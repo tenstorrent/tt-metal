@@ -102,16 +102,18 @@ ALWI void sfpu_pipeline(
     // Batching: pack as many chain iterations into a single acquire cycle as
     // the DEST register bank allows. Per iteration the chain uses `stride`
     // slots (= max_dst + 1), so at most DEST_AUTO_LIMIT / stride iterations
-    // fit. A single-slot chain (stride=1) runs DEST_AUTO_LIMIT tiles per
-    // acquire; a multi-slot chain runs fewer. Structurally mirrors
-    // apply_post_chain_batched in binary_op_helpers but stride-aware for
-    // multi-slot chains.
+    // fit. A stride-1 chain runs DEST_AUTO_LIMIT tiles per acquire; a
+    // multi-slot chain runs fewer. Structurally mirrors apply_post_chain_batched
+    // in binary_op_helpers but stride-aware for multi-slot chains.
     //
-    // Fan-in/fan-out chains (anything with a WaitNoPop or NoWaitNoPop Load or
-    // DestReuseOp) can NOT be batched: those policies read the same tile on
-    // every exec, so K execs in one acquire would copy the same input to K
-    // DEST slots. Fall back to iter=1 (behaviourally identical to the old
-    // per-tile pipeline) when chain_supports_batching_v is false.
+    // Batching is gated on chain_supports_batching_v — only chains where every
+    // CB-input op is WaitUpfrontPopAtEnd qualify. Per-tile wait/pop policies
+    // (WaitAndPop, NoWaitPop) introduce complications when the same CB is
+    // consumed by multiple chain elements (fan-in, shared tiles): each exec's
+    // pop mutates what its paired op sees. WaitUpfrontPopAtEnd is the
+    // explicit "I want batching" signal — bulk-wait once at the pipeline
+    // boundary, exec() advances an internal counter. Anything else falls back
+    // to iter=1, behaviourally identical to the old per-tile pipeline.
     constexpr uint32_t stride = Chain::stride;
     constexpr uint32_t iter_per_chunk = chain_supports_batching_v<Chain> ? (DEST_AUTO_LIMIT / stride) : 1u;
     static_assert(iter_per_chunk >= 1, "chain stride exceeds DEST capacity");

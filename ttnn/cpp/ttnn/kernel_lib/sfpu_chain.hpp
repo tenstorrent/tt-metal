@@ -628,23 +628,27 @@ struct upfront_cb_info<T, std::void_t<decltype(T::is_upfront), decltype(T::cb)>>
     static constexpr uint32_t cb = T::cb;
 };
 
-// Per-exec advance: does this CB-input op read a different tile each exec()?
+// Batch-safe: can this CB-input op run K execs back-to-back within one
+// tile_regs_acquire window without reading the same tile twice?
 //
-// Advancing: do_pop=true (exec pops → next front becomes tile 0), or
-//            is_upfront=true (exec advances cb_tile_idx_).
-// Non-advancing: WaitNoPop / NoWaitNoPop — same tile every exec. These
-//                typically appear in fan-in/fan-out chains where ordering
-//                across exec calls is controlled by a paired advancing op.
+// Only `WaitUpfrontPopAtEnd` qualifies. It pre-waits N tiles at the pipeline
+// boundary and exec() self-advances a local tile counter — so K execs read
+// K distinct tiles from a stable pre-waited block.
 //
-// The pipeline can only batch multiple chain iterations into one acquire when
-// every CB-input op advances per exec; otherwise batching would read the same
-// tile into multiple DEST slots.
+// `WaitAndPop` and `NoWaitPop` technically advance (each exec pops 1), but
+// they introduce complications when multiple chain elements read the same
+// CB (fan-in / shared-tile patterns): one exec's pop changes what the next
+// exec sees, and the per-exec wait/pop granularity makes reasoning about
+// paired WaitNoPop siblings fragile. We prefer explicit intent — callers
+// who want batching use WaitUpfrontPopAtEnd.
+//
+// `WaitNoPop` / `NoWaitNoPop` read the same tile every exec (fan-out intent)
+// and never batch.
 template <typename T, typename = void>
 struct cb_input_advances : std::true_type {};  // non-CB ops trivially advance
 
 template <typename T>
-struct cb_input_advances<T, std::void_t<decltype(T::do_pop), decltype(T::is_upfront)>>
-    : std::bool_constant<T::do_pop || T::is_upfront> {};
+struct cb_input_advances<T, std::void_t<decltype(T::is_upfront)>> : std::bool_constant<T::is_upfront> {};
 
 // Does any upfront CB-input element in Chain reference TargetCB?
 template <uint32_t TargetCB, typename Chain>
@@ -692,9 +696,11 @@ struct chain_all_advance<SfpuChain<Ops...>> : std::bool_constant<(cb_input_advan
 
 /** @brief True when sfpu_pipeline can safely batch multiple chain iterations
  *  into a single DEST acquire cycle. Requires every CB-input op (Load /
- *  DestReuseOp) to advance its tile index per exec call. Non-advancing
- *  policies (WaitNoPop, NoWaitNoPop) signal a fan-in/fan-out intent — the
- *  pipeline falls back to one iteration per acquire in that case. */
+ *  DestReuseOp) to use the WaitUpfrontPopAtEnd policy — that's the only
+ *  policy that advances via an internal counter (not via per-exec pop) and
+ *  pre-waits N tiles as a stable pre-waited block. Per-tile wait/pop policies
+ *  (WaitAndPop, NoWaitPop) and non-advancing policies (WaitNoPop, NoWaitNoPop)
+ *  all fall through to iter=1. */
 template <typename Chain>
 inline constexpr bool chain_supports_batching_v =
     detail::chain_all_advance<std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
