@@ -119,6 +119,16 @@ def test_sdpa_decode_paged_partial_mask_worker_node_regression(device):
 
     scale = d**-0.5
 
+    # Limit to a small (2,2) grid so the op uses 3 cores (one per KV page),
+    # giving a tree with 1 root + 2 workers. Without this, on Galaxy all 32
+    # chips × 64 cores = 2048 cores would be used, exceeding
+    # MAX_TREE_REDUCTION_ROUNDS=6 (supports max 64 cores) and causing TT_FATAL.
+    program_config = ttnn.SDPADecodeProgramConfig(
+        compute_with_storage_grid_size=(2, 2),
+        q_chunk_size=nh,
+        k_chunk_size=block_size,
+    )
+
     # === Random Q, K, V ===
     Q = torch.randn(1, B, nh, d)
     K_data = torch.randn(B, nkv, cur_pos_val + 1, d)
@@ -167,6 +177,7 @@ def test_sdpa_decode_paged_partial_mask_worker_node_regression(device):
         cur_pos_tensor=tt_cur_pos,
         page_table_tensor=tt_page_table,
         scale=scale,
+        program_config=program_config,
         memory_config=dram,
     )
 
