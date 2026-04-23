@@ -66,6 +66,7 @@ class WanPipelineI2V(WanPipeline):
             height=target_height, width=target_width, image_prompt=Image.new("RGB", (target_width, target_height))
         )
 
+
     @staticmethod
     def create_pipeline(*args, **kwargs):
         # Update I2V specific defaults

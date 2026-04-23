@@ -22,6 +22,7 @@ from ...utils.conv3d import (
     _ntuple,
     aligned_channels,
     compute_decoder_dims,
+    compute_encoder_dims,
     conv_pad_height,
     conv_pad_in_channels,
     count_convs,
@@ -1057,7 +1058,14 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                raise ValueError("feat_cache cannot be None")
+                # Full-T mode: frame 0 passes through without time_conv (matches
+                # the cached path's first-iteration behavior), remaining frames
+                # get the strided temporal conv with frame 0 prepended as context.
+                x_first = x_conv_BTHWC[:, :1, :, :, :]
+                if x_conv_BTHWC.shape[1] > 1:
+                    x_rest_input = ttnn.concat([x_first, x_conv_BTHWC[:, 1:, :, :, :]], dim=1)
+                    x_rest_output = self.time_conv(x_rest_input, logical_h)
+                    x_conv_BTHWC = ttnn.concat([x_first, x_rest_output], dim=1)
         return x_conv_BTHWC, logical_h
 
 
@@ -1156,8 +1164,8 @@ class WanDecoder3d(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
-        target_height: int = 0,
-        target_width: int = 0,
+        height: int = 0,
+        width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
     ) -> None:
@@ -1180,8 +1188,8 @@ class WanDecoder3d(Module):
         h_factor = parallel_config.height_parallel.factor
         w_factor = parallel_config.width_parallel.factor
         stage_hw, stage_t = compute_decoder_dims(
-            target_height,
-            target_width,
+            height,
+            width,
             h_factor,
             w_factor,
             t_chunk_size,
@@ -1388,8 +1396,8 @@ class WanDecoder(Module):
         ccl_manager: CCLManager,
         dtype: ttnn.DataType = ttnn.bfloat16,
         sdpa_t_fracture_w_only: bool = False,
-        target_height: int = 0,
-        target_width: int = 0,
+        height: int = 0,
+        width: int = 0,
         t_chunk_size: int | None = None,
         cached: bool = False,
     ) -> None:
@@ -1428,8 +1436,8 @@ class WanDecoder(Module):
             parallel_config=parallel_config,
             dtype=dtype,
             sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
-            target_height=target_height,
-            target_width=target_width,
+            height=height,
+            width=width,
             t_chunk_size=t_chunk_size,
             cached=cached,
         )
@@ -1512,6 +1520,9 @@ class WanEncoder3D(Module):
         ccl_manager=None,
         parallel_config=None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        height: int = 0,
+        width: int = 0,
+        encoder_t_chunk_size: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -1526,11 +1537,25 @@ class WanEncoder3D(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        num_stages = len(dim_mult) - 1
+        h_factor = parallel_config.height_parallel.factor
+        w_factor = parallel_config.width_parallel.factor
+        stage_hw, stage_t = compute_encoder_dims(
+            height,
+            width,
+            h_factor,
+            w_factor,
+            encoder_t_chunk_size,
+            temperal_downsample=temperal_downsample,
+            num_stages=num_stages,
+        )
+
         # dimensions
         dims = [dim * u for u in [1] + dim_mult]
         scale = 1.0
 
         # init block
+        full_h, full_w = stage_hw[0]
         self.conv_in = WanCausalConv3d(
             in_channels,
             dims[0],
@@ -1540,11 +1565,15 @@ class WanEncoder3D(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            conv_dims=ConvDims(stage_t[0].T_res, full_h, full_w),
         )
 
         # downsample blocks.
         self.down_blocks = ModuleList()
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
+            stage_h, stage_w = stage_hw[i]
+            res_dims = ConvDims(stage_t[i].T_res, stage_h, stage_w)
+
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
                     WanResidualBlock(
@@ -1554,6 +1583,7 @@ class WanEncoder3D(Module):
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
                         dtype=dtype,
+                        conv_dims=res_dims,
                     )
                 )
                 if scale in attn_scales:
@@ -1571,6 +1601,7 @@ class WanEncoder3D(Module):
             # downsample block
             if i != len(dim_mult) - 1:
                 mode = "downsample3d" if temperal_downsample[i] else "downsample2d"
+                next_h, next_w = stage_hw[i + 1]
                 self.down_blocks.append(
                     WanResample(
                         dim=out_dim,
@@ -1579,11 +1610,15 @@ class WanEncoder3D(Module):
                         ccl_manager=ccl_manager,
                         parallel_config=parallel_config,
                         dtype=dtype,
+                        tconv_dims=ConvDims(stage_t[i].T_tconv, next_h, next_w),
+                        spatial_dims=ConvDims(stage_t[i].T_spatial, stage_h, stage_w),
                     )
                 )
                 scale /= 2.0
 
         # middle blocks
+        lat_h, lat_w = stage_hw[-1]
+        lat_dims = ConvDims(stage_t[-1].T_res, lat_h, lat_w)
         self.mid_block = WanMidBlock(
             dim=out_dim,
             num_layers=1,
@@ -1591,6 +1626,7 @@ class WanEncoder3D(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            conv_dims=lat_dims,
         )
 
         # output blocks
@@ -1612,6 +1648,7 @@ class WanEncoder3D(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            conv_dims=lat_dims,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -1691,6 +1728,9 @@ class WanEncoder(Module):
         ccl_manager=None,
         parallel_config=None,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        height: int = 0,
+        width: int = 0,
+        encoder_t_chunk_size: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -1709,6 +1749,9 @@ class WanEncoder(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             dtype=dtype,
+            height=height,
+            width=width,
+            encoder_t_chunk_size=encoder_t_chunk_size,
         )
         # Linear for quant_conv
         self.quant_conv = Linear(
@@ -1732,38 +1775,53 @@ class WanEncoder(Module):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+    def forward(
+        self, x_BTHWC: ttnn.Tensor, logical_h: int, encoder_t_chunk_size: int | None = 4
+    ) -> tuple[ttnn.Tensor, int]:
+        """
+        encoder_t_chunk_size controls how the T dimension is processed:
+            None  - full-T single pass, no caching (fastest, most memory)
+            N     - frame 0 alone, then N frames at a time with caching
+        """
+        assert (
+            encoder_t_chunk_size is None or encoder_t_chunk_size >= 1
+        ), f"encoder_t_chunk_size must be None or >= 1, got {encoder_t_chunk_size}"
         B, T, H, W, C = x_BTHWC.shape
 
-        self.clear_cache()
+        if encoder_t_chunk_size is None:
+            output_BTHWC, new_logical_h = self.encoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
+        else:
+            self.clear_cache()
+            output_BTHWC = None
 
-        output_BTHWC = None
-        T_encoded = 1 + (T - 1) // 4
-        for i in range(T_encoded):
-            # Process one frame at a time
+            # Frame 0 alone (required by downsample3d cache initialization)
             self._conv_idx = [0]
-            if i == 0:
-                x_BTHWC_chunk = x_BTHWC[:, :1, :, :, :]
-            else:
-                x_BTHWC_chunk = x_BTHWC[:, 1 + 4 * (i - 1) : 1 + 4 * i, :, :, :]
-
             out_BTHWC, new_logical_h = self.encoder(
-                x_BTHWC_chunk, logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
+                x_BTHWC[:, :1, :, :, :],
+                logical_h,
+                feat_cache=self._feat_cache,
+                feat_idx=self._conv_idx,
             )
+            output_BTHWC = out_BTHWC
 
-            if output_BTHWC is None:
-                output_BTHWC = out_BTHWC
-            else:
+            for t_start in range(1, T, encoder_t_chunk_size):
+                self._conv_idx = [0]
+                t_end = min(t_start + encoder_t_chunk_size, T)
+                out_BTHWC, new_logical_h = self.encoder(
+                    x_BTHWC[:, t_start:t_end, :, :, :],
+                    logical_h,
+                    feat_cache=self._feat_cache,
+                    feat_idx=self._conv_idx,
+                )
                 output_BTHWC = ttnn.concat([output_BTHWC, out_BTHWC], dim=1)
+
+            self.clear_cache()
 
         output_tile_BTHWC = ttnn.to_layout(output_BTHWC, ttnn.TILE_LAYOUT)
         output_tile_BTHWC = self.quant_conv(output_tile_BTHWC)
         output_BTHWC = ttnn.to_layout(output_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        # Permute to channel second expected by torch
         output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
-        # Trim padding on output channels
-        output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]  # Get the mean
-        self.clear_cache()
+        output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]
         return (output_BCTHW, new_logical_h)
 
 

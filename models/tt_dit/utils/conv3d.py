@@ -52,7 +52,7 @@ class StageT(NamedTuple):
 
 
 def compute_decoder_dims(
-    target_height, target_width, h_factor, w_factor, t_chunk_size, *, temperal_upsample, num_stages=3, cached=False
+    height, width, h_factor, w_factor, t_chunk_size, *, temperal_upsample, num_stages=3, cached=False
 ):
     """Compute per-stage spatial and temporal dimensions for a VAE decoder.
 
@@ -60,13 +60,18 @@ def compute_decoder_dims(
       stage_hw: list of StageHW per stage (length num_stages + 1), latent -> full resolution
       stage_t:  list of StageT per stage (length num_stages + 1)
 
+    t_chunk_size must be a concrete integer — the latent T that will be processed:
+      full-T:   pass the full latent frame count (e.g. 21), with cached=False
+      chunked:  pass the chunk size (e.g. 1, 7), with cached=True
+    Returns zero dims when t_chunk_size is None or < 1 (constructor default fallback).
+
     Temporal formulas differ between uncached and cached paths because
     WanResample splits off frame-0 in the uncached path but not in the cached path:
 
-      uncached: T_tconv = cur_T + 1   (frames[1:] = cur_T-1, +2 causal pad)
-                T_spatial = 2*(cur_T-1) + 1   (frame-0 + doubled rest)
-      cached:   T_tconv = cur_T + 2   (all frames + 2 causal pad from cache)
-                T_spatial = 2 * cur_T         (all frames doubled)
+      uncached: T_tconv   = cur_T + 1           (frames[1:] = cur_T-1, +2 causal pad)
+                T_spatial = 2*(cur_T-1) + 1     (frame-0 + doubled rest)
+      cached:   T_tconv   = cur_T + 2           (all frames + 2 causal pad from cache)
+                T_spatial = 2 * cur_T           (all frames doubled)
     """
     if t_chunk_size is None or t_chunk_size < 1:
         n = num_stages + 1
@@ -76,8 +81,8 @@ def compute_decoder_dims(
     # Height uses ceil because some configs don't divide evenly (e.g. 720/8/4=22.5 → 23);
     # the hardware pads height via conv_pad_height.  Width always divides evenly for
     # production targets and is not padded the same way, so floor division is correct.
-    lat_h = math.ceil(target_height / vae_scale / h_factor)
-    lat_w = target_width // vae_scale // w_factor
+    lat_h = math.ceil(height / vae_scale / h_factor)
+    lat_w = width // vae_scale // w_factor
     stage_hw = [StageHW(lat_h * (2**s), lat_w * (2**s)) for s in range(num_stages + 1)]
 
     cur_T = t_chunk_size
@@ -90,15 +95,45 @@ def compute_decoder_dims(
         else:
             T_tconv = (cur_T + 1) if has_temporal_up else 0
             T_spatial = (2 * (cur_T - 1) + 1) if has_temporal_up else cur_T
-        stage_t.append(
-            StageT(
-                T_res=cur_T + 2,
-                T_tconv=T_tconv,
-                T_spatial=T_spatial,
-            )
-        )
+        stage_t.append(StageT(T_res=cur_T + 2, T_tconv=T_tconv, T_spatial=T_spatial))
         if has_temporal_up:
             cur_T = T_spatial
+
+    return stage_hw, stage_t
+
+
+def compute_encoder_dims(height, width, h_factor, w_factor, encoder_t_chunk_size, *, temperal_downsample, num_stages=3):
+    """Compute per-stage spatial and temporal dimensions for a cached VAE encoder.
+
+    Returns (stage_hw, stage_t) where:
+      stage_hw: list of StageHW per stage (length num_stages + 1), full → latent resolution
+      stage_t:  list of StageT per stage (length num_stages + 1)
+
+    encoder_t_chunk_size must be a concrete integer — the pixel-frame count being encoded
+    (e.g. _I2V_ENCODE_FRAMES=33). Returns zero dims when None or < 1 (constructor default fallback).
+
+    Downsample order: spatial WanConv2d at current res → 2x2 slice → WanCausalConv3d time_conv at halved res.
+    T_res     = cur_T + 2  (3D causal convs: residual blocks, conv_in, conv_out)
+    T_spatial = cur_T      (WanConv2d (1,3,3): no causal cache needed, sees exactly cur_T frames)
+    T_tconv   = cur_T      (time_conv (3,1,1) at next spatial res: input from spatial output = cur_T frames)
+    after_down = (cur_T - 1) // 2 + 1  (strided temporal conv output → next stage cur_T)
+    """
+    n = num_stages + 1
+    if encoder_t_chunk_size is None or encoder_t_chunk_size < 1:
+        return [StageHW(0, 0)] * n, [StageT(T_res=0, T_tconv=0, T_spatial=0)] * n
+
+    full_h = math.ceil(height / h_factor)
+    full_w = width // w_factor
+    stage_hw = [StageHW(full_h // (2**s), full_w // (2**s)) for s in range(n)]
+
+    cur_T = encoder_t_chunk_size
+    stage_t = []
+    for i in range(n):
+        has_temporal_down = i < len(temperal_downsample) and temperal_downsample[i]
+        T_tconv = cur_T if has_temporal_down else 0
+        stage_t.append(StageT(T_res=cur_T + 2, T_tconv=T_tconv, T_spatial=cur_T))
+        if has_temporal_down:
+            cur_T = (cur_T - 1) // 2 + 1
 
     return stage_hw, stage_t
 
@@ -270,6 +305,27 @@ _BLOCKINGS = {
     # Stage 3 (cur_T=28): T_res=30 (no temporal upsample)
     (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 7, 2, 16),  # up3_res — swept 9364us
     (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
+    # ===================================================================
+    # BH Galaxy 4x8, 720p image encoder, T=33 output frames
+    # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.
+    # ===================================================================
+    # Stage 0 (full res, H_out=180, W_out=160)
+    (4, 8, 32, 96, (3, 3, 3), 35, 180, 160): (32, 96, 5, 16, 2),  # conv_in — 4444us
+    (4, 8, 96, 96, (3, 3, 3), 35, 180, 160): (96, 96, 7, 4, 8),  # res_s0  — 5225us
+    (4, 8, 96, 96, (1, 3, 3), 33, 180, 160): (96, 96, 1, 16, 2),  # sp_s0   — 3462us
+    # Stage 1 (half res, H_out=90, W_out=80)
+    (4, 8, 96, 192, (3, 3, 3), 35, 90, 80): (96, 96, 7, 16, 2),  # down0   — 3539us
+    (4, 8, 192, 192, (3, 3, 3), 35, 90, 80): (96, 96, 7, 16, 2),  # res_s1  — 7376us
+    (4, 8, 192, 192, (1, 3, 3), 33, 90, 80): (192, 64, 1, 16, 2),  # sp_s1   — 2877us
+    (4, 8, 192, 192, (3, 1, 1), 33, 45, 40): (192, 96, 5, 4, 8),  # tc_s1   — 620us PARTIAL
+    # Stage 2 (quarter res, H_out=45, W_out=40)
+    (4, 8, 192, 384, (3, 3, 3), 19, 45, 40): (64, 128, 1, 8, 4),  # down1   — TODO
+    (4, 8, 384, 384, (3, 3, 3), 19, 45, 40): (96, 96, 1, 8, 4),  # res_s2  — TODO
+    (4, 8, 384, 384, (1, 3, 3), 17, 45, 40): (96, 96, 1, 8, 4),  # sp_s2   — TODO
+    (4, 8, 384, 384, (3, 1, 1), 17, 22, 20): (96, 96, 1, 8, 4),  # tc_s2   — TODO
+    # Stage 3 (eighth res, H_out=22, W_out=20)
+    (4, 8, 384, 384, (3, 3, 3), 11, 22, 20): (96, 96, 1, 8, 4),  # res_s3  — TODO
+    (4, 8, 384, 32, (3, 3, 3), 11, 22, 20): (96, 32, 1, 8, 4),  # conv_out — TODO
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
