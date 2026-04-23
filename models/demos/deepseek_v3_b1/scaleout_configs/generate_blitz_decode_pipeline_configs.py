@@ -13,6 +13,93 @@ import yaml
 from loguru import logger
 
 
+def _canonical_output_dir(output_dir: str) -> Path:
+    """Resolve --output-dir to an absolute path; must exist and be a directory."""
+    base = Path(output_dir).expanduser().resolve(strict=False)
+    if not base.is_dir():
+        logger.error(f"--output-dir must be an existing directory: {base}")
+        sys.exit(1)
+    return base
+
+
+def _safe_path_under_output_dir(output_dir: str, configured_name: str) -> Path:
+    """Resolve a writable path under output_dir using only the basename of configured_name.
+
+    Prevents path traversal from untrusted --output-dir or YAML fields (SAST / Cycode).
+    """
+    base = _canonical_output_dir(output_dir)
+    name = Path(configured_name).name
+    if not name or name in (".", ".."):
+        logger.error(f"Invalid output file name in pipeline config: {configured_name!r}")
+        sys.exit(1)
+    if os.sep in name or (os.altsep and os.altsep in name):
+        logger.error(f"Output file name must be a single path component: {configured_name!r}")
+        sys.exit(1)
+    candidate = (base / name).resolve(strict=False)
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        logger.error(f"Refusing path outside --output-dir: {candidate} is not under {base}")
+        sys.exit(1)
+    return candidate
+
+
+def _resolve_coordinator_tt_metal_home(explicit: str | None) -> Path | None:
+    """tt-metal root on the runner (for resolving mesh_graph_desc_path)."""
+    for candidate in (
+        explicit,
+        os.environ.get("TT_METAL_HOME"),
+        os.environ.get("TT_METAL_COORDINATOR_HOME"),
+    ):
+        if not candidate:
+            continue
+        root = Path(candidate).expanduser().resolve(strict=False)
+        if root.is_dir():
+            return root
+    return None
+
+
+def _mesh_graph_desc_path_for_rank_binding(
+    mesh_graph_desc_path_cfg: str,
+    output_dir: str | None,
+    coordinator_tt_metal_home: str | None,
+) -> str:
+    """Rank binding path tt-run validates on the runner.
+
+    With --output-dir, CI does ``cd`` into the pipeline dir first; tt-run's
+    ORIGINAL_CWD is then that directory, so repo-relative paths would wrongly
+    resolve under the pipeline dir unless we emit an absolute path here.
+    """
+    if not output_dir:
+        return mesh_graph_desc_path_cfg
+    raw = Path(mesh_graph_desc_path_cfg)
+    if raw.is_absolute():
+        resolved = raw.resolve(strict=False)
+        if not resolved.is_file():
+            logger.error(f"mesh_graph_desc_path is not a file: {resolved}")
+            sys.exit(1)
+        return str(resolved)
+    root = _resolve_coordinator_tt_metal_home(coordinator_tt_metal_home)
+    if root is None:
+        logger.error(
+            "With --output-dir, mesh_graph_desc_path must resolve on the runner. "
+            "Set TT_METAL_HOME or TT_METAL_COORDINATOR_HOME to the coordinator tt-metal checkout, "
+            "or pass --coordinator-tt-metal-home."
+        )
+        sys.exit(1)
+    root_resolved = root.resolve(strict=False)
+    resolved = (root_resolved / raw).resolve(strict=False)
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        logger.error(f"mesh_graph_desc_path must stay under coordinator tt-metal home ({root_resolved})")
+        sys.exit(1)
+    if not resolved.is_file():
+        logger.error(f"Mesh graph descriptor not found at {resolved}")
+        sys.exit(1)
+    return str(resolved)
+
+
 def _parse_host(hostname):
     """Parse hostname into (host_num, u_num) or None if unrecognised."""
     match = re.search(r"(\d+)u(\d{2})$", hostname)
@@ -92,7 +179,8 @@ def generate_slice_to_pcie_device_mapping(
     cmd.extend(["--bind-to", "none", "--tag-output"])
 
     if output_dir:
-        cmd.extend(["--wdir", output_dir])
+        wdir = str(_canonical_output_dir(output_dir))
+        cmd.extend(["--wdir", wdir])
 
     if worker_tt_metal_home:
         wh = Path(worker_tt_metal_home)
@@ -111,7 +199,7 @@ def generate_slice_to_pcie_device_mapping(
         logger.error(f"{cmd} Interrupted")
         sys.exit(1)
 
-    actual_mapping_file = os.path.join(output_dir, mapping_file) if output_dir else mapping_file
+    actual_mapping_file = str(_safe_path_under_output_dir(output_dir, mapping_file)) if output_dir else mapping_file
 
     if not os.path.exists(actual_mapping_file):
         logger.error(f"{actual_mapping_file} not found")
@@ -120,7 +208,13 @@ def generate_slice_to_pcie_device_mapping(
     return actual_mapping_file
 
 
-def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_metal_home=None):
+def generate_rank_bindings(
+    pipeline_config,
+    physical_mapping_file,
+    worker_tt_metal_home=None,
+    output_dir=None,
+    coordinator_tt_metal_home=None,
+):
     with open(physical_mapping_file, "r") as f:
         slice_to_pcie_device_mapping = yaml.safe_load(f)
 
@@ -144,9 +238,14 @@ def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_met
             }
         )
 
+    mesh_graph_desc_path = _mesh_graph_desc_path_for_rank_binding(
+        pipeline_config["mesh_graph_desc_path"],
+        output_dir,
+        coordinator_tt_metal_home,
+    )
     rank_binding_configs = {
         "rank_bindings": rank_bindings,
-        "mesh_graph_desc_path": pipeline_config["mesh_graph_desc_path"],
+        "mesh_graph_desc_path": mesh_graph_desc_path,
     }
 
     # When workers have tt-metal at a different path than the runner, override
@@ -155,17 +254,35 @@ def generate_rank_bindings(pipeline_config, physical_mapping_file, worker_tt_met
     # but global_env overrides the env var that actually reaches the workers.
     if worker_tt_metal_home:
         mgd_path = pipeline_config["mesh_graph_desc_path"]
+        mgd_rel = Path(mgd_path)
+        worker_mgd = (
+            str((Path(worker_tt_metal_home) / mgd_rel).resolve(strict=False))
+            if not mgd_rel.is_absolute()
+            else str(mgd_rel.resolve(strict=False))
+        )
         rank_binding_configs["global_env"] = {
-            "TT_MESH_GRAPH_DESC_PATH": str(Path(worker_tt_metal_home) / mgd_path),
+            "TT_MESH_GRAPH_DESC_PATH": worker_mgd,
         }
 
-    with open(pipeline_config["rank_binding_file"], "w") as f:
+    # With --output-dir, mpirun uses --wdir there for the slice map; write rank binding
+    # there too so CI (cwd often /ci/tt-metal) matches tt-run after cd $PIPELINE_DIR.
+    rank_binding_path = (
+        str(_safe_path_under_output_dir(output_dir, pipeline_config["rank_binding_file"]))
+        if output_dir
+        else pipeline_config["rank_binding_file"]
+    )
+    with open(rank_binding_path, "w") as f:
         yaml.dump(rank_binding_configs, f, default_flow_style=False, sort_keys=False)
 
 
-def generate_rank_file(pipeline_config):
+def generate_rank_file(pipeline_config, output_dir=None):
     num_pipeline_stages = len(pipeline_config["stage_to_slice_mapping"])
-    with open(pipeline_config["rank_file"], "w") as f:
+    rank_file_path = (
+        str(_safe_path_under_output_dir(output_dir, pipeline_config["rank_file"]))
+        if output_dir
+        else pipeline_config["rank_file"]
+    )
+    with open(rank_file_path, "w") as f:
         for stage in range(num_pipeline_stages):
             host = pipeline_config["stage_to_slice_mapping"][stage]["host"]
             f.write(f"rank {stage}={host} slot=0-31\n")
@@ -177,7 +294,11 @@ def generate_pipeline_config_files(
     hostfile=None,
     worker_tt_metal_home=None,
     output_dir=None,
+    coordinator_tt_metal_home=None,
 ):
+    if output_dir:
+        output_dir = str(_canonical_output_dir(output_dir))
+
     with open(pipeline_config_file, "r") as f:
         config = yaml.safe_load(f)
 
@@ -217,8 +338,8 @@ def generate_pipeline_config_files(
     actual_mapping_file = generate_slice_to_pcie_device_mapping(
         physical_mapping_file, host_vector, mpi_user, worker_tt_metal_home, output_dir
     )
-    generate_rank_bindings(config, actual_mapping_file, worker_tt_metal_home)
-    generate_rank_file(config)
+    generate_rank_bindings(config, actual_mapping_file, worker_tt_metal_home, output_dir, coordinator_tt_metal_home)
+    generate_rank_file(config, output_dir)
 
 
 if __name__ == "__main__":
@@ -252,6 +373,13 @@ if __name__ == "__main__":
         help="Shared NFS directory for mpirun output (e.g. /ci/pipeline-123). "
         "When set, mpirun uses --wdir to write generated files here, avoiding scp.",
     )
+    parser.add_argument(
+        "--coordinator-tt-metal-home",
+        type=str,
+        default=None,
+        help="Runner-side tt-metal root used to absolutize mesh_graph_desc_path when --output-dir is set. "
+        "Defaults to TT_METAL_HOME, then TT_METAL_COORDINATOR_HOME.",
+    )
     args = parser.parse_args()
     generate_pipeline_config_files(
         args.pipeline_config_file,
@@ -259,4 +387,5 @@ if __name__ == "__main__":
         args.hostfile,
         args.worker_tt_metal_home,
         args.output_dir,
+        args.coordinator_tt_metal_home,
     )
