@@ -8,7 +8,8 @@ of the routed-expert path.
 
 **Phase 1A — TP8 plumbing: ✅ COMPLETE**
 **Phase 1B — matmul_expert DRAM swap: ✅ COMPLETE (all 8 experts, DRAM-only)**
-**Phase 2 — SRAM hot path + new index encoding: ⏳ NOT STARTED**
+**Phase 1C — rebase on pr42896 (new DRAM API): 🔧 IN PROGRESS (PCC regression being debugged on `bliu/hot-cold-on-pr42896`)**
+**Phase 2 — SRAM hot path + new index encoding: 📋 PLANNED (see §9)**
 
 Anchor-test results on `test_moe_fused_with_reduce[blackhole-True-
 NOC_MODE.DM_DYNAMIC_NOC-True-fabric_2d]` (100 iterations, 8 devices):
@@ -329,16 +330,18 @@ Three add-tests-first items:
    - Belongs in `test_moe_mlp.py`, not `test_matmul_expert.py`.
 
 ## 8. Known gaps / follow-ups
-- **SRAM gate_proj SiLU fusion**: SRAM path has no SiLU today. Needs to be
-  added before any hot gate_proj experts are supported. Could be a new
-  template bool `fuse_silu` plumbed into the compute side.
-- **DRAM accum > 2**: policy (a) is a workaround. A proper fix would chain
-  accum across multiple `matmul_expert` calls (needs kernel API change).
+- **SRAM gate_proj SiLU fusion**: SRAM path has no SiLU today. Addressed by
+  Phase 2C (§9).
+- **DRAM accum > 2**: RESOLVED in Phase 1B — kernel now reconfigures L1_ACC
+  per expert iteration. Policy (a) from §6.2 is no longer a kernel
+  constraint (just a future perf knob for hot coverage).
 - **Flag-insert upstream producer**: the step that produces the new
-  encoded selection tensor (§4.2) must exist before integration. Where
-  it lives (inside TopK? a thin following op?) is TBD.
+  encoded selection tensor (§4.2). Addressed by Phase 2D (§9) —
+  plan calls for a small BRISC pass between TopK and the mcast_index
+  op, using per-device `is_hot[256]` + `slot_for[256]` LUTs.
 - **`table_idx_arr` simplification**: lower-15-bit-is-already-position
-  means the indirection table can go away. Safe as a follow-up cleanup.
+  means the indirection table can go away. Safe as a follow-up cleanup
+  after Phase 2D lands.
 
 ## 9. Rollout order
 
@@ -453,19 +456,257 @@ Kernel-side changes in `moe_kernel.cpp`:
   expert still flows through its own streamer core).
 
 ### Phase 2 — SRAM path + new index encoding
-1. Upstream encoding producer for §4.2 selection tensor (`is_sram | position`).
-2. SRAM SiLU fusion (unblocks hot gate_proj experts).
-3. Hard-code 2 hot experts (rig gate) for initial validation; PCC similar.
+
+Goal: land `sram_mm(); dram_mm();` hybrid dispatch for gate/up/down so a
+hard-coded subset of experts becomes L1-resident ("hot") and the rest keep
+streaming from DRAM ("cold"). Phase 2 is staged so a PCC-preserving smoke
+test lands before any real hot expert is allocated.
+
+#### Reference: canonical hybrid kernel
+
+`micro_ops/matmul_expert/kernels/matmul_expert_kernel.cpp` is the reference
+for the dispatch pattern we'll port into `moe_kernel.cpp`:
+- Both ops are compiled into the kernel; `sram_active` / `dram_active`
+  compile-time flags gate whether each runs on a given core.
+- **Order**: `sram_mm(); dram_mm();` — SRAM runs first so `cb_in0` /
+  `cb_index` are still populated for the DRAM pass.
+- `sram_pop_in0 = sram_active && !dram_active` (and same for
+  `sram_pop_index`): SRAM only pops inputs when DRAM isn't going to run.
+- `MatmulExpertCompressedSRAM::Op` signature:
+  `<CTArgs, IsActiveCore, pop_in0, pop_in1, pop_index, pop_out>`.
+- `MatmulExpertCompressedDRAM::Op` signature in the canonical:
+  `<CTArgs, IsActiveCore, pop_in0, pop_index, ResetCBIn1, CBIn1ResetAddr,
+  pop_out>`.
+- `cb_in1` (SRAM B data) must be sharded — set up via
+  `unified_kernels::setup_sharded_buffer(cb_in1, 1)` in NCRISC, gated on
+  `sram_active`. `cb_in0` / `cb_index` are already sharded.
+
+#### Reference: SRAM op semantics
+
+`unified_kernels/matmul_expert_compressed_sram.hpp` key behaviors:
+- **Index decode**: each `index_ptr[i]` is an encoded uint16 — bit 15 = 1
+  ⇒ SRAM, 0 ⇒ DRAM. Lower 15 bits = SRAM slot index (direct fmt / base-
+  addr array index, NOT eid). `is_sram_expert()` / `expert_slot()` helpers
+  in `expert_index_encoding.hpp`.
+- **Weight layout**: one contiguous L1 region per core holding all hot
+  experts' weights back-to-back. `cb_in1` points at that region.
+  `sram_base_addrs_l1_addr` points to a `uint32[num_hot_slots]` array in
+  L1 — each entry is the absolute L1 base of that slot's weights. For
+  each selected SRAM expert, NCRISC overrides `cb_in1` rd_ptr to its
+  slot base before the matmul.
+- **fmt layout**: `fmt_l1_addr` points at an L1 table of fmt words.
+  `meta_words_per_expert` is the stride (same layout as the compressed-
+  tile per-expert fmt array, just L1-resident instead of DRAM-streamed).
+- **Non-accum**: pushes `out_w` tiles per SRAM expert, then pads with
+  `(num_active_experts − num_sram_pushed) * out_w` empty reserve/push so
+  the total `cb_out` advance is always `num_active_experts * out_w`,
+  independent of the hot/cold split. DRAM op is written to play nicely
+  with this — its non-accum path writes into the same padded slots by
+  index, not sequential push. (Verify: read DRAM `compressed_dram.hpp`
+  non-accum path before wiring — this is the #1 risk in 2B.)
+- **Accum**: sums all SRAM experts into dst via chained
+  `compressed_custom_mm_block<false>` calls, packs once into
+  `cb_out[out_w]`. DRAM accum path (L1_ACC) picks up from there and
+  accumulates cold experts on top.
+- **`cb_out_sram`**: optional — if non-zero, SRAM writes to a separate
+  CB. Gives us an escape hatch if shared-`cb_out` interleaving turns out
+  to break; requires a merge step downstream. Default path is shared.
+- **No SiLU**: gate_proj needs SRAM SiLU added before any hot gate_proj
+  expert can run — see Phase 2C below.
+
+#### Phase 2A — Hot-expert infrastructure in op.py (no kernel change)
+
+Goal: allocate + populate L1 weight / fmt / base-addrs tensors for a
+configurable `num_hot_experts` set, threaded through all three projs,
+without turning the SRAM path on. `sram_active=0` so the kernel behaves
+exactly like Phase 1B. Validates allocation fits and nothing regresses.
+
+1. Add `hot_expert_ids: list[int] | None` parameter to `MoeRoutedExpertOp`
+   (default `None` = Phase 1B behavior). When set, a corresponding subset
+   of the `cts_list` CompressedTensors is staged in L1 per core.
+2. Per proj, per core: allocate an L1 sharded tensor sized
+   `num_hot_experts × tile_bytes_per_expert` (uniform bfp4_b =
+   `Kt × per_core_n × 576B` per expert per core). Pack the hot experts'
+   per-core N-slice (or K-slice for down_proj) contiguously.
+3. Build a per-core `sram_base_addrs_l1` uint32 array with
+   `num_hot_experts` entries: entry `s` = L1 base addr of slot `s`'s
+   weight region within that core's cb_in1 (sharded tensor).
+4. Build a per-core `sram_fmt_l1` uint32 table:
+   `num_hot_experts × meta_words_per_expert` words. Values mirror the
+   existing compressed-tile fmt encoding used by the DRAM path — the
+   assigner already knows per-tile formats.
+5. Extend `setup_matmul_expert_dram` (or split into a shared
+   `setup_matmul_expert_hot_cold`) to return SRAM-side fields alongside
+   the existing DRAM fields:
+   - `cb_in1_sram` (CB id for SRAM B data)
+   - `sram_backing_tensor` (replicated L1 sharded tensor)
+   - `sram_base_addrs_l1_addr`, `sram_fmt_l1_addr`
+   - `sram_meta_words_per_expert`, `in0_page_size`
+   - `num_hot_experts` (=0 when disabled)
+6. Thread new ReaderCTArgs / ComputeCTArgs fields (from the canonical
+   `matmul_expert_kernel.cpp` arg list above) into the per-core CT
+   descriptor list. Keep `sram_active=0` so `is_sram_expert(...)` never
+   fires in the index (no hot-encoding yet).
+
+**Exit criteria 2A**: anchor test still at baseline PCC. Memory budget
+sanity-checked — per-core L1 usage stays under the per-core cap with
+`num_hot_experts ∈ {2, 4, 8}`.
+
+**Memory budget** (bfp4_b, Kt=14, per_core_n=1 tile for gate/up, per_core_n=28 for down):
+- gate_proj + up_proj hot slot: `14 × 1 × 576 = 8_064 B` per expert (share one `cb_in1_sram` between gate/up?)
+- down_proj hot slot: `8 × 28 × 576 = 129_024 B` per expert
+- fmt per slot: `num_iterations_local × meta_words_per_block × 4 B`; tiny (<1KB per hot expert)
+- With 8 hot experts per proj, per core: gate+up ≈ 65 KB (or 130 if not shared), down ≈ 1 MB. Down dominates — start with ≤4 hot experts for down_proj during bring-up.
+
+#### Phase 2B — Kernel dispatch wiring (sram_mm(); dram_mm();)
+
+Goal: port the canonical hybrid kernel pattern into `moe_kernel.cpp` for
+all three projs. Exercise the SRAM path with `num_hot_experts=0` and
+`sram_active=1` to prove the call site compiles and is a no-op.
+
+1. Add `#include "../../unified_kernels/matmul_expert_compressed_sram.hpp"`.
+2. For each of gate_proj / up_proj / down_proj:
+   - Build `GateProjSRAMReaderCTArgs` / `ComputeCTArgs` alongside the
+     existing DRAM args, using the fields plumbed in 2A.
+   - Add NCRISC `setup_sharded_buffer(cb_in1_sram, 1)` guarded by
+     `sram_active`.
+   - Replace the single-op call block with:
+     ```cpp
+     constexpr bool sram_active = ...;  // 1 when num_hot_experts > 0
+     constexpr bool dram_active = true;
+     constexpr bool sram_pop_in0 = sram_active && !dram_active;
+     constexpr bool sram_pop_index = sram_active && !dram_active;
+
+     deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+         Moe::Routed::GateProjSRAMCTArgs,
+         Core::Routed::is_gate_proj_core && sram_active,
+         sram_pop_in0, true, sram_pop_index, false>
+         sram_gate_proj;
+     deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+         Moe::Routed::GateProjCTArgs,
+         Core::Routed::is_gate_proj_core && dram_active,
+         false, false, true, gp_cb_in1_addr>
+         gate_proj;
+     sram_gate_proj();
+     gate_proj();
+     ```
+   - Pop flags: preserve gate→up cb_in0/cb_index sharing. Specifically,
+     `up_proj` is the last consumer of cb_in0/cb_index, so `sram_pop_*`
+     must still respect the gate_proj/up_proj chain (gate_proj SRAM
+     leaves both alone; up_proj SRAM leaves cb_in0 alone but can pop
+     cb_index when DRAM up_proj also runs).
+3. Index encoding: since `num_hot_experts=0` initially, no upstream
+   changes needed — every entry will have bit 15 = 0 and SRAM no-ops.
+4. cb_out interleaving: in non-accum mode (gate/up), SRAM pads with
+   empty reserve/push when no SRAM experts ran. **Verify that DRAM
+   non-accum path in `matmul_expert_compressed_dram.hpp` writes into
+   the per-expert slots correctly when SRAM ran first** — the risk is
+   that DRAM's `cb_reserve_back` sees SRAM's padded slots as occupied
+   and advances past them, or that DRAM appends after SRAM's padding
+   (interleaving). Read the DRAM op first; possibly set `cb_out_sram`
+   to a distinct CB during bring-up and merge later.
+
+**Exit criteria 2B**: anchor test passes at baseline PCC with
+`sram_active=1, num_hot_experts=0`. Confirms call sites + CB wiring
+are correct; the SRAM path is simply skipped.
+
+#### Phase 2C — SRAM SiLU fusion (gate_proj only)
+
+Goal: add SiLU fusion to the SRAM op so hot gate_proj experts don't
+skip the activation.
+
+1. Add `fuse_silu` compile-time bool to `MatmulExpertCompressedSRAM::ComputeCTArgs` (default 0).
+2. After the non-accum pack loop, when `fuse_silu=1`, apply SiLU SFPU
+   to each packed tile. Mirror the DRAM path's approach:
+   `llk_math_eltwise_unary_sfpu_silu(...)` applied to dst regs before
+   pack (or after pack via copy-tile → sfpu → repack — pick whichever
+   matches the `compressed_custom_mm_block` output locality).
+3. Unit-test in the canonical `test_matmul_expert.py` harness: run a
+   uniform-SRAM gate/up matmul with `fuse_silu=1`, compare against
+   manual SiLU after a non-fused run. Add to Phase 2C test matrix.
+4. Accum path is not needed for gate_proj (gate/up are non-accum), so
+   `fuse_silu` on the accum branch can stay unwired (assert 0 if set).
+
+**Exit criteria 2C**: canonical SRAM-only matmul_expert test passes
+with `fuse_silu=1`; bit-exact match against post-op SiLU reference.
+
+#### Phase 2D — Upstream index encoding + hot-expert rigging
+
+Goal: produce the real `is_sram | slot` index encoding upstream of
+`cb_index` and run the anchor test with ≥2 hot experts.
+
+1. **Encoding producer**: add a thin op between TopK and the mcast
+   that rewrites each selected `eid` into `(is_hot[eid] ? (1<<15) |
+   slot_for[eid] : eid)`. Two pieces of state per device:
+   - `is_hot[256]` bool LUT.
+   - `slot_for[256]` uint16 LUT (valid only when is_hot).
+   Both can live in L1 as uint32 arrays; preferred implementation:
+   small BRISC pass that reads TopK output, writes the encoded output
+   into the mcast source CB. (Defer the "inside TopK" variant — it
+   couples two responsibilities and the mcast_index path already
+   exists as the natural injection point.)
+2. **Hot-expert selection**: for initial validation, hard-code hot
+   experts as the first `num_hot_experts` entries of each device's
+   per-device packed expert table. Rig `rig_moe_gate_for_expected_experts`
+   to include some of them in the top-8.
+3. **Golden reference**: `test_moe_fused_with_reduce`'s per-device
+   golden is unaffected — it's input/weight-identical regardless of
+   SRAM/DRAM path. PCC must match Phase 1B baseline (0.9915).
+
+**Exit criteria 2D**: anchor test passes with `num_hot_experts=2` on
+at least one proj (gate or up — down needs 2C to not matter but also
+works), PCC ≥ 0.9915. Expand to hot gate+up+down simultaneously; PCC
+holds.
+
+#### Phase 2E — Production-ish hot coverage (stretch)
+
+Goal: stress-test the accum cap and hot/cold mix at realistic splits.
+Push `num_hot_experts` up until PCC degrades, L1 budget exceeds, or
+a kernel bug surfaces.
+
+- `num_hot_experts ∈ {4, 8, 16}` per proj.
+- Mix of routed experts (some top-8 are hot, some cold).
+- DRAM accum cap: the kernel already reconfigures L1_ACC per expert
+  (§6.2 decision RESOLVED), so no 2-expert cap — just verify.
+- Track per-proj memory use vs per-core L1 cap to choose a feasible
+  operating point.
+
+**Exit criteria 2E**: anchor test green across the tested points. Per-
+core L1 budget documented. Add a regtest variant
+(`test_moe_fused_with_reduce[num_hot_experts=N]`) if parametric.
+
+#### Summary: what Phase 2 changes in moe_kernel.cpp
+
+Minimal kernel delta between Phase 1B and Phase 2 (steady state):
+
+- 1 new include (`matmul_expert_compressed_sram.hpp`).
+- 3 new CTArgs bundles (`GateProj{SRAM,}CTArgs`, `UpProj{SRAM,}CTArgs`,
+  `DownProj{SRAM,}CTArgs` — Reader + Compute per proj).
+- 3 new `sram_mm(); dram_mm();` call blocks (replace single DRAM ops).
+- 1 new `setup_sharded_buffer(cb_in1_sram, 1)` per proj in NCRISC.
+- No change to residual / mcast / shared-expert / reduce pipeline.
 
 ## 10. Open questions
 - Which upstream op produces the `is_sram | position` encoding? TopK
   followup, or a dedicated flag-insert op? (Probably the former for
-  perf; the latter for modularity.)
-- Is policy (a) "≤2 cold experts per token" realistic at production-scale
-  hot/cold splits? Needs measurement on real routing data.
-- For cross-device ReduceToOne: reuse existing reduce_to_one_b1 pattern,
-  or does TP8 call for a different topology? (Phase 1B shipped with
-  `reduce_to_one_b1` — answered unless a topology change is needed.)
+  perf; the latter for modularity.) **Phase 2D plans for the "thin op
+  between TopK and mcast" variant.**
+- DRAM-accum-2 policy is resolved as a kernel constraint (Phase 1B);
+  remains open as a perf knob — hot coverage chosen so most tokens see
+  ≤2 cold experts on down_proj keeps the accum path at its efficient
+  L1_ACC-slot count.
+- For cross-device ReduceToOne: `reduce_to_one_b1` shipped in Phase 1B
+  and validates at PCC 0.9915. Closed unless topology changes.
+- **cb_out interleaving in mixed SRAM+DRAM non-accum** (Phase 2B risk):
+  SRAM pads cb_out to `num_active_experts * out_w`; DRAM writes per-
+  expert slots. Unknown if DRAM's push pattern coexists with SRAM's
+  padding when both paths are active. Must be resolved by reading
+  `matmul_expert_compressed_dram.hpp` non-accum path before 2B lands;
+  fallback is a separate `cb_out_sram` + explicit merge.
+- **Hot-expert selection policy**: for Phase 2D, hard-code the first
+  `num_hot_experts` per-device slots. For production, a profile-based
+  or pretraining-output-based policy is needed; out of scope for this
+  integration.
 
 ## 11. Bugs hit & fixes landed during Phase 1A/1B
 

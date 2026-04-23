@@ -142,7 +142,7 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::DMArgs expert_scale_mcast_args{.sender = {}, .receiver = {}};
 #endif  // ENABLE_ROUTING
 
-            // gate_proj DRAM Matmul Expert Compressed (reader)
+            // gate_proj DRAM Matmul Expert Compressed (reader) — pr42896 36-param shape
             using GateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
                 get_named_compile_time_arg_val("gate_proj_cb_in0"),
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
@@ -150,27 +150,36 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_cb_index"),
                 get_named_compile_time_arg_val("gate_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("gate_proj_subblock_k"),
+                get_named_compile_time_arg_val("gate_proj_subblock_n"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("gate_proj_per_core_n"),
                 get_named_compile_time_arg_val("gate_proj_bank_id"),
                 get_named_compile_time_arg_val("gate_proj_vc"),
-                get_named_compile_time_arg_val("gate_proj_meta_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_block_sizes_l1_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_in1_size_bytes"),
                 get_named_compile_time_arg_val("gate_proj_noc_max_page_size"),
                 get_named_compile_time_arg_val("gate_proj_core_in_bank_idx"),
-                get_named_compile_time_arg_val("gate_proj_pipeline_sem_id"),
+                get_named_compile_time_arg_val("gate_proj_pipeline_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_next_core_noc_x"),
                 get_named_compile_time_arg_val("gate_proj_next_core_noc_y"),
                 get_named_compile_time_arg_val("gate_proj_cores_per_bank"),
                 get_named_compile_time_arg_val("gate_proj_num_active_experts"),
-                get_named_compile_time_arg_val("gate_proj_table_idx_l1_addr"),
                 get_named_compile_time_arg_val("gate_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_fmt"),
                 get_named_compile_time_arg_val("gate_proj_fmt_dram_addr"),
                 get_named_compile_time_arg_val("gate_proj_fmt_per_expert_bytes"),
                 get_named_compile_time_arg_val("gate_proj_fmt_per_core_bytes"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_1"),
                 get_named_compile_time_arg_val("gate_proj_accum_experts"),
-                get_named_compile_time_arg_val("gate_proj_index_offset")>;
+                get_named_compile_time_arg_val("gate_proj_index_offset"),
+                get_named_compile_time_arg_val("gate_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("gate_proj_partial_sem_addr")>;
 
             // up_proj DRAM Matmul Expert Compressed (reader) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
@@ -180,27 +189,36 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_cb_index"),
                 get_named_compile_time_arg_val("up_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("up_proj_subblock_k"),
+                get_named_compile_time_arg_val("up_proj_subblock_n"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("up_proj_per_core_n"),
                 get_named_compile_time_arg_val("up_proj_bank_id"),
                 get_named_compile_time_arg_val("up_proj_vc"),
-                get_named_compile_time_arg_val("up_proj_meta_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_block_sizes_l1_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_in1_size_bytes"),
                 get_named_compile_time_arg_val("up_proj_noc_max_page_size"),
                 get_named_compile_time_arg_val("up_proj_core_in_bank_idx"),
-                get_named_compile_time_arg_val("up_proj_pipeline_sem_id"),
+                get_named_compile_time_arg_val("up_proj_pipeline_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_next_core_noc_x"),
                 get_named_compile_time_arg_val("up_proj_next_core_noc_y"),
                 get_named_compile_time_arg_val("up_proj_cores_per_bank"),
                 get_named_compile_time_arg_val("up_proj_num_active_experts"),
-                get_named_compile_time_arg_val("up_proj_table_idx_l1_addr"),
                 get_named_compile_time_arg_val("up_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_fmt"),
                 get_named_compile_time_arg_val("up_proj_fmt_dram_addr"),
                 get_named_compile_time_arg_val("up_proj_fmt_per_expert_bytes"),
                 get_named_compile_time_arg_val("up_proj_fmt_per_core_bytes"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_1"),
                 get_named_compile_time_arg_val("up_proj_accum_experts"),
-                get_named_compile_time_arg_val("up_proj_index_offset")>;
+                get_named_compile_time_arg_val("up_proj_index_offset"),
+                get_named_compile_time_arg_val("up_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("up_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("up_proj_partial_sem_addr")>;
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -218,7 +236,7 @@ void kernel_main() {
             // down_proj Mcast (no-op on NCRISC — receiver moved to BRISC)
             deepseek_b1_ops::Mcast::DMArgs down_proj_mcast_args{.sender = {}, .receiver = {}};
 
-            // down_proj DRAM Matmul Expert Compressed (reader)
+            // down_proj DRAM Matmul Expert Compressed (reader) — pr42896 36-param shape
             using DownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
                 get_named_compile_time_arg_val("down_proj_cb_in0"),
                 get_named_compile_time_arg_val("down_proj_cb_in1"),
@@ -226,27 +244,36 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_cb_index"),
                 get_named_compile_time_arg_val("down_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("down_proj_subblock_k"),
+                get_named_compile_time_arg_val("down_proj_subblock_n"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("down_proj_per_core_n"),
                 get_named_compile_time_arg_val("down_proj_bank_id"),
                 get_named_compile_time_arg_val("down_proj_vc"),
-                get_named_compile_time_arg_val("down_proj_meta_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_block_sizes_l1_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_in1_size_bytes"),
                 get_named_compile_time_arg_val("down_proj_noc_max_page_size"),
                 get_named_compile_time_arg_val("down_proj_core_in_bank_idx"),
-                get_named_compile_time_arg_val("down_proj_pipeline_sem_id"),
+                get_named_compile_time_arg_val("down_proj_pipeline_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_next_core_noc_x"),
                 get_named_compile_time_arg_val("down_proj_next_core_noc_y"),
                 get_named_compile_time_arg_val("down_proj_cores_per_bank"),
                 get_named_compile_time_arg_val("down_proj_num_active_experts"),
-                get_named_compile_time_arg_val("down_proj_table_idx_l1_addr"),
                 get_named_compile_time_arg_val("down_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_fmt"),
                 get_named_compile_time_arg_val("down_proj_fmt_dram_addr"),
                 get_named_compile_time_arg_val("down_proj_fmt_per_expert_bytes"),
                 get_named_compile_time_arg_val("down_proj_fmt_per_core_bytes"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_1"),
                 get_named_compile_time_arg_val("down_proj_accum_experts"),
-                get_named_compile_time_arg_val("down_proj_index_offset")>;
+                get_named_compile_time_arg_val("down_proj_index_offset"),
+                get_named_compile_time_arg_val("down_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("down_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("down_proj_partial_sem_addr")>;
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -797,7 +824,7 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::ComputeArgs expert_scale_mcast_args{};
 #endif  // ENABLE_ROUTING
 
-            // gate_proj DRAM Matmul Expert Compressed (compute)
+            // gate_proj DRAM Matmul Expert Compressed (compute) — pr42896 28-param shape
             using GateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
                 get_named_compile_time_arg_val("gate_proj_cb_in0"),
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
@@ -805,16 +832,28 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_cb_index"),
                 get_named_compile_time_arg_val("gate_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("gate_proj_subblock_k"),
+                get_named_compile_time_arg_val("gate_proj_subblock_n"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("gate_proj_per_core_n"),
-                0,  // fmt_l1_addr — SRAM-only; DRAM uses cb_fmt
+                get_named_compile_time_arg_val("gate_proj_dram_fmt_l1_addr"),
                 get_named_compile_time_arg_val("gate_proj_num_active_experts"),
-                get_named_compile_time_arg_val("gate_proj_table_idx_l1_addr"),
                 get_named_compile_time_arg_val("gate_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_fmt"),
+                get_named_compile_time_arg_val("gate_proj_dram_meta_words_per_block"),
+                get_named_compile_time_arg_val("gate_proj_in0_page_size"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_1"),
                 get_named_compile_time_arg_val("gate_proj_accum_experts"),
                 get_named_compile_time_arg_val("gate_proj_fuse_silu"),
-                get_named_compile_time_arg_val("gate_proj_index_offset")>;
+                get_named_compile_time_arg_val("gate_proj_index_offset"),
+                get_named_compile_time_arg_val("gate_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_out_silu"),
+                get_named_compile_time_arg_val("gate_proj_silu_tile_h")>;
 
             // up_proj DRAM Matmul Expert Compressed (compute) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
@@ -824,16 +863,28 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_cb_index"),
                 get_named_compile_time_arg_val("up_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("up_proj_subblock_k"),
+                get_named_compile_time_arg_val("up_proj_subblock_n"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("up_proj_per_core_n"),
-                0,  // fmt_l1_addr — SRAM-only
+                get_named_compile_time_arg_val("up_proj_dram_fmt_l1_addr"),
                 get_named_compile_time_arg_val("up_proj_num_active_experts"),
-                get_named_compile_time_arg_val("up_proj_table_idx_l1_addr"),
                 get_named_compile_time_arg_val("up_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_fmt"),
+                get_named_compile_time_arg_val("up_proj_dram_meta_words_per_block"),
+                get_named_compile_time_arg_val("up_proj_in0_page_size"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_1"),
                 get_named_compile_time_arg_val("up_proj_accum_experts"),
                 get_named_compile_time_arg_val("up_proj_fuse_silu"),
-                get_named_compile_time_arg_val("up_proj_index_offset")>;
+                get_named_compile_time_arg_val("up_proj_index_offset"),
+                get_named_compile_time_arg_val("up_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("up_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_out_silu"),
+                get_named_compile_time_arg_val("up_proj_silu_tile_h")>;
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -856,7 +907,7 @@ void kernel_main() {
             // down_proj Mcast (compute — no-op)
             deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
 
-            // down_proj DRAM Matmul Expert Compressed (compute)
+            // down_proj DRAM Matmul Expert Compressed (compute) — pr42896 28-param shape
             using DownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
                 get_named_compile_time_arg_val("down_proj_cb_in0"),
                 get_named_compile_time_arg_val("down_proj_cb_in1"),
@@ -864,16 +915,28 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_cb_index"),
                 get_named_compile_time_arg_val("down_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("down_proj_subblock_k"),
+                get_named_compile_time_arg_val("down_proj_subblock_n"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
                 get_named_compile_time_arg_val("down_proj_per_core_n"),
-                0,  // fmt_l1_addr — SRAM-only
+                get_named_compile_time_arg_val("down_proj_dram_fmt_l1_addr"),
                 get_named_compile_time_arg_val("down_proj_num_active_experts"),
-                get_named_compile_time_arg_val("down_proj_table_idx_l1_addr"),
                 get_named_compile_time_arg_val("down_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_fmt"),
+                get_named_compile_time_arg_val("down_proj_dram_meta_words_per_block"),
+                get_named_compile_time_arg_val("down_proj_in0_page_size"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_1"),
                 get_named_compile_time_arg_val("down_proj_accum_experts"),
                 get_named_compile_time_arg_val("down_proj_fuse_silu"),
-                get_named_compile_time_arg_val("down_proj_index_offset")>;
+                get_named_compile_time_arg_val("down_proj_index_offset"),
+                get_named_compile_time_arg_val("down_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("down_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_out_silu"),
+                get_named_compile_time_arg_val("down_proj_silu_tile_h")>;
 
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<

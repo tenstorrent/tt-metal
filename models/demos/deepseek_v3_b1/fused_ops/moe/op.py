@@ -176,6 +176,10 @@ class _MoeRoutedExpertContext:
     gate_proj_cb_in1: int
     gate_proj_cb_out: int
     gate_proj_cb_fmt: int
+    # cb_out_silu aliases gate_proj_cb_out's L1 region with a tall tile covering
+    # all expert outputs so the silu fast-path processes them as one tile.
+    gate_proj_cb_out_silu: int
+    gate_proj_silu_tile_h: int
     up_proj_cb_in0: int
     up_proj_cb_in1: int
     up_proj_cb_mm_out: int
@@ -192,11 +196,6 @@ class _MoeRoutedExpertContext:
     add_cb_in0: int
     add_cb_in1: int
     add_cb_out: int
-    # Pipeline semaphore indices (MatmulExpertCompressedDRAM; degenerate self-signal at cores_per_bank=1)
-    gate_proj_pipeline_sem_idx: int
-    up_proj_pipeline_sem_idx: int
-    down_proj_pipeline_sem_idx: int
-
     # Semaphore IDs (shared)
     mcast_data_sender_semaphore_addr: int
     mcast_data_receiver_semaphore_addr: int
@@ -495,7 +494,8 @@ class MoeRoutedExpertOp:
               - ``meta_tensors`` (dict[MeshCoordinate -> dict[core_idx -> L1 uint32 tensor]])
               - ``fmt_dram_tensor`` (replicated DRAM fmt tensor)
               - ``fmt_dram_addr`` / ``fmt_per_expert_bytes`` / ``fmt_per_core_bytes``
-              - ``meta_l1_addr_per_device`` (dict[MeshCoordinate -> list[(core, addr)]])
+              - ``expert_offsets_l1_addr_per_device`` (dict[MeshCoordinate -> list[(core, addr)]])
+              - ``block_sizes_l1_addr_per_device`` (dict[MeshCoordinate -> list[(core, addr)]])
               - ``per_core_values_per_device`` (dict[MeshCoordinate -> {bank_id, vc, ...}])
               - ``num_active_experts``, ``num_total_experts``, ``cores_per_dram_bank``
               - ``num_in1_buffers`` (triple-buffered = 3)
@@ -509,8 +509,8 @@ class MoeRoutedExpertOp:
         """
         # Late-bind to avoid circular imports.
         from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
+            _meta_words_for_tiles,
             create_dram_expert_tensors_multi_device,
-            create_expert_selection_meta,
         )
 
         if num_total_experts is None:
@@ -553,48 +553,71 @@ class MoeRoutedExpertOp:
         #    fmt_sem_0, fmt_sem_1, partial_sem_addr, pipeline_sem_addr,
         #    partial_sem, pipeline_sem)
         # dram_backing_tensor holds in1 + fmt regions fused; buffer_address() seeds cb_in1.
+        # l1_addrs per coord = (expert_offsets_l1_addr_core_values, block_sizes_l1_addr_core_values).
+        # Cross-device constants (fmt_cb_l1_addr, sem addrs) match across coords by construction.
         first_coord = next(iter(dram_results))
-        in1_backing_tensor, _, fmt_dram_info, _, _, num_in1_buffers = dram_results[first_coord][:6]
+        (
+            in1_backing_tensor,
+            _,
+            fmt_dram_info,
+            _,
+            _,
+            num_in1_buffers,
+            fmt_cb_l1_addr,
+            fmt_sem_addr_0,
+            fmt_sem_addr_1,
+            fmt_sem_0,
+            fmt_sem_1,
+            partial_sem_addr,
+            pipeline_sem_addr,
+            partial_sem,
+            pipeline_sem,
+        ) = dram_results[first_coord]
         fmt_dram_tensor = fmt_dram_info["fmt_dram_tensor"]
 
         meta_tensors_per_device = {c: dram_results[c][1] for c in dram_results}
-        meta_l1_addr_per_device = {c: dram_results[c][3] for c in dram_results}
+        expert_offsets_l1_addr_per_device = {c: dram_results[c][3][0] for c in dram_results}
+        block_sizes_l1_addr_per_device = {c: dram_results[c][3][1] for c in dram_results}
         per_core_values_per_device = {c: dram_results[c][4] for c in dram_results}
 
         # Per-device compute cores list (same list across devices; from first device's per_core_values).
         first_coord_for_cores = next(iter(per_core_values_per_device))
         compute_cores_list = [c for (c, _) in per_core_values_per_device[first_coord_for_cores]["bank_id"]]
 
-        # table_idx L1 arrays — Phase 1B identity mapping (all 256 experts DRAM).
-        table_idx_tensors_per_device = {}
-        table_idx_l1_addr_per_device = {}
-        for coord in dram_results:
-            t_tensors, t_addr = create_expert_selection_meta(
-                mesh_device,
-                compute_cores_list,
-                is_dram_flags=is_dram_flags,
-                num_experts=num_total_experts,
-                device_coord=coord,
-            )
-            table_idx_tensors_per_device[coord] = t_tensors
-            table_idx_l1_addr_per_device[coord] = t_addr
-
         # Fmt DRAM sizing: recompute here (matches helper's internals).
-        _DRAM_ALIGNMENT = 64
-        tiles_per_expert = subblock_k * num_subblocks_k * per_core_n
-        fmt_bytes_per_expert_raw = tiles_per_expert * 4
+        # Phase 1C: k_parallel_per_bank=1, subblock_n=1 (matches setup), so
+        # num_subblocks_k_local == num_subblocks_k and fmt describes full K × N.
+        subblock_n = 1
+        k_parallel_per_bank = 1
+        num_subblocks_k_local = num_subblocks_k // k_parallel_per_bank
+        _DRAM_ALIGNMENT = ttnn._ttnn.bfp_utils.get_dram_alignment()
+        tiles_per_block = subblock_k * subblock_n
+        num_iterations_local = num_subblocks_k_local * (per_core_n // subblock_n)
+        fmt_words_per_expert = num_iterations_local * _meta_words_for_tiles(tiles_per_block)
+        fmt_bytes_per_expert_raw = fmt_words_per_expert * 4
         fmt_bytes_per_expert = ((fmt_bytes_per_expert_raw + _DRAM_ALIGNMENT - 1) // _DRAM_ALIGNMENT) * _DRAM_ALIGNMENT
         fmt_bytes_per_core = num_total_experts * fmt_bytes_per_expert
+        cb_fmt_dram_page_size = fmt_bytes_per_expert  # already aligned
+        dram_meta_words_per_block = _meta_words_for_tiles(tiles_per_block)
 
         # CT-args aliases / derived values (consumed by NCRISC + TRISC lists).
-        # Slot must fit worst-case bfp8_b tile (1088 B) regardless of the compressed
-        # storage dtype, matching micro_ops/matmul_expert/op.py's max_tile_size = _TILE_SIZES[0].
+        # Must match create_dram_expert_tensors_multi_device's use of _TILE_SIZES[1]
+        # (bfp4_b) so in1_region_bytes == helper's in1_region_bytes — otherwise cb_fmt
+        # aliased at address_offset=in1_region_bytes overshoots the backing tensor.
         from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
 
-        max_tile_size = _TILE_SIZES[0]
+        max_tile_size = _TILE_SIZES[1]
         data0_tile = data0.get_tile()
-        cb_in1_size_bytes = num_in1_buffers * subblock_k * max_tile_size
+        # pr42896 sizes cb_in1_dram as subblock_k × subblock_n × num_in1_buffers × max_tile_size.
+        cb_in1_dram_total_bytes = num_in1_buffers * subblock_k * subblock_n * max_tile_size
         noc_max_page_size = 16384  # Blackhole NOC max burst
+
+        # in0 page size (activation tile). MoE fused uses face tile [1, 32] bf16
+        # for cb_in0 (gate_mm_input_cb, TD_1x32), NOT the weight tile. Using
+        # data0_tile here was a bug — weights may report [32, 32] or packed shape,
+        # giving a page size the compute kernel strides with incorrectly.
+        _in0_tile_h, _in0_tile_w = 1, 32
+        in0_page_size = _in0_tile_h * _in0_tile_w * 2  # bf16 activations, face tile
 
         # Legacy fields that _overlap_cbs_with_sdpa_buffer consumes (total size + tile
         # metadata to rebuild cb_in1 pointed at the SDPA backing buffer instead of the
@@ -606,17 +629,33 @@ class MoeRoutedExpertOp:
             "Kt": Kt,
             "num_tiles_k": Kt,
             "subblock_k": subblock_k,
+            "subblock_n": subblock_n,
             "num_subblocks_k": num_subblocks_k,
+            "k_parallel_per_bank": k_parallel_per_bank,
+            "num_subblocks_k_local": num_subblocks_k_local,
             "in1_backing_tensor": in1_backing_tensor,
             "fmt_dram_tensor": fmt_dram_tensor,
             "fmt_dram_addr": _fused_base_addr(fmt_dram_tensor),
             "fmt_per_expert_bytes": fmt_bytes_per_expert,
             "fmt_per_core_bytes": fmt_bytes_per_core,
+            "fmt_cb_l1_addr": fmt_cb_l1_addr,
+            "fmt_cb_page_size": cb_fmt_dram_page_size,
+            "fmt_sem_addr_0": fmt_sem_addr_0,
+            "fmt_sem_addr_1": fmt_sem_addr_1,
+            "partial_sem_addr": partial_sem_addr,
+            "pipeline_sem_addr": pipeline_sem_addr,
+            "dram_meta_words_per_block": dram_meta_words_per_block,
+            "in0_page_size": in0_page_size,
+            # Keep sem objects alive so their L1 allocations aren't reclaimed before
+            # kernel launch (their addresses are baked into CT args).
+            "_fmt_sem_0": fmt_sem_0,
+            "_fmt_sem_1": fmt_sem_1,
+            "_partial_sem": partial_sem,
+            "_pipeline_sem": pipeline_sem,
             "meta_tensors_per_device": meta_tensors_per_device,
-            "meta_l1_addr_per_device": meta_l1_addr_per_device,
+            "expert_offsets_l1_addr_per_device": expert_offsets_l1_addr_per_device,
+            "block_sizes_l1_addr_per_device": block_sizes_l1_addr_per_device,
             "per_core_values_per_device": per_core_values_per_device,
-            "table_idx_tensors_per_device": table_idx_tensors_per_device,
-            "table_idx_l1_addr_per_device": table_idx_l1_addr_per_device,
             "compute_cores_list": compute_cores_list,
             "num_active_experts": num_active_experts,
             "num_total_experts": num_total_experts,
@@ -624,7 +663,7 @@ class MoeRoutedExpertOp:
             "cores_per_bank": cores_per_dram_bank,
             "num_in1_buffers": num_in1_buffers,
             "is_dram_flags": is_dram_flags,
-            "cb_in1_size_bytes": cb_in1_size_bytes,
+            "cb_in1_size_bytes": cb_in1_dram_total_bytes,
             "noc_max_page_size": noc_max_page_size,
             "accum_experts": accum_experts,
             # Filled in by caller after routing tensor is known (Phase 1B: stub 0)
@@ -634,9 +673,11 @@ class MoeRoutedExpertOp:
             "in1_block_size_bytes": in1_block_size_bytes,
             "weights_tile": data0_tile,
             "weights_dtype": data0.dtype,
-            # Kernel consumes bfp8_b tiles (1088 B) even though compressed storage is uint8.
+            # Compressed storage is bfp4_b (576 B / 32x32 tile). cb_in1 must match
+            # canonical matmul_expert's CB format (micro_ops/matmul_expert/op.py:402-407)
+            # — bfp8_b here would cause compute to unpack 1088-B tiles over 576-B pages.
             "cb_page_size": max_tile_size,
-            "cb_data_format": ttnn.bfloat8_b,
+            "cb_data_format": ttnn.bfloat4_b,
             "in1_buf_addr": 0,
             # Legacy aliases used elsewhere in build() (setup_dram_matmul shape)
             "cb_in1_descriptor": None,
@@ -661,35 +702,34 @@ class MoeRoutedExpertOp:
         Set up parameters and CB descriptors for element-wise multiply with CB aliasing and scalar multiply.
         When tensors are None, their CB descriptors are deferred to the overlap function.
         """
-        M = 1
-        tile_width = 32
-        total_elements = M * per_core_n * tile_width
-        mul_num_tiles = math.ceil(total_elements / 256)
+        # Inputs (matmul outputs) are 1x32 tiles; scalar broadcast requires 1x32,
+        # so the mul runs as per_core_n × 1x32 mul_tiles per expert.
+        mul_num_tiles = per_core_n
 
-        TILE_16x16 = ttnn.Tile((16, 16))
-        tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
-        tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
+        TILE_1x32 = ttnn.Tile((1, 32))
+        tile_1x32_size = TILE_1x32.get_tile_size(ttnn.bfloat16)
+        tile_1x32_desc = ttnn.TileDescriptor(TILE_1x32)
 
         cb_in0_descriptor = None
         if in0_tensor is not None:
             cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
-            cb_in0_descriptor.total_size = mul_num_tiles * tile_16x16_size
-            cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
-            cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
+            cb_in0_descriptor.total_size = mul_num_tiles * tile_1x32_size
+            cb_in0_descriptor.format_descriptors[0].tile = tile_1x32_desc
+            cb_in0_descriptor.format_descriptors[0].page_size = tile_1x32_size
 
         cb_in1_descriptor = None
         if in1_tensor is not None:
             cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
-            cb_in1_descriptor.total_size = mul_num_tiles * tile_16x16_size
-            cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
-            cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
+            cb_in1_descriptor.total_size = mul_num_tiles * tile_1x32_size
+            cb_in1_descriptor.format_descriptors[0].tile = tile_1x32_desc
+            cb_in1_descriptor.format_descriptors[0].page_size = tile_1x32_size
 
         cb_out_descriptor = None
         if out_tensor is not None:
             cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
-            cb_out_descriptor.total_size = mul_num_tiles * tile_16x16_size
-            cb_out_descriptor.format_descriptors[0].tile = tile_16x16_desc
-            cb_out_descriptor.format_descriptors[0].page_size = tile_16x16_size
+            cb_out_descriptor.total_size = mul_num_tiles * tile_1x32_size
+            cb_out_descriptor.format_descriptors[0].tile = tile_1x32_desc
+            cb_out_descriptor.format_descriptors[0].page_size = tile_1x32_size
 
         cb_scalar_src_descriptor = None
         if scalar_src_tensor is not None:
@@ -1126,6 +1166,9 @@ class MoeRoutedExpertOp:
         gate_proj_cb_fmt = cb_id_context.get_cb_id(data_format, TD_1x32)
         up_proj_cb_fmt = cb_id_context.get_cb_id(data_format, TD_1x32)
         down_proj_cb_fmt = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # cb_out_silu: aliases gate_proj_cb_out's L1 region with tile shape
+        # [silu_tile_h, tile_w] so post-reduction silu runs as one tile copy/pack.
+        gate_proj_cb_out_silu = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1472,28 +1515,38 @@ class MoeRoutedExpertOp:
         if enable_routing and gate_output_indices_tensor is not None:
             index_l1_addr = _fused_base_addr(gate_output_indices_tensor)
             for p in (gate_proj_params, up_proj_params, down_proj_params):
-                if "meta_l1_addr_per_device" in p:
+                if "expert_offsets_l1_addr_per_device" in p:
                     p["index_l1_addr"] = index_l1_addr
 
-        # Build cb_fmt CB descriptors for MatmulExpertCompressedDRAM (double-buffered
-        # per-expert fmt metadata, uint8). One descriptor per projection (gate/up/down);
-        # all three live on gate_proj_core_ranges (the DRAM streamer cores).
+        # Build cb_fmt CB descriptors for MatmulExpertCompressedDRAM.
+        # Canonical (micro_ops/matmul_expert/op.py:414-427) aliases cb_fmt OVER the
+        # dram_backing_tensor at address_offset=in1_region_bytes so the CB's L1 base
+        # matches fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes.
+        # NCRISC writes fmt via raw L1 pointer at fmt_cb_l1_addr; compute reads via the
+        # CB interface — both must resolve to the same physical L1 region.
+        _dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
+
         def _build_cb_fmt_descriptor(cb_id, params):
             if "fmt_per_expert_bytes" not in params:
                 return None
             fmt_bytes = params["fmt_per_expert_bytes"]
-            page_size = ((fmt_bytes + 63) // 64 * 64) if fmt_bytes > 0 else 64
-            return ttnn.CBDescriptor(
-                total_size=2 * page_size,
-                core_ranges=gate_proj_core_ranges,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=cb_id,
-                        data_format=ttnn.uint8,
-                        page_size=page_size,
-                    ),
-                ],
+            page_size = ((max(fmt_bytes, _dram_alignment) + _dram_alignment - 1) // _dram_alignment) * _dram_alignment
+            in1_region_bytes = params["cb_in1_size_bytes"]
+            in1_backing_tensor = params["in1_backing_tensor"]
+            cb_fmt_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb_id,
+                in1_backing_tensor,
+                address_offset=in1_region_bytes,
+                total_size=page_size,
             )
+            cb_fmt_desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_id,
+                    data_format=ttnn.uint8,
+                    page_size=page_size,
+                ),
+            ]
+            return cb_fmt_desc
 
         gate_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(gate_proj_cb_fmt, gate_proj_params)
         up_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(up_proj_cb_fmt, up_proj_params)
@@ -1694,6 +1747,15 @@ class MoeRoutedExpertOp:
             vc_core_values.append((core, vc))
             sender_idx_core_values.append((core, idx))
 
+        # Silu fast-path tile-h padded up to next valid face_r_dim ∈ {2, 4, 8, 16}.
+        # Covers all num_active_experts * per_core_n output tiles as one tall tile.
+        from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import _pad_to_face_r_dim
+
+        _gate_proj_out_tile_h = 1  # gate_proj_cb_out uses TD_1x32 (tile_h=1)
+        gate_proj_silu_tile_h = _pad_to_face_r_dim(
+            gate_proj_params["num_active_experts"] * gate_proj_params["per_core_n"] * _gate_proj_out_tile_h
+        )
+
         # ==================================================================
         # Return context
         # ==================================================================
@@ -1740,14 +1802,12 @@ class MoeRoutedExpertOp:
             # MatmulExpertCompressedDRAM CB indices (Phase 1B)
             gate_proj_cb_in0=gate_proj_cb_in0,
             gate_proj_cb_fmt=gate_proj_cb_fmt,
+            gate_proj_cb_out_silu=gate_proj_cb_out_silu,
+            gate_proj_silu_tile_h=gate_proj_silu_tile_h,
             up_proj_cb_in0=up_proj_cb_in0,
             up_proj_cb_fmt=up_proj_cb_fmt,
             down_proj_cb_in0=down_proj_cb_in0,
             down_proj_cb_fmt=down_proj_cb_fmt,
-            # MatmulExpertCompressedDRAM pipeline semaphore indices (Phase 1B)
-            gate_proj_pipeline_sem_idx=MoeSem.GATE_PROJ_PIPELINE,
-            up_proj_pipeline_sem_idx=MoeSem.UP_PROJ_PIPELINE,
-            down_proj_pipeline_sem_idx=MoeSem.DOWN_PROJ_PIPELINE,
             # Setup result dicts (shared)
             rmsnorm_mcast_params=rmsnorm_mcast_params,
             gate_proj_params=gate_proj_params,
@@ -1894,18 +1954,20 @@ class MoeRoutedExpertOp:
             ("add_cb_in1", ctx.add_cb_in1),
             ("add_cb_in0_wait_tiles", ctx.add_params["cb_in0_wait_tiles"]),
             ("add_cb_in1_wait_tiles", ctx.add_params["cb_in1_wait_tiles"]),
-            # gate_proj MatmulExpertCompressedDRAM reader (Phase 1B)
+            # gate_proj MatmulExpertCompressedDRAM reader (Phase 1C — pr42896 API)
             ("gate_proj_cb_in0", ctx.gate_proj_cb_in0),
             ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
             ("gate_proj_cb_out", ctx.gate_proj_cb_out),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
             ("gate_proj_num_tiles_k", ctx.gate_proj_params["num_tiles_k"]),
             ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
+            ("gate_proj_subblock_n", ctx.gate_proj_params["subblock_n"]),
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
             ("gate_proj_cb_in1_size_bytes", ctx.gate_proj_params["cb_in1_size_bytes"]),
             ("gate_proj_noc_max_page_size", ctx.gate_proj_params["noc_max_page_size"]),
-            ("gate_proj_pipeline_sem_id", ctx.gate_proj_pipeline_sem_idx),
+            ("gate_proj_pipeline_sem_addr", ctx.gate_proj_params["pipeline_sem_addr"]),
+            ("gate_proj_partial_sem_addr", ctx.gate_proj_params["partial_sem_addr"]),
             ("gate_proj_cores_per_bank", ctx.gate_proj_params["cores_per_bank"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
             ("gate_proj_index_l1_addr", ctx.gate_proj_params["index_l1_addr"]),
@@ -1913,6 +1975,12 @@ class MoeRoutedExpertOp:
             ("gate_proj_fmt_dram_addr", ctx.gate_proj_params["fmt_dram_addr"]),
             ("gate_proj_fmt_per_expert_bytes", ctx.gate_proj_params["fmt_per_expert_bytes"]),
             ("gate_proj_fmt_per_core_bytes", ctx.gate_proj_params["fmt_per_core_bytes"]),
+            ("gate_proj_fmt_cb_l1_addr", ctx.gate_proj_params["fmt_cb_l1_addr"]),
+            ("gate_proj_fmt_cb_page_size", ctx.gate_proj_params["fmt_cb_page_size"]),
+            ("gate_proj_fmt_sem_addr_0", ctx.gate_proj_params["fmt_sem_addr_0"]),
+            ("gate_proj_fmt_sem_addr_1", ctx.gate_proj_params["fmt_sem_addr_1"]),
+            ("gate_proj_k_parallel_per_bank", ctx.gate_proj_params["k_parallel_per_bank"]),
+            ("gate_proj_num_subblocks_k_local", ctx.gate_proj_params["num_subblocks_k_local"]),
             ("gate_proj_accum_experts", ctx.gate_proj_params["accum_experts"]),
             ("gate_proj_index_offset", 0),
             # Physical CB base address — used as CBIn1ResetAddr template param so the
@@ -1926,11 +1994,13 @@ class MoeRoutedExpertOp:
             ("up_proj_cb_index", ctx.gate_proj_cb_index),
             ("up_proj_num_tiles_k", ctx.up_proj_params["num_tiles_k"]),
             ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
+            ("up_proj_subblock_n", ctx.up_proj_params["subblock_n"]),
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             ("up_proj_cb_in1_size_bytes", ctx.up_proj_params["cb_in1_size_bytes"]),
             ("up_proj_noc_max_page_size", ctx.up_proj_params["noc_max_page_size"]),
-            ("up_proj_pipeline_sem_id", ctx.up_proj_pipeline_sem_idx),
+            ("up_proj_pipeline_sem_addr", ctx.up_proj_params["pipeline_sem_addr"]),
+            ("up_proj_partial_sem_addr", ctx.up_proj_params["partial_sem_addr"]),
             ("up_proj_cores_per_bank", ctx.up_proj_params["cores_per_bank"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
             ("up_proj_index_l1_addr", ctx.up_proj_params["index_l1_addr"]),
@@ -1938,6 +2008,12 @@ class MoeRoutedExpertOp:
             ("up_proj_fmt_dram_addr", ctx.up_proj_params["fmt_dram_addr"]),
             ("up_proj_fmt_per_expert_bytes", ctx.up_proj_params["fmt_per_expert_bytes"]),
             ("up_proj_fmt_per_core_bytes", ctx.up_proj_params["fmt_per_core_bytes"]),
+            ("up_proj_fmt_cb_l1_addr", ctx.up_proj_params["fmt_cb_l1_addr"]),
+            ("up_proj_fmt_cb_page_size", ctx.up_proj_params["fmt_cb_page_size"]),
+            ("up_proj_fmt_sem_addr_0", ctx.up_proj_params["fmt_sem_addr_0"]),
+            ("up_proj_fmt_sem_addr_1", ctx.up_proj_params["fmt_sem_addr_1"]),
+            ("up_proj_k_parallel_per_bank", ctx.up_proj_params["k_parallel_per_bank"]),
+            ("up_proj_num_subblocks_k_local", ctx.up_proj_params["num_subblocks_k_local"]),
             ("up_proj_accum_experts", ctx.up_proj_params["accum_experts"]),
             ("up_proj_index_offset", 0),
             # down_proj MatmulExpertCompressedDRAM reader
@@ -1947,11 +2023,13 @@ class MoeRoutedExpertOp:
             ("down_proj_cb_index", ctx.gate_proj_cb_index),
             ("down_proj_num_tiles_k", ctx.down_proj_params["num_tiles_k"]),
             ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
+            ("down_proj_subblock_n", ctx.down_proj_params["subblock_n"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
             ("down_proj_cb_in1_size_bytes", ctx.down_proj_params["cb_in1_size_bytes"]),
             ("down_proj_noc_max_page_size", ctx.down_proj_params["noc_max_page_size"]),
-            ("down_proj_pipeline_sem_id", ctx.down_proj_pipeline_sem_idx),
+            ("down_proj_pipeline_sem_addr", ctx.down_proj_params["pipeline_sem_addr"]),
+            ("down_proj_partial_sem_addr", ctx.down_proj_params["partial_sem_addr"]),
             ("down_proj_cores_per_bank", ctx.down_proj_params["cores_per_bank"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
             ("down_proj_index_l1_addr", ctx.down_proj_params["index_l1_addr"]),
@@ -1959,6 +2037,12 @@ class MoeRoutedExpertOp:
             ("down_proj_fmt_dram_addr", ctx.down_proj_params["fmt_dram_addr"]),
             ("down_proj_fmt_per_expert_bytes", ctx.down_proj_params["fmt_per_expert_bytes"]),
             ("down_proj_fmt_per_core_bytes", ctx.down_proj_params["fmt_per_core_bytes"]),
+            ("down_proj_fmt_cb_l1_addr", ctx.down_proj_params["fmt_cb_l1_addr"]),
+            ("down_proj_fmt_cb_page_size", ctx.down_proj_params["fmt_cb_page_size"]),
+            ("down_proj_fmt_sem_addr_0", ctx.down_proj_params["fmt_sem_addr_0"]),
+            ("down_proj_fmt_sem_addr_1", ctx.down_proj_params["fmt_sem_addr_1"]),
+            ("down_proj_k_parallel_per_bank", ctx.down_proj_params["k_parallel_per_bank"]),
+            ("down_proj_num_subblocks_k_local", ctx.down_proj_params["num_subblocks_k_local"]),
             ("down_proj_accum_experts", ctx.down_proj_params["accum_experts"]),
             ("down_proj_index_offset", 0),
             # Testing flag (routing only)
@@ -2108,20 +2192,33 @@ class MoeRoutedExpertOp:
             ("gate_eps", ctx.gate_params["eps"] if ctx.enable_routing else 0),
             ("gate_scaling_factor", ctx.gate_params["scaling_factor"] if ctx.enable_routing else 0),
             ("gate_enable_sigmoid", ctx.gate_params["enable_sigmoid"] if ctx.enable_routing else 0),
-            # gate_proj MatmulExpertCompressedDRAM compute (Phase 1B)
+            # gate_proj MatmulExpertCompressedDRAM compute (Phase 1C — pr42896 API)
             ("gate_proj_cb_in0", ctx.gate_proj_cb_in0),
             ("gate_proj_cb_in1", ctx.gate_proj_cb_in1),
             ("gate_proj_cb_out", ctx.gate_proj_cb_out),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
             ("gate_proj_num_tiles_k", ctx.gate_proj_params["num_tiles_k"]),
             ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
+            ("gate_proj_subblock_n", ctx.gate_proj_params["subblock_n"]),
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
             ("gate_proj_index_l1_addr", ctx.gate_proj_params["index_l1_addr"]),
             ("gate_proj_cb_fmt", ctx.gate_proj_cb_fmt),
+            ("gate_proj_dram_meta_words_per_block", ctx.gate_proj_params["dram_meta_words_per_block"]),
+            ("gate_proj_in0_page_size", ctx.gate_proj_params["in0_page_size"]),
+            ("gate_proj_fmt_cb_l1_addr", ctx.gate_proj_params["fmt_cb_l1_addr"]),
+            ("gate_proj_fmt_cb_page_size", ctx.gate_proj_params["fmt_cb_page_size"]),
+            ("gate_proj_fmt_sem_addr_0", ctx.gate_proj_params["fmt_sem_addr_0"]),
+            ("gate_proj_fmt_sem_addr_1", ctx.gate_proj_params["fmt_sem_addr_1"]),
+            ("gate_proj_k_parallel_per_bank", ctx.gate_proj_params["k_parallel_per_bank"]),
+            ("gate_proj_num_subblocks_k_local", ctx.gate_proj_params["num_subblocks_k_local"]),
+            ("gate_proj_partial_sem_addr", ctx.gate_proj_params["partial_sem_addr"]),
             ("gate_proj_accum_experts", ctx.gate_proj_params["accum_experts"]),
             ("gate_proj_fuse_silu", 1),
+            # Silu fast-path — only used when fuse_silu=1. gate_proj has it; up/down pass 0.
+            ("gate_proj_cb_out_silu", ctx.gate_proj_cb_out_silu),
+            ("gate_proj_silu_tile_h", ctx.gate_proj_silu_tile_h),
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             # up_proj MatmulExpertCompressedDRAM compute — shares weight CB with gate_proj
@@ -2131,13 +2228,25 @@ class MoeRoutedExpertOp:
             ("up_proj_cb_index", ctx.gate_proj_cb_index),
             ("up_proj_num_tiles_k", ctx.up_proj_params["num_tiles_k"]),
             ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
+            ("up_proj_subblock_n", ctx.up_proj_params["subblock_n"]),
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
             ("up_proj_index_l1_addr", ctx.up_proj_params["index_l1_addr"]),
             ("up_proj_cb_fmt", ctx.up_proj_cb_fmt),
+            ("up_proj_dram_meta_words_per_block", ctx.up_proj_params["dram_meta_words_per_block"]),
+            ("up_proj_in0_page_size", ctx.up_proj_params["in0_page_size"]),
+            ("up_proj_fmt_cb_l1_addr", ctx.up_proj_params["fmt_cb_l1_addr"]),
+            ("up_proj_fmt_cb_page_size", ctx.up_proj_params["fmt_cb_page_size"]),
+            ("up_proj_fmt_sem_addr_0", ctx.up_proj_params["fmt_sem_addr_0"]),
+            ("up_proj_fmt_sem_addr_1", ctx.up_proj_params["fmt_sem_addr_1"]),
+            ("up_proj_k_parallel_per_bank", ctx.up_proj_params["k_parallel_per_bank"]),
+            ("up_proj_num_subblocks_k_local", ctx.up_proj_params["num_subblocks_k_local"]),
+            ("up_proj_partial_sem_addr", ctx.up_proj_params["partial_sem_addr"]),
             ("up_proj_accum_experts", ctx.up_proj_params["accum_experts"]),
             ("up_proj_fuse_silu", 0),
+            ("up_proj_cb_out_silu", 0),
+            ("up_proj_silu_tile_h", 0),
             # Mul compute
             ("mul_cb_in0", ctx.mul_cb_in0),
             ("mul_cb_in1", ctx.mul_cb_in1),
@@ -2153,13 +2262,25 @@ class MoeRoutedExpertOp:
             ("down_proj_cb_index", ctx.gate_proj_cb_index),
             ("down_proj_num_tiles_k", ctx.down_proj_params["num_tiles_k"]),
             ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
+            ("down_proj_subblock_n", ctx.down_proj_params["subblock_n"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
             ("down_proj_index_l1_addr", ctx.down_proj_params["index_l1_addr"]),
             ("down_proj_cb_fmt", ctx.down_proj_cb_fmt),
+            ("down_proj_dram_meta_words_per_block", ctx.down_proj_params["dram_meta_words_per_block"]),
+            ("down_proj_in0_page_size", ctx.down_proj_params["in0_page_size"]),
+            ("down_proj_fmt_cb_l1_addr", ctx.down_proj_params["fmt_cb_l1_addr"]),
+            ("down_proj_fmt_cb_page_size", ctx.down_proj_params["fmt_cb_page_size"]),
+            ("down_proj_fmt_sem_addr_0", ctx.down_proj_params["fmt_sem_addr_0"]),
+            ("down_proj_fmt_sem_addr_1", ctx.down_proj_params["fmt_sem_addr_1"]),
+            ("down_proj_k_parallel_per_bank", ctx.down_proj_params["k_parallel_per_bank"]),
+            ("down_proj_num_subblocks_k_local", ctx.down_proj_params["num_subblocks_k_local"]),
+            ("down_proj_partial_sem_addr", ctx.down_proj_params["partial_sem_addr"]),
             ("down_proj_accum_experts", ctx.down_proj_params["accum_experts"]),
             ("down_proj_fuse_silu", 0),
+            ("down_proj_cb_out_silu", 0),
+            ("down_proj_silu_tile_h", 0),
             # Shared matmul-expert compute args (index_offset: 0 for TP8 all-device broadcast)
             ("gate_proj_index_offset", 0),
             ("up_proj_index_offset", 0),
@@ -2225,6 +2346,12 @@ class MoeRoutedExpertOp:
             # mul_cb_in0/in1 reuse gate_proj/up_proj out CBs (already listed above).
             ctx.mul_params["cb_out_descriptor"],
         ]
+        # cb_out_silu: alias on gate_proj_cb_out's L1 region for silu fast-path.
+        if (
+            "cb_out_silu_descriptor" in ctx.gate_proj_params
+            and ctx.gate_proj_params["cb_out_silu_descriptor"] is not None
+        ):
+            descriptors.append(ctx.gate_proj_params["cb_out_silu_descriptor"])
 
         if ctx.enable_routing:
             descriptors += [
@@ -2349,25 +2476,32 @@ class MoeRoutedExpertOp:
             ),
         ]
 
-        # MatmulExpertCompressedDRAM per-core descriptors (Phase 1B). Values populated
-        # from first device's per-coord dict as a shared default; `_setup_per_device_args`
-        # overwrites per-device for correctness on mesh devices where addresses may differ.
-        if "meta_l1_addr_per_device" in ctx.gate_proj_params:
+        # MatmulExpertCompressedDRAM per-core descriptors (Phase 1C — pr42896 API).
+        # Values populated from first device's per-coord dict as a shared default;
+        # `_setup_per_device_args` overwrites per-device for correctness on mesh
+        # devices where addresses may differ.
+        if "expert_offsets_l1_addr_per_device" in ctx.gate_proj_params:
             for proj in ("gate_proj", "up_proj", "down_proj"):
                 params = getattr(ctx, f"{proj}_params")
-                first_coord = next(iter(params["meta_l1_addr_per_device"]))
-                meta_vals = params["meta_l1_addr_per_device"][first_coord]
-                table_idx_vals = params["table_idx_l1_addr_per_device"][first_coord]
+                first_coord = next(iter(params["expert_offsets_l1_addr_per_device"]))
+                expert_offsets_vals = params["expert_offsets_l1_addr_per_device"][first_coord]
+                block_sizes_vals = params["block_sizes_l1_addr_per_device"][first_coord]
                 pcv = params["per_core_values_per_device"][first_coord]
                 per_core_compile_time_descriptors += [
                     PerCoreCompileTimeDescriptor(
-                        named_compile_time_arg=f"{proj}_meta_l1_addr",
-                        core_values=meta_vals,
+                        named_compile_time_arg=f"{proj}_expert_offsets_l1_addr",
+                        core_values=expert_offsets_vals,
                         other_value=0,
                     ),
                     PerCoreCompileTimeDescriptor(
-                        named_compile_time_arg=f"{proj}_table_idx_l1_addr",
-                        core_values=table_idx_vals,
+                        named_compile_time_arg=f"{proj}_block_sizes_l1_addr",
+                        core_values=block_sizes_vals,
+                        other_value=0,
+                    ),
+                    # DRAM-only path: dram_fmt_l1_addr slot is unused (SRAM-only); pass 0.
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=f"{proj}_dram_fmt_l1_addr",
+                        core_values=[],
                         other_value=0,
                     ),
                     PerCoreCompileTimeDescriptor(
@@ -2383,6 +2517,11 @@ class MoeRoutedExpertOp:
                     PerCoreCompileTimeDescriptor(
                         named_compile_time_arg=f"{proj}_next_core_noc_y",
                         core_values=pcv["next_core_noc_y"],
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=f"{proj}_k_slice_idx",
+                        core_values=pcv["k_slice_idx"],
                         other_value=0,
                     ),
                 ]
@@ -3819,6 +3958,26 @@ class MoeOp:
         )
         cb11_desc.format_descriptors = [cb11_fmt]
         routed_ctx.gate_proj_params["cb_out_descriptor"] = cb11_desc
+        # cb_out_silu: aliased view of CB11 with a single tall tile
+        # [silu_tile_h, tile_w] so the post-reduction silu runs as one pack/copy.
+        silu_tile_h = routed_ctx.gate_proj_silu_tile_h
+        cb_out_silu_cb_id = routed_ctx.gate_proj_cb_out_silu
+        cb_out_silu_tile = ttnn.Tile([silu_tile_h, 32])
+        cb_out_silu_page_size = silu_tile_h * 32 * 2  # bf16
+        cb_out_silu_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            cb_out_silu_cb_id,
+            kv_buf,
+            address_offset=kv_offset,
+            total_size=cb11_total_size,
+        )
+        cb_out_silu_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=cb_out_silu_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=cb_out_silu_page_size,
+            tile=ttnn.TileDescriptor(cb_out_silu_tile),
+        )
+        cb_out_silu_desc.format_descriptors = [cb_out_silu_fmt]
+        routed_ctx.gate_proj_params["cb_out_silu_descriptor"] = cb_out_silu_desc
         kv_offset += cb11_total_size
 
         # CB 12: up_proj_mm_out (aliases CB 13) — hardcoded descriptor
@@ -3990,7 +4149,6 @@ class MoeOp:
 
         cb9_offset = kv_offset
 
-        # Build CB 9 descriptor from SDPA buffer with weights format
         cb9_desc = ttnn.cb_descriptor_from_sharded_tensor(
             routed_ctx.gate_proj_cb_in1,
             kv_buf,
@@ -5116,15 +5274,14 @@ class MoeOp:
             self.ctx.routed_ctx.up_proj_params,
             self.ctx.routed_ctx.down_proj_params,
         ):
-            if "meta_l1_addr_per_device" not in proj_params:
+            if "expert_offsets_l1_addr_per_device" not in proj_params:
                 continue
             if proj_params["in1_backing_tensor"] is not None:
                 io_tensors.append(proj_params["in1_backing_tensor"])
             io_tensors.append(proj_params["fmt_dram_tensor"])
-            for coord_dict in proj_params["meta_tensors_per_device"].values():
-                io_tensors += list(coord_dict.values())
-            for coord_dict in proj_params["table_idx_tensors_per_device"].values():
-                io_tensors += list(coord_dict.values())
+            for offset_t, bsize_t in proj_params["meta_tensors_per_device"].values():
+                io_tensors += list(offset_t.values())
+                io_tensors += list(bsize_t.values())
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [
@@ -5223,7 +5380,7 @@ class MoeOp:
         # Replaces the first-coord defaults written by _build_core_descriptors with
         # values for this specific mesh coordinate.
         routed_ctx = self.ctx.routed_ctx
-        if "meta_l1_addr_per_device" in routed_ctx.gate_proj_params:
+        if "expert_offsets_l1_addr_per_device" in routed_ctx.gate_proj_params:
             proj_name_to_params = {
                 "gate_proj": routed_ctx.gate_proj_params,
                 "up_proj": routed_ctx.up_proj_params,
@@ -5232,11 +5389,12 @@ class MoeOp:
             overrides = {}
             for proj, params in proj_name_to_params.items():
                 pcv = params["per_core_values_per_device"][coord]
-                overrides[f"{proj}_meta_l1_addr"] = params["meta_l1_addr_per_device"][coord]
-                overrides[f"{proj}_table_idx_l1_addr"] = params["table_idx_l1_addr_per_device"][coord]
+                overrides[f"{proj}_expert_offsets_l1_addr"] = params["expert_offsets_l1_addr_per_device"][coord]
+                overrides[f"{proj}_block_sizes_l1_addr"] = params["block_sizes_l1_addr_per_device"][coord]
                 overrides[f"{proj}_core_in_bank_idx"] = pcv["core_in_bank_idx"]
                 overrides[f"{proj}_next_core_noc_x"] = pcv["next_core_noc_x"]
                 overrides[f"{proj}_next_core_noc_y"] = pcv["next_core_noc_y"]
+                overrides[f"{proj}_k_slice_idx"] = pcv["k_slice_idx"]
             for i, desc in enumerate(self.device_per_core_descs):
                 name = desc.named_compile_time_arg
                 if name in overrides:
