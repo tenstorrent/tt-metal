@@ -358,6 +358,10 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     // EventSynchronize / wait_for_pending_events actually waits on new events
     // instead of short-circuiting on a stale quiesce publication.
     this->cq_to_quiesced[cq_id].store(false, std::memory_order_release);
+    // Reset the prefetch queue in-flight counter. Firmware re-initializes its
+    // rd_ptr to the limit sentinel (base + N*entry_size) when the dispatch kernel
+    // is reloaded, so the host counter must also start at 0 to stay consistent.
+    this->prefetch_q_in_flight[cq_id] = 0;
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
