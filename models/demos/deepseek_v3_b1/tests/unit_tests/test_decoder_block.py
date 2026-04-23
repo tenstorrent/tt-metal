@@ -1084,7 +1084,7 @@ def test_decoder_mlp(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
-    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+    _full_q, golden_new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
         d["golden_attn_norm"],
         d["golden_torch_matmul_weights"],
