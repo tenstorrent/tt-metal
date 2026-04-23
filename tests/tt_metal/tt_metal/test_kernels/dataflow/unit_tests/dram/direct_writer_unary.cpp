@@ -17,10 +17,12 @@ void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
     uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    // See direct_reader_unary.cpp for why this is separate from the DFB
-    // entry size: the DRAM allocator may round page_size up to NoC DRAM
-    // alignment, so DRAM stride can exceed native tile size. Callers pass
-    // Buffer::aligned_page_size() here.
+    // DRAM page stride: the allocator may round page_size up (e.g. to
+    // NOC_DRAM_READ_ALIGNMENT_BYTES = 64 on Quasar), so tiles are spaced
+    // further apart in DRAM than their native size. Callers pass
+    // Buffer::aligned_page_size() here; the kernel advances the DRAM
+    // pointer by this stride while the DFB/CB still streams native-size
+    // tiles into L1.
     uint32_t dram_page_stride = get_arg_val<uint32_t>(3);
 
     uint32_t ublock_size_tiles = 1;
