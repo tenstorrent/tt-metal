@@ -22,7 +22,6 @@ from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
-from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
@@ -41,51 +40,15 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_moe_layer_weights,
 )
 
-# Blackhole DRAM-worker cores excluded from the SRAM hot-expert down-proj grid.
-_BH_DRAM_WORKER_CORES = {(0, 0), (0, 3), (0, 7), (0, 9), (7, 1), (7, 4), (7, 6), (7, 9)}
-
 # Safety ceiling on SRAM hot experts per layer.  The real cap is the
 # per-core L1 budget measured from the attention footprint inside
 # ``prepare_moe_layer_weights`` (see ``worker_l1_size`` wiring below), this
 # value just bounds how many ranked candidates we hand to the greedy trim
 # so we don't waste CPU time running the assigner on hundreds of experts
-# that will never fit.  32 is comfortably above the ~15 bfp4 / ~7 bfp8
-# experts that realistically fit per 4x2 device under shared-expert-style
-# TP8 (16 gate + 16 up + 56 down cores, per_core_N=64).
-_SRAM_HOT_EXPERTS_CEILING = 32
-
-# Per-device core-count split under shared-expert-style TP8.
-# Under TP8 (mesh 4x2 with K sharded along 4 rows, N sharded along 2 cols)
-# per-device N is half the full N; these counts keep per_core_N tile-aligned
-# (>= 32) while maximising how many experts fit in L1 per core.
-_SRAM_GATE_CORES_PER_DEVICE_TP8 = 16  # per_core_N = 1024 / 16 = 64
-_SRAM_UP_CORES_PER_DEVICE_TP8 = 16
-_SRAM_DOWN_CORES_PER_DEVICE_TP8 = 56  # per_core_N = 3584 / 56 = 64
-
-
-def _build_down_cores(submesh) -> list[ttnn.CoreCoord]:
-    """112-core down-proj grid matching the DRAM routed-expert pipeline.
-
-    Mirrors ``_build_down_grid`` in
-    ``tests/unit_tests/per_core_allocation/test_matmul_expert.py``: on a 13x10
-    device we exclude 8 DRAM workers, 9 phantoms (col 12, rows 0-8), and the
-    mcast core (12, 9).  On a 12x10 device col 12 does not exist and only the
-    8 DRAM workers are excluded.
-    """
-    grid = submesh.compute_with_storage_grid_size()
-    num_cols = grid.x
-    assert num_cols >= 12 and grid.y >= 10, f"Need at least 12x10 grid, got {num_cols}x{grid.y}"
-    cores = []
-    max_col = min(num_cols, 13)
-    for row in range(10):
-        for col in range(max_col):
-            if col == 12:
-                continue
-            if (col, row) in _BH_DRAM_WORKER_CORES:
-                continue
-            cores.append(ttnn.CoreCoord(col, row))
-    assert len(cores) == 112, f"Expected 112 down cores, got {len(cores)}"
-    return cores
+# that will never fit.  Sized for the shared-expert-style layout (64 gate /
+# 64 up / 112 down cores with block-sharded gate/up and K_dev=256 down)
+# where ~26 bfp4 / ~13 bfp8 experts realistically fit per core.
+_SRAM_HOT_EXPERTS_CEILING = 64
 
 
 def _mesh_shape_from_submesh(submesh) -> tuple[int, int]:
@@ -99,44 +62,11 @@ def _mesh_shape_from_submesh(submesh) -> tuple[int, int]:
     return (submesh.shape[0], submesh.shape[1])
 
 
-def _build_sram_core_grids(submesh) -> SramExpertCoreGrids:
-    """Per-device gate/up/down SRAM core grids for shared-expert-style TP8.
-
-    Under TP8 (4x2 mesh, dim-0 sharded along mesh_rows, dim-1 along
-    mesh_cols) each device sees per-projection:
-
-    * ``gate`` / ``up``: ``(K=1792, N=1024)`` on 16 cores (per_core_N=64)
-    * ``down``:          ``(K= 512, N=3584)`` on 56 cores (per_core_N=64)
-
-    We take the first-N entries of the existing shared-expert ``a_cores`` /
-    ``b_cores`` and of the down-proj grid.  The spatial layout is irrelevant
-    for pure allocation tests (which is the only path that consumes these
-    grids today -- the kernel wiring into ``MoeOp.op`` is a separate task);
-    once that wiring lands, revisit the core picks to align with the data-
-    movement topology.
-
-    On single-device / TP=1 runs we keep the full 64 / 64 / 112 grids so
-    per_core_N stays tile-aligned with the un-split logical (K, N).
-    """
-    mesh_rows, mesh_cols = _mesh_shape_from_submesh(submesh)
-    tp = mesh_rows * mesh_cols
-
-    a_cores, b_cores = SharedExpertOp.build_ab_grids()
-    down_cores = _build_down_cores(submesh)
-    if tp > 1:
-        a_cores = a_cores[:_SRAM_GATE_CORES_PER_DEVICE_TP8]
-        b_cores = b_cores[:_SRAM_UP_CORES_PER_DEVICE_TP8]
-        down_cores = down_cores[:_SRAM_DOWN_CORES_PER_DEVICE_TP8]
-
-    return SramExpertCoreGrids(
-        gate=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores]),
-        up=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores]),
-        down=ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in down_cores]),
-    )
-
-
 def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     """Build the ``(sram_hot_experts, sram_core_grids, sram_assigner)`` triple.
+
+    Core grids come from :meth:`SramExpertCoreGrids.shared_expert_mirror` (same
+    CRS as shared-expert gate/up/down in ``overlap_configs``).
 
     Returns up to ``_SRAM_HOT_EXPERTS_CEILING`` candidates ranked by routing
     frequency for ``layer_idx``; the actual budget-aware trim runs inside
@@ -145,8 +75,14 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     10 MiB budget is passed here so the ceiling, not the byte cap, selects
     the candidate set.
     """
-    sram_core_grids = _build_sram_core_grids(submesh)
-    sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp8", "bfp4"])
+    sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
+    # Routed experts in DRAM are already BFP4 (see prepare_routed_expert_weights);
+    # force the SRAM copies to match so every tile is the expected 25 KiB/expert
+    # binding-core footprint -- this is the lever that unlocks the 26+ expert
+    # target under the 960 KiB combined attn+SRAM cap.  Dropping BFP8 from the
+    # format list makes the assigner pick BFP4 on every tile regardless of PCC;
+    # add BFP2 back if accuracy drops unacceptably.
+    sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
 
     freqs = _load_routing_frequencies()
     generous_budget_bytes = 10 * 1024 * 1024
@@ -514,6 +450,10 @@ def test_decoder(
         )
 
     logger.info("Preparing layer weights on device...")
+    # ``sram_hot_experts`` is ``SramHotExpertConfig``: ``layer_idx -> ranked expert indices``.
+    # This test only builds candidates for ``ROUTED_EXPERT_LAYER_IDX`` (see
+    # ``_build_sram_hot_expert_kwargs``), so the dict has a single key; multi-layer
+    # callers use the same shape with more entries.
     layer_weights = prepare_moe_layer_weights(
         submesh,
         state_dict,
