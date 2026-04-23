@@ -31,36 +31,34 @@ constexpr auto kBcastOp = static_cast<ckernel::SfpuBcastOp>(BINOP_VAL);
 void kernel_main() {
     constexpr int NUM_TILES = 1;
 
-    constexpr auto cb_data = tt::CBIndex::c_0;
-    constexpr auto cb_bcast = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto input_a_cb_id = tt::CBIndex::c_0;
+    constexpr auto input_b_cb_id = tt::CBIndex::c_1;
+    constexpr auto out_cb_id = tt::CBIndex::c_16;
 
-    experimental::CircularBuffer cb0(cb_data);
-    experimental::CircularBuffer cb1(cb_bcast);
-    experimental::CircularBuffer cb16(cb_out);
+    experimental::CircularBuffer input_a_cb(input_a_cb_id);
+    experimental::CircularBuffer input_b_cb(input_b_cb_id);
+    experimental::CircularBuffer out_cb(out_cb_id);
 
-    init_sfpu(cb_data, cb_out);
+    init_sfpu(input_a_cb_id, out_cb_id);
     sfpu_bcast_init<kBcastDim>();
 
-    cb0.wait_front(NUM_TILES);
-    cb1.wait_front(NUM_TILES);
-    cb16.reserve_back(NUM_TILES);
+    input_a_cb.wait_front(NUM_TILES);
+    input_b_cb.wait_front(NUM_TILES);
+    out_cb.reserve_back(NUM_TILES);
 
     acquire_dst();
 
-    copy_tile_to_dst_init_short(cb_data);
-    copy_tile(cb_data, 0, kDstData);
-
-    copy_tile_to_dst_init_short(cb_bcast);
-    copy_tile(cb_bcast, 0, kDstBcast);
+    copy_tile_to_dst_init_short(input_a_cb_id);
+    copy_tile(input_a_cb_id, 0, kDstData);
+    copy_tile(input_b_cb_id, 0, kDstBcast);
 
     sfpu_bcast<kBcastDim, kBcastOp>(kDstData, kDstBcast);
 
-    pack_tile(kDstData, cb_out);
+    pack_tile(kDstData, out_cb_id);
 
     release_dst();
 
-    cb0.pop_front(NUM_TILES);
-    cb1.pop_front(NUM_TILES);
-    cb16.push_back(NUM_TILES);
+    input_a_cb.pop_front(NUM_TILES);
+    input_b_cb.pop_front(NUM_TILES);
+    out_cb.push_back(NUM_TILES);
 }
