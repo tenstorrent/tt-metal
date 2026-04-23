@@ -426,7 +426,7 @@ std::string ComputeKernel::config_hash() const {
 }
 
 uint64_t Kernel::compute_hash() const {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     for (const auto& [define, value] : this->defines_) {
         hasher.update(define);
         hasher.update(value);
