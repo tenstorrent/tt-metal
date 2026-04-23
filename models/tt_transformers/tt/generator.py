@@ -51,6 +51,10 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
+# HANG_DEBUG: module-level counter for cur_pos tracing
+_HANG_DEBUG_DECODE_STEP = 0
+
+
 class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -1013,6 +1017,16 @@ class Generator(WarmupForwardMixin):
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        # HANG_DEBUG: log cur_pos every decode step
+        import models.tt_transformers.tt.generator as _gm
+        _gm._HANG_DEBUG_DECODE_STEP += 1
+        _sp_all = torch.cat([s.flatten().cpu() for s in start_pos]).tolist()
+        _sp_min, _sp_max = int(min(_sp_all)), int(max(_sp_all))
+        logger.warning(
+            f"[HANG_DEBUG] decode_step={_gm._HANG_DEBUG_DECODE_STEP} "
+            f"n_users={len(_sp_all)} cur_pos_min={_sp_min} cur_pos_max={_sp_max} "
+            f"sample={[int(x) for x in _sp_all[:8]]}"
+        )
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
         sampling_params_list = None
         if sampling_params is not None:

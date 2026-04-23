@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from loguru import logger
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_rope
@@ -117,6 +118,13 @@ def decode_forward(
         use_height_and_width_as_shard_shape=True,
     )
     # Scaled dot-product attention
+    # HANG_DEBUG: log sdpa decode call info
+    _pos_shape = position_idx.shape if hasattr(position_idx, 'shape') else '?'
+    logger.warning(
+        f"[HANG_DEBUG][SDPA] paged={page_table is not None} "
+        f"pos_idx_shape={_pos_shape} "
+        f"kv_cache_shapes=[{k_cache.shape if hasattr(k_cache,'shape') else '?'}]"
+    )
     if page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
