@@ -107,11 +107,14 @@ void kernel_main() {
     // Runtime arguments
     uint32_t arg_idx = 0;
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
-    // Apply causal mask on all nodes (root and workers) to prevent zero-padded
-    // tokens in the partial last page from contributing to attention with exp(0)=1.
-    // Previously gated on do_reduce, causing worker nodes to skip the mask and
-    // produce NaN when all users simultaneously hit a partial last KV page.
-    const bool apply_mask_at_last_chunk = is_causal;
+    // apply_mask_at_last_chunk: apply causal mask ONLY when processing the actual
+    // last K chunk of the full KV sequence (k_num_chunks - 1), not just the last
+    // chunk in a worker's assigned range. This ensures:
+    //   - The core owning the partial last page correctly masks zero-padded tokens
+    //   - Other cores never apply the wrong mask to their fully-valid intermediate pages
+    // Note: k_num_chunks is not yet known here (computed after rt_args parsing),
+    // so we defer the check inline in the K chunk loop below.
+    const bool apply_mask_at_last_chunk = is_causal;  // gating moved to k_num_chunks check in loop
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
@@ -333,7 +336,11 @@ void kernel_main() {
 
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
-                bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
+                // Use k_num_chunks-1 (the actual last chunk of the full sequence), NOT
+                // k_chunk_end-1 (this core's last assigned chunk). Only the core that
+                // owns the actual last page ever triggers this — preventing incorrect
+                // masking of valid intermediate pages on other cores.
+                bool add_causal_mask_fusion = is_causal && k_chunk == k_num_chunks - 1;
                 bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
                 bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
@@ -377,8 +384,11 @@ void kernel_main() {
 
                 if (!add_mask_fusion) {
                     if constexpr (is_causal) {
-                        // For decode, we only apply mask at the last chunk for causal mode
-                        if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                        // Apply causal mask only at the actual last K chunk of the full
+                        // KV sequence (k_num_chunks-1), not just this core's last chunk
+                        // (k_chunk_end-1). This ensures only the core owning the partial
+                        // last page applies the mask; other cores' valid pages are unaffected.
+                        if (k_chunk == k_num_chunks - 1) {
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
