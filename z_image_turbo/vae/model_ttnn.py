@@ -5603,7 +5603,7 @@ class VaeDecoderTTNN(LightweightModule):
                 enable_kernel_stride_folding=False,
             ),
             compute_config=None,
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dL1Full, num_slices=0),
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=0),
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_reshape_316, False)
