@@ -273,20 +273,67 @@ class TestBarkPipeline:
         print(f"Generated audio: {len(audio)} samples, {len(audio)/24000:.2f}s")
 
     def test_multilingual(self, device, hf_model, tt_bark_model):
-        """Produce non-empty non-silent audio for non-English text."""
+        """Produce valid multilingual audio with quality validation.
+
+        Goes beyond non-empty/non-silent checks by verifying:
+        1. Spectral energy in voiced speech band (300-3400 Hz)
+        2. Duration ratio vs English reference (within 3x)
+        3. WAV artifact saving for manual inspection
+        """
         model = tt_bark_model
+
+        # Generate English reference for duration comparison
+        ref_audio = model.generate("Hello, how are you?", verbose=False)
+        ref_duration = len(ref_audio) / 24_000
+
         test_cases = [
             ("Bonjour, comment allez-vous?", "French"),
             ("Hola, ¿cómo estás?", "Spanish"),
         ]
         for text, lang in test_cases:
             audio = model.generate(text, verbose=False)
+
+            # Basic checks
             assert isinstance(audio, np.ndarray), f"[{lang}] No audio returned"
             assert audio.ndim == 1, f"[{lang}] Audio not 1D"
             assert len(audio) >= 2400, f"[{lang}] Audio too short (<0.1s)"
             assert np.abs(audio).max() > 0.001, f"[{lang}] Silent audio"
+
+            # Spectral energy validation: verify non-trivial energy in voiced
+            # speech band (300-3400 Hz). Pure noise or silence would have
+            # negligible energy in this band relative to full spectrum.
+            fft_mag = np.abs(np.fft.rfft(audio))
+            freqs = np.fft.rfftfreq(len(audio), d=1.0 / 24_000)
+            speech_band = (freqs >= 300) & (freqs <= 3400)
+            speech_energy = np.sum(fft_mag[speech_band] ** 2)
+            total_energy = np.sum(fft_mag**2)
+            speech_ratio = speech_energy / max(total_energy, 1e-12)
+            assert speech_ratio > 0.05, (
+                f"[{lang}] Speech band energy ratio {speech_ratio:.4f} too low — " f"audio may be noise, not speech"
+            )
+
+            # Duration ratio vs English reference: valid multilingual TTS
+            # should produce audio of roughly comparable length (within 3x)
             duration = len(audio) / 24_000
-            print(f"[{lang}] {duration:.2f}s of audio  ✓")
+            ratio = duration / max(ref_duration, 0.01)
+            assert 0.3 < ratio < 3.0, (
+                f"[{lang}] Duration ratio {ratio:.2f} vs English ref "
+                f"({duration:.2f}s vs {ref_duration:.2f}s) — pipeline may have failed"
+            )
+
+            # Save WAV artifact for manual inspection
+            try:
+                from scipy.io import wavfile
+
+                audio_clipped = np.clip(audio, -1.0, 1.0)
+                audio_int16 = (audio_clipped * 32767).astype(np.int16)
+                artifact_name = f"bark_multilingual_{lang.lower()}.wav"
+                wavfile.write(artifact_name, 24000, audio_int16)
+                print(f"[{lang}] Saved artifact: {artifact_name}")
+            except ImportError:
+                pass
+
+            print(f"[{lang}] {duration:.2f}s | speech_ratio={speech_ratio:.3f} | " f"duration_ratio={ratio:.2f}  ✓")
 
     def test_emotion_annotations(self, device, hf_model, tt_bark_model):
         """Emotion annotations must produce valid non-silent audio."""

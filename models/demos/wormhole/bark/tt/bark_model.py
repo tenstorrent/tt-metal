@@ -313,11 +313,13 @@ class TtBarkModel:
                 # EOS check — must only stop on full codebook pairs to prevent
                 # odd-length output that would crash Stage 3 reshape.
                 if next_token_torch.item() == COARSE_SEMANTIC_PAD_TOKEN:
-                    if step % N_COARSE_CODEBOOKS == 0 and len(generated_tokens) > 0:
-                        # EOS fired after codebook 0 of a new pair — pad with
-                        # a silence token for codebook 1 so the pair is complete.
-                        pad_cb1 = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
-                        generated_tokens.append(pad_cb1)
+                    # EOS can fire on either parity. We handle both:
+                    # - step % 2 == 1: codebook 1 just completed a pair → safe to stop
+                    # - step % 2 == 0: codebook 0 of a new pair → need to pad codebook 1
+                    if len(generated_tokens) > 0 and len(generated_tokens) % N_COARSE_CODEBOOKS != 0:
+                        # Incomplete pair — pad with a silence token for the missing codebook
+                        pad_token = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
+                        generated_tokens.append(pad_token)
                     break
 
                 generated_tokens.append(next_token_torch.unsqueeze(-1))
@@ -348,6 +350,16 @@ class TtBarkModel:
             return torch.zeros((1, 2), dtype=torch.long)
 
         coarse_output = torch.cat(generated_tokens, dim=-1)  # [1, n_tokens]
+
+        # Final guard: truncate any trailing incomplete codebook pair.
+        # This is a safety net independent of the EOS logic above — ensures
+        # Stage 3 never receives an odd-length tensor regardless of how
+        # the generation loop exited (EOS, max_new_tokens, or other).
+        n_generated = coarse_output.shape[-1]
+        if n_generated % N_COARSE_CODEBOOKS != 0:
+            n_generated = (n_generated // N_COARSE_CODEBOOKS) * N_COARSE_CODEBOOKS
+            coarse_output = coarse_output[:, :n_generated]
+
         # Remap to [0, CODEBOOK_SIZE) — fine model embedding tables expect this range
         coarse_output = (coarse_output - SEMANTIC_VOCAB_SIZE) % CODEBOOK_SIZE
         return coarse_output
