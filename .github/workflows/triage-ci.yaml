@@ -24,7 +24,7 @@ on:
         type: string
         default: "cursor"
       workflow-filter:
-        description: "Only analyze workflows whose name contains this string (empty = all)"
+        description: "Comma-separated substrings to filter workflow names (e.g. 'ops-unit-tests,Blackhole'). Empty = all."
         type: string
         default: ""
 
