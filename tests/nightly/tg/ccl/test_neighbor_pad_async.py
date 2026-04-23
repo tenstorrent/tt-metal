@@ -224,188 +224,27 @@ def test_neighbor_pad_async_2d(
 
 
 # ---------------------------------------------------------------------------
-# Minimal 2D repro — fast correctness check for the 3-phase W exchange
+# Shared sub-device setup helper
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(60)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, num_links",
-    [
-        # Tiny: per-device [1,5,4,4,8] — runs in a few seconds, exercises corners
-        ([1, 5, 4 * 4, 4 * 8, 8], 2, 3, 0, 1, 1, 1, 1),
-        # Same but 2 W links (exercises multi-T-batch per link)
-        ([1, 5, 4 * 4, 4 * 8, 8], 2, 3, 0, 1, 1, 1, 2),
-        # Slightly larger T to exercise multi-T-batch W link paths (still fast)
-        ([1, 9, 4 * 4, 4 * 8, 8], 2, 3, 0, 1, 1, 1, 2),
-    ],
-    ids=[
-        "tiny_1link",
-        "tiny_2link",
-        "medium_t_2link",
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_neighbor_pad_2d_minimal(
-    mesh_device,
-    input_shape,
-    h_dim,
-    w_dim,
-    h_axis,
-    w_axis,
-    pH,
-    pW,
-    num_links,
-    device_params,
-):
-    """Minimal 2D repro for the 3-phase W exchange correctness. Runs fast."""
-    if not is_blackhole():
-        pytest.skip("Minimal repro sized for 4x8 BH mesh")
-
-    run_neighbor_pad_2d_impl(
-        mesh_device,
-        input_shape=list(input_shape),
-        h_dim=h_dim,
-        w_dim=w_dim,
-        h_axis=h_axis,
-        w_axis=w_axis,
-        pH=pH,
-        pW=pW,
-        padding_mode="zeros",
-        num_links=num_links,
-        input_dtype=ttnn.bfloat16,
-        topology=ttnn.Topology.Linear,
+def _setup_sub_device(mesh_device):
+    """Create and load a full-grid sub-device. Returns (core_range_set, stall_group)."""
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
+    worker_sub_device = ttnn.SubDevice([crs])
+    stall_group = [ttnn.SubDeviceId(0)]
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(stall_group)
+    return crs, stall_group
 
 
 # ---------------------------------------------------------------------------
 # 2D + t_front_pad fusion tests
 # ---------------------------------------------------------------------------
-
-
-def run_neighbor_pad_2d_t_front_pad_impl(
-    mesh_device,
-    input_shape,
-    h_dim,
-    w_dim,
-    h_axis,
-    w_axis,
-    pH,
-    pW,
-    t_front_pad,
-    num_links,
-    input_dtype=ttnn.bfloat16,
-    use_persistent_output_buffer=True,
-):
-    """
-    Test combined 2D neighbor pad + T-front causal padding.
-
-    Golden: per-device 2D-padded tensor with t_front_pad zero T-frames prepended.
-    """
-    mesh_shape = tuple(mesh_device.shape)
-    h_factor = mesh_shape[h_axis]
-    w_factor = mesh_shape[w_axis]
-
-    assert input_shape[h_dim] % h_factor == 0
-    assert input_shape[w_dim] % w_factor == 0
-    assert input_shape[0] == 1, "t_front_pad requires B=1"
-
-    torch.manual_seed(42)
-    input_tensor = torch.rand(input_shape).bfloat16()
-
-    # Golden: 2D spatial pad then prepend t_front_pad zero T-frames
-    goldens_2d = compute_2d_pad_golden(input_tensor, mesh_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, "zeros")
-    t_dim = h_dim - 1
-    goldens = {}
-    for key, padded in goldens_2d.items():
-        zero_shape = list(padded.shape)
-        zero_shape[t_dim] = t_front_pad
-        golden = torch.cat([torch.zeros(zero_shape, dtype=padded.dtype), padded], dim=t_dim)
-        goldens[key] = golden
-
-    # Sub-device setup
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-
-    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-
-    dims = [None, None]
-    dims[h_axis] = h_dim
-    dims[w_axis] = w_dim
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-
-    persistent_output_buffer = None
-    if use_persistent_output_buffer:
-        output_shape = list(input_shape)
-        output_shape[t_dim] += t_front_pad
-        output_shape[h_dim] += h_factor * (pH + pH)
-        output_shape[w_dim] += w_factor * (pW + pW)
-        persistent_output_buffer = ttnn.from_torch(
-            torch.zeros(output_shape).bfloat16(),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=input_dtype,
-            memory_config=mem_config,
-            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
-        )
-
-    input_tensor_mesh = ttnn.from_torch(
-        input_tensor,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=input_dtype,
-        memory_config=mem_config,
-        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
-    )
-
-    output_tensor = ttnn.experimental.neighbor_pad_async(
-        input_tensor_mesh,
-        [h_dim, w_dim],
-        [pH, pW],
-        [pH, pW],
-        "zeros",
-        [h_axis, w_axis],
-        [h_neighbor_sem, w_neighbor_sem],
-        [barrier_sem],
-        num_links=[num_links, num_links],
-        memory_config=mem_config,
-        topology=ttnn.Topology.Linear,
-        persistent_output_buffer=persistent_output_buffer,
-        t_front_pad=t_front_pad,
-    )
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-
-    output_host = ttnn.from_device(output_tensor)
-    device_tensors = ttnn.get_device_tensors(output_host)
-
-    for row in range(mesh_shape[0]):
-        for col in range(mesh_shape[1]):
-            device_idx = row * mesh_shape[1] + col
-            dev_tensor = ttnn.to_torch(device_tensors[device_idx])
-            golden = goldens[(row, col)]
-            assert (
-                dev_tensor.shape == golden.shape
-            ), f"Device ({row},{col}): shape mismatch: got {dev_tensor.shape}, expected {golden.shape}"
-            eq, msg = comp_equal(dev_tensor, golden)
-            assert eq, f"Device ({row},{col}): {msg}"
-
-    mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
 
 
 @pytest.mark.timeout(300)
@@ -446,7 +285,7 @@ def test_neighbor_pad_async_2d_t_front_pad(
     if is_blackhole() and num_links > 2:
         pytest.skip("Skipping num_links > 2 on BH (only 2 ethernet channels available)")
 
-    run_neighbor_pad_2d_t_front_pad_impl(
+    run_neighbor_pad_2d_combined_impl(
         mesh_device,
         input_shape=list(input_shape),
         h_dim=h_dim,
@@ -517,20 +356,10 @@ def run_neighbor_pad_t_front_pad_impl(
             key = (h_idx, w_idx) if h_axis == 0 else (w_idx, h_idx)
             goldens[key] = golden
 
-    # Sub-device setup
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    crs, stall_group = _setup_sub_device(mesh_device)
 
-    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
 
     dims = [None, None]
     dims[h_axis] = h_dim
@@ -560,7 +389,7 @@ def run_neighbor_pad_t_front_pad_impl(
         topology=ttnn.Topology.Linear,
         t_front_pad=t_front_pad,
     )
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
 
     output_host = ttnn.from_device(output_tensor)
     device_tensors = ttnn.get_device_tensors(output_host)
@@ -578,56 +407,6 @@ def run_neighbor_pad_t_front_pad_impl(
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-
-
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape, h_dim, h_axis, other_shard_dim, padding_h, t_front_pad, num_links",
-    [
-        # 5D [B, T, H, W, C]: H sharded across axis 0 (4 devices), W sharded across axis 1 (8 devices)
-        # t_front_pad=2 (typical VAE causal padding)
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 0, 3, 1, 2, 2),
-        # t_front_pad=0 (no T-front padding, verifies no regression)
-        ([1, 3, 24 * 4, 20 * 8, 32], 2, 0, 3, 1, 0, 2),
-        # Larger t_front_pad
-        ([1, 5, 24 * 4, 20 * 8, 32], 2, 0, 3, 1, 4, 2),
-    ],
-    ids=[
-        "vae_t_front_2",
-        "vae_t_front_0",
-        "vae_t_front_4",
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
-    indirect=True,
-)
-def test_neighbor_pad_t_front_pad(
-    mesh_device,
-    input_shape,
-    h_dim,
-    h_axis,
-    other_shard_dim,
-    padding_h,
-    t_front_pad,
-    num_links,
-    device_params,
-):
-    if is_blackhole() and num_links > 2:
-        pytest.skip("Skipping num_links > 2 on BH")
-
-    run_neighbor_pad_t_front_pad_impl(
-        mesh_device,
-        input_shape=list(input_shape),
-        h_dim=h_dim,
-        h_axis=h_axis,
-        other_shard_dim=other_shard_dim,
-        padding_h=padding_h,
-        t_front_pad=t_front_pad,
-        num_links=num_links,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -676,20 +455,10 @@ def run_neighbor_pad_logical_h_impl(
     padded = pad_chunks_along_dim(chunks, halo_dim, padding_left, padding_right, "zeros")
     golden = torch.cat(padded, dim=halo_dim)
 
-    # Sub-device setup
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    crs, stall_group = _setup_sub_device(mesh_device)
 
-    neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    neighbor_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
 
     dims = [None, None]
     dims[cluster_axis] = halo_dim
@@ -720,7 +489,7 @@ def run_neighbor_pad_logical_h_impl(
         topology=ttnn.Topology.Linear,
         logical_h=logical_h,
     )
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
 
     tt_out = ttnn.to_torch(
         ttnn.from_device(output_tensor),
@@ -733,58 +502,6 @@ def run_neighbor_pad_logical_h_impl(
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-
-
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape, halo_dim, other_shard_dim, cluster_axis, padding_left, padding_right, logical_h, num_links",
-    [
-        # 5D [B, T, H, W, C]: H=92 (23*4) sharded across 4 H-devices, logical_h=90
-        # Device 3 has rows 69..91; rows 90-91 (local rows 21-22) should be zeroed.
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 90, 2),
-        # Same shape but logical_h aligns exactly to shard boundary (no masking on any device)
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 23 * 4, 2),
-        # Larger channel dim, more padding rows masked
-        ([1, 3, 24 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 90, 2),
-    ],
-    ids=[
-        "vae_720p_h90_of_92",
-        "vae_no_masking",
-        "vae_large_c_h90_of_96",
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
-    indirect=True,
-)
-def test_neighbor_pad_logical_h(
-    mesh_device,
-    input_shape,
-    halo_dim,
-    other_shard_dim,
-    cluster_axis,
-    padding_left,
-    padding_right,
-    logical_h,
-    num_links,
-    device_params,
-):
-    if is_blackhole() and num_links > 2:
-        pytest.skip("Skipping num_links > 2 on BH")
-
-    run_neighbor_pad_logical_h_impl(
-        mesh_device,
-        input_shape=list(input_shape),
-        halo_dim=halo_dim,
-        other_shard_dim=other_shard_dim,
-        cluster_axis=cluster_axis,
-        padding_left=padding_left,
-        padding_right=padding_right,
-        logical_h=logical_h,
-        num_links=num_links,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -842,20 +559,11 @@ def run_neighbor_pad_2d_logical_h_impl(
     masked_input[tuple(slices)] = 0.0
     goldens = compute_2d_pad_golden(masked_input, mesh_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, "zeros")
 
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    crs, stall_group = _setup_sub_device(mesh_device)
 
-    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
 
     dims = [None, None]
     dims[h_axis] = h_dim
@@ -876,7 +584,6 @@ def run_neighbor_pad_2d_logical_h_impl(
             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
         )
 
-    # Pass UNMASKED input — logical_h in the op must handle masking
     input_tensor_mesh = ttnn.from_torch(
         input_tensor,
         device=mesh_device,
@@ -901,7 +608,7 @@ def run_neighbor_pad_2d_logical_h_impl(
         persistent_output_buffer=persistent_output_buffer,
         logical_h=logical_h,
     )
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
 
     output_host = ttnn.from_device(output_tensor)
     device_tensors = ttnn.get_device_tensors(output_host)
@@ -919,74 +626,6 @@ def run_neighbor_pad_2d_logical_h_impl(
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-
-
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, num_links, use_persistent_output_buffer",
-    [
-        # Core repro: H=92 (23*4), logical_h=90 → device 3 rows 21-22 masked.
-        # 2 W links exercises the T-batch distribution across links.
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False),
-        # Same shape, logical_h at exact shard boundary — no masking, regression check
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 23 * 4, 2, False),
-        # Larger C, confirms W reader loop doesn't corrupt inter-stick indices
-        ([1, 3, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, 2, False),
-        # More masked rows: H=96 (24*4), logical_h=90 → device 3 rows 18-23 masked
-        ([1, 3, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False),
-        # Persistent output buffer — exercises the ping-pong path with masking
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, True),
-        # 1 W link
-        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, False),
-    ],
-    ids=[
-        "vae_720p_h90_of_92_2link",
-        "vae_no_masking_2link",
-        "vae_large_c_h90_of_92_2link",
-        "vae_h90_of_96_2link",
-        "vae_persistent_buf_2link",
-        "vae_720p_h90_of_92_1link",
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
-    indirect=True,
-)
-def test_neighbor_pad_2d_logical_h(
-    mesh_device,
-    input_shape,
-    h_dim,
-    w_dim,
-    h_axis,
-    w_axis,
-    pH,
-    pW,
-    logical_h,
-    num_links,
-    use_persistent_output_buffer,
-    device_params,
-):
-    """2D neighbor pad with logical_h masking — specifically targets W reader Phase 1 masking."""
-    if not is_blackhole():
-        pytest.skip("Sized for 4x8 BH mesh")
-    if num_links > 2:
-        pytest.skip("Skipping num_links > 2 on BH")
-
-    run_neighbor_pad_2d_logical_h_impl(
-        mesh_device,
-        input_shape=list(input_shape),
-        h_dim=h_dim,
-        w_dim=w_dim,
-        h_axis=h_axis,
-        w_axis=w_axis,
-        pH=pH,
-        pW=pW,
-        logical_h=logical_h,
-        num_links=num_links,
-        use_persistent_output_buffer=use_persistent_output_buffer,
-    )
 
 
 # ===========================================================================
@@ -1007,27 +646,33 @@ def run_neighbor_pad_2d_combined_impl(
     w_axis,
     pH,
     pW,
-    logical_h,
     t_front_pad,
     num_links,
+    logical_h=None,
     input_dtype=ttnn.bfloat16,
     use_persistent_output_buffer=False,
 ):
     """
-    2D neighbor pad with both logical_h masking and t_front_pad fusion active.
+    2D neighbor pad with optional logical_h masking and t_front_pad fusion.
+
+    logical_h=None means no masking (equivalent to logical_h=input_shape[h_dim]).
+    t_front_pad=0 means no T-frame prepend. Covers all 2D feature combinations.
 
     Golden: zero input rows >= logical_h, apply 2D spatial padding, prepend
-    t_front_pad zero T-frames. This exercises the full fused path in the kernel
-    (local_copy_writer Phase A + B with masking, W reader Phase 1 masking).
+    t_front_pad zero T-frames.
     """
     torch.manual_seed(7)
     mesh_shape = tuple(mesh_device.shape)
     h_factor = mesh_shape[h_axis]
     w_factor = mesh_shape[w_axis]
 
+    if logical_h is None:
+        logical_h = input_shape[h_dim]
+
     assert input_shape[h_dim] % h_factor == 0
     assert input_shape[w_dim] % w_factor == 0
-    assert input_shape[0] == 1, "t_front_pad requires B=1"
+    if t_front_pad > 0:
+        assert input_shape[0] == 1, "t_front_pad requires B=1"
     assert 0 < logical_h <= input_shape[h_dim]
 
     input_tensor = torch.rand(input_shape).bfloat16()
@@ -1046,20 +691,11 @@ def run_neighbor_pad_2d_combined_impl(
         front = torch.zeros(zero_shape, dtype=padded.dtype)
         goldens[key] = torch.cat([front, padded], dim=t_dim) if t_front_pad > 0 else padded
 
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    crs, stall_group = _setup_sub_device(mesh_device)
 
-    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
 
     dims = [None, None]
     dims[h_axis] = h_dim
@@ -1106,7 +742,7 @@ def run_neighbor_pad_2d_combined_impl(
         logical_h=logical_h,
         t_front_pad=t_front_pad,
     )
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+    ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
 
     output_host = ttnn.from_device(output_tensor)
     device_tensors = ttnn.get_device_tensors(output_host)
@@ -1557,7 +1193,7 @@ def test_np_bh_t_front_2d(
     if not is_blackhole():
         pytest.skip("Sized for 4x8 BH mesh")
 
-    run_neighbor_pad_2d_t_front_pad_impl(
+    run_neighbor_pad_2d_combined_impl(
         mesh_device,
         input_shape=list(input_shape),
         h_dim=h_dim,
