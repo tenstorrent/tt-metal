@@ -268,7 +268,7 @@ class TestPerfCountersSingleOp:
             "Semaphore Zero Wait T2 Min (%)": 0.0,
             # TDMA_UNPACK: Data hazard stalls
             "Data Hazard Stall Rate Min (%)": 0.0,
-            # L1 Bank 0 metrics ("all" now includes L1_0)
+            # L1 Bank 0 metrics
             "L1 Unpacker Port Util Min (%)": 0.0,
             "L1 TDMA Bundle Util Min (%)": 0.0,
             "NOC Ring 0 Outgoing Util Min (%)": 0.0,

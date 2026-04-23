@@ -199,11 +199,7 @@ def run_device_profiler(
     python_post_process=True,
     capture_perf_counters_groups=[],
     sum_profiling=False,
-    # Default op support count is multiplied by 1.333 because previously the profiler would reserve space
-    # for approximately 33% more ops than the default. Several model tests call this function and rely on
-    # this extra space to ensure that all ops are captured by the profiler. Now that the profiler doesn't
-    # reserve this extra space, we multiply the default by 1.333 to ensure that these model tests continue
-    # to capture all ops.
+    # 1.333x matches the historical reserve that some model tests depend on.
     op_support_count=int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),
     is_command_binary_exe=False,
 ):

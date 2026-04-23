@@ -811,15 +811,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         //   256 (1 << 8) - L1 bank 4 counters (BH only: misc ports)
         //   47  (0x2F)   - Recommended: fpu|pack|unpack|l1_0|instrn
         //
-        // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
-        // Note: All L1 banks share the same hardware mux and only one can be active at a time.
-        //       To capture multiple L1 banks, run separate passes. The model-log wrapper
-        //       (process_model_log.run_device_profiler) supports automatic two-pass merge.
+        // Multiple groups can be OR'd together. Only one L1 bank may be set per run (shared hardware mux).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
-                // All L1 banks share the same hardware mux — only one can be active at a time.
-                // Specify at most one L1 bank per run.
                 constexpr uint32_t L1_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
                 uint32_t l1_selected = this->profiler_perf_counter_mode & L1_BITS;
                 if (l1_selected && (l1_selected & (l1_selected - 1))) {

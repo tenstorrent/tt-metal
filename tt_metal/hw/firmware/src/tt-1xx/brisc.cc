@@ -540,10 +540,7 @@ int main() {
 
             wait_ncrisc_trisc();
 
-            // Read perf counter values after all TRISCs finish. TRISC1 started/stopped
-            // the counters (via RecordPerfCounters RAII), but BRISC reads them because
-            // it has NOC access to push the L1 profiler buffer to DRAM when it fills up.
-            // The perf counter debug registers are shared across all RISCs on the core.
+            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
             ReadPerfCounters();
 
             trigger_sync_register_init();

@@ -367,7 +367,7 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 0 Incoming Util Median (%)",
     "NOC Ring 0 Incoming Util Max (%)",
     "NOC Ring 0 Incoming Util Avg (%)",
-    # L1 Bank 1: utilization metrics (NaN when L1_1 data unavailable)
+    # L1 Bank 1 utilization
     "NOC Ring 1 Outgoing Util Min (%)",
     "NOC Ring 1 Outgoing Util Median (%)",
     "NOC Ring 1 Outgoing Util Max (%)",
@@ -376,12 +376,12 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 1 Incoming Util Median (%)",
     "NOC Ring 1 Incoming Util Max (%)",
     "NOC Ring 1 Incoming Util Avg (%)",
-    # L1 Bank 0 Port 1: arch-specific (WH: Unpacker#1/ECC/Pack1, BH: Unified Packer)
+    # L1 Bank 0 port 1 (arch-specific)
     "L1 Packer Port Util Min (%)",
     "L1 Packer Port Util Median (%)",
     "L1 Packer Port Util Max (%)",
     "L1 Packer Port Util Avg (%)",
-    # L1 back-pressure metrics: (req - grant) / req * 100
+    # L1 back-pressure
     "NOC Ring 0 Outgoing Backpressure Min (%)",
     "NOC Ring 0 Outgoing Backpressure Median (%)",
     "NOC Ring 0 Outgoing Backpressure Max (%)",
@@ -734,7 +734,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "NOC Ring 1 Incoming Util",
         # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
         "L1 Packer Port Util",
-        # L1 back-pressure (derived stall: (req - grant) / req)
+        # L1 back-pressure
         "NOC Ring 0 Outgoing Backpressure",
         "NOC Ring 0 Incoming Backpressure",
         "NOC Ring 1 Outgoing Backpressure",
@@ -1190,7 +1190,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_1_NOC_RING1_INCOMING_0", "L1_1_NOC_RING1_INCOMING_1"
         )
 
-    # === Derived stall metrics (req - grant) / req * 100 ===
+    # === NOC Ring 1 back-pressure ===
     if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_0_GRANT"):
         per_op_stats["NOC Ring 1 Outgoing Backpressure"] = compute_backpressure(
             "L1_1_NOC_RING1_OUTGOING_0",
@@ -1676,7 +1676,7 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # L1 back-pressure: (req - grant) / req * 100
+    # L1 back-pressure
     def safe_backpressure(req0_key, req1_key, grant0_key, grant1_key):
         def fn(x):
             r0 = x.get(req0_key, 0)

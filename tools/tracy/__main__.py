@@ -237,25 +237,25 @@ def main():
         )
 
     if options.perf_counter_groups:
-        # Map counter group names to bit positions (from perf_counters.hpp)
+        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
         counter_group_bits = {
-            "fpu": 0,  # PROFILE_PERF_COUNTERS_FPU    (1 << 0)
-            "pack": 1,  # PROFILE_PERF_COUNTERS_PACK   (1 << 1)
-            "unpack": 2,  # PROFILE_PERF_COUNTERS_UNPACK (1 << 2)
-            "l1_0": 3,  # PROFILE_PERF_COUNTERS_L1_0   (1 << 3)
-            "l1_1": 4,  # PROFILE_PERF_COUNTERS_L1_1   (1 << 4)
-            "instrn": 5,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
-            "l1_2": 6,  # PROFILE_PERF_COUNTERS_L1_2   (1 << 6)  BH-only NOC Ring 2
-            "l1_3": 7,  # PROFILE_PERF_COUNTERS_L1_3   (1 << 7)  BH-only NOC Ring 3
-            "l1_4": 8,  # PROFILE_PERF_COUNTERS_L1_4   (1 << 8)  BH-only misc ports
+            "fpu": 0,
+            "pack": 1,
+            "unpack": 2,
+            "l1_0": 3,
+            "l1_1": 4,
+            "instrn": 5,
+            "l1_2": 6,
+            "l1_3": 7,
+            "l1_4": 8,
         }
 
         bitfield = 0
         for group in options.perf_counter_groups:
             group_lower = group.lower()
             if group_lower == "all":
-                # Enable all counter groups including L1 bank 0 (L1 bank 1 requires separate run)
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)  # fpu|pack|unpack|l1_0|instrn
+                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
                 break
             elif group_lower in counter_group_bits:
                 bitfield |= 1 << counter_group_bits[group_lower]
@@ -265,11 +265,9 @@ def main():
                     f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
-        # L1 bank mutual exclusion is enforced at runtime by rtoptions.cpp
-        # (multiple L1 banks share the hardware mux and only one can be active).
+        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
 
         # Reject BH-only groups on non-BH architectures.
-        # Detect arch from env vars or by querying the device at runtime.
         bh_only_groups = {"l1_2", "l1_3", "l1_4"}
         requested_groups = {group.lower() for group in options.perf_counter_groups}
         requested_bh_only = sorted(requested_groups & bh_only_groups)
@@ -282,7 +280,6 @@ def main():
                 ),
                 None,
             )
-            # If no env var is set, detect from the actual device
             if declared_arch is None:
                 try:
                     import ttnn
@@ -291,8 +288,6 @@ def main():
                     declared_arch = str(device.arch()).split(".")[-1]
                     ttnn.close_device(device)
                 except Exception:
-                    # Runtime arch detection is best-effort; fall back to
-                    # treating arch as undeclared (will error below)
                     logger.debug("Failed to detect device arch via ttnn")
             is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
             if not is_blackhole:
