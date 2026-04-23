@@ -317,10 +317,10 @@ struct ReduceToOneB1 {
 
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
+                    fabric_sender.wait_for_empty_write_slot();
                     noc_semaphore_wait_min(worker_sem_ptr, 1);
                     unified_kernels::semaphore_dec(worker_sem_ptr);
 
-                    fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(
                         worker_payload_addr, CTArgs::payload_size_bytes);
                     fabric_sender.send_payload_flush_blocking_from_address(
@@ -347,11 +347,10 @@ struct ReduceToOneB1 {
                     if (args.persistent_enable != 0) {
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        noc_semaphore_set(agg_sem_ptr, 0);
-
                         uint64_t fc_sem = get_noc_addr(
                             args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        noc_semaphore_set(agg_sem_ptr, 0);
                         noc_semaphore_inc(fc_sem, 1);
                         noc_async_atomic_barrier();
                     } else if (args.agg_sem_l1_addr != 0) {
