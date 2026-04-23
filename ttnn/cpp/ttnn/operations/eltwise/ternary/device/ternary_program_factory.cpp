@@ -1274,8 +1274,9 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             kernel_defines[k] = v;
         }
     }
-    std::string_view compute_kernel_path = use_addcmul_int_kernel ? override_addcmul_compute_kernel(compute_kernel)
-                                                                  : get_kernel_file_path(compute_kernel, is_fpu);
+    std::string_view compute_kernel_path = use_addcmul_int_kernel
+                                               ? override_addcmul_compute_kernel(compute_kernel)
+                                               : get_kernel_file_path(compute_kernel, is_fpu);
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;
