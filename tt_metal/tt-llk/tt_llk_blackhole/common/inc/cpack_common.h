@@ -858,20 +858,21 @@ __attribute__((noinline)) void are_packers_configured_correctly(
 
     if (config.in_data_format != pack_hw_src_format)
     {
-        // DEVICE_PRINT("are_packers_configured_correctly: pack_src_format mismatch. expected: {}, actual: {}\n", pack_hw_src_format, config.in_data_format);
+        // DEVICE_PRINT("#1101 are_packers_configured_correctly: pack_src_format mismatch. expected: {}, actual: {}\n", pack_hw_src_format,
+        // config.in_data_format);
         LLK_ASSERT(
             (config.in_data_format == pack_hw_src_format),
-            "are_packers_configured_correctly: pack_src_format mismatch. Enable TT_METAL_DEVICE_PRINT and dprint "
-            "cores to see expected/actual above.");
+            "are_packers_configured_correctly: pack_src_format mismatch. Uncomment DEVICE_PRINT #1101 to inspect "
+            "expected/actual.");
     }
     if (config.out_data_format != pack_output_dst_format)
     {
-        // DEVICE_PRINT("are_packers_configured_correctly: pack_dst_format mismatch. expected: {}, actual: {}\n", pack_output_dst_format,
+        // DEVICE_PRINT("#1102 are_packers_configured_correctly: pack_dst_format mismatch. expected: {}, actual: {}\n", pack_output_dst_format,
         // config.out_data_format);
         LLK_ASSERT(
             (config.out_data_format == pack_output_dst_format),
-            "are_packers_configured_correctly: pack_dst_format mismatch. Enable TT_METAL_DEVICE_PRINT and dprint "
-            "cores to see expected/actual above.");
+            "are_packers_configured_correctly: pack_dst_format mismatch. Uncomment DEVICE_PRINT #1102 to inspect "
+            "expected/actual.");
     }
 
     if constexpr (program_type == PackerProgramType::ProgramByFace)
@@ -879,11 +880,12 @@ __attribute__((noinline)) void are_packers_configured_correctly(
         if (counters.pack_reads_per_xy_plane != face_r_dim)
         {
             // DEVICE_PRINT(
-            // "are_packers_configured_correctly: pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n", face_r_dim, counters.pack_reads_per_xy_plane);
+            // "#1103 are_packers_configured_correctly: pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n", face_r_dim,
+            // counters.pack_reads_per_xy_plane);
             LLK_ASSERT(
                 (counters.pack_reads_per_xy_plane == face_r_dim),
-                "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Enable "
-                "TT_METAL_DEVICE_PRINT and dprint cores to see expected/actual above.");
+                "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Uncomment "
+                "DEVICE_PRINT #1103 to inspect expected/actual.");
         }
     }
 }
