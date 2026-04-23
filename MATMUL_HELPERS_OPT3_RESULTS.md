@@ -84,6 +84,28 @@ These have explicit configs and WH-feasibility possibility but need weights / ta
 | metal_BERT_large_11 | `demos/metal_BERT_large_11/` | TBD | Legacy BERT implementation |
 | gemma4 | `demos/gemma4/tt/experts/decode.py` | TBD | Likely multi-chip |
 
+### Auto-config bug sweep on BH
+
+Targeted PCC sweep on BH to catch more of the divisibility-class bug the
+`63d9bc9e4da` fix addressed. Ran 25+ BH PCC tests across model regions most
+likely to exercise batched-sharded matmul paths (attention, transformer
+blocks, cross-attention, feedforward, GEGLU, ResNet blocks, VAE, full UNet).
+All pass. No additional auto-tuner bugs in this class surfaced beyond the
+one already fixed. LoRA + refiner tests skipped on missing weights.
+
+Breakdown:
+- SDXL base attention: 4/4 pass
+- SDXL base UNet 1024x1024: 1/1 pass
+- SDXL base transformerblock / feedforward / GEGLU: 8/8 pass
+- SDXL base crossattn (up/down/mid) + resnetblock: 11/11 pass
+- SDXL VAE (encode/decode): 2/2 pass (512x512 deliberately skipped on BH)
+
+ResNet50 K-lever check (per explicit user ask): the single matmul config in
+`ttnn_functional_resnet50.py` has `in0_block_w=2`, and the per-core K shard
+is 2 tiles — so `in0_block_w` is already at max. No K-iteration lever
+available for ResNet50 either. Combined with per_core_M=per_core_N=1 capping
+the subblock lever, ResNet50 has no helper-based optimization target.
+
 ### Cross-arch hypothesis from the negative BH results
 
 Two independent BH migrations (sentence-BERT, SDXL UNet 1024x1024) applied the same WH-pattern
