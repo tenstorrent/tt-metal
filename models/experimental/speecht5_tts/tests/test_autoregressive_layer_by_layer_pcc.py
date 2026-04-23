@@ -129,7 +129,7 @@ def run_layer_by_layer_autoregressive(
     hf_model.speecht5.decoder.prenet._consistent_dropout = lambda x, p: x if p == 0.0 else original_dropout(x, p)
 
     # Speaker embeddings
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+    embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
     speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
     # Initialize TTNN

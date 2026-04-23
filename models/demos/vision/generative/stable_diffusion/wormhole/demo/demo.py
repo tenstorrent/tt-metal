@@ -385,8 +385,11 @@ def run_demo_inference_diffusiondb(
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
-    # 0. Load a sample prompt from the dataset
-    dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
+    # 0. Load a sample prompt from the dataset.
+    # Switched from "poloclub/diffusiondb" (script-only on the Hub, broken on
+    # ``datasets >= 4``) to a parquet-hosted random 10k subset with the same
+    # schema (``image`` + ``prompt`` columns, ``train`` split).
+    dataset = load_dataset("svjack/diffusiondb_random_10k")
     data_1k = dataset["train"]
 
     height, width = image_size
