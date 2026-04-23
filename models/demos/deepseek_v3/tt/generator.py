@@ -2478,6 +2478,101 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         return logits
 
+    def verify_decode_prefill_agreement(
+        self,
+        prompt_ids: list[int],
+        generated_ids: list[int],
+        *,
+        user_id: int = 0,
+        top_k_check: int = 5,
+    ) -> dict:
+        """Score each decode-produced token under a single trusted prefill over ``prompt_ids + generated_ids``.
+
+        For causal LM prefill logits, row ``pos - 1`` predicts the token at sequence index ``pos``.
+        Returns aggregate top-1 / top-``top_k_check`` hit rates and mean log-probability of the decoded
+        tokens under prefill softmax. Intended to catch decode-path bugs (KV, positions) while tolerating
+        small BF16 / kernel drift via top-k rather than raw logit equality.
+
+        Args:
+            prompt_ids: Prompt token ids (same encoding as used for decode).
+            generated_ids: Autoregressive decode output (excluding prompt).
+            user_id: KV / page-table user slot to run verification prefill on.
+            top_k_check: Rank threshold for the "in top-k" rate (default 5).
+
+        Raises:
+            RuntimeError: If ``enable_mtp`` is on (layout / user mapping differs from this helper).
+        """
+        if self.enable_mtp:
+            raise RuntimeError("verify_decode_prefill_agreement does not support MTP-enabled runs yet.")
+
+        p_len = len(prompt_ids)
+        if p_len < 1:
+            raise ValueError("verify_decode_prefill_agreement requires a non-empty prompt_ids sequence")
+        g_len = len(generated_ids)
+        if g_len == 0:
+            return {
+                "decode_prefill_agreement_num_tokens": 0,
+                "decode_prefill_agreement_top1_rate": 1.0,
+                "decode_prefill_agreement_topk_rate": 1.0,
+                "decode_prefill_agreement_topk": int(top_k_check),
+                "decode_prefill_agreement_mean_logprob": 0.0,
+                "decode_prefill_agreement_max_rank": 0,
+            }
+
+        full_ids = list(prompt_ids) + [int(t) for t in generated_ids]
+        actual_len = len(full_ids)
+        padded_len = align_prefill_padded_seq_len(actual_len, self.mesh_device.shape[0])
+        pad_id = self._get_pad_id()
+        row = torch.full((padded_len,), pad_id, dtype=torch.long)
+        row[:actual_len] = torch.tensor(full_ids, dtype=torch.long)
+        tokens_view = row.view(1, 1, -1)
+
+        logits = self._prefill(tokens_view, user_id=user_id, sample_on_device=False)
+        self.ccl.reset_sem_counters()
+
+        if not isinstance(logits, torch.Tensor):
+            raise TypeError("Expected host logits tensor from prefill when sample_on_device=False")
+
+        while logits.dim() > 2 and logits.shape[0] == 1:
+            logits = logits.squeeze(0)
+        if logits.dim() != 2:
+            logits = logits.reshape(logits.shape[0], -1)
+
+        seq_rows, vocab = logits.shape
+        if seq_rows < actual_len:
+            raise RuntimeError(f"Prefill logits sequence dim {seq_rows} shorter than concatenated length {actual_len}")
+        logits_sq = logits[:actual_len].float()
+
+        top1_hits = 0
+        topk_hits = 0
+        log_probs: list[float] = []
+        max_rank = 0
+        k_eff = min(int(top_k_check), int(vocab))
+
+        for j in range(g_len):
+            pos = p_len + j
+            log_row = logits_sq[pos - 1]
+            token_id = int(generated_ids[j])
+            if int(torch.argmax(log_row).item()) == token_id:
+                top1_hits += 1
+            _, topk_idx = torch.topk(log_row, k_eff)
+            if token_id in topk_idx.tolist():
+                topk_hits += 1
+            log_probs.append(float(torch.log_softmax(log_row, dim=-1)[token_id].item()))
+            strictly_better = int((log_row > log_row[token_id]).sum().item())
+            rank = strictly_better + 1
+            max_rank = max(max_rank, rank)
+
+        mean_lp = sum(log_probs) / g_len if g_len else 0.0
+        return {
+            "decode_prefill_agreement_num_tokens": g_len,
+            "decode_prefill_agreement_top1_rate": top1_hits / g_len,
+            "decode_prefill_agreement_topk_rate": topk_hits / g_len,
+            "decode_prefill_agreement_topk": int(top_k_check),
+            "decode_prefill_agreement_mean_logprob": mean_lp,
+            "decode_prefill_agreement_max_rank": int(max_rank),
+        }
+
     def _slice_last_token_logits(
         self, logits: ttnn.Tensor, prompt_len: int, *, expand_to_batch: bool = False
     ) -> ttnn.Tensor:
