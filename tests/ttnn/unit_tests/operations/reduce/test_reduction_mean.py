@@ -51,6 +51,7 @@ def test_mean_scaling(device, shape, dim, keepdim):
     """Use assert_allclose with ones() to test that mean's scaling factor is
     computed correctly.
     """
+    torch.manual_seed(0)
     torch_input_tensor = torch.ones(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim, dtype=torch.bfloat16)
 
@@ -76,6 +77,7 @@ def test_mean_scaling(device, shape, dim, keepdim):
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]])
 @pytest.mark.parametrize("scalar", [2.0])
 def test_mean_scaling_factor(device, shape, dim, scalar):
+    torch.manual_seed(0)
     torch_input_tensor = torch.ones(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
     torch_output_tensor = torch_output_tensor * scalar
@@ -101,6 +103,7 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block"])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_mean_shard(device, mem_config, keepdim):
+    torch.manual_seed(0)
     if mem_config is None and not keepdim:
         pytest.skip("Skipping because reshape does not work in this scenario. Issue #35145")
     torch_input_tensor = torch.randn(1, 1024, 160, dtype=torch.bfloat16)

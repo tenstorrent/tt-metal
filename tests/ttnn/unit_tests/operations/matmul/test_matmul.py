@@ -185,6 +185,7 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
 
 @pytest.mark.parametrize("m, k, n", [(784, 192, 576), (576, 192, 784), (486, 792, 352), (966, 123, 561)])
 def test_pytorch_2_0_failed_cases(device, m, k, n):
+    torch.manual_seed(0)
     x = torch.ones((m, k), dtype=torch.float32)
     y = torch.ones((k, n), dtype=torch.float32)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -436,6 +437,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
+    torch.manual_seed(0)
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
@@ -749,6 +751,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     num_out_block_w,
     transpose_mcast,
 ):
+    torch.manual_seed(0)
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     required_size = 8  # input tensor sizes are too small to be subdivided on larger grids
     grid_size = [min(required_size, compute_grid_size.x), min(required_size, compute_grid_size.y)]
@@ -930,6 +933,7 @@ def test_matmul_2d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
+    torch.manual_seed(0)
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
@@ -1099,6 +1103,7 @@ def test_matmul_1d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
+    torch.manual_seed(0)
     if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
@@ -1319,6 +1324,7 @@ def test_matmul_1d_multiple_output_blocks_per_core(
     mcast_in0,
     uneven_width,
 ):
+    torch.manual_seed(0)
     for _ in range(2):
         run_matmul_1d_multiple_output_blocks_per_core(
             device,
@@ -1660,6 +1666,7 @@ def test_matmul_does_dot_product(device, w):
     ])
 # fmt: on
 def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
+    torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((n_size, c, w, h), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
@@ -1721,6 +1728,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
     ])
 # fmt: on
 def test_matmul_same_shape_but_invalid(device, input_a, input_b):
+    torch.manual_seed(0)
     # pad the lists with zeros to make it 32 so that it fits nicely on the device.
     input_a += [0.0] * (32 - len(input_a))
     input_b += [0.0] * (32 - len(input_b))
@@ -3387,6 +3395,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
 
 
 def test_from_torch_col_tilize_validation():
+    torch.manual_seed(0)
     torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
     torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
 
