@@ -201,6 +201,7 @@ def test_sparse_weights(device, k_active):
 # ============================================================================
 
 
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 def test_skip_nonlocal_experts(device):
     """Verify that marking experts as non-local (-1 in dispatch table) produces
     the same result when those experts' combine_output is zero (as in real MoE)."""

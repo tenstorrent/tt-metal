@@ -33,7 +33,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint64_t dst_noc_addr = get_noc_addr(i_stick, s0);
+            uint64_t dst_noc_addr = s0.get_noc_addr(i_stick);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
             l1_read_addr += stick_size_offset;
             i_stick += 1;
