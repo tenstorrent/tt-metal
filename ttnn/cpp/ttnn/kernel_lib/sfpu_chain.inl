@@ -76,7 +76,6 @@ ALWI void sfpu_pipeline(
         "the pipeline would double-pop. Use a single upfront Load per CB, or duplicate via "
         "WaitNoPop/NoWaitPop fan-out.");
     ASSERT(num_tiles > 0);
-    ASSERT(static_cast<uint32_t>(pack_slot) < Chain::stride);
 
     // Packer reconfiguration once before the loop.
     if constexpr (detail::sfpu_reconfig_output(reconfig)) {
@@ -99,28 +98,35 @@ ALWI void sfpu_pipeline(
         cb_reserve_back(ocb, num_tiles);
     }
 
-    // Pack amortization: run as many chain iterations as the DEST register
-    // bank can hold inside one tile_regs_acquire/commit/wait/release window,
-    // then pack them as a burst. Per iteration the chain uses `stride` slots
-    // (= max_dst + 1), so DEST_AUTO_LIMIT / stride iterations fit.
+    // Pack amortization: run as many chain iterations as fit in DEST inside
+    // one tile_regs_acquire/commit/wait/release window, then pack as a burst.
     //
-    // Semantics per iteration are the full chain.apply(k * stride) — each
-    // op's init and exec fire exactly as in per-tile mode, just writing to a
-    // slot block offset by k*stride. All policies (WaitUpfrontPopAtEnd,
-    // WaitAndPop, fan-in / fan-out) behave identically to the per-tile path;
-    // the only difference is the DEST acquire boundary moves out.
+    // Stride — how much each chain iteration's slot block shifts in DEST:
+    //   Non-optimized (current) mode: stride = pack_slot + 1 (= 1 with the
+    //     Dst::D0 convention). The result slot is spaced per-iter; scratch
+    //     slots from iter k naturally get overwritten by iter k+1's loads
+    //     (iter k's scratch is dead once iter k commits its result).
+    //     Compact: K outputs + scratch overhead live simultaneously.
+    //   Optimized mode (future, init-once/exec-K): stride = max_dst + 1 —
+    //     all K iterations' scratch slots live concurrently because each op
+    //     fires K times before the next op begins.
     //
-    // Deferred: per-op init amortization ("init once, exec K times") — the
-    // pattern binary_op_helpers uses for its post-chain. Adding it requires
-    // analysis of each chain element's init/exec interaction and is tracked
-    // as future work. The current shape leaves the door open: chain.apply
-    // already accepts an offset, so swapping the inner loop for a batched
-    // variant is a localized change.
-    constexpr uint32_t stride = Chain::stride;
-    constexpr uint32_t iter_per_chunk = DEST_AUTO_LIMIT / stride;
-    static_assert(iter_per_chunk >= 1, "chain stride exceeds DEST capacity");
+    // Budget: max DEST slot touched across the chunk is
+    //   (K - 1) * stride + max_dst. Must stay below DEST_AUTO_LIMIT.
+    // → K = (DEST_AUTO_LIMIT - max_dst + pack_slot) / stride + 1.
+    //   With pack_slot = 0, stride = 1: K = DEST_AUTO_LIMIT - max_dst.
+    //
+    // Every op's init/exec still fires per iteration — behaviourally the
+    // same as the old per-tile pipeline, just with more tiles sharing one
+    // DEST acquire. The door is open for init-once/exec-K optimization by
+    // swapping this inner loop for a batched variant.
+    ASSERT(static_cast<uint32_t>(pack_slot) == 0);
+    constexpr uint32_t pack_base = 0u;
+    constexpr uint32_t stride = pack_base + 1u;  // non-optimized mode
+    constexpr uint32_t max_dst = Chain::max_dst;
+    constexpr uint32_t iter_per_chunk = (DEST_AUTO_LIMIT > max_dst) ? (DEST_AUTO_LIMIT - max_dst) : 1u;
+    static_assert(max_dst < DEST_AUTO_LIMIT, "chain max_dst exceeds DEST capacity");
 
-    const uint32_t pack_base = static_cast<uint32_t>(pack_slot);
     uint32_t tiles_processed = 0;
     for (uint32_t base = 0; base < num_tiles; base += iter_per_chunk) {
         const uint32_t this_chunk = (base + iter_per_chunk <= num_tiles) ? iter_per_chunk : (num_tiles - base);
