@@ -66,6 +66,8 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
+#include "api/compute/add_int_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
@@ -487,9 +489,49 @@ ALWI void GeluDerivative<FastAndApprox, Slot>::init() const { gelu_derivative_ti
 template <bool FastAndApprox, Dst Slot>
 ALWI void GeluDerivative<FastAndApprox, Slot>::call(uint32_t d0) const { gelu_derivative_tile<FastAndApprox>(d0); }
 
+// lgamma and integer ops
+
+template <Dst Slot>
+ALWI void LgammaStirling<Slot>::init() const { lgamma_stirling_tile_init(); }
+template <Dst Slot>
+ALWI void LgammaStirling<Slot>::call(uint32_t d0) const { lgamma_stirling_tile(d0); }
+
+template <Dst Slot>
+ALWI void FillTileInt<Slot>::init() const { fill_tile_init(); }
+template <Dst Slot>
+ALWI void FillTileInt<Slot>::call(uint32_t d0) const { fill_tile_int(d0, value); }
+
+template <Dst In0, Dst In1, Dst Out>
+ALWI void LgammaStirlingFloat<In0, In1, Out>::init() const { lgamma_stirling_float_tile_init(); }
+template <Dst In0, Dst In1, Dst Out>
+ALWI void LgammaStirlingFloat<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const {
+    lgamma_stirling_float_tile(a, b, c);
+}
+
+template <DataFormat DF, Dst In0, Dst In1, Dst Out>
+ALWI void IntMul<DF, In0, In1, Out>::init() const { mul_int_tile_init<DF>(); }
+template <DataFormat DF, Dst In0, Dst In1, Dst Out>
+ALWI void IntMul<DF, In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const {
+    mul_int_tile<DF>(a, b, c);
+}
+
+template <DataFormat DF, Dst In0, Dst In1, Dst Out>
+ALWI void IntAdd<DF, In0, In1, Out>::init() const { add_int_tile_init(); }
+template <DataFormat DF, Dst In0, Dst In1, Dst Out>
+ALWI void IntAdd<DF, In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const {
+    add_int_tile<DF>(a, b, c);
+}
+
 // =============================================================================
 // Op Method Definitions — Ternary SFPU (4 ops)
 // =============================================================================
+
+template <Dst In0, Dst In1, Dst In2, Dst Out>
+ALWI void LgammaAdjusted<In0, In1, In2, Out>::init() const { lgamma_adjusted_tile_init(); }
+template <Dst In0, Dst In1, Dst In2, Dst Out>
+ALWI void LgammaAdjusted<In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const {
+    lgamma_adjusted_tile(a, b, c, d);
+}
 
 template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
 ALWI void Where<df, In0, In1, In2, Out>::init() const { where_tile_init(); }

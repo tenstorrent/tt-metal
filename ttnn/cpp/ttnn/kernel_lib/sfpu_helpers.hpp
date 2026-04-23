@@ -58,6 +58,8 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
+#include "api/compute/add_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
@@ -1008,6 +1010,19 @@ struct Dropout : UnaryOp<Dropout<Slot>, Slot> {
     ALWI void call(uint32_t d0) const;
 };
 
+template <Dst Slot = Dst::D0>
+struct LgammaStirling : UnaryOp<LgammaStirling<Slot>, Slot> {
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
+template <Dst Slot = Dst::D0>
+struct FillTileInt : UnaryOp<FillTileInt<Slot>, Slot> {
+    uint32_t value;
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
 // --- Fill and Random ---
 
 template <Dst Slot = Dst::D0>
@@ -1096,6 +1111,26 @@ struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
     ALWI void call(uint32_t d0, uint32_t d1, uint32_t d_out) const;
 };
 
+// lgamma_stirling_float_tile(x, log_z, out): Stirling approximation using log(z)
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct LgammaStirlingFloat : BinaryOp<LgammaStirlingFloat<In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
+};
+
+// Integer SFPU binary ops
+template <DataFormat DF, Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct IntMul : BinaryOp<IntMul<DF, In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
+};
+
+template <DataFormat DF, Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct IntAdd : BinaryOp<IntAdd<DF, In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
+};
+
 template <bool FastAndApprox = false, Dst Slot = Dst::D0>
 struct TanhDerivative : UnaryOp<TanhDerivative<FastAndApprox, Slot>, Slot> {
     ALWI void init() const;
@@ -1128,6 +1163,13 @@ template <
     Dst In2 = Dst::D2,
     Dst Out = Dst::D0>
 struct Lerp : TernaryOp<Lerp<df, In0, In1, In2, Out>, In0, In1, In2, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const;
+};
+
+// lgamma_adjusted_tile(stirling, log_sin, x, out): reflection correction
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst In2 = Dst::D2, Dst Out = Dst::D0>
+struct LgammaAdjusted : TernaryOp<LgammaAdjusted<In0, In1, In2, Out>, In0, In1, In2, Out> {
     ALWI void init() const;
     ALWI void call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const;
 };
