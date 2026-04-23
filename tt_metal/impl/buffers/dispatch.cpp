@@ -1312,42 +1312,40 @@ bool write_to_device_buffer(
         // If the filter excluded every core, no DMA was issued, so callers must not treat the
         // pinned transfer as in-flight (which would add spurious barrier events).
         return use_pinned_transfer && any_core_written;
-    } else {
-        if (logical_core_filter != nullptr) {
-            TT_FATAL(
-                logical_core_filter->empty(),
-                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
-                "per-core filtering)");
-            // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
-            return false;
-        }
-        auto root_buffer = buffer.root_buffer();
-        auto region = buffer.root_buffer_region();
-        InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
-            initialize_interleaved_buf_dispatch_params(
-                *root_buffer,
-                cq_id,
-                expected_num_workers_completed,
-                region,
-                sub_device_ids,
-                pinned_src_noc_xy,
-                pinned_src_addr,
-                use_pinned_transfer,
-                remote_chip);
-
-        InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
-            ttsl::overloaded{
-                [](std::derived_from<InterleavedBufferWriteDispatchParams> auto& val)
-                    -> InterleavedBufferWriteDispatchParams* { return &val; },
-                [](std::monostate) -> InterleavedBufferWriteDispatchParams* { return nullptr; },
-            },
-            dispatch_params_variant);
-        TT_ASSERT(dispatch_params != nullptr);
-
-        write_interleaved_buffer_to_device(
-            src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
-        return use_pinned_transfer;
     }
+    if (logical_core_filter != nullptr) {
+        TT_FATAL(
+            logical_core_filter->empty(),
+            "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+            "per-core filtering)");
+        // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
+        return false;
+    }
+    auto root_buffer = buffer.root_buffer();
+    auto region = buffer.root_buffer_region();
+    InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant = initialize_interleaved_buf_dispatch_params(
+        *root_buffer,
+        cq_id,
+        expected_num_workers_completed,
+        region,
+        sub_device_ids,
+        pinned_src_noc_xy,
+        pinned_src_addr,
+        use_pinned_transfer,
+        remote_chip);
+
+    InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
+        ttsl::overloaded{
+            [](std::derived_from<InterleavedBufferWriteDispatchParams> auto& val)
+                -> InterleavedBufferWriteDispatchParams* { return &val; },
+            [](std::monostate) -> InterleavedBufferWriteDispatchParams* { return nullptr; },
+        },
+        dispatch_params_variant);
+    TT_ASSERT(dispatch_params != nullptr);
+
+    write_interleaved_buffer_to_device(
+        src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+    return use_pinned_transfer;
 }
 
 // ====== Utility Functions for Reads ======
