@@ -35,10 +35,14 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
+    per_layer_shapes = isinstance(kv_cache_shape, list)
+    per_layer_dtypes = isinstance(dtype, list)
     for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
         for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
+            layer_kv_cache_shape = kv_cache_shape[layer_num] if per_layer_shapes else kv_cache_shape
+            layer_dtype = dtype[layer_num] if per_layer_dtypes else dtype
+            cache_kv = torch.zeros(layer_kv_cache_shape, dtype=layer_dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
                 kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
@@ -60,7 +64,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{layer_kv_cache_shape}",
                 )
                 for kv in ["k", "v"]
             ]
