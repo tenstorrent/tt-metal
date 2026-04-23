@@ -452,10 +452,12 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
-        # Combine expects TILE_LAYOUT input and untilizes it inside of operator
+        # Combine expects ROW_MAJOR or TILE_LAYOUT input
+        expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
+        logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 
         combined_output = self.combine_module(
-            expert_outputs,
+            expert_outputs_rm,
             metadata,
             tt_expert_token_counts,
         )
