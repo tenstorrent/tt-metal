@@ -849,34 +849,39 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
             continue;  // clean — nothing to do
         }
 
-        // Fix F4 (#42429): if the status word is not a valid EDMStatus value, the L1 slot is
-        // corrupt — either from a prior process's mid-handshake crash (e.g. close_finish
-        // spinning forever on a lost EDM ACK, then BRISC-halted by Device::close()), or from
-        // unrelated stray NOC traffic. In either case, the TERMINATE probe will time out
-        // because no recognizable firmware is running at the peer.  Skip the 50ms wait per
-        // channel (saves ~42s on a T3K with ~840 corrupt channels) but still send the
-        // TERMINATE write as a best-effort — if there IS firmware behind the garbage word,
-        // it gets a chance to notice.  configure_fabric_cores() will clear the L1 and load
-        // the new router firmware; whether that recovers cleanly is observed downstream at
-        // wait_for_fabric_endpoint_ready.
+        // Fix F4 / FIX K (#42429): if the status word is not a valid EDMStatus value, the L1
+        // slot is corrupt OR shows the base-UMD-firmware sentinel (0x49706550 = "iPeP").
+        // Skip the 50ms wait per channel (saves ~42s on a T3K with ~840 such channels).
+        // Do NOT send TERMINATE — see FIX K comment below for why that kills the ETH relay.
+        // configure_fabric_cores() will clear the L1 via soft-reset and load new firmware;
+        // whether that recovers cleanly is observed downstream at wait_for_fabric_endpoint_ready.
         const bool known_status = is_known_edm_status(status_buf[0]);
         if (!known_status) {
+            // FIX K (#42429): Do NOT send TERMINATE to corrupt/unknown-status channels.
+            //
+            // 0x49706550 ("iPeP") is the base-UMD-firmware sentinel — it means the ERISC is
+            // running the stock UMD relay firmware, NOT stale fabric firmware.  Base UMD firmware
+            // actively polls the termination_signal_address; writing TERMINATE causes it to exit
+            // gracefully.  On MMIO devices (chips 0-3) this kills the ETH relay that non-MMIO
+            // devices (chips 4-7) depend on for ALL L1 / register / reset operations.
+            //
+            // The original rationale was "give unknown firmware a best-effort chance to stop".
+            // In practice this was harmful: sending TERMINATE to a live relay ERISC kills it
+            // ~9 ms into PHASE 1, and by the time PHASE 2 tries to soft-reset non-MMIO Device 4
+            // (which goes through that same relay), the relay is already dead → 5 s UMD timeout.
+            //
+            // configure_fabric_cores() issues a hard BRISC soft-reset (assert+deassert) which
+            // reliably restarts the ERISC regardless of its prior firmware state, so no graceful
+            // TERMINATE handshake is needed here.
             log_error(
                 tt::LogMetal,
                 "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} is NOT a "
-                "valid EDMStatus value — ERISC L1 appears CORRUPT (likely stuck-mid-handshake "
-                "from a prior process; see #42429). Sending TERMINATE best-effort, NOT polling "
-                "(would time out). configure_fabric_cores() will reset L1 next.",
+                "valid EDMStatus value — ERISC L1 appears CORRUPT or shows base-UMD-firmware "
+                "sentinel (see #42429). NOT sending TERMINATE (would kill ETH relay). "
+                "configure_fabric_cores() will issue soft-reset to recover.",
                 dev->id(),
                 eth_chan_id,
                 status_buf[0]);
-
-            std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(term_signal));
-            try {
-                detail::WriteToDeviceL1(dev, eth_logical_core, term_addr, term_buf, CoreType::ETH);
-            } catch (...) {
-                // write-side also unresponsive — best effort only, ignore
-            }
             // Fix #42429 (cascade prevention): zero edm_status_address so the NEXT session's
             // terminate_stale_erisc_routers() sees a clean 0 instead of the same garbage value.
             // Without this, the corrupt status persists in L1 across container restarts (bare
