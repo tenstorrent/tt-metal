@@ -58,19 +58,6 @@ namespace deepseek_b1_ops {
 // =============================================================================
 #if defined(COMPILE_FOR_BRISC)
 
-/** Fabric destination addresses (where data lands on remote device) */
-struct SdpaFabricDest {
-    uint64_t dst_noc;  // Destination L1 address (varies per packet)
-    uint64_t sem_noc;  // Semaphore address (constant per round)
-};
-
-/** Forwarder destination addresses (local forwarder slot) */
-struct SdpaForwarderDest {
-    uint64_t slot_noc;  // Forwarder slot NOC address
-    uint64_t sem_noc;   // Forwarder semaphore NOC address (constant per round)
-    uint32_t slot_idx;  // Slot index for bit-packed signaling
-};
-
 /** Per-round configuration for sending packets. */
 struct SdpaRoundConfig {
     uint32_t cb_l;
@@ -107,12 +94,17 @@ struct SdpaChunkSender {
     SdpaRoundConfig cfg;
 
     // Precomputed NOC addresses (computed once per round in setup_round)
-    uint64_t sem_noc;      // Fabric destination semaphore
-    uint64_t fwd_sem_noc;  // Forwarder semaphore
+    uint64_t dst_base_noc;       // Fabric destination payload base for L chunks
+    uint64_t sem_noc;            // Fabric destination semaphore
+    uint64_t fwd_slot_base_noc;  // Forwarder slot base
+    uint64_t fwd_sem_noc;        // Forwarder semaphore
+    volatile PACKET_HEADER_TYPE* header;
 
     // Derived constants
     static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
     static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+    static constexpr uint32_t aligned_ms_payload_bytes = align(ms_tile_size_bytes, l1_alignment);
+    static constexpr uint32_t aligned_l_chunk_payload_bytes = align(l_chunk_size_bytes, l1_alignment);
 
     // Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
     static constexpr uint32_t MS_SLOT_OFFSET = 0;
@@ -120,83 +112,82 @@ struct SdpaChunkSender {
 
     FORCE_INLINE void setup_round(const SdpaRoundConfig& new_cfg) {
         cfg = new_cfg;
+        dst_base_noc = get_noc_addr(current_core_x, current_core_y, cfg.dst_base_addr);
         sem_noc = get_noc_addr(current_core_x, current_core_y, cfg.sem_addr);
+        fwd_slot_base_noc = get_noc_addr(fwd_core_x, fwd_core_y, cfg.fwd_slot_addr);
         fwd_sem_noc = get_noc_addr(fwd_core_x, fwd_core_y, cfg.fwd_sem_addr);
 
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
-        (void)fabric_set_unicast_route(header, cfg.dst_chip_id, cfg.dst_mesh_id);
-    }
+        header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
 
-    FORCE_INLINE SdpaFabricDest get_fabric_dest(uint32_t dst_addr) const {
-        return {
-            get_noc_addr(current_core_x, current_core_y, dst_addr),
-            sem_noc  // precomputed
-        };
-    }
+        // SDPA reduce-to-all only exchanges immediate torus neighbors, so the next hop is the final destination.
+        const auto next_hop_direction = get_next_hop_router_direction(cfg.dst_mesh_id, cfg.dst_chip_id);
+        fabric_set_single_hop_unicast_route_from_direction(
+            header, next_hop_direction, cfg.dst_chip_id, cfg.dst_mesh_id);
 
-    template <bool is_ms>
-    FORCE_INLINE SdpaForwarderDest get_forwarder_dest(uint32_t l_chunk_idx = 0) const {
-        uint32_t slot_offset = is_ms ? MS_SLOT_OFFSET : (L_SLOT_OFFSET + l_chunk_idx);
-        uint32_t slot_idx = cfg.base_slot_idx + slot_offset;
-        uint32_t fwd_slot_addr = cfg.fwd_slot_addr + slot_offset * slot_size;
-        return {
-            get_noc_addr(fwd_core_x, fwd_core_y, fwd_slot_addr),
-            fwd_sem_noc,  // precomputed
-            slot_idx};
-    }
-
-    FORCE_INLINE void send_packet(
-        const SdpaFabricDest& fabric_dest,
-        const SdpaForwarderDest& fwd_dest,
-        uint32_t src_addr,
-        uint32_t payload_size) const {
-        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
         constexpr uint32_t ATOMIC_INC_VAL = 1;
         constexpr bool FLUSH_WRITES = false;
         header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                fabric_dest.dst_noc, fabric_dest.sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
-            align(payload_size, l1_alignment));
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_base_noc, sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
+            aligned_l_chunk_payload_bytes);
+    }
 
-        noc_async_write(cfg.header_addr, fwd_dest.slot_noc, packet_header_size_bytes);
-        uint64_t fwd_payload_noc = fwd_dest.slot_noc + packet_header_size_bytes;
+    FORCE_INLINE void send_packet(
+        uint64_t dst_noc,
+        uint64_t fwd_slot_noc,
+        uint32_t fwd_slot_idx,
+        uint32_t src_addr,
+        uint32_t payload_size) const {
+        header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc);
+        noc_async_write(cfg.header_addr, fwd_slot_noc, packet_header_size_bytes);
+        uint64_t fwd_payload_noc = fwd_slot_noc + packet_header_size_bytes;
         noc_async_write(src_addr, fwd_payload_noc, payload_size);
+        // The forwarder reads packet size from the staged header, so the whole slot must be visible before signaling.
         noc_async_writes_flushed();
-        noc_semaphore_inc(fwd_dest.sem_noc, 1u << fwd_dest.slot_idx);
+        noc_semaphore_inc(fwd_sem_noc, 1u << fwd_slot_idx);
     }
 
-    FORCE_INLINE void send_ms() const {
-        uint32_t dst_addr = cfg.dst_base_addr + total_l_bytes;
-        auto fabric_dest = get_fabric_dest(dst_addr);
-        auto fwd_dest = get_forwarder_dest<true>();
-        send_packet(fabric_dest, fwd_dest, get_read_ptr(cfg.cb_ms), ms_tile_size_bytes);
+    FORCE_INLINE void send_ms(uint32_t src_addr) const {
+        if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
+            header->set_payload_size_bytes(aligned_ms_payload_bytes);
+        }
+        send_packet(dst_base_noc + total_l_bytes, fwd_slot_base_noc, cfg.base_slot_idx, src_addr, ms_tile_size_bytes);
     }
 
-    FORCE_INLINE void send_l_chunk(uint32_t l_chunk_idx) const {
-        uint32_t dst_addr = cfg.dst_base_addr + l_chunk_idx * l_chunk_size_bytes;
-        uint32_t src_addr = get_read_ptr(cfg.cb_l) + l_chunk_idx * l_chunk_size_bytes;
-        auto fabric_dest = get_fabric_dest(dst_addr);
-        auto fwd_dest = get_forwarder_dest<false>(l_chunk_idx);
-        send_packet(fabric_dest, fwd_dest, src_addr, l_chunk_size_bytes);
+    template <bool streaming>
+    FORCE_INLINE void send_l_chunks(uint32_t src_addr) const {
+        if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
+            header->set_payload_size_bytes(aligned_l_chunk_payload_bytes);
+        }
+
+        uint64_t current_dst_noc = dst_base_noc;
+        uint64_t current_fwd_slot_noc = fwd_slot_base_noc + (L_SLOT_OFFSET * slot_size);
+        uint32_t current_fwd_slot_idx = cfg.base_slot_idx + L_SLOT_OFFSET;
+        uint32_t current_src_addr = src_addr;
+        for (uint32_t i = 0; i < num_l_chunks; i++) {
+            if constexpr (streaming) {
+                cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
+            }
+
+            send_packet(
+                current_dst_noc, current_fwd_slot_noc, current_fwd_slot_idx, current_src_addr, l_chunk_size_bytes);
+            current_dst_noc += l_chunk_size_bytes;
+            current_fwd_slot_noc += slot_size;
+            current_fwd_slot_idx++;
+            current_src_addr += l_chunk_size_bytes;
+        }
     }
 
     FORCE_INLINE void send_all() const {
         cb_wait_front(cfg.cb_ms, 1);
-        send_ms();
+        send_ms(get_read_ptr(cfg.cb_ms));
         cb_wait_front(cfg.cb_l, num_l_chunks * tiles_per_l_chunk);
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            send_l_chunk(i);
-        }
+        send_l_chunks</*streaming=*/false>(get_read_ptr(cfg.cb_l));
     }
 
     FORCE_INLINE void send_streaming() const {
         cb_wait_front(cfg.cb_ms, 1);
-        send_ms();
-
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
-            cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
-            send_l_chunk(i);
-        }
+        send_ms(get_read_ptr(cfg.cb_ms));
+        send_l_chunks</*streaming=*/true>(get_read_ptr(cfg.cb_l));
     }
 };
 
