@@ -309,6 +309,8 @@ class WanAttention(Module):
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
+        cross_attn_mask: (optional, cross-attn only) mask for SDPA, shape [B|1, nqh|1, Sq, Sk].
+            Must be TILE layout, bf16/bfp8/bfp4 dtype, on device in DRAM.
         rope_cos: fractured on SP, TP
         rope_sin: fractured on SP, TP
         trans_mat: replicated
