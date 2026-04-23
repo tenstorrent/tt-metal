@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -320,9 +321,16 @@ class TtLlamaMLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096 or batch_size > 1:
+        # QWEN_FF2_DISABLE_FUSED=1 forces the non-fused AG+linear path for A/B profiling (temporary toggle)
+        _disable_fused_ff2 = os.environ.get("QWEN_FF2_DISABLE_FUSED") == "1"
+        if seq_len < 4096 or batch_size > 1 or _disable_fused_ff2:
             w2_in_gathered = self.tt_ccl.line_all_gather(
-                w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+                w2_in,
+                cluster_axis=1,
+                num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+                memory_config=w3_out.memory_config(),
+                buffer_key="FF3",
+                dim=3,
             )
             ttnn.deallocate(w2_in)
             w2_out = ttnn.linear(

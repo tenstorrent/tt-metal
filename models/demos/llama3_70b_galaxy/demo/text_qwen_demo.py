@@ -375,6 +375,25 @@ def create_tt_qwen_model(
             False,
             False,
         ),
+        (  # bh-glx-prefill-4k-profile-2L - BH GLX prefill-only, ISL=4k, 2 layers, for device profiler
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",
+            True,
+            1,
+            128 * 1024,
+            1,
+            1,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            False,
+            False,
+            False,
+            False,  # prefill_profile=False (tracy signpost path hits BH sub-device bug)
+            2,  # num_layers = 2 (layer 0 = warmup JIT, layer 1 = clean steady-state sample)
+            True,
+            False,
+            False,
+        ),
         (  # bh-glx-prefill-8k - BH GLX prefill-only, ISL=8k
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",
             True,
@@ -523,6 +542,7 @@ def create_tt_qwen_model(
         "bh-glx-prefill-128",
         "bh-glx-prefill-1k",
         "bh-glx-prefill-4k",
+        "bh-glx-prefill-4k-profile-2L",  # 2L profiler run for CCL bottleneck analysis
         "bh-glx-prefill-8k",
         "bh-glx-prefill-16k",
         "bh-glx-prefill-32k",
@@ -550,7 +570,7 @@ def create_tt_qwen_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
-            "fabric_config": True,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
@@ -900,7 +920,12 @@ def test_qwen_demo_text(
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
-        if prefill_profile:  # If we are profiling prefill, we stop here
+        # QWEN_EXIT_AFTER_PREFILL=1: same early-exit as prefill_profile, but without
+        # relying on tracy signposts (those hit a BH sub-device config bug at warmup
+        # seq_len=128). Used for device-profiler runs where decode-trace capture
+        # hangs on BH Galaxy + TT_METAL_DEVICE_PROFILER=1.
+        _exit_after_prefill = os.environ.get("QWEN_EXIT_AFTER_PREFILL") == "1"
+        if prefill_profile or _exit_after_prefill:  # If we are profiling prefill, we stop here
             total_inference_prefill_time = profiler.get_duration("inference_prefill")
             isl = prefill_lens[0] if prefill_lens else max_encoded_prompt_len
             prefill_tok_s = isl / total_inference_prefill_time * batch_size
