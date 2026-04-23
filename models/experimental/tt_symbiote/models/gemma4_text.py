@@ -11,6 +11,8 @@ Replaces Gemma4TextModel to:
 - Keep rotary embeddings and causal masks on host (unchanged)
 """
 
+import logging
+import os
 from typing import Optional
 
 import torch
@@ -18,6 +20,60 @@ import ttnn
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Prefill cross-request sync barrier
+#
+# Background: when this model is driven by an asynchronous serving stack
+# (e.g. vLLM with ``read_from_device=False`` decode), the TTNN command queue
+# accumulates work across all decode steps of one request and is only drained
+# at the end of the request when its final token is read back to host. If the
+# next request's prefill begins before that drain completes, the in-flight
+# decode ops can race with the prefill ops issued by the new request.
+#
+# Empirically, this race manifests as a deterministic deadlock inside the
+# ``ttnn.reshape`` after SDPA in
+# ``TTNNGemma4Attention._forward_prefill`` (gemma4_attention.py:696). py-spy
+# traces show the hang at ttnn/decorators.py:473 with 99% CPU on the
+# dispatcher thread and no progress beyond the reshape. The hang is in the
+# C++ TTNN runtime, not in Python, and so cannot be unblocked without a
+# process kill.
+#
+# Until the underlying TTNN issue is fixed upstream, we bracket the prefill
+# compute path with two ``ttnn.synchronize_device`` calls:
+#   1. At the start of ``call()`` when seq_len > 1 (prefill): drains any
+#      pending work from the previous request's async-decode pipeline.
+#   2. After the decoder layer loop completes: drains any latent ops queued
+#      during prefill so they cannot leak into the first decode of this same
+#      request.
+#
+# Each sync costs ~0.7-1.1 ms on T3K (negligible compared to ~1 s prefill or
+# ~430 ms decode); validated via 30/30 sequential requests on Gemma4-31B
+# (median 60.5 s, p99 66.0 s) where the same workload previously deadlocked
+# at request #24 without the barriers.
+#
+# The behaviour is ON by default and can be disabled via env var for
+# benchmarking once the upstream TTNN fix lands:
+#   TT_SYMBIOTE_GEMMA4_PREFILL_SYNC=1   enable barriers (default)
+#   TT_SYMBIOTE_GEMMA4_PREFILL_SYNC=0   disable
+# ---------------------------------------------------------------------------
+_PREFILL_SYNC_ENABLED = os.environ.get("TT_SYMBIOTE_GEMMA4_PREFILL_SYNC", "1") == "1"
+
+
+def _sync_device_safely(device, label: str) -> None:
+    """Drain the TTNN command queue, never raising into the model's forward.
+
+    ``ttnn.synchronize_device`` is a thin wrapper around the C++ runtime; if
+    it fails for any reason (e.g. mesh teardown during shutdown) we log and
+    continue rather than abort the inference call.
+    """
+    try:
+        ttnn.synchronize_device(device)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("ttnn.synchronize_device(%s) failed: %s", label, exc)
 
 
 class TTNNGemma4TextModel(TTNNModule):
@@ -180,6 +236,15 @@ class TTNNGemma4TextModel(TTNNModule):
         for layer_type in self.unique_layer_types:
             position_embeddings[layer_type] = self.rotary_emb(hidden_states, position_ids, layer_type)
 
+        # Cross-request sync barrier (entry). Drain the TTNN command queue
+        # before starting prefill so any in-flight work from the previous
+        # request's async-decode pipeline cannot race with this prefill's
+        # ttnn.reshape after SDPA. See the module-level docstring on
+        # _PREFILL_SYNC_ENABLED for the full rationale.
+        is_prefill = inputs_embeds.shape[1] > 1
+        if is_prefill and _PREFILL_SYNC_ENABLED:
+            _sync_device_safely(ttnn_object.device, "before_prefill")
+
         # Iterate decoder layers directly — no slicing avoids ModuleList
         # reconstruction (HF's [:N] creates a new ModuleList that rejects TTNNModule).
         num_layers = self.config.num_hidden_layers
@@ -209,6 +274,13 @@ class TTNNGemma4TextModel(TTNNModule):
                 past_key_values.update_seq_length(layer_idx=i, seq_len=seq_len)
 
         hidden_states = self.norm(hidden_states)
+
+        # Cross-request sync barrier (exit). Drain any latent ops queued
+        # during prefill so they cannot leak into the first decode step of
+        # this same request (or a downstream caller's host-side post-
+        # processing of `last_hidden_state`).
+        if is_prefill and _PREFILL_SYNC_ENABLED:
+            _sync_device_safely(ttnn_object.device, "after_prefill")
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,

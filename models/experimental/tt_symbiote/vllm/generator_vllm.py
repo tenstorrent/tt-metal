@@ -28,116 +28,31 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Diagnostic probe (gated behind TT_SYMBIOTE_DIAG=1)
 #
-# Goal: attribute the "first ~9 requests fast, then 370x slowdown" regression
-# observed on the 2026-04-17 benchmark sweep to one of:
-#   (1) TTNN program-cache pollution     -> progcache grows unbounded
-#   (2) NormalRun Python heap accumulation -> gc_objs / rss_mb grow
-#   (3) HF cache reference retention     -> wall_ms grows with no obvious heap
-# Output is one CSV-shaped line per prefill and one per N decode steps.
+# One CSV-shaped log line per prefill and one per N decode steps, recording
+# wall_ms / rss_mb / gc_objs / progcache. Used to attribute slowdowns to TTNN
+# program-cache pollution vs Python heap accumulation vs HF cache retention.
 # Default off so production runs are unaffected.
 # ---------------------------------------------------------------------------
 _DIAG_ENABLED = os.environ.get("TT_SYMBIOTE_DIAG", "0") == "1"
 _DIAG_DECODE_EVERY = max(1, int(os.environ.get("TT_SYMBIOTE_DIAG_DECODE_EVERY", "32")))
 _DIAG_STATE = {"prefill": 0, "decode": 0}
 
-# Watchdog: if a single decode_forward call exceeds this many wall-seconds we
-# log a WATCHDOG line. Default 0 = disabled to avoid false positives during
-# legitimate first-call compilation. Set to 30 to catch the post-9th-request
-# slowdown described in the latency-regression plan.
+# Watchdogs: log a WATCHDOG line when a single prefill / decode exceeds the
+# configured wall-second budget. Cannot preempt a stuck C++ TTNN op but
+# surface the hang clearly in the server log so the operator can correlate
+# with the request index. Default 0 = disabled (avoids false positives during
+# legitimate first-call compilation).
+_WATCHDOG_PREFILL_SEC = float(os.environ.get("TT_SYMBIOTE_PREFILL_WATCHDOG_SEC", "0"))
 _WATCHDOG_DECODE_SEC = float(os.environ.get("TT_SYMBIOTE_DECODE_WATCHDOG_SEC", "0"))
 
-# ---------------------------------------------------------------------------
-# Phase 2B knobs (latency-regression fix; see
-# .cursor/plans/gemma4_latency_regression_fix_9682ee7e.plan.md):
-#
-#   TT_SYMBIOTE_USE_INFERENCE_MODE=1   prefer torch.inference_mode() over
-#                                       torch.no_grad() to avoid one autograd
-#                                       version-counter object per dispatched
-#                                       op.
-#   TT_SYMBIOTE_GC_EVERY_N_PREFILLS=8  force gc.collect() every N prefills.
-#                                       0 disables. ~50-100 ms per collection.
-#   TT_SYMBIOTE_SEVER_PKV=1            null outputs.past_key_values + del
-#                                       outputs after each prefill/decode to
-#                                       drop HF's hold on KV pages.
-#
-# All three default OFF after the 2026-04-20 hang investigation. The 16:38
-# server log shows the unmodified code (no_grad / no severance / no GC) ran
-# 33 sequential requests cleanly; the 18:27 run with inference_mode + sever
-# enabled hung deterministically on the 6th prefill inside a TTNN op called
-# from NormalRun.module_run (py-spy: ttnn/decorators.py:473, 99% CPU on the
-# main thread). Each knob can be turned on individually to bisect.
-# ---------------------------------------------------------------------------
-_USE_INFERENCE_MODE = os.environ.get("TT_SYMBIOTE_USE_INFERENCE_MODE", "0") == "1"
-_GC_EVERY_N_PREFILLS = max(0, int(os.environ.get("TT_SYMBIOTE_GC_EVERY_N_PREFILLS", "0")))
-_SEVER_PKV = os.environ.get("TT_SYMBIOTE_SEVER_PKV", "0") == "1"
-
-# ---------------------------------------------------------------------------
-# Referrer probe (next-step diagnosis after the 2026-04-20 smoke run).
-#
-# The 33-request smoke confirmed the heap grows by ~5,686 objects per decode
-# step but TPOT stayed flat at ~430ms -- so Phase 2B's outputs.past_key_values
-# severance was a no-op for whatever pins the TorchTTNNTensor wrappers. We
-# need to know *which* objects refer to a live wrapper to design the real
-# fix (likely TTNNGemma4PagedAttentionKVCache, the NormalRun dispatcher, or
-# HF's attention cache).
-#
-# This probe is OFF by default. When enabled it samples one wrapper every
-# TT_SYMBIOTE_DIAG_REFS_EVERY prefills, walks gc.get_referrers(), and logs
-# the top referrer types. gc.get_referrers() is O(heap) so we keep N small.
-#   TT_SYMBIOTE_DIAG_REFS=1
-#   TT_SYMBIOTE_DIAG_REFS_EVERY=8        (default; one snapshot every 8 prefills)
-#   TT_SYMBIOTE_DIAG_REFS_TARGET=TorchTTNNTensor   (substring match on type name)
-# ---------------------------------------------------------------------------
-_DIAG_REFS_ENABLED = os.environ.get("TT_SYMBIOTE_DIAG_REFS", "0") == "1"
-_DIAG_REFS_EVERY = max(1, int(os.environ.get("TT_SYMBIOTE_DIAG_REFS_EVERY", "8")))
-_DIAG_REFS_TARGET = os.environ.get("TT_SYMBIOTE_DIAG_REFS_TARGET", "TorchTTNNTensor")
-
-
-class _NoGrad:
-    """Tiny re-entrant wrapper that prefers inference_mode but falls back to
-    no_grad if a downstream op in tt_symbiote / HF rejects inference tensors.
-    Stateful: once we've fallen back we stay fallen back for the rest of the
-    process to avoid per-call try/except overhead.
-    """
-
-    _disabled = False
-
-    def __enter__(self):
-        if _USE_INFERENCE_MODE and not _NoGrad._disabled:
-            try:
-                self._cm = torch.inference_mode()
-                self._cm.__enter__()
-                self._mode = "inference_mode"
-                return self
-            except Exception as exc:
-                logger.warning(
-                    "torch.inference_mode() unavailable (%s); "
-                    "falling back to torch.no_grad() for the rest of the run.",
-                    exc,
-                )
-                _NoGrad._disabled = True
-        self._cm = torch.no_grad()
-        self._cm.__enter__()
-        self._mode = "no_grad"
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        # Auto-fallback if a downstream op rejected inference-mode tensors.
-        # Marking _disabled here flips the global so no further calls use it.
-        if (
-            exc is not None
-            and self._mode == "inference_mode"
-            and isinstance(exc, RuntimeError)
-            and "inference" in str(exc).lower()
-        ):
-            logger.warning(
-                "RuntimeError under torch.inference_mode(): %s. "
-                "Auto-disabling inference_mode for the rest of the run; "
-                "next call will retry under torch.no_grad().",
-                exc,
-            )
-            _NoGrad._disabled = True
-        return self._cm.__exit__(exc_type, exc, tb)
+# Periodic intra-request decode sync. With async decode (read_from_device=False)
+# the TTNN command queue accumulates work across all decode steps of one
+# request before the final read drains it. Forcing synchronize_device every
+# N decode steps caps the live queue depth and complements the model-internal
+# cross-request prefill barrier in tt_symbiote/models/gemma4_text.py. Costs
+# ~1 ms per sync; with N=32 that's ~4 syncs per 128-step decode (negligible
+# vs ~430 ms/step). Set to 0 to disable.
+_SYNC_EVERY_N_DECODES = max(0, int(os.environ.get("TT_SYMBIOTE_SYNC_EVERY_N_DECODES", "0")))
 
 
 def _diag_progcache_entries(mesh_device) -> int:
@@ -165,90 +80,6 @@ def _diag_log(kind: str, mesh_device, wall_ms: float, extra: str = "") -> None:
         f"wall_ms={wall_ms:.1f} rss_mb={rss_mb} gc_objs={gc_objs} "
         f"progcache={progcache}{suffix}"
     )
-
-
-def _diag_log_gc_stats(label: str) -> None:
-    """Emit per-generation gc stats so we can see whether collections
-    actually move the gen0/gen1/gen2 counts (i.e. whether Phase 2B's
-    gc.collect() reclaims anything or just pushes garbage into older
-    generations).
-    """
-    try:
-        stats = gc.get_stats()
-        counts = gc.get_count()
-        threshold = gc.get_threshold()
-    except Exception as exc:
-        logger.info("[DIAG] gc_stats label=%s unavailable: %s", label, exc)
-        return
-    parts = []
-    for gen, st in enumerate(stats):
-        parts.append(
-            f"g{gen}=col{st.get('collections', 0)}/" f"un{st.get('uncollectable', 0)}/" f"co{st.get('collected', 0)}"
-        )
-    logger.info(
-        "[DIAG] gc_stats label=%s count=%s threshold=%s %s",
-        label,
-        counts,
-        threshold,
-        " ".join(parts),
-    )
-
-
-def _diag_log_referrers(target_substr: str, max_objects: int = 1) -> None:
-    """Walk gc.get_referrers() for one live target object and log the top
-    referrer types. Expensive (O(heap)); caller MUST gate on rate.
-
-    We pick the first matching object (typically the oldest, deepest into
-    accumulated state) so the referrer chain is the one that actually
-    pinned it across requests.
-    """
-    try:
-        sample = None
-        sample_id = None
-        for obj in gc.get_objects():
-            tname = type(obj).__name__
-            if target_substr in tname:
-                sample = obj
-                sample_id = id(obj)
-                break
-        if sample is None:
-            logger.info(
-                "[DIAG] refs target=%r not found in heap (no live instances)",
-                target_substr,
-            )
-            return
-
-        # gc.get_referrers itself appears in its own output; filter it out
-        # via id-comparison before tallying.
-        referrers = gc.get_referrers(sample)
-        type_counts = {}
-        sample_reprs = []
-        for r in referrers:
-            if id(r) == sample_id:
-                continue
-            tname = type(r).__name__
-            type_counts[tname] = type_counts.get(tname, 0) + 1
-            if len(sample_reprs) < 3:
-                try:
-                    sample_reprs.append(f"{tname}@{id(r):x}")
-                except Exception:
-                    pass
-
-        ranked = sorted(type_counts.items(), key=lambda kv: -kv[1])[:8]
-        ranked_str = " ".join(f"{t}={c}" for t, c in ranked)
-        logger.info(
-            "[DIAG] refs target=%s sample_id=%x n_referrers=%d " "top_types=[%s] examples=[%s]",
-            type(sample).__name__,
-            sample_id,
-            len(referrers) - 1,  # exclude the get_referrers internal frame
-            ranked_str,
-            ", ".join(sample_reprs),
-        )
-        # Drop our local references so the probe doesn't itself pin the
-        # sample for the next collection cycle.
-        del sample, referrers
-    except Exception as exc:
-        logger.warning("[DIAG] refs probe failed: %s", exc)
 
 
 class SymbioteGemma4ForCausalLM:
@@ -453,9 +284,14 @@ class SymbioteGemma4ForCausalLM:
 
         self.kv_cache.reset()
 
-        diag_t0 = time.perf_counter() if _DIAG_ENABLED else 0.0
+        # The cross-request prefill barrier lives in the model wrapper
+        # (tt_symbiote/models/gemma4_text.py, gated by
+        # TT_SYMBIOTE_GEMMA4_PREFILL_SYNC, ON by default). Adding a second
+        # barrier here would just double-sync; trust the model.
+        time_prefill = _DIAG_ENABLED or (_WATCHDOG_PREFILL_SEC > 0)
+        diag_t0 = time.perf_counter() if time_prefill else 0.0
 
-        with _NoGrad():
+        with torch.no_grad():
             outputs = self.model.forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -466,58 +302,33 @@ class SymbioteGemma4ForCausalLM:
 
         logits = self._to_host_tensor(outputs.logits)
 
-        # Phase 2B: opt-in severance of HF's past_key_values reference. Off by
-        # default after the 2026-04-20 hang on prefill #6 inside a TTNN op;
-        # we suspect the early drop interacts with the symbiote dispatcher's
-        # accumulated tensor state. Re-enable with TT_SYMBIOTE_SEVER_PKV=1
-        # to bisect once we have a hardened harness.
-        if _SEVER_PKV:
-            outputs.past_key_values = None
-            del outputs
-
         if logits.dim() == 2:
             logits = logits.unsqueeze(0)
 
-        if _DIAG_ENABLED:
-            _DIAG_STATE["prefill"] += 1
-            _DIAG_STATE["decode"] = 0  # reset per-request decode counter
-            _diag_log(
-                "prefill",
-                self.mesh_device,
-                (time.perf_counter() - diag_t0) * 1000.0,
-                extra=f"isl={seq_len} bs={batch_size}",
-            )
-
-        # Phase 2B: bound heap growth across long sweeps. Cyclic GC alone
-        # eventually reclaims the wrappers but only after multi-second pauses
-        # at high object counts; periodic eager collection keeps each pass
-        # cheap (~50-100 ms).
-        if _GC_EVERY_N_PREFILLS > 0:
-            self._gc_prefill_counter = getattr(self, "_gc_prefill_counter", 0) + 1
-            if self._gc_prefill_counter % _GC_EVERY_N_PREFILLS == 0:
-                gc_t0 = time.perf_counter() if _DIAG_ENABLED else 0.0
-                gc_objs_before = len(gc.get_objects()) if _DIAG_ENABLED else 0
-                collected = gc.collect()
-                if _DIAG_ENABLED:
-                    gc_objs_after = len(gc.get_objects())
-                    logger.info(
-                        "[DIAG] gc.collect() #%d freed=%d gc_objs_before=%d " "gc_objs_after=%d delta=%d wall_ms=%.1f",
-                        self._gc_prefill_counter // _GC_EVERY_N_PREFILLS,
-                        collected,
-                        gc_objs_before,
-                        gc_objs_after,
-                        gc_objs_before - gc_objs_after,
-                        (time.perf_counter() - gc_t0) * 1000.0,
-                    )
-                    _diag_log_gc_stats(label=f"post_collect_{self._gc_prefill_counter}")
-
-        # Sampled, gated referrer probe: every N prefills walk the referrer
-        # chain of one live wrapper to expose what pins it across requests.
-        # O(heap) so default OFF; opt in with TT_SYMBIOTE_DIAG_REFS=1.
-        if _DIAG_REFS_ENABLED:
-            self._diag_refs_counter = getattr(self, "_diag_refs_counter", 0) + 1
-            if self._diag_refs_counter % _DIAG_REFS_EVERY == 0:
-                _diag_log_referrers(_DIAG_REFS_TARGET)
+        if time_prefill:
+            elapsed = time.perf_counter() - diag_t0
+            if _DIAG_ENABLED:
+                _DIAG_STATE["prefill"] += 1
+                _DIAG_STATE["decode"] = 0  # reset per-request decode counter
+                _diag_log(
+                    "prefill",
+                    self.mesh_device,
+                    elapsed * 1000.0,
+                    extra=f"isl={seq_len} bs={batch_size}",
+                )
+            if _WATCHDOG_PREFILL_SEC > 0 and elapsed > _WATCHDOG_PREFILL_SEC:
+                logger.warning(
+                    "[WATCHDOG] prefill_forward took %.2fs (limit=%.2fs) "
+                    "req#=%d isl=%d bs=%d. Most likely candidates: stale TTNN "
+                    "command-queue work from a prior async decode (verify "
+                    "TT_SYMBIOTE_GEMMA4_PREFILL_SYNC=1) or a hang inside "
+                    "tt_symbiote gemma4_attention prefill kernels.",
+                    elapsed,
+                    _WATCHDOG_PREFILL_SEC,
+                    _DIAG_STATE["prefill"],
+                    seq_len,
+                    batch_size,
+                )
 
         return logits
 
@@ -560,11 +371,11 @@ class SymbioteGemma4ForCausalLM:
         else:
             cache_position = start_pos
 
-        # Time every decode_forward when DIAG or watchdog is on; both share t0.
-        time_decode = _DIAG_ENABLED or (_WATCHDOG_DECODE_SEC > 0)
+        # Time every decode_forward when DIAG, watchdog, or periodic sync is on.
+        time_decode = _DIAG_ENABLED or (_WATCHDOG_DECODE_SEC > 0) or (_SYNC_EVERY_N_DECODES > 0)
         decode_t0 = time.perf_counter() if time_decode else 0.0
 
-        with _NoGrad():
+        with torch.no_grad():
             outputs = self.model.forward(
                 input_ids=input_ids,
                 past_key_values=self.kv_cache,
@@ -574,21 +385,14 @@ class SymbioteGemma4ForCausalLM:
 
         if not read_from_device:
             # Async path: caller (TTAsyncDecodeController) needs the device
-            # tensor still alive, so we only sever past_key_values here. The
-            # outputs container is released as `outputs` falls out of scope at
-            # return; we keep a private reference to logits so it survives.
+            # tensor still alive; keep a private reference to logits so it
+            # survives once `outputs` falls out of scope at return.
             logits_dev = outputs.logits
-            if _SEVER_PKV:
-                outputs.past_key_values = None
-                del outputs
             if time_decode:
                 self._maybe_emit_decode_diag(decode_t0, batch_size, async_path=True)
             return logits_dev
 
         logits = self._to_host_tensor(outputs.logits)
-        if _SEVER_PKV:
-            outputs.past_key_values = None
-            del outputs
 
         if logits.dim() == 2:
             logits = logits.unsqueeze(0)
@@ -599,13 +403,35 @@ class SymbioteGemma4ForCausalLM:
         return logits
 
     def _maybe_emit_decode_diag(self, decode_t0, batch_size, async_path):
-        """Shared post-decode bookkeeping: DIAG sampling + watchdog tripwire."""
+        """Shared post-decode bookkeeping: DIAG sampling + watchdog tripwire +
+        periodic device sync."""
         elapsed = time.perf_counter() - decode_t0
         if _DIAG_ENABLED:
             _DIAG_STATE["decode"] += 1
             if _DIAG_STATE["decode"] % _DIAG_DECODE_EVERY == 0:
                 suffix = f"bs={batch_size}" + (" async=1" if async_path else "")
                 _diag_log("decode", self.mesh_device, elapsed * 1000.0, extra=suffix)
+        else:
+            _DIAG_STATE["decode"] += 1
+
+        # Periodic intra-request sync: cap TTNN command-queue depth during
+        # async decode bursts so the next prefill never collides with hundreds
+        # of in-flight ops. Off when _SYNC_EVERY_N_DECODES==0.
+        if _SYNC_EVERY_N_DECODES > 0 and _DIAG_STATE["decode"] % _SYNC_EVERY_N_DECODES == 0:
+            sync_t0 = time.perf_counter() if _DIAG_ENABLED else 0.0
+            try:
+                import ttnn
+
+                ttnn.synchronize_device(self.mesh_device)
+            except Exception as exc:
+                logger.warning("ttnn.synchronize_device (decode) failed: %s", exc)
+            if _DIAG_ENABLED:
+                logger.info(
+                    "[DIAG] sync_during_decode decode#=%d wall_ms=%.1f",
+                    _DIAG_STATE["decode"],
+                    (time.perf_counter() - sync_t0) * 1000.0,
+                )
+
         if _WATCHDOG_DECODE_SEC > 0 and elapsed > _WATCHDOG_DECODE_SEC:
             logger.warning(
                 "[WATCHDOG] decode_forward took %.2fs (limit=%.2fs) "
