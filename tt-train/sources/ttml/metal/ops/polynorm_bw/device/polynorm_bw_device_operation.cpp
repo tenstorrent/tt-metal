@@ -11,7 +11,7 @@
 namespace ttml::metal::ops::polynorm3_bw::device {
 
 void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
@@ -96,9 +96,9 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t PolyNorm3BackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    spec_return_value_t output_specs;
+PolyNorm3BWSpecReturn PolyNorm3BackwardDeviceOperation::compute_output_specs(
+    const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs& tensor_args) {
+    PolyNorm3BWSpecReturn output_specs;
     output_specs.reserve(2U);
 
     if (tensor_args.preallocated_dL_dx.has_value()) {
@@ -122,9 +122,9 @@ spec_return_value_t PolyNorm3BackwardDeviceOperation::compute_output_specs(
     return output_specs;
 }
 
-tensor_return_value_t PolyNorm3BackwardDeviceOperation::create_output_tensors(
-    const operation_attributes_t& op_attrs, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensors;
+PolyNorm3BWTensorReturn PolyNorm3BackwardDeviceOperation::create_output_tensors(
+    const PolyNorm3BWAttributes& op_attrs, const PolyNorm3BWTensorArgs& tensor_args) {
+    PolyNorm3BWTensorReturn output_tensors;
     output_tensors.reserve(2U);
     auto specs = compute_output_specs(op_attrs, tensor_args);
 
@@ -143,7 +143,7 @@ tensor_return_value_t PolyNorm3BackwardDeviceOperation::create_output_tensors(
 }
 
 ttsl::hash::hash_t PolyNorm3BackwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const PolyNorm3BWAttributes& args, const PolyNorm3BWTensorArgs& tensor_args) {
     const auto& input = tensor_args.input;
     return tt::tt_metal::operation::hash_operation<PolyNorm3BackwardDeviceOperation>(
         args.epsilon, input.dtype(), input.logical_shape());
