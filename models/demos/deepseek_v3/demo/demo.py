@@ -105,7 +105,9 @@ def _resolve_tt_metal_commit() -> str:
 
 
 def _is_primary_artifact_writer() -> bool:
-    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+    # Prefer global launcher ranks when available; TT_MESH_HOST_RANK is mesh-local
+    # and can repeat across submeshes in a multi-mesh launch.
+    for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK", "TT_MESH_HOST_RANK"):
         rank_value = os.getenv(rank_env)
         if rank_value is None:
             continue
@@ -236,7 +238,18 @@ def create_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SAMPLING_TOP_P,
         help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
     )
-    p.add_argument("--cache-dir", type=str, required=True)
+    p.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Optional reference/test cache directory. Also used as the legacy TT weight-cache root when --use-weight-cache is set.",
+    )
+    p.add_argument(
+        "--use-weight-cache",
+        action="store_true",
+        default=False,
+        help="Load a prebuilt current-format legacy TT weight cache from --cache-dir instead of converting DeepSeek weights in memory. Older-format and unversioned caches must be regenerated first.",
+    )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -329,7 +342,7 @@ def create_parser() -> argparse.ArgumentParser:
         dest="force_recalculate",
         action="store_true",
         default=False,
-        help="Force regeneration of cached TTNN weight files and config.",
+        help="Legacy compatibility flag. The stacked DeepSeek path converts weights directly in memory, so this is ignored there.",
     )
     p.add_argument(
         "--stop-at-eos",
@@ -455,6 +468,7 @@ def run_demo(
     max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
     max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
+    use_weight_cache: bool = False,
     random_weights: bool = False,
     single_layer: str | None = None,
     override_num_layers: int | None = None,
@@ -488,9 +502,12 @@ def run_demo(
         raise SystemExit("Missing model path. Provide --model-path.")
     model_path = Path(model_path)
 
-    if cache_dir is None:
-        raise SystemExit("Missing cache directory. Provide --cache-dir.")
-    cache_dir = Path(cache_dir)
+    cache_dir = None if cache_dir is None else Path(cache_dir)
+
+    if use_weight_cache and cache_dir is None:
+        raise SystemExit("--use-weight-cache requires --cache-dir pointing at the legacy TT weight-cache root.")
+    if use_weight_cache and force_recalculate:
+        raise SystemExit("--use-weight-cache cannot be combined with --force-recalculate.")
 
     if sampling_temperature < 0:
         raise SystemExit("--sampling-temperature must be >= 0 (use 0 for greedy decoding).")
@@ -597,29 +614,35 @@ def run_demo(
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":
-            gen = DeepseekGeneratorDP(
-                mesh_device=mesh_device,
-                model_path=model_path,
-                cache_dir=cache_dir,
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(
-                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
-                ),
-                single_layer=(single_layer if random_weights else None),
-                enable_trace=enable_trace,
-                enable_mem_profile=enable_mem_profile,
-                signpost=signpost,
-                max_seq_len=max_seq_len,
-                prefill_max_tokens=prefill_max_tokens,
-                force_recalculate=force_recalculate,
-                profile_decode=profile_decode,
-                sample_on_device=sample_on_device,
-                enable_mtp=enable_mtp,
-                batch_size_per_row=max_users_per_row,
-                sampling_params=sampling_params,
-            )
+            try:
+                gen = DeepseekGeneratorDP(
+                    mesh_device=mesh_device,
+                    model_path=model_path,
+                    cache_dir=cache_dir,
+                    use_weight_cache=use_weight_cache,
+                    tokenizer=tokenizer,
+                    random_weights=bool(random_weights),
+                    dense_layers=(1 if random_weights and single_layer else None),
+                    override_num_layers=(
+                        override_num_layers if override_num_layers is not None else (1 if random_weights else None)
+                    ),
+                    single_layer=(single_layer if random_weights else None),
+                    enable_trace=enable_trace,
+                    enable_mem_profile=enable_mem_profile,
+                    signpost=signpost,
+                    max_seq_len=max_seq_len,
+                    prefill_max_tokens=prefill_max_tokens,
+                    force_recalculate=force_recalculate,
+                    profile_decode=profile_decode,
+                    sample_on_device=sample_on_device,
+                    enable_mtp=enable_mtp,
+                    batch_size_per_row=max_users_per_row,
+                    sampling_params=sampling_params,
+                )
+            except (FileNotFoundError, ValueError) as e:
+                if use_weight_cache:
+                    raise SystemExit(str(e)) from e
+                raise
         else:
             raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
@@ -846,6 +869,7 @@ def main() -> None:
         max_seq_len=args.max_seq_len,
         max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
+        use_weight_cache=bool(args.use_weight_cache),
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
         override_num_layers=args.override_num_layers,

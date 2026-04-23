@@ -79,6 +79,31 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     // Initialize if we're the creator
     if (is_creator_) {
         initialize_region();
+    } else if (region_->version != DEVICE_MEMORY_REGION_VERSION) {
+        const uint32_t existing_refcount = region_->reference_count.load(std::memory_order_acquire);
+        if (existing_refcount == 0) {
+            log_info(
+                tt::LogMetal,
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}), reinitializing stale region",
+                asic_id_,
+                region_->version,
+                DEVICE_MEMORY_REGION_VERSION);
+            initialize_region();
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}) with {} attached process(es); "
+                "disabling SHM tracking for this provider",
+                asic_id_,
+                region_->version,
+                DEVICE_MEMORY_REGION_VERSION,
+                existing_refcount);
+            munmap(region_, sizeof(DeviceMemoryRegion));
+            region_ = nullptr;
+            close(shm_fd_);
+            shm_fd_ = -1;
+            return;
+        }
     }
 
     // Increment reference count (this process is now attached)
@@ -194,7 +219,7 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
 
             // Reset per-chip stats
             for (auto & chip_stat : region_->chip_stats) {
-                if (chip_stat.chip_id != CHIP_STATS_UNUSED) {
+                if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
                     chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
@@ -229,7 +254,7 @@ void SharedMemoryStatsProvider::initialize_region() {
     // Set version (use constexpr from header)
     region_->version = DEVICE_MEMORY_REGION_VERSION;
     region_->num_active_processes = 0;
-    region_->last_update_timestamp = current_timestamp_ns();
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
     region_->reference_count.store(0, std::memory_order_relaxed);
 
     // Set physical chip identification (for proper device correlation)
@@ -247,8 +272,8 @@ void SharedMemoryStatsProvider::initialize_region() {
 
     // Initialize per-chip entries (for remote device tracking)
     for (auto & chip_stat : region_->chip_stats) {
-        chip_stat.chip_id = CHIP_STATS_UNUSED;
-        chip_stat.is_remote = 0;
+        chip_stat.chip_id.store(CHIP_STATS_UNUSED, std::memory_order_relaxed);
+        chip_stat.is_remote.store(0, std::memory_order_relaxed);
         chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
         chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
         chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
@@ -257,8 +282,8 @@ void SharedMemoryStatsProvider::initialize_region() {
     }
 
     // Register the gateway chip itself (chip_id = device_id, is_remote = false)
-    region_->chip_stats[0].chip_id = static_cast<uint32_t>(device_id_);
-    region_->chip_stats[0].is_remote = 0;
+    region_->chip_stats[0].chip_id.store(static_cast<uint32_t>(device_id_), std::memory_order_relaxed);
+    region_->chip_stats[0].is_remote.store(0, std::memory_order_relaxed);
 
     // Clear per-process entries
     for (auto & processe : region_->processes) {
@@ -333,7 +358,7 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
     }
 
     // Update timestamp
-    region_->last_update_timestamp = current_timestamp_ns();
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
     // Update per-PID stats if enabled
     if (per_pid_tracking_enabled_) {
@@ -425,7 +450,7 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
     }
 
     // Update timestamp
-    region_->last_update_timestamp = current_timestamp_ns();
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
     // Update per-PID stats if enabled (with underflow protection using atomics)
     if (per_pid_tracking_enabled_) {
@@ -464,7 +489,7 @@ SharedMemoryStatsProvider::DeviceStats SharedMemoryStatsProvider::get_device_sta
         region_->total_l1_small_allocated.load(std::memory_order_relaxed),
         region_->total_trace_allocated.load(std::memory_order_relaxed),
         region_->total_cb_allocated.load(std::memory_order_relaxed),
-        region_->last_update_timestamp};
+        region_->last_update_timestamp.load(std::memory_order_relaxed)};
 }
 
 std::vector<SharedMemoryStatsProvider::ProcessInfo> SharedMemoryStatsProvider::get_process_stats() const {
@@ -555,21 +580,27 @@ DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_en
 
     // First, try to find existing entry
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id == chip_id) {
+        if (chip_stat.chip_id.load(std::memory_order_relaxed) == chip_id) {
             return &chip_stat;
         }
     }
 
-    // Not found, create new entry
+    // Not found — claim a slot with CAS to avoid TOCTOU race between threads
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id == CHIP_STATS_UNUSED) {
-            chip_stat.chip_id = chip_id;
-            chip_stat.is_remote = 0;  // Will be set by register_chip if needed
+        uint32_t expected = CHIP_STATS_UNUSED;
+        if (chip_stat.chip_id.compare_exchange_strong(
+                expected, chip_id, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            // We claimed this slot; initialize it
+            chip_stat.is_remote.store(0, std::memory_order_relaxed);
             chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
             chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
             chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
             chip_stat.trace_allocated.store(0, std::memory_order_relaxed);
             chip_stat.cb_allocated.store(0, std::memory_order_relaxed);
+            return &chip_stat;
+        }
+        if (expected == chip_id) {
+            // Another thread claimed this slot for the same chip_id concurrently
             return &chip_stat;
         }
     }
@@ -585,7 +616,7 @@ void SharedMemoryStatsProvider::register_chip(uint32_t chip_id, bool is_remote) 
 
     auto* chip_entry = find_or_create_chip_entry(chip_id);
     if (chip_entry) {
-        chip_entry->is_remote = is_remote ? 1 : 0;
+        chip_entry->is_remote.store(is_remote ? 1u : 0u, std::memory_order_relaxed);
     }
 }
 
@@ -596,10 +627,10 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
     }
 
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id != CHIP_STATS_UNUSED) {
+        if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
             ChipInfo info{};
-            info.chip_id = chip_stat.chip_id;
-            info.is_remote = (chip_stat.is_remote != 0);
+            info.chip_id = chip_stat.chip_id.load(std::memory_order_relaxed);
+            info.is_remote = (chip_stat.is_remote.load(std::memory_order_relaxed) != 0);
             info.dram_allocated = chip_stat.dram_allocated.load(std::memory_order_relaxed);
             info.l1_allocated = chip_stat.l1_allocated.load(std::memory_order_relaxed);
             info.l1_small_allocated = chip_stat.l1_small_allocated.load(std::memory_order_relaxed);
