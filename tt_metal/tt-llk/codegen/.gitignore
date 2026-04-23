@@ -1,0 +1,5 @@
+# Transient logs from runs
+*.log
+
+# Local-only Claude settings
+.claude/settings.local.json
