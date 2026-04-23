@@ -33,6 +33,8 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
 
 // Include existing SDPA compute building blocks (matmul_blocks, softmax helpers, etc.)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
@@ -188,19 +190,14 @@ inline void dequant_k_chunk(
         tile_regs_release();
     }
 
-    // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
-    // Pop the old typecast tiles, re-reserve to get a clean packer state, then do the
-    // final norm multiply + grid-transposed write to cb_k_in. This pop/push dance
-    // between Pass 2a and Pass 2b ensures the in-place centroid tiles written by Pass 2a
-    // are properly synchronized for Pass 2b's unpacker reads.
-    cb_pop_front(cb_dq_temp, chunk_tiles);
-    cb_reserve_back(cb_dq_temp, chunk_tiles);
-    cb_push_back(cb_dq_temp, chunk_tiles);
-    cb_wait_front(cb_dq_temp, chunk_tiles);
-
+    // Pass 2b: Norm bcast multiply + grid-transpose into cb_k_in.
+    // Col-major iteration with sequential pack writes tiles in the transposed-grid order:
+    // slot i*Sk+j = tile at (col=i, row=j) — same layout the reader produces for standard SDPA.
+    // Using sequential pack (no out-of-order) ensures clean pack→unpack sync for the
+    // subsequent matmul_blocks read of cb_k_in.
     cb_reserve_back(cb_k_in, chunk_tiles);
-    for (uint32_t row = 0; row < Sk_chunk_t; row++) {
-        for (uint32_t col = 0; col < DHt; col++) {
+    for (uint32_t col = 0; col < DHt; col++) {
+        for (uint32_t row = 0; row < Sk_chunk_t; row++) {
             uint32_t src_tile = row * DHt + col;
             tile_regs_acquire();
             mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
@@ -208,7 +205,7 @@ inline void dequant_k_chunk(
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(cb_k_in);
-            pack_tile<true>(0, cb_k_in, col * Sk_chunk_t + row);
+            pack_tile(0, cb_k_in);
             tile_regs_release();
         }
     }
@@ -275,13 +272,8 @@ inline void dequant_v_chunk(
         tile_regs_release();
     }
 
-    // Pass 2b: Norm bcast multiply into cb_v_in (no output transpose).
-    // Pop-reserve-push dance re-syncs the CB counters after Pass 2a's in-place writes.
-    cb_pop_front(cb_dq_temp, chunk_tiles);
-    cb_reserve_back(cb_dq_temp, chunk_tiles);
-    cb_push_back(cb_dq_temp, chunk_tiles);
-    cb_wait_front(cb_dq_temp, chunk_tiles);
-
+    // Pass 2b: Norm bcast multiply into cb_v_in (no output transpose — natural [Sk × vDHt]).
+    // Sequential pack matches the row-major src layout.
     cb_reserve_back(cb_v_in, chunk_tiles);
     for (uint32_t row = 0; row < Sk_chunk_t; row++) {
         for (uint32_t col = 0; col < vDHt; col++) {
@@ -502,9 +494,9 @@ void kernel_main() {
                     dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
                         cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
 
-                    // Force unpacker to re-fetch from L1 (avoids stale tiles from prior iteration's matmul).
-                    invalidate_l1_cache();
-                    cb_wait_front(cb_k_in, k_chunk_tiles);
+                    // Sync hack: touching cb_k_in via UNPACK-thread volatile L1 read forces
+                    // proper pack→unpack sync for the subsequent matmul_blocks (empirical fix).
+                    DPRINT_UNPACK(DPRINT << TSLICE(cb_k_in, 0, SliceRange::hw0_32_4()) << ENDL());
 
                     // ── Step 2: QK = Q × K^T ──
                     reconfig_data_format(cb_k_in, cb_q_in);
@@ -543,8 +535,8 @@ void kernel_main() {
                     dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
                         cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
 
-                    invalidate_l1_cache();
-                    cb_wait_front(cb_v_in, v_chunk_tiles);
+                    // Sync hack (same as K): force unpack-thread to touch cb_v_in.
+                    DPRINT_UNPACK(DPRINT << TSLICE(cb_v_in, 0, SliceRange::hw0_32_4()) << ENDL());
 
                     // ── Step 5: OUT_IM = softmax × V ──
                     reconfig_data_format(cb_v_in, cb_qk_im);
