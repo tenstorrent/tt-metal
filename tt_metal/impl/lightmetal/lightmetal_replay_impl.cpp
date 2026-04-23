@@ -9,6 +9,7 @@
 #include "command_generated.h"
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
