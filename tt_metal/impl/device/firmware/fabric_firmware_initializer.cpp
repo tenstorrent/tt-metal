@@ -31,6 +31,7 @@ namespace {
 
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
+using tt::umd::CoreCoord;
 
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
 static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
@@ -93,6 +94,43 @@ struct RouterStatusReport {
     bool is_master;
 };
 
+// Build a human-readable hint explaining the most likely root cause for a
+// router stuck at the given init stage. Returns an empty string when no
+// stage-specific hint is available. Stages align with kernel writes to
+// *edm_status_ptr in fabric_erisc_router.cpp.
+std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_t num_initialized_routers) {
+    switch (stuck_stage) {
+        case EdmInitProgress::NotStarted:
+            return "Hint: router(s) never reached kernel main loop. The ERISC kernel may have failed "
+                   "to launch, the kernel image may not have been loaded, or the core was wedged "
+                   "before writing the STARTED status.";
+        case EdmInitProgress::Started:
+            return "Hint: router(s) likely entered the main function but did not complete the remote "
+                   "(ethernet) handshake. Ethernet handshake likely failed -- the link may not be "
+                   "healthy. Investigate link training state, cable integrity, and whether the "
+                   "remote-side partner kernel is running and responsive.";
+        case EdmInitProgress::RemoteHandshakeComplete:
+            return fmt::format(
+                "Hint: remote (ethernet) handshake completed but local (intra-device, master <-> "
+                "subordinate) handshake did not. Master expects {} router(s) on this device. "
+                "Likely causes: (1) master was configured with the wrong router count, so it is "
+                "waiting on notifications from routers that will never signal; (2) one or more "
+                "subordinate routers is corrupted or stuck before reaching the local-handshake "
+                "notify step.",
+                num_initialized_routers);
+        case EdmInitProgress::LocalHandshakeComplete:
+            return "Hint: local handshake completed but READY_FOR_TRAFFIC was never signaled. The "
+                   "router is likely stuck waiting for local forwarded ethernet connections (over "
+                   "NoC). Likely causes: (1) router was misprogrammed to expect a producer when it "
+                   "has none; (2) handshake addresses were misconfigured; (3) producer core(s) were "
+                   "misconfigured and are pointing to the wrong address, or are corrupted.";
+        case EdmInitProgress::ReadyForTraffic:
+        case EdmInitProgress::TerminatedIndeterminate:
+        case EdmInitProgress::Unknown: return {};
+    }
+    return {};
+}
+
 [[noreturn]] void report_router_sync_timeout_and_throw(
     Device* dev,
     chan_id_t master_chan,
@@ -106,6 +144,8 @@ struct RouterStatusReport {
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
     const auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& soc_desc = cluster.get_soc_desc(dev->id());
+    const uint32_t num_initialized_routers =
+        control_plane.get_fabric_context().get_builder_context().get_num_fabric_initialized_routers(dev->id());
 
     std::vector<RouterStatusReport> reports;
     reports.reserve(active_channels.size());
@@ -171,12 +211,17 @@ struct RouterStatusReport {
             is_laggard ? "  <-- least progress" : "");
     }
 
+    std::string diagnostic_hint;
     if (min_stage) {
         log_error(
             tt::LogMetal,
             "Earliest init stage reached: {} ({} core(s) stuck at this stage).",
             progress_name(*min_stage),
             laggard_count);
+        diagnostic_hint = diagnostic_hint_for_stuck_stage(*min_stage, num_initialized_routers);
+        if (!diagnostic_hint.empty()) {
+            log_error(tt::LogMetal, "{}", diagnostic_hint);
+        }
     }
 
     const size_t terminated_count = std::count_if(reports.begin(), reports.end(), [](const auto& r) {
@@ -208,13 +253,15 @@ struct RouterStatusReport {
 
     TT_THROW(
         "Fabric Router Sync: Timeout after {} ms on Device {}: expected status 0x{:08x}. "
-        "Master chan={} got 0x{:08x}. {}. See error log above for per-core status breakdown.",
+        "Master chan={} got 0x{:08x}. {}.{}{} See error log above for per-core status breakdown.",
         timeout_ms,
         dev->id(),
         expected_status,
         master_chan,
         master_raw_status,
-        laggard_summary);
+        laggard_summary,
+        diagnostic_hint.empty() ? "" : " ",
+        diagnostic_hint);
 }
 
 }  // namespace
