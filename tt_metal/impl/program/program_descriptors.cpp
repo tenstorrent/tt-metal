@@ -196,19 +196,28 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
     }
 }
 
-void KernelDescriptor::emplace_runtime_args(
-    const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
-    CoreRuntimeArgs values;
+template <typename Range>
+static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& core, const Range& args) {
+    KernelDescriptor::CoreRuntimeArgs values;
     values.reserve(args.size());
     for (const auto& arg : args) {
-        if (const auto* buf = std::get_if<Buffer*>(&arg)) {
-            buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
+        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
+            kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
             values.push_back((*buf)->address());
         } else {
             values.push_back(std::get<uint32_t>(arg));
         }
     }
-    runtime_args.emplace_back(core, std::move(values));
+    kd.runtime_args.emplace_back(core, std::move(values));
+}
+
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_runtime_args_impl(*this, core, args);
+}
+
+void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, std::vector<std::variant<uint32_t, Buffer*>> args) {
+    emplace_runtime_args_impl(*this, core, args);
 }
 
 ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& desc) {
