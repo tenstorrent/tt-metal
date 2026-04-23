@@ -346,21 +346,21 @@ class TTSampling(LightweightModule):
             else:
                 mapper = None
 
-            self.k_tensor_new = ttnn.from_torch(
+            k_tensor_new = ttnn.from_torch(
                 torch.tensor(k),
                 device=None,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=mapper,
             )
-            self.p_tensor_new = ttnn.from_torch(
+            p_tensor_new = ttnn.from_torch(
                 torch.tensor(p),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=mapper,
             )
-            self.temp_tensor_new = ttnn.from_torch(
+            temp_tensor_new = ttnn.from_torch(
                 torch.tensor(temp),
                 device=None,
                 dtype=ttnn.bfloat16,
@@ -368,9 +368,9 @@ class TTSampling(LightweightModule):
                 mesh_mapper=mapper,
             )
 
-            ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
-            ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
-            ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+            ttnn.copy_host_to_device_tensor(k_tensor_new, self.k_tensor)
+            ttnn.copy_host_to_device_tensor(p_tensor_new, self.p_tensor)
+            ttnn.copy_host_to_device_tensor(temp_tensor_new, self.temp_tensor)
 
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots

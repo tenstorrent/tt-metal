@@ -207,6 +207,7 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         if mesh_sub_device_manager_id_prefill is None:
+            # If creating from scratch
             self.tt_ccl = TT_CCL(
                 self.mesh_device,
                 self.args,
@@ -232,6 +233,7 @@ class TtTransformer(LightweightModule):
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
         if mesh_sub_device_manager_id_decode is None:
+            # If creating from scratch
             self.tt_ccl = TT_CCL(
                 self.mesh_device,
                 self.args,
@@ -571,7 +573,10 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            with ttnn.corruptible_allocation_scope(self.mesh_device):
+                x = x[
+                    :, :, last_token_idx_i : last_token_idx_i + 1, :
+                ]  # this compiles a new program cache variant for each last token index TODO fix properly
             # lm_head returns logits in sharded format (same as decode before all-gather)
             tt_logits = self.lm_head(x, None, mode="prefill")
             tt_logits = tt_logits[0]
@@ -613,8 +618,10 @@ class TtTransformer(LightweightModule):
                 last_token_idx_i = last_token_idx[i]
             else:
                 last_token_idx_i = last_token_idx
-
-            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            with ttnn.corruptible_allocation_scope(self.mesh_device):
+                x = x[
+                    :, :, last_token_idx_i : last_token_idx_i + 1, :
+                ]  # this compiles a new program cache variant for each last token index TODO fix properly
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(

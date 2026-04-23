@@ -103,11 +103,13 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
     def create_global_cb(self):
         if not hasattr(self, "global_circular_buffer") or self.global_circular_buffer is None:
-            self.global_circular_buffer = ttnn.create_global_circular_buffer(
-                self.mesh_device,
-                self.sender_receiver_mapping,
-                self.global_cb_size,
-            )
+            with ttnn.corruptible_allocation_scope(self.mesh_device):
+                self.global_circular_buffer = ttnn.create_global_circular_buffer(
+                    self.mesh_device,
+                    self.sender_receiver_mapping,
+                    self.global_cb_size,
+                )
+            # TODO THIS SHOULDNT BE MARKED CORRUPTIBLE ACTUALLY< BUT FIXING THIS IS A BIGGER DEAL AND I'LL DO IT ON MAIN DIRECTLY
 
     def insert_tensor(self, tensor: ttnn.Tensor):
         self.tensors.append(tensor)

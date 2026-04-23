@@ -86,6 +86,7 @@ class WarmupForwardMixin:
         num_blocks,
         can_sample_on_device,
         non_greedy_decoding_on_device,
+        warmup_only=False,
         read_from_device=True,
     ):
         """
@@ -96,6 +97,9 @@ class WarmupForwardMixin:
         )
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
+        warmup_bitmask = (
+            self._create_warmup_bitmask(max_batch_size) if hasattr(self, "_create_warmup_bitmask") else None
+        )
 
         logger.info("Starting decode warmup")
         logger.info(f"Tokens shape: {tokens.shape}")
@@ -104,14 +108,18 @@ class WarmupForwardMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
+            decode_kwargs = dict(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
+                warmup_only=warmup_only,
                 read_from_device=read_from_device,
                 sampling_params=param,
             )
+            if warmup_bitmask is not None:
+                decode_kwargs["bitmask"] = warmup_bitmask
+            self.decode_forward(**decode_kwargs)
 
         logger.info("Decode warmup completed")

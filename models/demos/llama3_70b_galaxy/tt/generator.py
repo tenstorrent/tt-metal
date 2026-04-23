@@ -197,6 +197,12 @@ class Generator(WarmupForwardMixin):
         for ccl_obj in ccl_refs:
             ccl_obj._prefill_column_mask = tt_column_mask
 
+    def _create_warmup_bitmask(self, batch_size: int) -> torch.Tensor:
+        padded_vocab_size = getattr(self.model.args, "padded_vocab_size", self.model.vocab_size)
+        packed_vocab = (padded_vocab_size + 31) // 32
+        # All-ones means "allow all tokens"; warmup only needs to exercise bitmask ops.
+        return torch.full((batch_size, packed_vocab), -1, dtype=torch.int32)
+
     def prefill_warmup(
         self,
         tokens: torch.Tensor,
@@ -204,6 +210,7 @@ class Generator(WarmupForwardMixin):
         kv_cache=None,
         prompt_lens=None,
         enable_trace=True,
+        warmup_only=False,
         sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
@@ -260,6 +267,7 @@ class Generator(WarmupForwardMixin):
                     sampling_params_list = [None]
 
                 for sampling_params in sampling_params_list:
+                    warmup_bitmask = self._create_warmup_bitmask(batch)
                     logger.info(
                         f"Warming up prefill sequence length: {warmup_sequence_length} for batch size: {batch} with sampling params: {sampling_params}"
                     )
@@ -269,9 +277,11 @@ class Generator(WarmupForwardMixin):
                         kv_cache,
                         warmup_prompt_lens,
                         enable_trace,
-                        sampling_params,
-                        warmup_empty_slots,
-                        tt_out_logits_all_users,
+                        warmup_only=warmup_only,
+                        sampling_params=sampling_params,
+                        empty_slots=warmup_empty_slots,
+                        tt_out_logits_all_users=tt_out_logits_all_users,
+                        bitmask=warmup_bitmask,
                     )
                 sampling_parameters_sweeped = True
 
@@ -305,6 +315,7 @@ class Generator(WarmupForwardMixin):
             )
             warmup_tokens = torch.zeros(1, total_seq_len, dtype=torch.long)
             warmup_prompt_lens = torch.tensor([total_seq_len], dtype=torch.long)
+            warmup_bitmask = self._create_warmup_bitmask(1)
 
             self.prefill_forward_text(
                 warmup_tokens,
@@ -312,10 +323,12 @@ class Generator(WarmupForwardMixin):
                 kv_cache,
                 warmup_prompt_lens,
                 enable_trace,
-                sampling_params,
-                [0],
-                tt_out_logits_all_users,
+                warmup_only=warmup_only,
+                sampling_params=sampling_params,
+                empty_slots=[0],
+                tt_out_logits_all_users=tt_out_logits_all_users,
                 start_pos=[num_cached],
+                bitmask=warmup_bitmask,
             )
 
         # trace_id_prefill dict check
@@ -329,6 +342,7 @@ class Generator(WarmupForwardMixin):
         kv_cache=None,
         prompt_lens=None,  # Full prompt lengths, including the cached ones
         enable_trace=True,
+        warmup_only=False,
         sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
@@ -347,6 +361,7 @@ class Generator(WarmupForwardMixin):
                 kv_cache,
                 prompt_lens,
                 enable_trace,
+                warmup_only,
                 None,
                 empty_slots,
                 None,
@@ -529,7 +544,9 @@ class Generator(WarmupForwardMixin):
                 # For batched prefill, reset to empty list since we use extend()
                 if use_batched_prefill and do_device_sampling:
                     self.tt_logits_accumulated_batched = []
-                tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
+                tt_tok = self._easy_trace_prefill(
+                    **prefill_kwargs, prefill_seq_len=prefill_seq_len, warmup_only=warmup_only
+                )
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
@@ -539,7 +556,7 @@ class Generator(WarmupForwardMixin):
                     last_token_idx=last_token_idx_output,
                     tt_out_logits_saved=tt_out_logits_saved,
                     user_id=prefill_kwargs["user_id"],
-                )
+                )  # torch tensor
                 if use_batched_prefill:
                     # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
                     tt_tok_tensor = torch.stack(tt_tok, dim=0)
@@ -556,9 +573,11 @@ class Generator(WarmupForwardMixin):
                 if use_batched_prefill:
                     # Batched prefill: logits list has 32 entries ordered by slot position
                     self.tt_logits_accumulated_batched.extend(tt_logits_list)
+                    # TODO the outputs here can be corrupted by executing the decode trace, we need to fix this and copy them to a preallocated location
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+                    del tt_logits_list
         prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:
@@ -772,6 +791,10 @@ class Generator(WarmupForwardMixin):
             rot_mats=full_rot_mats,
             batch_size=batch_size,
         )
+        # The column mask is not actually persisted. It is set every time before we run prefill,
+        # and setting it on the CCL reference is just a convenient pass-through.
+        # A more robust way would be to unset it here, but marking corruptible is fine for now.
+        ttnn.mark_corruptible(tt_column_mask)
         return tt_toks
 
     def _easy_trace_prefill(
@@ -785,9 +808,12 @@ class Generator(WarmupForwardMixin):
         batch_size=1,
         tt_out_logits_saved=None,
         num_cached_tokens=0,  # For prefix caching support
+        warmup_only=False,
     ):
         """
         Tracing with prefix caching support.
+        warmup_only=True runs this traced path in compile-only mode: it executes
+        the same ops but skips trace capture/persistent trace setup.
         Trace key is (prefill_seq_len, batch_size, use_start_pos)
         Does not differentiate between num_cached_tokens (only zero or non-zero).
         page_table is padded to fixed max shape so one trace can be reused for any num_cached_blocks.
@@ -838,8 +864,15 @@ class Generator(WarmupForwardMixin):
                 user_id=user_id,
                 batch_size=batch_size,
                 start_pos=chunk_start_idx,
+                warmup_only=warmup_only,
             )
+            if warmup_only:
+                return tt_out_trace
             self.trace_id_prefill[trace_key] = trace_id
+            # We only hold onto these to copy new data into, it's ok if they are corrupted.
+            for tensor in device_inputs:
+                if tensor is not None:
+                    ttnn.mark_corruptible(tensor)
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
 
@@ -867,6 +900,7 @@ class Generator(WarmupForwardMixin):
         kv_cache=None,
         batch_size=1,
         start_pos=0,  # Absolute start position
+        warmup_only=False,
     ):
         """
         Captures a trace for the prefill_forward method with prefix caching support.
@@ -937,6 +971,10 @@ class Generator(WarmupForwardMixin):
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
+
+        if warmup_only:
+            logger.info("Done Warmup-Only Prefill Run")
+            return None, tt_out_trace, *device_inputs
 
         # Trace capture run
         device_inputs = copy_host_to_device(
@@ -1039,6 +1077,7 @@ class Generator(WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         enable_trace=True,
+        warmup_only=False,
         read_from_device=True,
         async_read=False,
         sampling_params: SamplingParams = None,  # None means returning logits and host sampling.
@@ -1104,6 +1143,7 @@ class Generator(WarmupForwardMixin):
                 reset_inputs=reset_inputs,
                 return_logits=return_logits,
                 bitmask=bitmask,
+                warmup_only=warmup_only,
             )
         else:
             tt_tok, tt_log_probs = self._decode_forward_no_trace_text(
@@ -1180,12 +1220,17 @@ class Generator(WarmupForwardMixin):
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        bitmask=None,
+        warmup_only=False,
     ):
         """
         Captures a trace for the decode_forward method.
+        warmup_only=True executes traced decode ops but does not call
+        begin_trace_capture/end_trace_capture.
         """
 
         # Compile run
+        # This also warms up the sampling module.
         self._decode_forward_no_trace_text(
             tokens,
             current_pos,
@@ -1194,6 +1239,7 @@ class Generator(WarmupForwardMixin):
             is_cur_pos_sharded=is_cur_pos_sharded,
             is_page_table_sharded=is_page_table_sharded,
             return_logits=return_logits,
+            bitmask=bitmask,
         )
         logger.info("Done Compiling Model")
 
@@ -1201,6 +1247,20 @@ class Generator(WarmupForwardMixin):
         tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
+
+        if warmup_only:
+            tt_out_tok = self.model.ttnn_decode_forward(
+                tokens_tt,
+                current_pos_tt,
+                rope_idxs_tt,
+                page_table_tt,
+                kv_cache=kv_cache,
+                is_cur_pos_sharded=is_cur_pos_sharded,
+                return_logits=return_logits,
+                capture_sampling_trace=self.enable_split_sampling,
+            )
+            logger.info("Done Warmup-Only Decode Run")
+            return None, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
         # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -1214,7 +1274,6 @@ class Generator(WarmupForwardMixin):
             return_logits=return_logits,
             capture_sampling_trace=self.enable_split_sampling,
         )
-
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
@@ -1247,11 +1306,43 @@ class Generator(WarmupForwardMixin):
         is_page_table_sharded=False,
         return_logits=False,
         bitmask=None,
+        warmup_only=False,
     ):
         """
         Run decode forward text with tracing
+        warmup_only=True calls the trace-capture helper in no-capture mode to
+        exercise traced decode execution without creating trace state.
         """
         tokens = tokens.view(-1, 1)
+        if warmup_only:
+            _, tt_out_tok, tokens_tt, *_ = self._capture_trace_text(
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                is_cur_pos_sharded=is_cur_pos_sharded,
+                is_page_table_sharded=is_page_table_sharded,
+                return_logits=return_logits,
+                bitmask=bitmask,
+                warmup_only=True,
+            )
+            # Warm up split-sampling with the same preallocated output contract used
+            # in traced decode replay. This ensures SamplingDeviceOperation variants
+            # (including preallocated output) are compiled before first real trace use.
+            if self.enable_split_sampling and not return_logits:
+                if bitmask is not None:
+                    self.model.start_bitmask_to_device(bitmask)
+                    self.model.complete_bitmask_to_device()
+                    tt_out_tok = self.model.apply_bitmask_to_logits(tt_out_tok)
+                return self.model.sampling.sample(
+                    logits=tt_out_tok,
+                    tt_out_tok=tokens_tt,
+                    enable_trace=False,
+                )
+
+            # Decode trace path was exercised, but no traces were captured.
+            return tt_out_tok, None
+
         # The trace is different depending on whether we are returning logits or sampling on device
         if not self.trace_ids_decode[return_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
@@ -1262,8 +1353,13 @@ class Generator(WarmupForwardMixin):
                 is_cur_pos_sharded=is_cur_pos_sharded,
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
+                bitmask=bitmask,
             )
             self.trace_ids_decode[return_logits] = trace_id
+            # We only hold onto these to copy new data into, it's ok if they are corrupted.
+            for tensor in device_inputs:
+                if tensor is not None:
+                    ttnn.mark_corruptible(tensor)
             self.trace_inputs_decode[return_logits] = device_inputs
             self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
@@ -1294,7 +1390,7 @@ class Generator(WarmupForwardMixin):
                 trace_tok_rm = self.model.apply_bitmask_to_logits(trace_tok_rm)
             return self.model.sampling.sample(
                 logits=trace_tok_rm,
-                tt_out_tok=self.trace_inputs_decode[return_logits][0],
+                tt_out_tok=self.trace_inputs_decode[return_logits][0],  # TODO this is corruptible, is this ok?
             )
 
         return trace_tok_rm
@@ -1414,7 +1510,9 @@ class Generator(WarmupForwardMixin):
 
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(
+        self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device, warmup_only=False
+    ) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)
@@ -1424,6 +1522,7 @@ class Generator(WarmupForwardMixin):
             kv_cache=kv_cache,
             prompt_lens=None,
             enable_trace=enable_trace,
+            warmup_only=warmup_only,
             sampling_params=None,
             empty_slots=None,
             tt_out_logits_all_users=None,
