@@ -404,7 +404,8 @@ void kernel_main() {
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::WriterCTArgs<
         get_named_compile_time_arg_val("k_page_size"),
         get_named_compile_time_arg_val("vDHt"),
-        get_named_compile_time_arg_val("mla_out_o_cb")>;
+        get_named_compile_time_arg_val("mla_out_o_cb"),
+        get_named_compile_time_arg_val("mla_use_alt_mcast_vc")>;
 
     // Matmul4 CTArgs
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
