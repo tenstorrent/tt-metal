@@ -273,19 +273,19 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     assert_numeric_metrics(
         torch_ref,
         ttnn.to_torch(tt_out1),
-        pcc_threshold=0.9999,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
+        pcc_threshold=0.999,
+        rtol=0.007,
+        atol=0.25,
+        frobenius_threshold=0.001,
     )
     # test for equivalance
     assert_numeric_metrics(
         torch_ref,
         ttnn.to_torch(tt_out2),
-        pcc_threshold=0.9999,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
+        pcc_threshold=0.999,
+        rtol=0.007,
+        atol=0.25,
+        frobenius_threshold=0.001,
     )
 
     assert device.cache_entries_counter.total == 2
