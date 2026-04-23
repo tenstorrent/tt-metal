@@ -138,23 +138,22 @@ def test_sdpa_decode_paged_partial_mask_worker_node_regression(device):
         max_cores_per_head_batch=3,
     )
 
-    # === Random Q, K, V ===
+    # === Random Q, K, V (ALL positions including padding) ===
     Q = torch.randn(1, B, nh, d)
-    K_data = torch.randn(B, nkv, cur_pos_val + 1, d)
-    V_data = torch.randn(B, nkv, cur_pos_val + 1, d)
+    # Fill the ENTIRE page with random K/V — including the zero-padded tokens
+    # (positions 132-191). The CPU reference masks them to -inf so they don't
+    # contribute. The buggy kernel skips the mask, so those non-zero V values
+    # corrupt the output — making PCC < 0.99 detectable.
+    K_data = torch.randn(B, nkv, num_pages_per_seq * block_size, d)
+    V_data = torch.randn(B, nkv, num_pages_per_seq * block_size, d)
 
     # === Build paged KV cache ===
     # Page table: sequential physical page allocation
     page_table = torch.arange(num_pages_per_seq, dtype=torch.int32).unsqueeze(0).expand(B, -1)
 
-    # K/V paged: shape [B, nkv, num_pages, block_size, d] — zeros beyond cur_pos
-    K_paged = torch.zeros(B, nkv, num_pages_per_seq, block_size, d)
-    V_paged = torch.zeros(B, nkv, num_pages_per_seq, block_size, d)
-    for b in range(B):
-        for tok in range(cur_pos_val + 1):
-            pg, off = tok // block_size, tok % block_size
-            K_paged[b, 0, pg, off, :] = K_data[b, 0, tok, :]
-            V_paged[b, 0, pg, off, :] = V_data[b, 0, tok, :]
+    # K/V paged: fill ALL positions with random data (no zeroing of padding)
+    K_paged = K_data.view(B, nkv, num_pages_per_seq, block_size, d)
+    V_paged = V_data.view(B, nkv, num_pages_per_seq, block_size, d)
 
     # === CPU reference (correct causal masking) ===
     ref = get_cpu_paged_sdpa_reference(
