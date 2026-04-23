@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,7 @@ Interface vs real decoder:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
@@ -38,8 +39,80 @@ import ttnn
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
-# Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
+
+
+# ---------------------------------------------------------------------------
+# Speculative-decode page layout (64 bytes = 16 uint32 words)
+# ---------------------------------------------------------------------------
+
+
+class OutputField:
+    """uint32 indices within the 16-word output page."""
+
+    TOKEN_0 = 0
+    TOKEN_0_TYPE = 1
+    TOKEN_0_POS = 2
+    TOKEN_1 = 3
+    TOKEN_1_TYPE = 4
+    TOKEN_1_POS = 5
+
+
+class InputField:
+    """uint32 indices within the 16-word input page."""
+
+    TOKEN_TYPE = 1
+    USER_ID = 6
+    TOKEN_ID = 7
+    POSITION_ID = 8
+    PREFILL_TOKEN_ID = 9
+    TOKEN0_POSITION_ID = 2
+
+
+class TokenType:
+    BASE = 0
+    SPEC = 1
+
+
+@dataclass
+class DecodeResult:
+    """Parsed output page from the pipeline."""
+
+    token_0: int
+    token_0_type: int
+    token_0_pos: int
+    token_1: int | None = None
+    token_1_type: int | None = None
+    token_1_pos: int | None = None
+    slot_id: int | None = None
+
+
+def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
+    """Parse a 16-word output page into a structured DecodeResult."""
+    raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
+    return DecodeResult(
+        token_0=int(raw[OutputField.TOKEN_0].item()),
+        token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
+        token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
+        token_1=int(raw[OutputField.TOKEN_1].item()),
+        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
+        token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
+        slot_id=int(raw[InputField.USER_ID].item()),
+    )
+
+
+def to_spec_input(
+    token_id: int, prefill_token_id: int, user_id: int, position_id: int, page_size_datums: int, token_type: TokenType
+) -> ttnn.Tensor:
+    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
+    torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
+    torch_padded[0, InputField.TOKEN_ID] = token_id
+    torch_padded[0, InputField.PREFILL_TOKEN_ID] = prefill_token_id
+    torch_padded[0, InputField.TOKEN_TYPE] = token_type
+    torch_padded[0, InputField.USER_ID] = user_id
+    torch_padded[0, InputField.POSITION_ID] = position_id
+    torch_padded[0, InputField.TOKEN0_POSITION_ID] = position_id
+    return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -111,40 +184,56 @@ class DeepSeekV3:
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
-    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
+    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
         """
         Prefill-by-decode with overlapped I/O: enqueue tokens until the pipeline is
-        saturated, then overlap one readback per additional write, and finally drain
-        the remaining in-flight outputs. Returns the last output token.
+        saturated, then overlap readback per additional write, and finally drain
+        the remaining in-flight outputs.
+
+        Each write produces READS_PER_WRITE output pages (base + spec).
+        All outputs are discarded except the last READS_PER_WRITE (from the final
+        prompt token), which are parsed and returned so the decode state machine
+        can process both the base and speculative results.
 
         Args:
             prompt_tokens: List of ttnn.Tensor, each already padded for the socket
                 (PCIe-aligned, size in bytes equal to page_size_bytes(batch_size)).
-                Caller is responsible for padding; use to_padded_input() if needed.
+                Caller is responsible for padding; use to_spec_input() if needed.
 
         Returns:
-            Last step output tensor; valid data is first batch_size elements.
+            List of READS_PER_WRITE DecodeResults from the last prompt token's outputs.
         """
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
-        last_output: ttnn.Tensor | None = None
         num_writes_before_readback = min(self._pipeline_depth, len(prompt_tokens))
-        # Schedules exactly len(prompt_tokens) writes and len(prompt_tokens) reads.
-        total_iterations = len(prompt_tokens) + num_writes_before_readback - 1
+        total_reads = len(prompt_tokens)
 
-        for i in range(total_iterations):
-            if i < len(prompt_tokens):
-                self._write_fn(prompt_tokens[i])
+        write_idx = 0
+        read_count = 0
 
-            # Start draining once the pipeline is full or all prompt tokens have been written.
-            if i >= num_writes_before_readback - 1:
-                self._read_fn(self._output_buffer)
-                last_output = self._output_buffer
-                self._position += 1
+        # Phase 1: saturate the pipeline (no reads yet)
+        while write_idx < num_writes_before_readback:
+            self._write_fn(prompt_tokens[write_idx])
+            write_idx += 1
 
-        assert last_output is not None, "Last output tensor is None"
-        return last_output
+        # Phase 2: overlap — drain outputs and issue remaining writes in steady state
+        while write_idx < len(prompt_tokens):
+            self._read_fn(self._output_buffer)
+            read_count += 1
+            self._write_fn(prompt_tokens[write_idx])
+            write_idx += 1
+
+        # Phase 3: drain remaining outputs; save the last output
+        last_results: list[DecodeResult] = []
+        while read_count < total_reads:
+            self._read_fn(self._output_buffer)
+            read_count += 1
+            if read_count > total_reads - 1:
+                last_results.append(parse_output_page(self._output_buffer))
+
+        self._position += len(prompt_tokens)
+        return last_results
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -161,12 +250,25 @@ class DeepSeekV3:
         assert (
             input_tensor.shape[0] == self.batch_size
         ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
-
         padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
         self._write_fn(padded_input)
         self._read_fn(self._output_buffer)
         self._position += 1
         return self._output_buffer
+
+    def write_input(
+        self, token_id: int, prefill_token_id: int, user_id: int, position_id: int, token_type: TokenType
+    ) -> None:
+        """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
+        input_tensor = to_spec_input(
+            token_id, prefill_token_id, user_id, position_id, self._page_size_datums, token_type
+        )
+        self._write_fn(input_tensor)
+
+    def read_result(self) -> DecodeResult:
+        """Read one output page from the pipeline and return the parsed DecodeResult."""
+        self._read_fn(self._output_buffer)
+        return parse_output_page(self._output_buffer)
 
     @property
     def position(self) -> int:

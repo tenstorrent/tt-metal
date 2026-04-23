@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,8 +36,8 @@ void kernel_main() {
         negative_tile_init();
         negative_tile(1);
 
-        exp_tile_init<true, true>();
-        exp_tile<true, true>(1);
+        exp_tile_init<true>();
+        exp_tile<true>(1);
 
         logsigmoid_tile_init();
         logsigmoid_tile(0, 1, 0);

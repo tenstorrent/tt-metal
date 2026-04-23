@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,14 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+// A name identifying a DataflowBufferSpec within a ProgramSpec.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* INPUT_DFB = "input_dfb";
+//   DataflowBufferSpec{.unique_id = INPUT_DFB, ...};
+// Reusing a single constant helps catch typos and errors at compile time.
 using DFBSpecName = std::string;
+
 enum class DFBAccessPattern { STRIDED, BLOCKED, CONTIGUOUS };
 
 struct DataflowBufferSpec {

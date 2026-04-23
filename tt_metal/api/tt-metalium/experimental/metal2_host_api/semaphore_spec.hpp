@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,12 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+// A name identifying a SemaphoreSpec within a ProgramSpec.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* DONE_FLAG = "done_flag";
+//   SemaphoreSpec{.unique_id = DONE_FLAG, ...};
+// Reusing a single constant helps catch typos and errors at compile time.
 using SemaphoreSpecName = std::string;
 
 struct SemaphoreSpec {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -97,7 +97,10 @@ ALWI void binary_tiles_init(
  */
 // clang-format on
 ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
-    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(icb0, icb1, false, call_line);
+    // acc_to_dest is unused for WH/BH and accumulation is default behaviour.
+    // For back compatibility with Quasar, acc_to_dest=true in this API for all ops.
+    // More control is provided with 3-arg version of init API.
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(icb0, icb1, true, call_line);
 }
 
 // clang-format off
@@ -108,7 +111,21 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __bu
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles | bool     | 0,1         | False |
+ */
+// clang-format on
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1, uint32_t acc_to_dest, uint32_t call_line = __builtin_LINE()) {
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(icb0, icb1, acc_to_dest, call_line);
+}
+
+// clang-format off
+/**
+ * Short init function
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
 ALWI void add_tiles_init(
@@ -124,7 +141,7 @@ ALWI void add_tiles_init(
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
- * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles | bool     | 0,1         | False |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
  */
 // clang-format on
 ALWI void sub_tiles_init(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -393,7 +393,7 @@ private:
 #endif
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
-TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
+TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
         /* RankCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT,
         /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT,
@@ -416,7 +416,7 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, 
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
-TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
+TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
         /* RankCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT,
         /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT,
@@ -469,25 +469,16 @@ TensorAccessor(
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args,
-    uint32_t address_rt_arg_index_start,
-    uint32_t page_size_ct_arg_index_start,
-    std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(TensorAccessor(
-        std::get<Indexes>(args),
-        get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes),
-        kernel_compile_time_args[page_size_ct_arg_index_start + Indexes])...);
+    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, std::integer_sequence<uint32_t, Indexes...>) {
+    return std::make_tuple(
+        TensorAccessor(std::get<Indexes>(args), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes))...);
 }
 }  // namespace tensor_accessor::detail
 
 template <typename... Args>
-auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, uint32_t page_size_ct_arg_index_start) {
+auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start) {
     return tensor_accessor::detail::make_tensor_accessor_tuple(
-        args,
-        address_rt_arg_index_start,
-        page_size_ct_arg_index_start,
-        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+        args, address_rt_arg_index_start, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
 /**

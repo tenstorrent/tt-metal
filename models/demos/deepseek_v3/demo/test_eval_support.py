@@ -1,8 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +30,9 @@ class _FakeGenerator:
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
         self.tokenizer = kwargs["tokenizer"]
+        self.enable_mtp = kwargs.get("enable_mtp", False)
+        mesh_rows = getattr(kwargs.get("mesh_device"), "shape", (1, 1))[0]
+        self.batch_size = kwargs.get("batch_size_per_row", 1) * mesh_rows
         self.generate_kwargs = None
 
     def generate(self, prompts, **kwargs):
@@ -35,7 +40,7 @@ class _FakeGenerator:
         on_user_finished = kwargs["on_user_finished"]
         if on_user_finished is not None:
             on_user_finished(0, [11, 12])
-        return [[11, 12], [21, 22, 23]], {"decode_t/s": 1.0}
+        return [[11, 12], [21, 22, 23]], {"decode_t/s": 1.0}, {"sampling": {}}
 
     def cleanup_all(self):
         return None
@@ -44,6 +49,7 @@ class _FakeGenerator:
 def test_create_parser_stop_at_eos_flag():
     args = demo_module.create_parser().parse_args(["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache"])
     assert args.stop_at_eos is True
+    assert args.use_weight_cache is False
 
     args = demo_module.create_parser().parse_args(
         ["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache", "--stop-at-eos"]
@@ -54,6 +60,11 @@ def test_create_parser_stop_at_eos_flag():
         ["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache", "--no-stop-at-eos"]
     )
     assert args.stop_at_eos is False
+
+    args = demo_module.create_parser().parse_args(
+        ["--model-path", "/tmp/model", "--cache-dir", "/tmp/cache", "--use-weight-cache"]
+    )
+    assert args.use_weight_cache is True
 
 
 def test_stop_at_eos_signature_defaults():
@@ -71,7 +82,15 @@ def _patch_demo_runtime(monkeypatch, fake_generator, *, mesh_shape=(1, 1)):
     monkeypatch.setattr(demo_module.ttnn, "open_mesh_device", lambda *args, **kwargs: _FakeMeshDevice(shape=mesh_shape))
     monkeypatch.setattr(demo_module.ttnn, "synchronize_device", lambda *args, **kwargs: None)
     monkeypatch.setattr(demo_module.ttnn, "close_mesh_device", lambda *args, **kwargs: None)
-    monkeypatch.setattr(demo_module, "DeepseekGeneratorDP", lambda **kwargs: fake_generator)
+
+    def _construct_fake_generator(**kwargs):
+        fake_generator.init_kwargs = kwargs
+        fake_generator.tokenizer = kwargs["tokenizer"]
+        fake_generator.enable_mtp = kwargs.get("enable_mtp", False)
+        fake_generator.batch_size = kwargs["batch_size_per_row"] * kwargs["mesh_device"].shape[0]
+        return fake_generator
+
+    monkeypatch.setattr(demo_module, "DeepseekGeneratorDP", _construct_fake_generator)
 
 
 @pytest.mark.parametrize("stop_at_eos", [True, False], ids=["stop_at_eos", "no_stop_at_eos"])
@@ -115,6 +134,67 @@ def test_run_demo_defaults_to_stop_at_eos(monkeypatch, tmp_path):
     assert fake_generator.generate_kwargs["stop_at_eos"] is True
 
 
+def test_is_primary_artifact_writer_accepts_common_rank_envs(monkeypatch):
+    monkeypatch.delenv("TT_MESH_HOST_RANK", raising=False)
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
+
+    assert demo_module._is_primary_artifact_writer() is True
+
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+    assert demo_module._is_primary_artifact_writer() is False
+
+
+def test_is_primary_artifact_writer_prefers_global_rank_over_mesh_local_rank(monkeypatch):
+    monkeypatch.setenv("TT_MESH_HOST_RANK", "0")
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+
+    assert demo_module._is_primary_artifact_writer() is False
+
+
+def test_main_uses_primary_artifact_writer_for_json_output(monkeypatch, tmp_path):
+    prompts_file = tmp_path / "prompts.json"
+    prompts_file.write_text(json.dumps([{"prompt": "prompt-0"}]), encoding="utf-8")
+
+    writes: list[tuple[Path, dict, str]] = []
+
+    monkeypatch.setattr(
+        demo_module,
+        "run_demo",
+        lambda *args, **kwargs: {"generations": [{"text": "11 12"}], "statistics": {}, "model_params": {}},
+    )
+    monkeypatch.setattr(
+        demo_module,
+        "_write_json_output",
+        lambda path, payload, label: writes.append((Path(path), payload, label)),
+    )
+    monkeypatch.setattr(demo_module, "_is_primary_artifact_writer", lambda: False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["demo.py", "--prompts-file", str(prompts_file), "--model-path", str(tmp_path / "model")],
+    )
+
+    demo_module.main()
+
+    assert writes == []
+
+    monkeypatch.setattr(demo_module, "_is_primary_artifact_writer", lambda: True)
+    demo_module.main()
+
+    assert writes == [
+        (
+            prompts_file.parent / f"{prompts_file.stem}_output.json",
+            {
+                "prompts": ["prompt-0"],
+                "generations": [{"index": 1, "prompt": "prompt-0", "text": "11 12"}],
+                "statistics": {},
+                "model_params": {},
+            },
+            "Results",
+        )
+    ]
+
+
 def test_run_demo_sizes_sampling_params_from_max_users_per_row(monkeypatch, tmp_path):
     fake_generator = _FakeGenerator(tokenizer=_FakeTokenizer())
 
@@ -132,6 +212,30 @@ def test_run_demo_sizes_sampling_params_from_max_users_per_row(monkeypatch, tmp_
     assert len(sampling_params.temperature) == expected_batch
     assert len(sampling_params.top_p) == expected_batch
     assert len(sampling_params.top_k) == expected_batch
+
+
+def test_run_demo_passes_use_weight_cache_to_generator(monkeypatch, tmp_path):
+    fake_generator = _FakeGenerator(tokenizer=_FakeTokenizer())
+
+    _patch_demo_runtime(monkeypatch, fake_generator)
+
+    demo_module.run_demo(
+        prompts=["prompt-0"],
+        model_path=tmp_path / "model",
+        cache_dir=tmp_path / "cache",
+        use_weight_cache=True,
+    )
+
+    assert fake_generator.init_kwargs["use_weight_cache"] is True
+
+
+def test_run_demo_rejects_use_weight_cache_without_cache_dir(tmp_path):
+    with pytest.raises(SystemExit, match="--use-weight-cache requires --cache-dir"):
+        demo_module.run_demo(
+            prompts=["prompt-0"],
+            model_path=tmp_path / "model",
+            use_weight_cache=True,
+        )
 
 
 def test_lmeval_helpers():

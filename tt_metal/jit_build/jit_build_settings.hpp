@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
-#include <functional>
 #include <unordered_map>
 
 namespace tt::tt_metal {
@@ -31,6 +31,11 @@ public:
     // Called to process the user named compile time args
     virtual void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
+    // Called to process the user kernel resource bindings (Metal 2.0 APIs)
+    // (Initially just DFB local accessor names, but will be extended and refactored as needed.)
+    virtual void process_dataflow_buffer_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -78,6 +78,9 @@ class DispatcherCoreData:
     # Host-assigned id from the previous launch message entry (best-effort).
     # Not serialized by default; used by scripts that need accurate previous-op tracking.
     previous_host_assigned_id: int | None = None
+    # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
+    # active-vs-idle ETH without re-consulting the cluster descriptor.
+    block_type: BlockType | None = None
 
 
 class DispatcherData:
@@ -537,11 +540,16 @@ class DispatcherData:
                 f"failed to read subordinate sync from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
             )
 
+        # Path picking must use the same source of truth as block_type above (inspector /
+        # metal control plane), not location.device.active_eth_block_locations (cluster
+        # descriptor / exalens).
+        is_active_eth = block_type == "active_eth"
+
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
         if block_type == "dram":
             firmware_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
-        elif location in location.device.active_eth_block_locations:
+        elif is_active_eth:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
             elif proc_name.lower() == "erisc0":
@@ -565,7 +573,7 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if location in location.device.active_eth_block_locations:
+            if is_active_eth:
                 if proc_name.lower() == "erisc":
                     kernel_path = kernel.path + "/erisc/erisc.elf"
                 elif proc_name.lower() == "erisc0":
@@ -591,7 +599,7 @@ class DispatcherData:
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
+            elif is_active_eth and location.device.is_wormhole():
                 kernel_offset = kernel_text_offset
             elif block_type == "dram":
                 # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
@@ -630,6 +638,7 @@ class DispatcherData:
             enables=enables,
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
+            block_type=block_type,
         )
 
 

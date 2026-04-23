@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,9 +53,9 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
-    const auto beta_address_generator = TensorAccessor(beta_args, beta_address, tile_bytes);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
+    const auto beta_address_generator = TensorAccessor(beta_args, beta_address);
 
 #ifdef EVERYTHING_FITS_IN_L1
     // Read gamma and beta once for all rows when everything fits in L1

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,6 +47,7 @@ struct AllocatorConfig {
     uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
     AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP;
+
     void reset();
     ~AllocatorConfig() { reset(); }
 };

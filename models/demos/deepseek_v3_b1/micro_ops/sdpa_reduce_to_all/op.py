@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -281,10 +281,10 @@ class SdpaReduceToAll:
                 output_l_device = output_l_per_device[device_idx]
                 interm_recv_device = interm_recv_per_device[device_idx]
                 fwd_scratch_device = fwd_scratch_per_device[device_idx]
-                pos_addr = 0
+                metadata_addr = 0
                 if position_enabled:
                     position_device = position_per_device[device_idx]
-                    pos_addr = position_device.buffer_address()
+                    metadata_addr = position_device.buffer_address()
 
                 device = input_l_device.device()
 
@@ -626,7 +626,6 @@ class SdpaReduceToAll:
                                 (
                                     core,
                                     [
-                                        pos_addr,
                                         device_idx,
                                         r1_neighbor_device_idx,
                                         r2_neighbor_device_idx,
@@ -642,7 +641,6 @@ class SdpaReduceToAll:
                                 (
                                     core,
                                     [
-                                        pos_addr,
                                         r1_neighbor_device_idx,
                                         r2_neighbor_device_idx,
                                         r2_neighbor_r1_neighbor_idx,
@@ -742,6 +740,13 @@ class SdpaReduceToAll:
                         cb_l_out_desc,
                     ],
                 )
+
+                # Set metadata common runtime args for worker kernels
+                if position_enabled:
+                    worker_group = kernel_result.get_group_by_arg("is_worker", 1)
+                    metadata_common_args = [metadata_addr]
+                    program.kernels[worker_group.ncrisc_kernel_index].common_runtime_args = metadata_common_args
+                    program.kernels[worker_group.trisc_kernel_index].common_runtime_args = metadata_common_args
 
                 # Append fabric connection args to forwarder kernels (post-program)
                 forwarder_group = kernel_result.get_group_by_arg("is_worker", 0)

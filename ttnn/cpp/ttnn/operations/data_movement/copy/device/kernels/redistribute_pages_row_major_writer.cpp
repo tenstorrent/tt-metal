@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 FORCE_INLINE uint32_t u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
@@ -20,6 +21,8 @@ void kernel_main() {
     constexpr uint32_t bytes_per_element = get_compile_time_arg_val(3);
     constexpr uint32_t elements_per_tensor_row = get_compile_time_arg_val(4);
     constexpr uint32_t bytes_per_output_subblock = get_compile_time_arg_val(5);
+
+    experimental::CircularBuffer cb_in1(cb_id_in1);
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
@@ -42,12 +45,12 @@ void kernel_main() {
             uint64_t output_addr_subblock_offset =
                 ((output_column % elements_per_output_page) / elements_per_output_subblock) * bytes_per_output_subblock;
             uint32_t num_bytes_to_write = (output_end_column - output_column + 1) * bytes_per_element;
-            cb_wait_front(cb_id_in1, 1);
-            uint32_t output_page_read_addr = get_read_ptr(cb_id_in1);
+            cb_in1.wait_front(1);
+            uint32_t output_page_read_addr = cb_in1.get_read_ptr();
             uint64_t output_subblock_noc_addr = accessor_dst.get_noc_addr(output_page_id) + output_addr_subblock_offset;
             noc_async_write(output_page_read_addr, output_subblock_noc_addr, num_bytes_to_write);
             noc_async_write_barrier();
-            cb_pop_front(cb_id_in1, 1);
+            cb_in1.pop_front(1);
             output_column = output_end_column + 1;
         }
     }

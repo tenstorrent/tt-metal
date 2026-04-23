@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,6 +44,8 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -520,9 +522,319 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackUntilize) {
     }
 }
 
+/******************************
+Following tests are for Quasar
+*******************************/
+enum class QuasarTestMode { TILIZE, UNTILIZE, UNTILIZE_DST };
+
+static void run_quasar_tilize_untilize_test(
+    IDevice* dev,
+    uint32_t num_tiles_r,
+    uint32_t num_tiles_c,
+    QuasarTestMode mode,
+    bool dst_full_sync_en,
+    bool fp32_dest_acc_en = false,
+    tt::DataFormat data_format = tt::DataFormat::Float16_b) {
+    bool is_tilize = (mode == QuasarTestMode::TILIZE);
+
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
+    uint32_t num_tiles = num_tiles_r * num_tiles_c;
+    uint32_t input_single_tile_size = tt::tile_size(data_format);
+    tt::DataFormat output_format = data_format;
+    if (fp32_dest_acc_en) {
+        output_format = tt::DataFormat::Float32;
+    } else if (is_8bit_integer) {
+        output_format = tt::DataFormat::Int32;
+    }
+    uint32_t output_single_tile_size = tt::tile_size(output_format);
+    uint32_t src_dram_buffer_size = input_single_tile_size * num_tiles;
+    uint32_t dst_dram_buffer_size = output_single_tile_size * num_tiles;
+
+    InterleavedBufferConfig src_config{
+        .device = dev,
+        .size = src_dram_buffer_size,
+        .page_size = src_dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
+    InterleavedBufferConfig dst_config{
+        .device = dev,
+        .size = dst_dram_buffer_size,
+        .page_size = dst_dram_buffer_size,
+        .buffer_type = BufferType::DRAM};
+    auto src_dram_buffer = CreateBuffer(src_config);
+    auto dst_dram_buffer = CreateBuffer(dst_config);
+    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+
+    uint32_t dfb_num_entries = std::max(2u, num_tiles_c);
+
+    tt::DataFormat output_data_format = data_format;
+    if (is_8bit_integer) {
+        output_data_format = tt::DataFormat::Int32;
+    } else if (fp32_dest_acc_en) {
+        output_data_format = tt::DataFormat::Float32;
+    }
+
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
+        .entry_size = input_single_tile_size,
+        .num_entries = dfb_num_entries,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true,
+        .data_format = data_format};
+
+    tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+        .entry_size = output_single_tile_size,
+        .num_entries = dfb_num_entries,
+        .num_producers = 1,
+        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = true,
+        .data_format = output_data_format};
+
+    uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
+    uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
+
+    KernelHandle reader = tt_metal::experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb, 1}});
+
+    KernelHandle writer = tt_metal::experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        core,
+        tt_metal::experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb, 1}});
+
+    std::string compute_kernel;
+    std::vector<uint32_t> compute_args;
+    switch (mode) {
+        case QuasarTestMode::TILIZE:
+            compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
+            compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
+            break;
+        case QuasarTestMode::UNTILIZE:
+            compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize.cpp";
+            compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
+            break;
+        case QuasarTestMode::UNTILIZE_DST: {
+            compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
+            uint32_t num_faces = 4;
+            uint32_t face_r_dim = 16;
+            compute_args = {num_tiles_r, num_tiles_c, num_faces, face_r_dim, l1_input_dfb, l1_output_dfb};
+            break;
+        }
+    }
+
+    KernelHandle compute = CreateKernel(
+        program,
+        compute_kernel,
+        core,
+        tt_metal::experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = 1,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .compile_args = compute_args});
+
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
+    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
+
+    std::vector<uint32_t> src_vec;
+    if (data_format == tt::DataFormat::Int8) {
+        src_vec = create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
+    } else if (data_format == tt::DataFormat::UInt8) {
+        src_vec = create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
+    } else if (data_format == tt::DataFormat::Int16) {
+        src_vec.resize(src_dram_buffer_size / sizeof(uint32_t));
+        for (uint32_t i = 0; i < src_vec.size(); i++) {
+            src_vec[i] = (static_cast<uint32_t>((2 * i) + 1) << 16) | static_cast<uint32_t>(2 * i);
+        }
+    } else if (is_tilize && data_format == tt::DataFormat::Float32) {
+        src_vec.resize(src_dram_buffer_size / sizeof(uint32_t));
+        for (uint32_t i = 0; i < src_vec.size(); i++) {
+            src_vec[i] = std::bit_cast<uint32_t>(static_cast<float>(i));
+        }
+    } else {
+        src_vec = create_arange_vector_of_bfloat16(src_dram_buffer_size, false);
+    }
+    detail::WriteToBuffer(src_dram_buffer, src_vec);
+
+    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, (uint32_t)0, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
+
+    detail::LaunchProgram(dev, program, true);
+
+    std::vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+
+    ::unit_tests::compute::GoldenConfig golden_config = {
+        .num_tiles_r_dim = static_cast<int>(num_tiles_r),
+        .num_tiles_c_dim = static_cast<int>(num_tiles_c),
+        .datum_bytes = tt::datum_size(data_format)};
+    auto golden = is_tilize ? ::unit_tests::compute::gold_standard_tilize(src_vec, golden_config)
+                            : ::unit_tests::compute::gold_standard_untilize(src_vec, golden_config);
+
+    if (is_8bit_integer) {
+        // Int8/UInt8 in dest is promoted to Int32. Expand each byte to a uint32_t word.
+        // Hardware uses sign-magnitude representation for Int8:
+        //   bit 31 = sign (MSB of the byte), bits [6:0] = magnitude (lower 7 bits of the byte)
+        bool is_signed = (data_format == tt::DataFormat::Int8);
+        std::vector<uint32_t> golden_int32;
+        golden_int32.reserve(golden.size() * 4);
+        for (auto word : golden) {
+            for (int b = 0; b < 4; b++) {
+                uint8_t byte_val = (word >> (b * 8)) & 0xFF;
+                if (is_signed) {
+                    uint32_t sign = (byte_val >> 7) & 1;
+                    uint32_t magnitude = byte_val & 0x7F;
+                    golden_int32.push_back((sign << 31) | magnitude);
+                } else {
+                    golden_int32.push_back(static_cast<uint32_t>(byte_val));
+                }
+            }
+        }
+        golden = std::move(golden_int32);
+    } else if (fp32_dest_acc_en && data_format != tt::DataFormat::Float32) {
+        // For fp32_dest_acc_en with 16-bit float input: expand golden from bfloat16 to float32
+        // For Float32 input: golden is already 32-bit, no expansion needed
+        vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
+        golden.resize(golden.size() * 2);
+        for (auto i = 0; i < golden_unpacked.size(); i++) {
+            golden[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_unpacked[i]));
+        }
+    }
+
+    EXPECT_EQ(golden.size(), result_vec.size());
+    EXPECT_EQ(golden, result_vec);
+}
+
+// Pack Untilize (via pack_untilize_block)
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
+                    if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
+                         data_format == tt::DataFormat::Float16_b)) {
+                        continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
+                    }
+                    run_quasar_tilize_untilize_test(
+                        this->devices_.at(0)->get_devices()[0],
+                        cfg[0],
+                        cfg[1],
+                        QuasarTestMode::UNTILIZE,
+                        dst_full_sync_en,
+                        fp32_dest_acc_en,
+                        data_format);
+                }
+            }
+        }
+    }
+}
+
+// Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
+                    if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
+                         data_format == tt::DataFormat::Float16_b)) {
+                        continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
+                    }
+                    run_quasar_tilize_untilize_test(
+                        this->devices_.at(0)->get_devices()[0],
+                        cfg[0],
+                        cfg[1],
+                        QuasarTestMode::UNTILIZE_DST,
+                        dst_full_sync_en,
+                        fp32_dest_acc_en,
+                        data_format);
+                }
+            }
+        }
+    }
+}
+
+// Quasar Unpack Tilize
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
+    std::vector<vector<uint32_t>> test_configs = {{1, 4}, {4, 1}, {2, 40}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                for (tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Int16}) {
+                    if ((fp32_dest_acc_en || dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40 ||
+                         data_format != tt::DataFormat::Int16)) {
+                        continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
+                    }
+                    run_quasar_tilize_untilize_test(
+                        this->devices_.at(0)->get_devices()[0],
+                        cfg[0],
+                        cfg[1],
+                        QuasarTestMode::TILIZE,
+                        dst_full_sync_en,
+                        fp32_dest_acc_en,
+                        data_format);
+                }
+            }
+        }
+    }
+}
+
+// Pack Untilize Int8 -> Int32 dest -> Int32 (via pack_untilize_block)
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            if ((dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40)) {
+                continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
+            }
+            run_quasar_tilize_untilize_test(
+                this->devices_.at(0)->get_devices()[0],
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Int8);
+        }
+    }
+}
+
+// Pack Untilize Dst Int8 -> Int32 dest -> Int32 (tiles pre-loaded into dest via copy_tile)
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
+    std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            if ((dst_full_sync_en || cfg[0] != 2 || cfg[1] != 40)) {
+                continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
+            }
+            run_quasar_tilize_untilize_test(
+                this->devices_.at(0)->get_devices()[0],
+                cfg[0],
+                cfg[1],
+                QuasarTestMode::UNTILIZE_DST,
+                dst_full_sync_en,
+                /*fp32_dest_acc_en=*/true,
+                tt::DataFormat::Int8);
+        }
+    }
+}
+
 /**************************************
 Following tests are for pack untilize
 ***************************************/
+
 TEST_F(MeshDeviceFixture, TensixComputePackUntilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {

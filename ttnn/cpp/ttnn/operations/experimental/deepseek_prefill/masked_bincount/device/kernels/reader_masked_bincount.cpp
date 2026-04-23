@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,19 +72,18 @@ void kernel_main() {
     constexpr uint32_t gather_sem_idx = get_compile_time_arg_val(10);
     constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
     constexpr uint32_t cb_mask = get_compile_time_arg_val(15);
-    constexpr uint32_t mask_page_size = get_compile_time_arg_val(16);
 
     constexpr uint32_t src_accessor_offset = 17;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
-    const auto src_accessor = TensorAccessor(src_args, src_addr, input_page_size);
+    const auto src_accessor = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t dst_accessor_offset = src_args.next_compile_time_args_offset();
     constexpr auto dst_args_ct = TensorAccessorArgs<dst_accessor_offset>();
-    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr, output_page_size);
+    const auto dst_accessor = TensorAccessor(dst_args_ct, dst_addr);
 
     constexpr uint32_t mask_accessor_offset = dst_args_ct.next_compile_time_args_offset();
     constexpr auto mask_args_ct = TensorAccessorArgs<mask_accessor_offset>();
-    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr, mask_page_size);
+    const auto mask_accessor = TensorAccessor(mask_args_ct, mask_addr);
 
     uint32_t in_base_addr = get_write_ptr(cb_id_in);
     uint32_t out_addr = get_write_ptr(cb_id_out);

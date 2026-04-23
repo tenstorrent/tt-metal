@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,8 @@ enum AccessPattern : uint8_t {
 };
 
 constexpr uint8_t NUM_DFBS = 32;
+// Pack TRISC stores only active logical DFBs in a compact local array to reduce local-memory pressure.
+constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 16;
 
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t DH = k_shape[3];
     uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
     uint32_t Bkv = k_shape[0];
+    uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
@@ -331,12 +332,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     }
 
     // All active cores (for tree reduction lookups)
-    std::vector<uint32_t> reduction_group_core_xs(num_active_cores);
-    std::vector<uint32_t> reduction_group_core_ys(num_active_cores);
+    std::vector<uint32_t> reduction_group_core_xs;
+    std::vector<uint32_t> reduction_group_core_ys;
+    reduction_group_core_xs.reserve(num_active_cores);
+    reduction_group_core_ys.reserve(num_active_cores);
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         auto physical = device->worker_core_from_logical_core(core_group[i]);
-        reduction_group_core_xs[i] = physical.x;
-        reduction_group_core_ys[i] = physical.y;
+        reduction_group_core_xs.push_back(physical.x);
+        reduction_group_core_ys.push_back(physical.y);
     }
 
     log_debug(
@@ -624,6 +627,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         k_mcast_semaphore_id,
         (uint32_t)q_locally_available,
         (uint32_t)use_col_major_group_indexing,  // use_k_mcast
+        Bmask,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -636,7 +640,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
-        reader_compile_time_args_common.push_back(0);
+        tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
 
     std::vector<uint32_t> writer_compile_time_args_common = {

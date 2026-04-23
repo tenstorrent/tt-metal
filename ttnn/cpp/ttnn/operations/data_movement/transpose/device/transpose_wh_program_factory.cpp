@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_wh_program_factory.hpp"
@@ -314,11 +314,11 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
     if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
         compute_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         if (row_major) {
-            unpack_to_dest_mode[static_cast<std::size_t>(tt::CBIndex::c_24)] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[static_cast<std::size_t>(tt::CBIndex::c_24)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
     auto compute_kernel_id = CreateKernel(

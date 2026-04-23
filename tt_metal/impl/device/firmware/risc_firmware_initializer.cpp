@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <future>
 #include <set>
 
@@ -112,7 +113,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     for (auto refs : table_refs) {
         futures.emplace_back(detail::async([this, refs]() {
             tt::ChipId device_id = refs.device_id;
-            // Clear L1/DRAM if requested - skip for mock devices
+            // Clear L1/DRAM if requested - skip for mock devices (no memory), but do for emulated (memory-backed)
             if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
                 if (rtoptions_.get_clear_l1()) {
                     clear_l1_state(device_id);
@@ -132,12 +133,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             generate_worker_logical_to_virtual_map(
                 device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
 
-            // Skip firmware building for mock devices
-            if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
-                // Create build env for this device, and build FW if it's not built already.
+            // Skip build env registration and firmware building for mock/emulated devices
+            if (!cluster_.is_mock_or_emulated()) {
+                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                 // build_firmware ensures that the FW is built only once for a given build key
                 // (which captures the fw_compile_hash).
-                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
                 BuildEnvManager::get_instance().build_firmware(device_id);
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
@@ -158,7 +158,7 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
-    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!cluster_.is_mock_or_emulated()) {
         terminate_active_ethernet_cores_on_all_chips();
 
         for (tt::ChipId device_id : device_ids) {
@@ -195,7 +195,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
     teardown_simulator_ethernet_cores();
 
-    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!cluster_.is_mock_or_emulated()) {
         for (tt::ChipId device_id : all_devices) {
             assert_cores(device_id);
             cluster_.l1_barrier(device_id);
@@ -489,8 +489,8 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
 
     dram_bank_to_noc_xy.clear();
     dram_bank_to_noc_xy.reserve(hal_.get_num_nocs() * num_dram_banks);
-    bool noc_translation_enabled = cluster_.get_target_device_type() != tt::TargetDevice::Mock &&
-                                   cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
+    bool noc_translation_enabled =
+        !cluster_.is_mock_or_emulated() && cluster_.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
         noc_translation_enabled && (hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
     for (unsigned int noc = 0; noc < hal_.get_num_nocs(); noc++) {
@@ -559,8 +559,34 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const HalProgrammableCoreType& core_type,
     CoreCoord virtual_core,
     std::optional<CoreCoord> end_core) {
-    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
-    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
+    // Firmware uses bank_noc_xy_t (uint32_t for Quasar configs with odd bank counts, uint16_t otherwise)
+    // to ensure table sizes are always 4-byte aligned for l1_to_local_mem_copy. Match that here.
+    const uint32_t dram_noc_xy_size = dram_bank_to_noc_xy_[device_id].size();
+    const uint32_t l1_noc_xy_size = l1_bank_to_noc_xy_[device_id].size();
+    const uint32_t num_nocs = hal_.get_num_nocs();
+    const bool use_u32_entries = (cluster_.arch() == tt::ARCH::QUASAR) &&
+                                 ((dram_noc_xy_size / num_nocs) % 2 != 0 || (l1_noc_xy_size / num_nocs) % 2 != 0);
+
+    std::vector<uint32_t> dram_noc_xy_padded, l1_noc_xy_padded;
+    void* dram_noc_data;
+    void* l1_noc_data;
+    uint32_t dram_to_noc_sz_in_bytes;
+    uint32_t l1_to_noc_sz_in_bytes;
+
+    if (use_u32_entries) {
+        dram_noc_xy_padded.assign(dram_bank_to_noc_xy_[device_id].begin(), dram_bank_to_noc_xy_[device_id].end());
+        l1_noc_xy_padded.assign(l1_bank_to_noc_xy_[device_id].begin(), l1_bank_to_noc_xy_[device_id].end());
+        dram_noc_data = dram_noc_xy_padded.data();
+        l1_noc_data = l1_noc_xy_padded.data();
+        dram_to_noc_sz_in_bytes = dram_noc_xy_size * sizeof(uint32_t);
+        l1_to_noc_sz_in_bytes = l1_noc_xy_size * sizeof(uint32_t);
+    } else {
+        dram_noc_data = dram_bank_to_noc_xy_[device_id].data();
+        l1_noc_data = l1_bank_to_noc_xy_[device_id].data();
+        dram_to_noc_sz_in_bytes = dram_noc_xy_size * sizeof(uint16_t);
+        l1_to_noc_sz_in_bytes = l1_noc_xy_size * sizeof(uint16_t);
+    }
+
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_[device_id].size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_[device_id].size() * sizeof(int32_t);
 
@@ -575,21 +601,11 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     if (end_core.has_value()) {
         auto start_core = virtual_core;
         cluster_.noc_multicast_write(
-            dram_bank_to_noc_xy_[device_id].data(),
-            dram_to_noc_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            mem_bank_to_noc_addr);
+            dram_noc_data, dram_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
         cluster_.noc_multicast_write(
-            l1_bank_to_noc_xy_[device_id].data(),
-            l1_to_noc_sz_in_bytes,
-            device_id,
-            start_core,
-            end_core.value(),
-            l1_noc_addr);
+            l1_noc_data, l1_to_noc_sz_in_bytes, device_id, start_core, end_core.value(), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_.noc_multicast_write(
@@ -610,17 +626,10 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             l1_offset_addr);
     } else {
         cluster_.write_core(
-            dram_bank_to_noc_xy_[device_id].data(),
-            dram_to_noc_sz_in_bytes,
-            tt_cxy_pair(device_id, virtual_core),
-            mem_bank_to_noc_addr);
+            dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
-        cluster_.write_core(
-            l1_bank_to_noc_xy_[device_id].data(),
-            l1_to_noc_sz_in_bytes,
-            tt_cxy_pair(device_id, virtual_core),
-            l1_noc_addr);
+        cluster_.write_core(l1_noc_data, l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
         cluster_.write_core(

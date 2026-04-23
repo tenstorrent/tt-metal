@@ -1,12 +1,18 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <stdint.h>
+#include <array>
 #include <algorithm>
+#include <stdint.h>
 
+namespace detail {
+
+enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
+
+}  // namespace detail
 //=============================================================================
 // MoE Ring All-to-All Configuration
 //

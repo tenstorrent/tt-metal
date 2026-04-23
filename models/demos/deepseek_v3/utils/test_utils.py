@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 import itertools
 import os
@@ -620,6 +621,8 @@ def get_test_weight_config(
     test_name: str | None = None,
     real_weights: bool = True,
     layer_id: str | int | None = None,
+    prefer_legacy_weight_cache: bool = False,
+    cache_identity: str | os.PathLike[str] | None = None,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating.
 
@@ -646,18 +649,70 @@ def get_test_weight_config(
             integer layer index, or a descriptive qualifier for random weights
             (``"kv_lora_rank"``).  ``None`` when no further distinction is
             needed.
+        prefer_legacy_weight_cache: When ``True``, prefer the historical
+            SavedWeight cache for this test case and rebuild that cache on
+            miss. Use this only for tests that intentionally compare against
+            the legacy SavedWeight emission path instead of the current direct
+            conversion path. Pair this with ``force_recalculate=True`` when a
+            test must validate the current input weights on every run.
+        cache_identity: Optional cache discriminator appended to the per-test
+            cache path. Use this when the same test/layer can legitimately run
+            against different checkpoint layouts or other distinct weight
+            sources that should not share a SavedWeight cache entry.
     """
     if test_name is not None:
         parts = [test_name, ModuleClass.__name__, "real" if real_weights else "random"]
         if layer_id is not None:
             parts.append(str(layer_id))
+        if cache_identity is not None:
+            raw_cache_identity = os.fspath(cache_identity).strip()
+            if not raw_cache_identity:
+                raise ValueError("cache_identity must be non-empty when provided")
+            normalized_cache_identity = raw_cache_identity
+            for old, new in ((os.sep, "__"), ("/", "__"), ("\\", "__"), (" ", "_"), (":", "_")):
+                normalized_cache_identity = normalized_cache_identity.replace(old, new)
+            cache_identity_digest = hashlib.sha256(raw_cache_identity.encode("utf-8")).hexdigest()[:16]
+            parts.append(f"{normalized_cache_identity}__{cache_identity_digest}")
         weight_config_id = "/".join(parts)
     else:
         weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
     per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
-    return get_weight_config(
-        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
-    )
+
+    if not prefer_legacy_weight_cache:
+        return get_weight_config(
+            ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+        )
+
+    if force_recalculate:
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            force_recalculate=True,
+            emit_weight_cache=True,
+        )
+
+    try:
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            use_weight_cache=True,
+        )
+    except FileNotFoundError:
+        logger.info(f"DeepSeek test weight cache miss at {per_test_weight_cache_path}; regenerating it")
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            emit_weight_cache=True,
+        )
 
 
 def get_rope_tensors(

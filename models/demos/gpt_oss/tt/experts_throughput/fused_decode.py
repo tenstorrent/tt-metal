@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Fused decode forward pass using all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
@@ -206,6 +206,12 @@ def fused_decode_forward(
 
     # Rearrange scores: [M, 1, 1, K] -> [K, 1, M, 1] using transpose (stays in TILE).
     # Avoids permute which drops to RM and requires a tilize round-trip.
+    # Ensure scores are INTERLEAVED before TILE conversion (HEIGHT_SHARDED
+    # inputs with shard shape (1, K) are too small for tiles).
+    if tt_scores_copy.memory_config().is_sharded():
+        tt_scores_interleaved = ttnn.to_memory_config(tt_scores_copy, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(tt_scores_copy)
+        tt_scores_copy = tt_scores_interleaved
     tt_scores_tile = ttnn.to_layout(tt_scores_copy, ttnn.TILE_LAYOUT)
     ttnn.deallocate(tt_scores_copy)
     tt_scores_t1 = ttnn.transpose(tt_scores_tile, 0, 3)  # [K, 1, 1, M]

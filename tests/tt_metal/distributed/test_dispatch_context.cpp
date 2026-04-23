@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -225,6 +225,32 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
         ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
         EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed after FD->SD transition";
     }
+}
+
+TEST_F(DispatchContextFixture, AsyncSdStatePreservedAcrossFdTransition) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    // Enable async slow dispatch before FD transition
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(mesh_device_.get());
+    EXPECT_TRUE(experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(mesh_device_.get()));
+
+    // SD -> FD -> SD round-trip
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+
+    // Verify async SD state survived the round-trip
+    EXPECT_TRUE(experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(mesh_device_.get()));
 }
 
 }  // namespace tt::tt_metal::distributed::test

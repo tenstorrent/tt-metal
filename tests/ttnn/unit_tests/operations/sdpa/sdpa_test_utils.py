@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1380,3 +1380,106 @@ def run_sdpa_decode_sink_impl(
     assert (
         num_program_cache_entries == expected_num_program_cache_entries
     ), f"Expected {expected_num_program_cache_entries} program cache entries, got {num_program_cache_entries}."
+
+
+def run_test_sdpa_decode_broadcast_mask_batch(
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    mask_dtype,
+    q_dtype=ttnn.bfloat16,
+):
+    """Regression test for issue #39910: mask batch-broadcast reads OOB DRAM.
+
+    Reader kernel used Bkv (K's batch) as modulo for mask tile offset. With
+    mask_batch=1 and Bkv>1, batches 1+ compute non-zero offsets and read past
+    the end of the mask buffer, producing garbage attention output.
+
+    Strategy: run SDPA with a batch=1 broadcast mask and compare against a
+    full-batch mask (batch=b) with the same values replicated. The mask has
+    -inf for the second half of the sequence so that reading zeros from OOB
+    DRAM instead of the actual mask values produces clearly wrong results.
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    torch.manual_seed(1234)
+
+    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    k_chunk_size = get_chunk_size(s, s)
+    scale = d**-0.5
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    neg_inf = torch.finfo(torch.float32).min
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=padded_num_heads,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    Q = fa_rand(1, b, nh, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    # TTNN mask layout: [batch, 1, nh, s]
+    # Mask the second half of the sequence with -inf so the masking effect is large.
+    mask_1batch = torch.zeros(1, 1, nh, s)
+    mask_1batch[:, :, :, s // 2 :] = neg_inf
+    mask_fullbatch = mask_1batch.expand(b, -1, -1, -1).contiguous()
+
+    tt_Q = ttnn.as_tensor(Q, device=device, dtype=q_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram)
+    tt_mask_broadcast = ttnn.as_tensor(
+        mask_1batch, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram
+    )
+    tt_mask_full = ttnn.as_tensor(
+        mask_fullbatch, device=device, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram
+    )
+
+    tt_out_broadcast = ttnn.transformer.scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=False,
+        attn_mask=tt_mask_broadcast,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=dram,
+    )
+    tt_out_full = ttnn.transformer.scaled_dot_product_attention_decode(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=False,
+        attn_mask=tt_mask_full,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=dram,
+    )
+
+    out_broadcast = ttnn.to_torch(tt_out_broadcast)
+    out_full = ttnn.to_torch(tt_out_full)
+
+    out_pass, out_pcc = comp_pcc(out_full, out_broadcast, 0.99)
+    logger.debug(f"broadcast mask vs full-batch mask: {out_pcc}")
+    assert out_pass, (
+        f"Broadcast mask batch bug (issue #39910): "
+        f"batch=1 mask vs full-batch mask {out_pcc} (expected >=0.99). "
+        f"Batches 1+ likely read OOB DRAM instead of mask[0]."
+    )

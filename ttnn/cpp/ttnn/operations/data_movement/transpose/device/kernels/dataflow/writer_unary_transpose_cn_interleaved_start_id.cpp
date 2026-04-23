@@ -1,8 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -16,19 +19,21 @@ void kernel_main() {
 
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_id_out);
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_wait_front(cb_id_out, onepage);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
+        cb.wait_front(onepage);
 #ifdef CN_RM
-        tt::data_movement::common::noc_async_write_sharded(l1_read_addr, s, i, 0, write_size);
+        noc.async_write(cb, s, write_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
 #else
-        noc_async_write_page(i, s, l1_read_addr);
+        noc.async_write(cb, s, page_size, {.offset_bytes = 0}, {.page_id = i});
 #endif
 
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out, onepage);
+        noc.async_write_barrier();
+        cb.pop_front(onepage);
     }
 }

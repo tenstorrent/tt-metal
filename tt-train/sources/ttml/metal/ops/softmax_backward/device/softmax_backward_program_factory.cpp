@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -159,7 +159,7 @@ static tt::tt_metal::ComputeConfig precise(
     tt::tt_metal::ComputeConfig config;
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
-    config.math_fidelity = MathFidelity::HiFi4;
+    config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     config.compile_args = std::move(compile_time_args);
     config.defines = std::move(defines);
     return config;

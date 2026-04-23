@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -53,6 +53,16 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
             tensor->set_grad(synchronize_tensor(tensor->get_grad(), cluster_axes));
+        }
+    }
+}
+
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes) {
+    ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
+    for (auto& [name, tensor] : parameters) {
+        if (tensor->is_grad_initialized()) {
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes));
         }
     }
 }

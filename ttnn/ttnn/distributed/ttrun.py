@@ -1,35 +1,907 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from enum import Enum
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import click
 import yaml
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
-RANKFILE_MAP_BY_PATH_PATTERN = re.compile(r"rankfile:file=([^,\s]+)", re.IGNORECASE)
 MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
+# mpirun --version / stderr (OpenMPI 4.x and 5.x)
+_OPENMPI_VERSION_RE = re.compile(
+    r"(?:Open\s*MPI|OpenMPI)[^\d]*(\d+)\.(\d+)",
+    re.IGNORECASE,
+)
+
+# How to extend Phase 2 failure messages (see legacy_flow phase2_failure_hint).
+Phase2FailureHint = Optional[Literal["stale_phase1_cache", "legacy"]]
+
+# Phase 2 troubleshooting (after new_mode_flow → legacy_flow).
+PHASE2_TROUBLESHOOTING_HINT_NEW_MODE = (
+    "If the run failed or hung during physical discovery, or expected files are missing, your rank bindings "
+    "cache may be stale. Retry with --force-rediscovery to regenerate Phase 1 outputs."
+)
+
+# Phase 2 troubleshooting when only --rank-binding was used (no mesh-graph-descriptor / Phase 1 cache).
+PHASE2_TROUBLESHOOTING_HINT_LEGACY_MODE = (
+    "If device/ASIC mapping or discovery failed (e.g. golden file mismatch), verify cluster descriptors and "
+    "golden YAML under tests/tt_metal/tt_fabric/golden_mapping_files/ match this system. "
+    "If you use tt-run new mode (--mesh-graph-descriptor), retry with --force-rediscovery to refresh rank bindings."
+)
+
+
+def _phase2_troubleshooting_hint_text(hint: Phase2FailureHint) -> Optional[str]:
+    if hint == "stale_phase1_cache":
+        return PHASE2_TROUBLESHOOTING_HINT_NEW_MODE
+    if hint == "legacy":
+        return PHASE2_TROUBLESHOOTING_HINT_LEGACY_MODE
+    return None
+
+
+def _emit_phase2_troubleshooting_hint(hint: Phase2FailureHint) -> None:
+    """Log a single Phase 2 failure hint (stale Phase 1 cache vs legacy rank-binding guidance)."""
+    text = _phase2_troubleshooting_hint_text(hint)
+    if text:
+        logger.warning(f"{TT_RUN_PREFIX} {text}")
+
 
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
 ORIGINAL_CWD = Path.cwd().resolve()
+
+
+class RankfileSyntax(Enum):
+    """MPI rankfile syntax variants for different mpirun versions."""
+
+    MAP_BY_RANKFILE_FILE = "map_by_rankfile_file"  # --map-by rankfile:file=<path> (OpenMPI 5.x / PRRTE)
+    RANKFILE = "rankfile"  # --rankfile <path> (older OpenMPI)
+    MCA_RMAPS_RANKFILE_PATH = "mca_rmaps_rankfile_path"  # -mca rmaps_rankfile_path <path> (fallback)
+
+
+def get_mpi_launcher() -> str:
+    """Get the MPI launcher executable for the current PATH.
+
+    Prefers ``mpirun-ulfm`` from :func:`shutil.which` if found; otherwise logs and
+    returns ``\"mpirun\"``.
+    """
+    mpi_launcher = shutil.which("mpirun-ulfm")
+    if not mpi_launcher:
+        logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+        return "mpirun"
+
+    return mpi_launcher
+
+
+def rankfile_path_for_mpi_cli(rankfile: Union[str, Path], cwd: Optional[Path] = None) -> str:
+    """Path string for Open MPI / PRRTE rankfile options under ``mpirun``'s working directory.
+
+    PRRTE ``--map-by rankfile:file=...`` misparses absolute POSIX paths (extra ``/`` tokens look like
+    unsupported qualifiers). Always emit a path relative to ``cwd`` (default: launch directory).
+    """
+    cwd_resolved = (cwd or ORIGINAL_CWD).resolve()
+    rankfile_resolved = Path(rankfile).expanduser().resolve()
+    rel = os.path.relpath(str(rankfile_resolved), str(cwd_resolved))
+    if rel.startswith(".."):
+        logger.warning(
+            f"{TT_RUN_PREFIX} Rankfile {rankfile_resolved} is outside mpirun cwd {cwd_resolved}; "
+            f"using relative path {rel!r}"
+        )
+    return rel
+
+
+def build_rankfile_args(syntax: RankfileSyntax, rankfile: Path, cwd: Optional[Path] = None) -> List[str]:
+    """Build MPI command-line arguments for rankfile based on syntax variant.
+
+    Embeds a path **relative to cwd** (default ORIGINAL_CWD), matching :func:`subprocess.run`'s directory
+    for tt-run's mpirun invocations.
+
+    Args:
+        syntax: The rankfile syntax variant to use
+        rankfile: Path to the rankfile
+        cwd: Working directory for the MPI command (default: ORIGINAL_CWD).
+
+    Returns:
+        List of MPI command-line arguments (e.g., ["--map-by", "rankfile:file=generated/ttrun/rankfile"])
+    """
+    rankfile_str = rankfile_path_for_mpi_cli(rankfile, cwd)
+
+    if syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
+        return ["--map-by", f"rankfile:file={rankfile_str}"]
+    elif syntax == RankfileSyntax.RANKFILE:
+        return ["--rankfile", rankfile_str]
+    elif syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH:
+        return ["--mca", "rmaps_rankfile_path", rankfile_str]
+    else:
+        raise ValueError(f"Unknown rankfile syntax: {syntax}")
+
+
+def _parse_rankfile_syntax_option(value: str) -> Optional[RankfileSyntax]:
+    """Convert --rankfile-syntax CLI value to RankfileSyntax enum."""
+    if value == "auto":
+        return None
+    if value == "rankfile":
+        return RankfileSyntax.RANKFILE
+    if value == "map-by":
+        return RankfileSyntax.MAP_BY_RANKFILE_FILE
+    if value == "mca":
+        return RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
+    return None
+
+
+def _parse_hosts_option(ctx: click.Context, param: click.Parameter, value: Optional[str]) -> Optional[List[str]]:
+    """Parse ``--hosts``: comma-separated hostnames, strip whitespace, drop empties, reject duplicates.
+
+    Host tokens must not contain whitespace (use commas between hosts only).
+    """
+    if not value:
+        return None
+    parts = [h.strip() for h in value.split(",")]
+    hosts = [h for h in parts if h]
+    if not hosts:
+        raise click.ClickException(
+            "No valid hostnames in --hosts after removing empty entries (e.g. avoid ',,,' or whitespace-only). "
+            "Example: --hosts node1,node2,node3"
+        )
+    seen: set[str] = set()
+    for h in hosts:
+        if h in seen:
+            raise click.ClickException(f"Duplicate hostname in --hosts: {h!r}")
+        seen.add(h)
+        if h.startswith("-"):
+            raise click.ClickException(
+                f"Invalid hostname in --hosts: {h!r} looks like a CLI flag. "
+                "Often caused by an empty shell variable after bare --hosts. "
+                "Use a non-empty host list or --hosts=node1,node2."
+            )
+        if any(c in h for c in "\n\r\t"):
+            raise click.ClickException(f"Invalid hostname in --hosts (no newlines/tabs): {h!r}")
+        if " " in h:
+            raise click.ClickException(
+                f"Invalid hostname in --hosts (spaces not allowed inside a host; use commas between hosts): {h!r}"
+            )
+    return hosts
+
+
+def _get_openmpi_runtime_version(mpi_launcher: str, _subprocess_run=subprocess.run) -> Optional[tuple[int, int]]:
+    """Return ``(major, minor)`` from ``mpirun --version``, or ``None`` if unknown."""
+    exe = mpi_launcher
+    if not os.path.isabs(exe) and os.sep not in exe:
+        resolved = shutil.which(exe)
+        if resolved:
+            exe = resolved
+    try:
+        proc = _subprocess_run(
+            [exe, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    text = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    m = _OPENMPI_VERSION_RE.search(text)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def detect_rankfile_syntax(mpi_launcher: str, _subprocess_run=subprocess.run) -> RankfileSyntax:
+    """Pick rankfile CLI form based on detected Open MPI version.
+
+    * **Open MPI >= 5.0** — use ``--map-by rankfile:file=PATH`` (matches PRRTE; avoids deprecating
+      legacy ``--rankfile`` → auto-rewrite that can clash with ``--bind-to none``).
+    * **Open MPI 4.x / unknown** — use ``--rankfile`` (4.x does not accept the ``map-by`` rankfile modifier).
+
+    For nonstandard builds, force with ``--rankfile-syntax map-by``, ``rankfile``, or ``mca``.
+    """
+    ver = _get_openmpi_runtime_version(mpi_launcher, _subprocess_run)
+    if ver is not None and ver >= (5, 0):
+        logger.info(
+            f"{TT_RUN_PREFIX} Open MPI {ver[0]}.{ver[1]} detected; rankfile placement uses --map-by rankfile:file="
+        )
+        return RankfileSyntax.MAP_BY_RANKFILE_FILE
+    if ver is not None:
+        logger.debug(f"{TT_RUN_PREFIX} Open MPI {ver[0]}.{ver[1]} detected; rankfile placement uses --rankfile")
+    return RankfileSyntax.RANKFILE
+
+
+def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already sets a binding policy (``--bind-to`` / ``-bind-to``)."""
+    if not mpi_args:
+        return False
+    for arg in mpi_args:
+        if arg in ("--bind-to", "-bind-to"):
+            return True
+        if arg.startswith("--bind-to=") or arg.startswith("-bind-to="):
+            return True
+    return False
+
+
+def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already specifies rankfile placement (token-aware, not substring-joined).
+
+    Avoids false positives from unrelated arguments that happen to contain substrings such as
+    ``rankfile`` in paths, and avoids treating unrelated ``--map-by`` policies as rankfile placement.
+    """
+    if not mpi_args:
+        return False
+    args = list(mpi_args)
+    for i, arg in enumerate(args):
+        if arg in ("--rankfile", "-rankfile", "-rf"):
+            return True
+        if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
+            return True
+        if arg == "--map-by":
+            if i + 1 < len(args) and "rankfile:file=" in args[i + 1]:
+                return True
+            continue
+        if arg.startswith("--map-by=") and "rankfile:file=" in arg:
+            return True
+        if "rankfile:file=" in arg:
+            return True
+        if arg == "rmaps_rankfile_path":
+            return True
+        if i + 2 < len(args) and arg in ("--mca", "-mca") and args[i + 1] == "rmaps_rankfile_path":
+            return True
+    return False
+
+
+def inject_rankfile_mpi_args(
+    rankfile: Path,
+    base_mpi_args: List[str],
+    mpi_launcher: str,
+    detect_fn=detect_rankfile_syntax,
+    add_host_slots: bool = False,
+    force_rankfile_syntax: Optional[RankfileSyntax] = None,
+    cwd: Optional[Path] = None,
+) -> List[str]:
+    """Inject rankfile MPI arguments into base MPI args.
+
+    Uses :func:`detect_rankfile_syntax` (default ``--rankfile``) unless ``force_rankfile_syntax``
+    or a custom ``detect_fn`` is supplied.
+
+    Args:
+        rankfile: Path to the rankfile
+        base_mpi_args: Existing MPI arguments to prepend to
+        mpi_launcher: MPI launcher executable name/path (passed to ``detect_fn``)
+        detect_fn: Returns :class:`RankfileSyntax` (default: :func:`detect_rankfile_syntax`)
+        add_host_slots: If True, prepend ``--host host1:N,host2:N`` derived from the
+            rankfile (for Phase 2 real cluster). Skip if the user already provided
+            ``--host`` in ``base_mpi_args``. Does not add ``-np``; pass that in
+            ``base_mpi_args`` when the launcher needs an explicit process count.
+        force_rankfile_syntax: If set, use this syntax instead of ``detect_fn``
+            (e.g. ``RankfileSyntax.MAP_BY_RANKFILE_FILE``).
+        cwd: Working directory for the MPI command (default: ORIGINAL_CWD).
+            The rankfile path in the command will be relative to this.
+
+    Returns:
+        New list with rankfile args prepended: ``[--host?, rankfile_args..., ...base_mpi_args]``.
+    """
+    result: List[str] = []
+
+    # Prepend --host slots when requested and user did not already pass host selection in base_mpi_args
+    if add_host_slots:
+        has_host = has_host_selection_args(list(base_mpi_args or []))
+        if not has_host:
+            host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
+            if host_str and total_ranks > 0:
+                result.extend(["--host", host_str])
+
+    syntax = force_rankfile_syntax if force_rankfile_syntax is not None else detect_fn(mpi_launcher)
+    rankfile_args = build_rankfile_args(syntax, rankfile, cwd=cwd)
+    result.extend(rankfile_args)
+    result.extend(base_mpi_args or [])
+    return result
+
+
+def find_generate_rank_bindings_executable() -> Path:
+    """Find the generate_rank_bindings executable.
+
+    Searches for the executable in standard locations:
+    1. TT_METAL_HOME/build/tools/scaleout/generate_rank_bindings
+    2. Current directory relative paths
+
+    Returns:
+        Path to the generate_rank_bindings executable
+
+    Raises:
+        FileNotFoundError: If the executable cannot be found
+    """
+    # Try TT_METAL_HOME first
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    if tt_metal_home:
+        candidate = Path(tt_metal_home) / "build" / "tools" / "scaleout" / "generate_rank_bindings"
+        if candidate.exists():
+            return candidate.resolve()
+
+    # Try relative to ORIGINAL_CWD
+    candidate = ORIGINAL_CWD / "build" / "tools" / "scaleout" / "generate_rank_bindings"
+    if candidate.exists():
+        return candidate.resolve()
+
+    # Try current directory
+    candidate = Path("build") / "tools" / "scaleout" / "generate_rank_bindings"
+    if candidate.exists():
+        return candidate.resolve()
+
+    raise FileNotFoundError(
+        f"generate_rank_bindings executable not found. "
+        f"Searched: TT_METAL_HOME/build/tools/scaleout/generate_rank_bindings, "
+        f"{ORIGINAL_CWD}/build/tools/scaleout/generate_rank_bindings, "
+        f"build/tools/scaleout/generate_rank_bindings"
+    )
+
+
+def get_generate_rank_bindings_output_paths(output_dir: Path) -> tuple[Path, Path]:
+    """Get the output paths for generate_rank_bindings.
+
+    This is a pure function that returns the expected output paths.
+
+    Args:
+        output_dir: Base output directory (typically generated/ttrun)
+
+    Returns:
+        Tuple of (rank_bindings.yaml path, rankfile path)
+    """
+    rank_bindings_path = output_dir / "rank_bindings.yaml"
+    rankfile_path = output_dir / "rankfile"
+    return (rank_bindings_path, rankfile_path)
+
+
+PHASE2_MOCK_MAPPING_FILENAME = "phase2_mock_mapping.yaml"
+PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
+
+# Short prefix of SHA-256 for cache directory names (balance: path length vs collision risk for local cache).
+PHASE1_CACHE_ID_HEX_LEN = 16
+
+
+def compute_phase1_cache_fingerprint_full(
+    mgd_path: Path,
+    hosts: Optional[List[str]],
+    mock_rank_to_desc: Optional[Dict[int, Path]],
+) -> str:
+    """Full SHA-256 hex (64 chars) of MGD + hosts or mock descriptor contents.
+
+    Stored in :data:`PHASE1_CACHE_KEY_FILENAME` to validate cache hits; directory name uses only a prefix.
+
+    Raises:
+        ValueError: Invalid host/mock combination.
+    """
+    if hosts is not None and mock_rank_to_desc is not None:
+        raise ValueError("hosts and mock_rank_to_desc are mutually exclusive for cache id")
+    if hosts is None and mock_rank_to_desc is None:
+        raise ValueError("Either hosts or mock_rank_to_desc is required")
+
+    h = hashlib.sha256()
+    h.update(mgd_path.read_bytes())
+    h.update(b"\0")
+    if hosts is not None:
+        h.update(json.dumps(hosts, separators=(",", ":"), ensure_ascii=False).encode())
+    else:
+        for rank in sorted(mock_rank_to_desc.keys()):
+            h.update(str(rank).encode())
+            h.update(b"\0")
+            desc_path = mock_rank_to_desc[rank]
+            h.update(hashlib.sha256(desc_path.read_bytes()).digest())
+    return h.hexdigest()
+
+
+def compute_phase1_cache_id(
+    mgd_path: Path,
+    hosts: Optional[List[str]],
+    mock_rank_to_desc: Optional[Dict[int, Path]],
+) -> str:
+    """Short hex id for Phase 1 cache directory (prefix of SHA-256).
+
+    Content-based on MGD bytes; host sets are order-invariant (use sorted(hosts) when calling).
+    Mock mode fingerprints each mock descriptor file by content, keys in sorted order.
+
+    Args:
+        mgd_path: Path to mesh graph descriptor (must exist).
+        hosts: Sorted list of hostnames for real cluster, or None if mock mode.
+        mock_rank_to_desc: Rank -> mock cluster descriptor path, or None if real cluster.
+
+    Returns:
+        First :data:`PHASE1_CACHE_ID_HEX_LEN` hex characters of SHA-256 (filesystem-safe).
+
+    Raises:
+        ValueError: Invalid host/mock combination.
+    """
+    return compute_phase1_cache_fingerprint_full(mgd_path, hosts, mock_rank_to_desc)[:PHASE1_CACHE_ID_HEX_LEN]
+
+
+def read_stored_phase1_cache_key(run_dir: Path) -> Optional[str]:
+    """Return stored full fingerprint from run_dir, or None if absent."""
+    key_path = run_dir / PHASE1_CACHE_KEY_FILENAME
+    if not key_path.is_file():
+        return None
+    text = key_path.read_text().strip()
+    return text if text else None
+
+
+def phase1_cache_hit_valid(run_dir: Path, fingerprint_full: str, mock_mode: bool) -> bool:
+    """True if run_dir holds complete Phase 1 outputs and matching full fingerprint."""
+    if not phase1_outputs_ready(run_dir, mock_mode):
+        return False
+    stored = read_stored_phase1_cache_key(run_dir)
+    if stored is None:
+        return False
+    return stored == fingerprint_full
+
+
+def write_phase1_cache_key_file(run_dir: Path, fingerprint_full: str) -> None:
+    """Atomically write the full fingerprint for cache verification on later runs."""
+    key_path = run_dir / PHASE1_CACHE_KEY_FILENAME
+    tmp_path = run_dir / f"{PHASE1_CACHE_KEY_FILENAME}.tmp"
+    tmp_path.write_text(fingerprint_full + "\n", encoding="utf-8")
+    tmp_path.replace(key_path)
+
+
+def write_phase1_openmpi_hostfile(hostfile_path: Path, hosts_sorted: List[str]) -> None:
+    """Write an OpenMPI hostfile (hostname slots=1 per line)."""
+    lines = [f"{hostname} slots=1" for hostname in hosts_sorted]
+    hostfile_path.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
+def phase1_outputs_ready(run_dir: Path, mock_mode: bool) -> bool:
+    """True if cached Phase 1 artifacts look complete."""
+    rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+    if not rank_bindings_path.is_file() or not rankfile_path.is_file():
+        return False
+    if rank_bindings_path.stat().st_size == 0 or rankfile_path.stat().st_size == 0:
+        return False
+    if mock_mode:
+        p2 = run_dir / PHASE2_MOCK_MAPPING_FILENAME
+        if not p2.is_file() or p2.stat().st_size == 0:
+            return False
+    return True
+
+
+def parse_rankfile(rankfile_path: Path) -> Dict[int, str]:
+    """Parse OpenMPI rankfile to extract rank -> hostname mapping.
+
+    Args:
+        rankfile_path: Path to rankfile
+
+    Returns:
+        Dictionary mapping rank (int) -> hostname (str)
+    """
+    rank_to_host: Dict[int, str] = {}
+    with open(rankfile_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            # Skip comments and empty lines
+            if not line or line.startswith("#"):
+                continue
+            # Parse format: rank N=hostname slot(s)=X (OpenMPI accepts both slot= and slots=)
+            match = re.match(r"rank\s+(\d+)=([^\s]+)\s+slots?=[\d\-]+", line)
+            if match:
+                rank = int(match.group(1))
+                hostname = match.group(2)
+                rank_to_host[rank] = hostname
+            else:
+                logger.debug(f"{TT_RUN_PREFIX} rankfile line skipped (unrecognized format): {line!r}")
+    return rank_to_host
+
+
+def rankfile_needs_oversubscribe(rankfile_path: Path) -> bool:
+    """Check if rankfile requires --oversubscribe (multiple ranks per host).
+
+    Args:
+        rankfile_path: Path to rankfile
+
+    Returns:
+        True if any host has more than one rank assigned (requires oversubscription)
+    """
+    rank_to_host = parse_rankfile(rankfile_path)
+    if not rank_to_host:
+        return False
+
+    # Count ranks per host
+    host_to_rank_count: Dict[str, int] = {}
+    for hostname in rank_to_host.values():
+        host_to_rank_count[hostname] = host_to_rank_count.get(hostname, 0) + 1
+
+    # Check if any host has more than one rank
+    return any(count > 1 for count in host_to_rank_count.values())
+
+
+def host_list_needs_oversubscribe(hosts: List[str]) -> bool:
+    """True iff the host list names the same hostname more than once (multiple Phase 1 procs on one node)."""
+    return len(hosts) > len(set(hosts))
+
+
+def host_csv_needs_oversubscribe(host_csv: str) -> bool:
+    """True iff a comma-separated ``--host`` value lists the same bare hostname more than once.
+
+    Tokens with an explicit slot count (``host:N``) are ignored; OpenMPI treats ``N`` as allocated slots.
+    """
+    tokens = [t.strip() for t in host_csv.split(",") if t.strip()]
+    bare_counts: Dict[str, int] = defaultdict(int)
+    for t in tokens:
+        if ":" in t:
+            continue
+        bare_counts[t] += 1
+    return any(c > 1 for c in bare_counts.values())
+
+
+def extract_rankfile_path_from_mpi_args_list(mpi_args: List[str]) -> Optional[Path]:
+    """Return a resolved rankfile path from MPI placement options, if present and readable."""
+    i = 0
+    while i < len(mpi_args):
+        arg = mpi_args[i]
+        if arg in ("--rankfile", "-rankfile", "-rf"):
+            if i + 1 < len(mpi_args):
+                p = Path(resolve_rankfile_for_mpi(mpi_args[i + 1]))
+                if p.is_file():
+                    return p
+            i += 1
+            continue
+        if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
+            p = Path(resolve_rankfile_for_mpi(arg.split("=", 1)[1]))
+            if p.is_file():
+                return p
+            i += 1
+            continue
+        if arg == "--map-by" and i + 1 < len(mpi_args):
+            rp = extract_rankfile_path_from_map_by_policy(mpi_args[i + 1])
+            if rp:
+                p = Path(resolve_rankfile_for_mpi(rp))
+                if p.is_file():
+                    return p
+            i += 2
+            continue
+        if arg.startswith("--map-by="):
+            rp = extract_rankfile_path_from_map_by_policy(arg.split("=", 1)[1])
+            if rp:
+                p = Path(resolve_rankfile_for_mpi(rp))
+                if p.is_file():
+                    return p
+            i += 1
+            continue
+        if arg == "--mca" and i + 2 < len(mpi_args) and mpi_args[i + 1] == "rmaps_rankfile_path":
+            p = Path(resolve_rankfile_for_mpi(mpi_args[i + 2]))
+            if p.is_file():
+                return p
+            i += 3
+            continue
+        i += 1
+    return None
+
+
+def mpi_args_host_csvs_need_oversubscribe(mpi_args: List[str]) -> bool:
+    """True if any ``--host`` / ``-host`` / ``--host=`` value implies multiple procs on a node (bare duplicates)."""
+    i = 0
+    while i < len(mpi_args):
+        arg = mpi_args[i]
+        if arg in ("--host", "-host") and i + 1 < len(mpi_args):
+            if host_csv_needs_oversubscribe(mpi_args[i + 1]):
+                return True
+            i += 2
+            continue
+        if arg.startswith("--host=") or arg.startswith("-host="):
+            if host_csv_needs_oversubscribe(arg.split("=", 1)[1]):
+                return True
+        i += 1
+    return False
+
+
+def ensure_oversubscribe_for_multi_proc_per_host(
+    mpi_args: List[str],
+    rankfile_hint: Optional[Path] = None,
+) -> List[str]:
+    """Prepend ``--oversubscribe`` when placement implies multiple MPI processes per host with default slot counts.
+
+    Covers: rankfile mapping (from ``rankfile_hint`` or parsed MPI args), and duplicate bare hostnames in ``--host``.
+    """
+    if "--oversubscribe" in mpi_args:
+        return mpi_args
+
+    need = False
+
+    rankfile_paths: List[Path] = []
+    if rankfile_hint is not None:
+        rankfile_paths.append(rankfile_hint)
+    extracted = extract_rankfile_path_from_mpi_args_list(mpi_args)
+    if extracted is not None:
+        rankfile_paths.append(extracted)
+
+    seen: set[str] = set()
+    for p in rankfile_paths:
+        try:
+            key = str(p.resolve())
+        except OSError:
+            key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        if p.is_file() and rankfile_needs_oversubscribe(p):
+            need = True
+            break
+
+    if not need and mpi_args_host_csvs_need_oversubscribe(mpi_args):
+        need = True
+
+    if not need:
+        return mpi_args
+
+    return ["--oversubscribe"] + mpi_args
+
+
+def build_host_slots_from_rankfile(rankfile_path: Path) -> tuple[str, int]:
+    """Build --host host1:N,host2:N string and total rank count from rankfile.
+
+    Args:
+        rankfile_path: Path to OpenMPI rankfile
+
+    Returns:
+        Tuple of (host_slots_str, total_ranks). host_slots_str is in format
+        "host1:4,host2:4" for use with mpirun --host. Returns ("", 0) if rankfile
+        is empty or unparseable.
+    """
+    rank_to_host = parse_rankfile(rankfile_path)
+    if not rank_to_host:
+        return ("", 0)
+
+    # Build host -> count, preserving order of first appearance (by rank order)
+    host_to_count: Dict[str, int] = {}
+    for rank in sorted(rank_to_host.keys()):
+        hostname = rank_to_host[rank]
+        host_to_count[hostname] = host_to_count.get(hostname, 0) + 1
+
+    # Format as host1:count1,host2:count2
+    host_parts = [f"{host}:{count}" for host, count in host_to_count.items()]
+    host_str = ",".join(host_parts)
+    total_ranks = len(rank_to_host)
+    return (host_str, total_ranks)
+
+
+def build_phase2_mock_mapping(
+    rankfile_path: Path,
+    phase1_hosts: Optional[List[str]],
+    phase1_mock_rank_to_desc: Optional[Dict[int, Path]],
+) -> Optional[Dict[int, Path]]:
+    """Build Phase 2 mock cluster descriptor mapping from Phase 1 mapping.
+
+    Maps Phase 2 ranks (from generated rank_bindings.yaml) to Phase 1 mock descriptors
+    based on host assignment. If Phase 1 used hosts, Phase 2 ranks on the same host
+    get the Phase 1 rank's descriptor for that host. If Phase 1 used mock (all localhost),
+    Phase 2 ranks map directly to Phase 1 ranks.
+
+    Args:
+        rankfile_path: Path to generated rankfile (maps Phase 2 ranks to hosts)
+        phase1_hosts: List of hosts used in Phase 1 (None if mock cluster)
+        phase1_mock_rank_to_desc: Phase 1 mock descriptor mapping (rank -> path)
+
+    Returns:
+        Dictionary mapping Phase 2 rank -> mock descriptor path, or None if no mock cluster
+    """
+    if not phase1_mock_rank_to_desc:
+        return None
+
+    # Parse rankfile to get Phase 2 rank -> host mapping
+    phase2_rank_to_host = parse_rankfile(rankfile_path)
+
+    # Build Phase 2 rank -> Phase 1 rank -> mock descriptor mapping
+    phase2_mock_mapping: Dict[int, Path] = {}
+
+    if phase1_hosts:
+        # Phase 1 used hosts: map by host (first rank on each host gets that host's Phase 1 rank's descriptor)
+        # Build host -> Phase 1 rank mapping (first rank on each host)
+        host_to_phase1_rank: Dict[str, int] = {}
+        for phase1_rank, host in enumerate(phase1_hosts):
+            if host not in host_to_phase1_rank:
+                host_to_phase1_rank[host] = phase1_rank
+
+        # Map Phase 2 ranks to Phase 1 ranks by host
+        for phase2_rank, hostname in phase2_rank_to_host.items():
+            if hostname in host_to_phase1_rank:
+                phase1_rank = host_to_phase1_rank[hostname]
+                if phase1_rank in phase1_mock_rank_to_desc:
+                    phase2_mock_mapping[phase2_rank] = phase1_mock_rank_to_desc[phase1_rank]
+            else:
+                # Host not in Phase 1 hosts - shouldn't happen, but fallback to rank 0
+                logger.warning(
+                    f"{TT_RUN_PREFIX} Phase 2 rank {phase2_rank} on host {hostname} "
+                    f"not found in Phase 1 hosts. Using Phase 1 rank 0 mock descriptor."
+                )
+                if 0 in phase1_mock_rank_to_desc:
+                    phase2_mock_mapping[phase2_rank] = phase1_mock_rank_to_desc[0]
+    else:
+        # Phase 1 used mock (all localhost): map Phase 2 ranks directly to Phase 1 ranks
+        # This assumes Phase 2 ranks are in the same order as Phase 1 ranks
+        for phase2_rank in sorted(phase2_rank_to_host.keys()):
+            # Map Phase 2 rank to Phase 1 rank directly (modulo if Phase 2 has more ranks).
+            # ``len(phase1_mock_rank_to_desc)`` is the number of entries, not max_rank+1 (sparse keys affect modulo).
+            phase1_rank = phase2_rank % len(phase1_mock_rank_to_desc)
+            if phase1_rank in phase1_mock_rank_to_desc:
+                phase2_mock_mapping[phase2_rank] = phase1_mock_rank_to_desc[phase1_rank]
+
+    return phase2_mock_mapping
+
+
+def build_generate_rank_bindings_mpi_cmd(
+    executable: Path,
+    mgd_path: Path,
+    hosts: Optional[List[str]],
+    output_dir: Path,
+    mock_rank_to_desc: Optional[Dict[int, Path]] = None,
+    mpi_args: Optional[List[str]] = None,
+) -> List[str]:
+    """Build MPI command for running generate_rank_bindings.
+
+    This is a pure function that constructs the MPI command without executing it.
+
+    Args:
+        executable: Path to generate_rank_bindings executable
+        mgd_path: Path to mesh graph descriptor
+        hosts: List of hostnames (for real cluster) or None (for mock)
+        output_dir: Output directory for generated files
+        mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
+        mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+
+    Returns:
+        List of command-line arguments for mpirun
+
+    Raises:
+        ValueError: If neither hosts nor mock_rank_to_desc is provided
+    """
+    mpi_launcher = get_mpi_launcher()
+    cmd = [mpi_launcher]
+
+    # Always enable tagged output for easier debugging (prefixes output with rank info)
+    cmd.extend(["--tag-output"])
+
+    # Pass LD_LIBRARY_PATH so generate_rank_bindings can find libtt_metal.so when spawned by mpirun
+    ld_path = os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD)))
+    cmd.extend(["-x", f"LD_LIBRARY_PATH={ld_path}"])
+
+    # Add user-provided MPI args (e.g., --allow-run-as-root for Docker containers)
+    if mpi_args:
+        cmd.extend(mpi_args)
+
+    if mock_rank_to_desc:
+        # Mock cluster: all processes on localhost
+        # Use per-rank -np 1 segments to set per-rank env vars (similar to legacy_flow)
+        # Use --oversubscribe to allow more processes than available slots (needed for mock clusters)
+        cmd.extend(["--oversubscribe"])
+        # Don't specify --host for mock clusters - MPI will default to localhost
+        # This avoids "All nodes which are allocated for this job are already filled" errors
+
+        # Build per-rank segments with : separator
+        for i, rank in enumerate(sorted(mock_rank_to_desc.keys())):
+            if i > 0:
+                cmd.append(":")
+            desc_path = mock_rank_to_desc[rank]
+            cmd.extend(["-np", "1"])
+            cmd.extend(["-x", f"TT_METAL_MOCK_CLUSTER_DESC_PATH={desc_path.resolve()}"])
+            cmd.append(str(executable.resolve()))
+            cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
+            cmd.extend(["--output-dir", str(output_dir.resolve())])
+
+        # Return early for mock mode (already added executable and args per rank)
+        return cmd
+
+    elif hosts:
+        # Real cluster: one MPI process per entry in ``hosts`` (duplicate hostnames => multiple procs on one node).
+        np = len(hosts)
+        hosts_str = ",".join(hosts)
+        if host_list_needs_oversubscribe(hosts) and "--oversubscribe" not in (mpi_args or []):
+            cmd.extend(["--oversubscribe"])
+        cmd.extend(["--host", hosts_str])
+        cmd.extend(["-np", str(np)])
+        cmd.append(str(executable.resolve()))
+        cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
+        cmd.extend(["--output-dir", str(output_dir.resolve())])
+    else:
+        raise ValueError("Either hosts or mock_rank_to_desc must be provided")
+
+    return cmd
+
+
+def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=subprocess.run) -> int:
+    """Run generate_rank_bindings command via subprocess.
+
+    Args:
+        cmd: Command to run (from build_generate_rank_bindings_mpi_cmd)
+        cwd: Working directory for the command
+        subprocess_run: Subprocess run function (injectable for testing)
+
+    Returns:
+        Exit code from the subprocess
+    """
+    result = subprocess_run(cmd, cwd=cwd)
+    return result.returncode if hasattr(result, "returncode") else result
+
+
+def run_phase1_generate_rank_bindings(
+    mgd_path: Path,
+    hosts: Optional[List[str]],
+    output_dir: Path,
+    subprocess_run=subprocess.run,
+    sleep_secs: int = 5,
+    mock_rank_to_desc: Optional[Dict[int, Path]] = None,
+    mpi_args: Optional[List[str]] = None,
+) -> tuple[Path, Path]:
+    """Run Phase 1: generate_rank_bindings to produce rank_bindings.yaml and rankfile.
+
+    Orchestrates the Phase 1 MPI call, waits for file sync, and validates outputs.
+
+    Args:
+        mgd_path: Path to mesh graph descriptor
+        hosts: List of hostnames (for real cluster) or None (for mock)
+        output_dir: Output directory (typically generated/ttrun)
+        subprocess_run: Subprocess run function (injectable for testing)
+        sleep_secs: Seconds to sleep after Phase 1 for file sync (default 5)
+        mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
+        mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+
+    Returns:
+        Tuple of (rank_bindings.yaml path, rankfile path)
+
+    Raises:
+        FileNotFoundError: If generate_rank_bindings executable not found
+        RuntimeError: If Phase 1 fails or outputs are missing
+    """
+    executable = find_generate_rank_bindings_executable()
+    cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args)
+
+    logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
+    logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
+
+    # generate_rank_bindings writes to output_dir (passed via --output-dir)
+    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run)
+
+    if exit_code != 0:
+        raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
+
+    # Wait for file sync (NFS, shared storage)
+    if sleep_secs > 0:
+        logger.info(f"{TT_RUN_PREFIX} Waiting {sleep_secs} seconds for file sync...")
+        time.sleep(sleep_secs)
+
+    # Validate outputs exist
+    rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
+
+    if not rank_bindings_path.exists():
+        raise RuntimeError(
+            f"Phase 1 output not found: {rank_bindings_path}. " f"generate_rank_bindings may have failed silently."
+        )
+
+    if not rankfile_path.exists():
+        raise RuntimeError(
+            f"Phase 1 output not found: {rankfile_path}. " f"generate_rank_bindings may have failed silently."
+        )
+
+    logger.info(f"{TT_RUN_PREFIX} Phase 1 complete. Generated: {rank_bindings_path}, {rankfile_path}")
+
+    return (rank_bindings_path, rankfile_path)
 
 
 def get_local_network_interfaces() -> List[str]:
@@ -77,6 +949,30 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
+def default_multihost_mpi_args(tcp_interface: Optional[str]) -> List[str]:
+    """OpenMPI MCA arguments for multi-host TCP (used by Phase 1 and legacy flow unless --bare).
+
+    When ``tcp_interface`` is set, uses ``btl_tcp_if_include``; otherwise excludes ``docker0,lo``.
+    """
+    if tcp_interface:
+        return [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_include",
+            tcp_interface,
+        ]
+    return [
+        "--mca",
+        "btl",
+        "self,tcp",
+        "--mca",
+        "btl_tcp_if_exclude",
+        "docker0,lo",
+    ]
+
+
 class RankBinding(BaseModel):
     """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
@@ -113,12 +1009,20 @@ class TTRunConfig(BaseModel):
         return bindings
 
     @field_validator("mesh_graph_desc_path", mode="before")
-    def validate_mesh_graph_exists(cls, path: Union[str, Path]) -> Path:
+    @classmethod
+    def validate_mesh_graph_exists(cls, path: Union[str, Path], info: ValidationInfo) -> Path:
         """Ensure mesh graph descriptor file exists.
 
         Uses resolve_path() to search multiple locations for relative paths.
+        Skips existence check when skip_mgd_check is True in validation context.
         """
-        return resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
+        skip_check = info.context and info.context.get("skip_mgd_check", False)
+        return resolve_path(
+            path,
+            description="Mesh graph descriptor",
+            must_be_file=True,
+            must_exist=not skip_check,
+        )
 
 
 def get_search_paths() -> List[Optional[Path]]:
@@ -214,7 +1118,32 @@ def resolve_path(
     return (ORIGINAL_CWD / expanded_path).resolve()
 
 
-def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
+def load_mock_rank_to_descriptors(resolved_config_path: Path) -> Dict[int, Path]:
+    """Load rank -> mock cluster descriptor paths from a YAML config file.
+
+    If the document contains ``rank_to_cluster_mock_cluster_desc``, resolve each path.
+    Otherwise treat ``resolved_config_path`` as a single cluster descriptor for rank 0.
+    """
+    with open(resolved_config_path, "r") as f:
+        mock_data = yaml.safe_load(f)
+    resolved_mock_bindings: Dict[int, Path] = {}
+    if mock_data and isinstance(mock_data, dict) and "rank_to_cluster_mock_cluster_desc" in mock_data:
+        for rank_key, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
+            rank = int(rank_key)
+            resolved_path = resolve_path(
+                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
+            )
+            resolved_mock_bindings[rank] = resolved_path
+    else:
+        resolved_mock_bindings[0] = resolved_config_path
+    return resolved_mock_bindings
+
+
+def parse_binding_config(
+    yaml_path: Path,
+    mock_cluster_rank_binding: Optional[Path] = None,
+    skip_mgd_check: bool = False,
+) -> TTRunConfig:
     """Parse YAML configuration file with schema validation.
 
     Resolves all relative paths in the configuration against the launch directory
@@ -230,7 +1159,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         data = yaml.safe_load(f)
 
     try:
-        config = TTRunConfig(**data)
+        config = TTRunConfig.model_validate(data, context={"skip_mgd_check": skip_mgd_check})
     except ValidationError as e:
         raise ValueError(f"Invalid configuration: {e}")
 
@@ -239,20 +1168,89 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         resolved_mock_path = resolve_path(
             mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
         )
-        with open(resolved_mock_path, "r") as f:
-            mock_data = yaml.safe_load(f)
-
-        # Validate and resolve mock cluster rank binding configuration paths
-        resolved_mock_bindings: Dict[int, Path] = {}
-        for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            resolved_path = resolve_path(
-                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
-            )
-            resolved_mock_bindings[rank] = resolved_path
-
-        config.mock_cluster_rank_binding = resolved_mock_bindings
+        config.mock_cluster_rank_binding = load_mock_rank_to_descriptors(resolved_mock_path)
 
     return config
+
+
+DEFAULT_TRACY_BASE_PORT = 8087
+
+
+@dataclass
+class TracyConfig:
+    output_root: Path
+    base_port: int
+    passthrough_args: List[str]
+
+
+def parse_tracy_args(raw: str) -> TracyConfig:
+    """Parse a raw tracy argument string, extracting port and output root for per-rank handling.
+
+    Recognises -t/--port and -o/--output-folder from python -m tracy's interface.
+    Those two values are consumed (they become per-rank); everything else is
+    forwarded verbatim so that new tracy options work without ttrun changes.
+    """
+    tokens = shlex.split(raw) if raw else []
+    base_port = DEFAULT_TRACY_BASE_PORT
+    output_root: Optional[Path] = None
+    passthrough: List[str] = []
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        # Handle --port=8087 / -t=8087 styles
+        if token.startswith("--port=") or token.startswith("-t="):
+            value = token.split("=", 1)[1]
+            if not value:
+                raise ValueError("Tracy port option -t/--port requires a value")
+            base_port = int(value)
+            i += 1
+        # Handle --output-folder=/path / -o=/path styles
+        elif token.startswith("--output-folder=") or token.startswith("-o="):
+            value = token.split("=", 1)[1]
+            if not value:
+                raise ValueError("Tracy output option -o/--output-folder requires a value")
+            output_root = Path(value)
+            i += 1
+        # Handle space-separated -t 8087 / --port 8087
+        elif token in ("-t", "--port"):
+            if i + 1 >= len(tokens):
+                raise ValueError("Tracy port option -t/--port requires a value")
+            base_port = int(tokens[i + 1])
+            i += 2
+        # Handle space-separated -o /path / --output-folder /path
+        elif token in ("-o", "--output-folder"):
+            if i + 1 >= len(tokens):
+                raise ValueError("Tracy output option -o/--output-folder requires a value")
+            output_root = Path(tokens[i + 1])
+            i += 2
+        else:
+            passthrough.append(token)
+            i += 1
+
+    if output_root is None:
+        # Match tt-run's environment propagation: prefer TT_METAL_HOME, then ORIGINAL_CWD,
+        # and finally fall back to the module-level ORIGINAL_CWD captured at import time.
+        tt_metal_home = os.environ.get("TT_METAL_HOME")
+        if tt_metal_home is None:
+            original_cwd_env = os.environ.get("ORIGINAL_CWD")
+            base_dir = Path(original_cwd_env) if original_cwd_env is not None else ORIGINAL_CWD
+        else:
+            base_dir = Path(tt_metal_home)
+        output_root = base_dir / "generated/profiler/ttrun"
+
+    output_root = output_root.expanduser().resolve()
+    try:
+        output_root.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as exc:
+        # Surface filesystem issues as user-level configuration errors; the CLI wraps ValueError into ClickException.
+        raise ValueError(f"Unable to create tracy output directory '{output_root}': {exc}") from exc
+
+    if base_port <= 0:
+        raise ValueError("Tracy base port must be a positive integer")
+
+    return TracyConfig(output_root=output_root, base_port=base_port, passthrough_args=passthrough)
 
 
 # Environment variable prefixes that should be automatically passed through to MPI processes
@@ -294,22 +1292,14 @@ ENV_BLOCKLIST = frozenset(
 )
 
 
-def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
-    """Get all environment variables for a specific rank.
+def _parent_env_prefix_from_environ() -> Dict[str, str]:
+    """Env vars from :data:`os.environ` matching passthrough prefixes, excluding the blocklist.
 
-    Args:
-        binding: Rank binding configuration
-        config: Global configuration
-
-    Returns:
-        Dictionary of environment variables for this rank
+    Logs debug for propagated and blocked keys (call once per mpirun command build to avoid spam).
     """
-    # Start with automatic pass-through of TT-related environment variables
-    # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
-    # Variables in ENV_BLOCKLIST are excluded even if they match prefixes
-    env = {}
-    passthrough_vars = []
-    blocked_vars = []
+    env: Dict[str, str] = {}
+    passthrough_vars: List[str] = []
+    blocked_vars: List[str] = []
     for key, value in os.environ.items():
         if key.startswith(ENV_PASSTHROUGH_PREFIXES):
             if key in ENV_BLOCKLIST:
@@ -329,6 +1319,30 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
             f"{TT_RUN_PREFIX} Blocked {len(blocked_vars)} environment variables from pass-through "
             f"(managed by tt-run or rank bindings): {', '.join(sorted(blocked_vars))}"
         )
+
+    return env
+
+
+def get_rank_environment(
+    binding: RankBinding,
+    config: TTRunConfig,
+    *,
+    parent_env_prefix: Optional[Dict[str, str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Get all environment variables for a specific rank.
+
+    Args:
+        binding: Rank binding configuration
+        config: Global configuration
+
+    Returns:
+        Dictionary of environment variables for this rank
+    """
+    if parent_env_prefix is not None:
+        env = dict(parent_env_prefix)
+    else:
+        env = dict(_parent_env_prefix_from_environ())
 
     # Use ORIGINAL_CWD as the default for TT_METAL_HOME when not explicitly set.
     # This assumes the launch directory is on a shared filesystem (NFS) visible to all nodes.
@@ -381,21 +1395,32 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Rank-specific overrides last (higher precedence)
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
+    if extra_env:
+        env.update(extra_env)
+
     return env
 
 
-def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> List[str]:
+def build_rank_environment_args(
+    binding: RankBinding,
+    config: TTRunConfig,
+    *,
+    parent_env_prefix: Optional[Dict[str, str]] = None,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> List[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
         binding: Rank binding configuration
         config: Global configuration
+        parent_env_prefix: If set, reuse this prefix pass-through dict for all ranks (avoids re-scanning
+            :data:`os.environ` per rank). When omitted, scans the environment (and logs) on each call.
 
     Returns:
         List of ["-x", "KEY=value"] arguments for mpirun
     """
     env_args = []
-    env = get_rank_environment(binding, config)
+    env = get_rank_environment(binding, config, parent_env_prefix=parent_env_prefix, extra_env=extra_env)
 
     for key, value in env.items():
         env_args.extend(["-x", f"{key}={value}"])
@@ -416,10 +1441,35 @@ def resolve_rankfile_for_mpi(rankfile_path: str) -> str:
 
 def extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
     """Extract rankfile path from --map-by policy if using rankfile:file=... syntax."""
-    match = RANKFILE_MAP_BY_PATH_PATTERN.search(policy)
-    if not match:
+    idx = policy.lower().find("rankfile:file=")
+    if idx < 0:
         return None
-    return match.group(1)
+    rest = policy[idx + len("rankfile:file=") :]
+    end = len(rest)
+    for sep in (",", " "):
+        j = rest.find(sep)
+        if j >= 0:
+            end = min(end, j)
+    path = rest[:end].strip()
+    if not path:
+        logger.warning(f"{TT_RUN_PREFIX} Ignoring empty path in MPI --map-by policy segment {policy!r}")
+        return None
+    return path
+
+
+def _replace_rankfile_file_in_map_by_policy(policy: str, new_path: str) -> str:
+    """Swap the path in ``rankfile:file=`` inside a ``--map-by`` policy string for ``new_path``."""
+    idx = policy.lower().find("rankfile:file=")
+    if idx < 0:
+        return policy
+    start = idx + len("rankfile:file=")
+    rest = policy[start:]
+    end = len(rest)
+    for sep in (",", " "):
+        j = rest.find(sep)
+        if j >= 0:
+            end = min(end, j)
+    return policy[:idx] + f"rankfile:file={new_path}" + policy[start + end :]
 
 
 def extract_rankfile_hosts(rankfile_path: str) -> List[str]:
@@ -482,15 +1532,20 @@ def has_mca_param(mpi_args: List[str], param_name: str) -> bool:
     return False
 
 
-def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
-    """Normalize rankfile MPI args and infer --host list when rankfile is provided.
+def normalize_rankfile_mpi_args(
+    mpi_args: Optional[List[str]], rankfile_syntax: RankfileSyntax, cwd: Optional[Path] = None
+) -> List[str]:
+    """Normalize rankfile-related MPI args and infer ``--host`` when a rankfile is present.
 
-    OpenMPI deprecates --rankfile in favor of --map-by rankfile:file=<path>.
-    This keeps backwards compatibility while avoiding deprecation warnings.
+    With the default portable form (:attr:`RankfileSyntax.RANKFILE`), ``--rankfile`` is kept
+    or produced, and ``--map-by`` … ``rankfile:file=`` is converted to ``--rankfile``.
+    For :attr:`RankfileSyntax.MAP_BY_RANKFILE_FILE`, paths inside ``rankfile:file=`` are
+    resolved but the map-by form is kept.
     """
     if not mpi_args:
         return []
 
+    cwd_resolved = (cwd if cwd is not None else ORIGINAL_CWD).resolve()
     normalized_args = []
     detected_rankfile_path: Optional[str] = None
     rewrote_rankfile_args = False
@@ -507,7 +1562,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
                 continue
 
             detected_rankfile_path = resolve_rankfile_for_mpi(mpi_args[i + 1])
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            normalized_args.extend(build_rankfile_args(rankfile_syntax, Path(detected_rankfile_path), cwd=cwd_resolved))
             rewrote_rankfile_args = True
             i += 2
             continue
@@ -515,38 +1570,65 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
         if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
             rankfile_path = arg.split("=", 1)[1]
             detected_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            normalized_args.extend(build_rankfile_args(rankfile_syntax, Path(detected_rankfile_path), cwd=cwd_resolved))
             rewrote_rankfile_args = True
             i += 1
             continue
 
         if arg == "--map-by":
-            normalized_args.append(arg)
             if i + 1 >= len(mpi_args):
+                normalized_args.append(arg)
                 i += 1
                 continue
 
             policy = mpi_args[i + 1]
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
-            if rankfile_path:
-                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
-                detected_rankfile_path = resolved_rankfile_path
 
-            normalized_args.append(policy)
+            if rankfile_path and rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
+                resolved_abs = Path(resolve_rankfile_for_mpi(rankfile_path)).resolve()
+                detected_rankfile_path = str(resolved_abs)
+                rel = rankfile_path_for_mpi_cli(resolved_abs, cwd_resolved)
+                policy = _replace_rankfile_file_in_map_by_policy(policy, rel)
+                normalized_args.extend(["--map-by", policy])
+            elif rankfile_path and rankfile_syntax in (
+                RankfileSyntax.RANKFILE,
+                RankfileSyntax.MCA_RMAPS_RANKFILE_PATH,
+            ):
+                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
+                normalized_args.extend(
+                    build_rankfile_args(rankfile_syntax, Path(resolved_rankfile_path), cwd=cwd_resolved)
+                )
+                detected_rankfile_path = resolved_rankfile_path
+                rewrote_rankfile_args = True
+            else:
+                normalized_args.extend(["--map-by", mpi_args[i + 1]])
+
             i += 2
             continue
 
         if arg.startswith("--map-by="):
             policy = arg.split("=", 1)[1]
             rankfile_path = extract_rankfile_path_from_map_by_policy(policy)
-            if rankfile_path:
-                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
-                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
-                arg = f"--map-by={policy}"
-                detected_rankfile_path = resolved_rankfile_path
 
-            normalized_args.append(arg)
+            if rankfile_path and rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
+                resolved_abs = Path(resolve_rankfile_for_mpi(rankfile_path)).resolve()
+                detected_rankfile_path = str(resolved_abs)
+                rel = rankfile_path_for_mpi_cli(resolved_abs, cwd_resolved)
+                policy = _replace_rankfile_file_in_map_by_policy(policy, rel)
+                normalized_args.append(f"--map-by={policy}")
+            elif rankfile_path and rankfile_syntax in (
+                RankfileSyntax.RANKFILE,
+                RankfileSyntax.MCA_RMAPS_RANKFILE_PATH,
+            ):
+                resolved_rankfile_path = resolve_rankfile_for_mpi(rankfile_path)
+                normalized_args.extend(
+                    build_rankfile_args(rankfile_syntax, Path(resolved_rankfile_path), cwd=cwd_resolved)
+                )
+                detected_rankfile_path = resolved_rankfile_path
+                rewrote_rankfile_args = True
+            else:
+                normalized_args.append(arg)
+
             i += 1
             continue
 
@@ -555,8 +1637,7 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
 
     if rewrote_rankfile_args and detected_rankfile_path:
         logger.debug(
-            f"{TT_RUN_PREFIX} Rewrote deprecated MPI rankfile args to "
-            f"--map-by rankfile:file={detected_rankfile_path}"
+            f"{TT_RUN_PREFIX} Normalized MPI rankfile args ({rankfile_syntax.value}) for {detected_rankfile_path}"
         )
 
     if detected_rankfile_path and not has_host_selection_args(normalized_args):
@@ -575,35 +1656,31 @@ def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
 
 
 def build_mpi_command(
-    config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
+    config: TTRunConfig,
+    program: List[str],
+    mpi_args: Optional[List[str]] = None,
+    debug_gdbserver: bool = False,
+    rankfile_syntax: Optional[RankfileSyntax] = None,
+    tracy_config: Optional[TracyConfig] = None,
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
-    effective_mpi_args = normalize_rankfile_mpi_args(mpi_args)
-
-    # Check if running in SLURM interactive session
-    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
-        logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
-        mpi_launcher = "mpirun"
-    else:
-        # Find mpirun-ulfm executable, fall back to mpirun if not found
-        mpi_launcher = shutil.which("mpirun-ulfm")
-        if not mpi_launcher:
-            logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
-            mpi_launcher = "mpirun"
+    mpi_launcher = get_mpi_launcher()
+    syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
+    effective_mpi_args = normalize_rankfile_mpi_args(mpi_args, syntax)
 
     cmd = [mpi_launcher]
 
-    # Check if --bind-to is already specified in mpi_args
-    bind_to_already_specified = False
-    if effective_mpi_args:
-        for i, arg in enumerate(effective_mpi_args):
-            if arg == "--bind-to":
-                bind_to_already_specified = True
-                break
+    bind_to_already_specified = mpi_args_specify_bind_to(effective_mpi_args)
+    rankfile_placement = mpi_args_contain_rankfile_options(effective_mpi_args)
 
-    # Add --bind-to none only if not already specified
-    if not bind_to_already_specified:
+    # Open MPI 5 + PRRTE: ``--map-by rankfile:file=...`` (or auto-rewrite from ``--rankfile``) conflicts with
+    # ``--bind-to none`` ("PE mapping ... cannot be combined with binding directive other than core/hwt").
+    if not bind_to_already_specified and not rankfile_placement:
         cmd.extend(["--bind-to", "none"])
+    elif not bind_to_already_specified and rankfile_placement:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Skipping default --bind-to none because rankfile placement is present in MPI args"
+        )
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
@@ -611,32 +1688,137 @@ def build_mpi_command(
     if effective_mpi_args:
         cmd.extend(effective_mpi_args)
 
+    parent_env_prefix = _parent_env_prefix_from_environ()
+
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config))
-        program_to_run = program
+        tracy_env: Dict[str, str] = {}
+        rank_program = program
+        if tracy_config:
+            rank_program, tracy_env = wrap_program_with_tracy(program, binding, tracy_config)
+        cmd.extend(
+            build_rank_environment_args(binding, config, parent_env_prefix=parent_env_prefix, extra_env=tracy_env)
+        )
         if debug_gdbserver:
             port = 20000 + binding.rank
             echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
             gdbserver_part = f"exec gdbserver :{port}"
-            quoted_program_args = " ".join(shlex.quote(arg) for arg in program)
+            quoted_program_args = " ".join(shlex.quote(arg) for arg in rank_program)
             cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
-            program_to_run = ["bash", "-c", cmd_str]
-        cmd.extend(program_to_run)
+            rank_program = ["bash", "-c", cmd_str]
+        cmd.extend(rank_program)
 
     return cmd
+
+
+def _is_python_entry_point(path: str) -> bool:
+    """Check if an executable is a Python console_scripts entry point by examining its shebang."""
+    try:
+        with open(path, "r") as f:
+            shebang = f.readline(256)
+        return shebang.startswith("#!") and "python" in shebang
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _normalize_program_for_tracy(program: List[str]) -> List[str]:
+    """Normalize a program command for use under ``python -m tracy``.
+
+    Handles three invocation styles:
+      1. ``python3 script.py …``  — strip the interpreter (tracy provides its own)
+      2. ``python3 -m module …``  — strip the interpreter, keep ``-m module``
+      3. ``pytest …`` (bare entry point) — convert to ``-m pytest …``
+
+    Case 3 detects Python console_scripts entry points (installed via pip) by
+    resolving the executable on PATH and checking for a Python shebang.  The
+    entry point name is assumed to match the importable module name, which holds
+    for the vast majority of tools (pytest, coverage, mypy, black, etc.).
+    """
+    if not program:
+        return program
+
+    first = program[0]
+    name = Path(first).name
+
+    # Cases 1 & 2: explicit Python interpreter — strip it
+    if name in ("python", "python3") or name.startswith("python3."):
+        return program[1:]
+    if Path(first).resolve() == Path(sys.executable).resolve():
+        return program[1:]
+
+    # Case 3: bare command that may be a Python entry point (e.g. pytest)
+    if not first.endswith(".py"):
+        resolved = shutil.which(first)
+        if resolved and _is_python_entry_point(resolved):
+            logger.debug(
+                f"{TT_RUN_PREFIX} Detected Python entry point '{first}' (shebang), "
+                f"converting to '-m {name}' for tracy compatibility"
+            )
+            return ["-m", name] + program[1:]
+
+        # Fallback: shebang check can fail for binary entry point launchers
+        # (e.g. uv-installed tools). Check if the name is importable as a module.
+        try:
+            if importlib.util.find_spec(name) is not None:
+                logger.debug(
+                    f"{TT_RUN_PREFIX} Detected importable module '{name}', "
+                    f"converting to '-m {name}' for tracy compatibility"
+                )
+                return ["-m", name] + program[1:]
+        except (ModuleNotFoundError, ValueError) as exc:
+            # Best-effort detection: failure to probe importability is non-fatal;
+            # fall back to leaving the command unchanged.
+            logger.debug(
+                f"{TT_RUN_PREFIX} Failed to probe importability for module '{name}': {exc}; "
+                "leaving program command unchanged"
+            )
+
+    return program
+
+
+def wrap_program_with_tracy(
+    program: List[str], binding: RankBinding, tracy_config: TracyConfig
+) -> Tuple[List[str], Dict[str, str]]:
+    """Return the tracy-wrapped command and any extra env for a rank.
+
+    Only --port and -o are injected per-rank; every other tracy flag comes
+    from the user's original --tracy string via passthrough_args.
+    """
+    rank_output_dir = (tracy_config.output_root / f"rank{binding.rank}").resolve()
+    rank_output_dir.mkdir(parents=True, exist_ok=True)
+    port = tracy_config.base_port + binding.rank
+
+    tracy_cmd = [
+        sys.executable,
+        "-m",
+        "tracy",
+        "--port",
+        str(port),
+        "-o",
+        str(rank_output_dir),
+    ]
+
+    if tracy_config.passthrough_args:
+        tracy_cmd.extend(tracy_config.passthrough_args)
+
+    tracy_cmd.extend(_normalize_program_for_tracy(program))
+
+    extra_env = {
+        "TT_METAL_PROFILER_DIR": str(rank_output_dir),
+    }
+
+    return tracy_cmd, extra_env
 
 
 def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     """Pretty print a command for readability."""
     if len(cmd) > PRETTY_PRINT_THRESHOLD:
-        logger.info(f"{prefix} Command:")
         parts = []
-        current_part = ["mpirun"]
+        current_part = [Path(cmd[0]).name if cmd else "mpirun"]
 
         for arg in cmd[1:]:
             if arg == ":":
@@ -654,53 +1836,7 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
         logger.info(f"{prefix} Command: " + " ".join(cmd))
 
 
-@click.command(
-    context_settings=dict(
-        ignore_unknown_options=True,
-        allow_extra_args=True,
-    )
-)
-@click.option(
-    "--rank-binding",
-    type=click.Path(path_type=Path),
-    required=True,
-    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
-)
-@click.option("--dry-run", is_flag=True, help="Print command without executing")
-@click.option(
-    "-v",
-    "--verbose",
-    is_flag=True,
-    help="Show path resolution diagnostics, environment propagation, and MPI command details",
-)
-@click.option(
-    "--mpi-args",
-    callback=lambda ctx, param, value: shlex.split(value) if value else None,
-    help="Additional MPI arguments (quoted)",
-)
-@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
-@click.option(
-    "--mock-cluster-rank-binding",
-    required=False,
-    type=click.Path(path_type=Path),
-    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
-)
-@click.option(
-    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
-)
-@click.option(
-    "--bare",
-    is_flag=True,
-    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
-)
-@click.option(
-    "--tcp-interface",
-    type=str,
-    default=None,
-    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
-)
-@click.pass_context
-def main(
+def legacy_flow(
     ctx: click.Context,
     rank_binding: Path,
     dry_run: bool,
@@ -709,8 +1845,13 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    skip_mgd_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
+    rankfile: Optional[Path] = None,
+    rankfile_syntax: Optional[RankfileSyntax] = None,
+    phase2_failure_hint: Phase2FailureHint = "legacy",
+    tracy_args: Optional[str] = None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -763,7 +1904,7 @@ def main(
 
         For multi-host setups, you typically need BOTH:
             tt-run --rank-binding mesh_config.yaml \\
-                   --mpi-args "--host nodeA,nodeB --map-by rankfile:file=/etc/mpirun/rankfile" \\
+                   --mpi-args "--host nodeA,nodeB --map-by rankfile:file=generated/ttrun/rankfile" \\
                    ./my_app
 
         The rank-binding configures what each MPI rank "sees" in terms of TT-Metal devices,
@@ -932,9 +2073,8 @@ def main(
         tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Section 2.4: Distributed Process Launch with tt-run
     """
-    program = ctx.args
+    program = list(ctx.args)
 
-    # Log diagnostic information for path resolution debugging
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} Path Resolution Diagnostics:")
         logger.info(f"{TT_RUN_PREFIX}   Original CWD (at launch): {ORIGINAL_CWD}")
@@ -950,9 +2090,14 @@ def main(
             logger.info(f"{TT_RUN_PREFIX}   SLURM_SUBMIT_DIR: {os.environ.get('SLURM_SUBMIT_DIR', '<not set>')}")
 
     try:
-        config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
+        config = parse_binding_config(rank_binding, mock_cluster_rank_binding, skip_mgd_check)
     except (ValueError, ValidationError) as e:
-        raise click.ClickException(f"Configuration error: {e}")
+        msg = f"Configuration error: {e}"
+        # Stale Phase 1 cache guidance applies after a cache hit when MPI/apps fail — not typical for YAML parse.
+        t_legacy = _phase2_troubleshooting_hint_text("legacy")
+        if phase2_failure_hint == "legacy" and t_legacy:
+            msg += f"\n{TT_RUN_PREFIX} {t_legacy}"
+        raise click.ClickException(msg)
 
     if verbose:
         logger.info(f"{TT_RUN_PREFIX}   Resolved mesh_graph_desc_path: {config.mesh_graph_desc_path}")
@@ -972,6 +2117,9 @@ def main(
         validate_network_interface(tcp_interface, verbose=verbose)
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
+
+    mpi_launcher = get_mpi_launcher()
+    effective_rankfile_syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
 
     if not bare:
         user_has_btl_setting = has_mca_param(effective_mpi_args, "btl")
@@ -1013,9 +2161,57 @@ def main(
                     "set matching MCA options)."
                 )
 
+    # Inject rankfile args if provided (auto-detect MPI syntax)
+    # This happens after multihost args so rankfile comes right before user args
+    # Check if user already specified rankfile in mpi_args to avoid conflicts
+    if rankfile:
+        has_existing_rankfile = mpi_args_contain_rankfile_options(mpi_args)
+
+        if has_existing_rankfile:
+            logger.warning(
+                f"{TT_RUN_PREFIX} Rankfile argument already present in --mpi-args. "
+                f"Skipping rankfile injection from parameter. "
+                f"To use the rankfile parameter, remove rankfile-related args from --mpi-args."
+            )
+        else:
+            rankfile_args: List[str] = []
+
+            # Add --host host1:N,host2:N for Phase 2 real cluster (skip when mock)
+            if not mock_cluster_rank_binding:
+                has_host = has_host_selection_args(effective_mpi_args)
+                if not has_host:
+                    host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
+                    if host_str and total_ranks > 0:
+                        rankfile_args.extend(["--host", host_str])
+                        if verbose:
+                            logger.info(f"{TT_RUN_PREFIX} Injected --host {host_str} from rankfile")
+
+            rankfile_args.extend(build_rankfile_args(effective_rankfile_syntax, rankfile, cwd=ORIGINAL_CWD))
+            effective_mpi_args = rankfile_args + effective_mpi_args
+            if verbose:
+                logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
+
+    rankfile_hint = rankfile.resolve() if rankfile is not None and rankfile.is_file() else None
+    had_oversubscribe = "--oversubscribe" in effective_mpi_args
+    effective_mpi_args = ensure_oversubscribe_for_multi_proc_per_host(effective_mpi_args, rankfile_hint=rankfile_hint)
+    if verbose and not had_oversubscribe and effective_mpi_args and effective_mpi_args[0:1] == ["--oversubscribe"]:
+        logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (multiple processes per host from rankfile or --host)")
+
     # Build MPI command
+    tracy_config = None
+    if tracy_args is not None:
+        try:
+            tracy_config = parse_tracy_args(tracy_args)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+
     mpi_cmd = build_mpi_command(
-        config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
+        config,
+        program,
+        effective_mpi_args if effective_mpi_args else None,
+        debug_gdbserver=debug_gdbserver,
+        rankfile_syntax=effective_rankfile_syntax,
+        tracy_config=tracy_config,
     )
 
     if verbose or dry_run:
@@ -1034,14 +2230,501 @@ def main(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
-        result = subprocess.run(mpi_cmd)
+        result = subprocess.run(mpi_cmd, cwd=ORIGINAL_CWD)
+        if result.returncode != 0:
+            _emit_phase2_troubleshooting_hint(phase2_failure_hint)
         sys.exit(result.returncode)
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
         logger.error(f"{TT_RUN_PREFIX} Interrupted")
+        _emit_phase2_troubleshooting_hint(phase2_failure_hint)
         sys.exit(INTERRUPTED_EXIT_CODE)
     except OSError as e:
-        raise click.ClickException(f"Error launching mpirun: {e}")
+        t = _phase2_troubleshooting_hint_text(phase2_failure_hint)
+        raise click.ClickException(f"Error launching mpirun: {e}" + (f"\n{TT_RUN_PREFIX} {t}" if t else ""))
+
+
+def _log_new_mode_phase2_rerun_command(
+    ctx: click.Context,
+    rank_bindings_path: Path,
+    rankfile_path: Path,
+    phase2_mock_binding_path: Optional[Path],
+    mpi_args: Optional[List[str]],
+    rankfile_syntax: Optional[RankfileSyntax],
+) -> None:
+    """Log the Phase-2-equivalent tt-run line (rank binding + rankfile + --mpi-args + program args)."""
+
+    def _path_for_display(p: Path) -> str:
+        try:
+            return str(p.relative_to(ORIGINAL_CWD))
+        except ValueError:
+            return str(p)
+
+    phase2_parts = ["tt-run", "--rank-binding", _path_for_display(rank_bindings_path)]
+    if phase2_mock_binding_path:
+        phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
+    if rankfile_syntax is not None:
+        syntax_name = (
+            "rankfile"
+            if rankfile_syntax == RankfileSyntax.RANKFILE
+            else "map-by"
+            if rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE
+            else "mca"
+        )
+        phase2_parts.extend(["--rankfile-syntax", syntax_name])
+    mpi_launcher = get_mpi_launcher()
+    rankfile_args = inject_rankfile_mpi_args(
+        rankfile_path,
+        mpi_args or [],
+        mpi_launcher,
+        add_host_slots=False,
+        force_rankfile_syntax=rankfile_syntax,
+    )
+    resolved_rankfile = rankfile_path.resolve()
+    if (
+        rankfile_path.exists()
+        and rankfile_needs_oversubscribe(resolved_rankfile)
+        and "--oversubscribe" not in rankfile_args
+    ):
+        rankfile_args = ["--oversubscribe"] + rankfile_args
+    mpi_args_str = shlex.join(rankfile_args)
+    phase2_parts.extend(["--mpi-args", mpi_args_str])
+    phase2_parts.extend(["--"] + [str(a) for a in ctx.args])
+    logger.info(f"{TT_RUN_PREFIX} To re-run only Phase 2 (skip generate_rank_bindings): {shlex.join(phase2_parts)}")
+
+
+def new_mode_flow(
+    ctx: click.Context,
+    mesh_graph_descriptor: Path,
+    hosts: Optional[List[str]],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
+    skip_mgd_check: bool,
+    bare: bool,
+    tcp_interface: Optional[str],
+    rankfile_syntax: Optional[RankfileSyntax] = None,
+    force_rediscovery: bool = False,
+    tracy_args: Optional[str] = None,
+) -> None:
+    """New mode flow for ttrun using mesh graph descriptor.
+
+    This function implements the new mode of ttrun that uses --mesh-graph-descriptor
+    instead of --rank-binding. It runs generate_rank_bindings (Phase 1) to produce
+    rank_bindings.yaml and rankfile, then calls legacy_flow (Phase 2) with those files.
+
+    Args:
+        ctx: Click context
+        mesh_graph_descriptor: Path to mesh graph descriptor file
+        hosts: List of hostnames (required unless mock_cluster_rank_binding is provided)
+        dry_run: If True, print commands without executing. In new mode, skips Phase 1 side effects when the Phase 1
+            cache misses (no generate_rank_bindings, no cache writes); use a Phase 1 cache hit to dry-run Phase 2 mpirun.
+        verbose: If True, show detailed diagnostics
+        mpi_args: Additional MPI arguments
+        debug_gdbserver: If True, launch with gdbserver for debugging
+        mock_cluster_rank_binding: Optional mock cluster rank binding configuration
+        skip_executable_check: If True, skip program executable validation
+        bare: If True, disable tt-run defaults
+        tcp_interface: Network interface for MPI TCP communication
+        force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
+    """
+    program = ctx.args
+
+    if not program:
+        raise click.ClickException("No program specified. Please provide a program to run.")
+
+    # Resolve mesh_graph_descriptor path
+    resolved_mgd = resolve_path(
+        mesh_graph_descriptor,
+        description="Mesh graph descriptor",
+        must_be_file=True,
+        must_exist=not skip_mgd_check,
+    )
+
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX} New mode: Mesh Graph Descriptor = {resolved_mgd}")
+
+    # Parse mock cluster mapping if provided
+    mock_rank_to_desc: Optional[Dict[int, Path]] = None
+    if mock_cluster_rank_binding:
+        resolved_mock_path = resolve_path(
+            mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
+        )
+        mock_rank_to_desc = load_mock_rank_to_descriptors(resolved_mock_path)
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Mock cluster: {len(mock_rank_to_desc)} ranks")
+
+    hosts_for_phase1: Optional[List[str]] = sorted(hosts) if hosts else None
+    try:
+        fingerprint_full = compute_phase1_cache_fingerprint_full(resolved_mgd, hosts_for_phase1, mock_rank_to_desc)
+    except FileNotFoundError as e:
+        raise click.ClickException(
+            f"Cannot compute Phase 1 cache fingerprint: {e}. "
+            f'"--skip-mgd-check" only skips the initial mesh graph path check; '
+            f"the mesh graph descriptor (and mock cluster descriptor files, if used) must still "
+            f"exist and be readable on this host for Phase 1 caching."
+        ) from e
+    short_id = fingerprint_full[:PHASE1_CACHE_ID_HEX_LEN]
+    ttrun_base = ORIGINAL_CWD / "generated" / "ttrun"
+    short_dir = ttrun_base / short_id
+    full_dir = ttrun_base / fingerprint_full
+    mock_mode = mock_rank_to_desc is not None
+
+    if verbose and hosts_for_phase1:
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 canonical host order (sorted): {','.join(hosts_for_phase1)}")
+
+    # Apply default multihost MPI args to Phase 1 (same as Phase 2) unless --bare
+    phase1_mpi_args: Optional[List[str]] = None
+    if tcp_interface and not bare:
+        validate_network_interface(tcp_interface, verbose=verbose)
+    if not bare:
+        multihost_args = default_multihost_mpi_args(tcp_interface)
+        phase1_mpi_args = multihost_args + (mpi_args or [])
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Phase 1 using multihost MPI args: {' '.join(multihost_args)}")
+    else:
+        phase1_mpi_args = mpi_args
+
+    run_dir: Path
+    phase1_used_cache = False
+    if not force_rediscovery and phase1_cache_hit_valid(short_dir, fingerprint_full, mock_mode):
+        phase1_used_cache = True
+        run_dir = short_dir
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
+        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+    elif not force_rediscovery and phase1_cache_hit_valid(full_dir, fingerprint_full, mock_mode):
+        phase1_used_cache = True
+        run_dir = full_dir
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
+        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+    else:
+        if force_rediscovery:
+            logger.info(
+                f"{TT_RUN_PREFIX} --force-rediscovery: running Phase 1 (generate_rank_bindings) and refreshing cache"
+            )
+        stored_short = read_stored_phase1_cache_key(short_dir)
+        if (
+            short_dir.is_dir()
+            and phase1_outputs_ready(short_dir, mock_mode)
+            and stored_short is not None
+            and stored_short != fingerprint_full
+        ):
+            logger.warning(
+                f"{TT_RUN_PREFIX} Phase 1 cache directory name collision ({short_dir}): "
+                f"another configuration shares the short id. Writing to disambiguated path {full_dir}"
+            )
+            run_dir = full_dir
+        else:
+            run_dir = short_dir
+
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {run_dir}")
+
+        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+
+        if dry_run:
+            logger.info(
+                f"{TT_RUN_PREFIX} Dry-run: skipping Phase 1 (no cache writes, generate_rank_bindings not run). "
+                f"Predicted output directory: {run_dir}"
+            )
+            try:
+                executable = find_generate_rank_bindings_executable()
+                phase1_cmd = build_generate_rank_bindings_mpi_cmd(
+                    executable,
+                    resolved_mgd,
+                    hosts_for_phase1,
+                    run_dir,
+                    mock_rank_to_desc,
+                    phase1_mpi_args,
+                )
+                print_command(
+                    phase1_cmd,
+                    prefix=f"{TT_RUN_PREFIX} Phase 1 (generate_rank_bindings) — dry-run, not executed",
+                )
+            except FileNotFoundError as e:
+                logger.warning(f"{TT_RUN_PREFIX} Dry-run: could not locate generate_rank_bindings ({e})")
+
+            _log_new_mode_phase2_rerun_command(ctx, rank_bindings_path, rankfile_path, None, mpi_args, rankfile_syntax)
+            logger.info(
+                f"{TT_RUN_PREFIX} Dry-run: Phase 2 mpirun command not printed (requires rank_bindings.yaml from "
+                f"Phase 1). Run without --dry-run to execute Phase 1, or use --dry-run after a Phase 1 cache hit to "
+                f"preview mpirun."
+            )
+            return
+
+        run_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(resolved_mgd, run_dir / f"mgd{resolved_mgd.suffix}")
+        if hosts_for_phase1:
+            write_phase1_openmpi_hostfile(run_dir / "hostfile", hosts_for_phase1)
+        try:
+            rank_bindings_path, rankfile_path = run_phase1_generate_rank_bindings(
+                resolved_mgd,
+                hosts_for_phase1,
+                run_dir,
+                subprocess_run=subprocess.run,
+                sleep_secs=5,
+                mock_rank_to_desc=mock_rank_to_desc,
+                mpi_args=phase1_mpi_args,
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
+        write_phase1_cache_key_file(run_dir, fingerprint_full)
+
+    # Phase 2: Use phase2_mock_mapping.yaml from generate_rank_bindings (cluster descriptors used during allocation).
+    # The C++ tool writes this file; ttrun only reads it.
+    phase2_mock_binding_path: Optional[Path] = None
+    if mock_rank_to_desc:
+        generated_phase2_mock_path = run_dir / PHASE2_MOCK_MAPPING_FILENAME
+        if generated_phase2_mock_path.exists():
+            phase2_mock_binding_path = generated_phase2_mock_path
+            if verbose:
+                with open(phase2_mock_binding_path, "r") as f:
+                    phase2_data = yaml.safe_load(f) or {}
+                phase2_mock_mapping = phase2_data.get("rank_to_cluster_mock_cluster_desc", {})
+                logger.info(
+                    f"{TT_RUN_PREFIX} Phase 2 mock mapping: {len(phase2_mock_mapping)} ranks from "
+                    f"generate_rank_bindings"
+                )
+
+    # Log Phase 2-only command for re-runs without re-running generate_rank_bindings
+    _log_new_mode_phase2_rerun_command(
+        ctx, rank_bindings_path, rankfile_path, phase2_mock_binding_path, mpi_args, rankfile_syntax
+    )
+
+    # Stale-cache hint only if Phase 1 was skipped via cache; fresh Phase 1 or --force-rediscovery → no hint.
+    phase2_failure_hint: Phase2FailureHint = "stale_phase1_cache" if phase1_used_cache else None
+
+    legacy_flow(
+        ctx,
+        rank_binding=rank_bindings_path,
+        dry_run=dry_run,
+        verbose=verbose,
+        mpi_args=mpi_args,
+        debug_gdbserver=debug_gdbserver,
+        mock_cluster_rank_binding=phase2_mock_binding_path,  # Pass Phase 2 mock mapping
+        skip_executable_check=skip_executable_check,
+        skip_mgd_check=skip_mgd_check,
+        bare=bare,
+        tcp_interface=tcp_interface,
+        rankfile=rankfile_path,  # Pass generated rankfile
+        rankfile_syntax=rankfile_syntax,
+        phase2_failure_hint=phase2_failure_hint,
+        tracy_args=tracy_args,
+    )
+
+
+@click.command(
+    context_settings=dict(
+        ignore_unknown_options=True,
+        allow_extra_args=True,
+    )
+)
+@click.option(
+    "--rank-binding",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
+)
+@click.option(
+    "--mesh-graph-descriptor",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Mesh graph descriptor file. When provided, enables new mode (mutually exclusive with --rank-binding). "
+    "Requires --hosts unless --mock-cluster-rank-binding is provided.",
+)
+@click.option(
+    "--hosts",
+    type=str,
+    required=False,
+    callback=_parse_hosts_option,
+    help="Comma-separated hostnames for MPI processes (e.g. node1,node2,node3). Empty segments are ignored; "
+    "duplicates, embedded spaces, and control characters are rejected. "
+    "Required for new mode (--mesh-graph-descriptor) unless --mock-cluster-rank-binding is provided. "
+    "Not used in legacy mode (--rank-binding).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print commands without executing. New mode: skips Phase 1 when cache misses (no generate_rank_bindings); "
+    "with a Phase 1 cache hit, prints Phase 2 mpirun only.",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show path resolution diagnostics and tt-run DEBUG logs (launcher process only; worker ranks unchanged)",
+)
+@click.option(
+    "--mpi-args",
+    callback=lambda ctx, param, value: shlex.split(value) if value else None,
+    help="Additional MPI arguments (quoted)",
+)
+@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
+@click.option(
+    "--mock-cluster-rank-binding",
+    required=False,
+    type=click.Path(path_type=Path),
+    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory. "
+    "When used with new mode (--mesh-graph-descriptor), makes --hosts optional.",
+)
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
+@click.option("--skip-mgd-check", is_flag=True, help="Skip the check if MGD file exists on the local host")
+@click.option(
+    "--bare",
+    is_flag=True,
+    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
+)
+@click.option(
+    "--tcp-interface",
+    type=str,
+    default=None,
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
+)
+@click.option(
+    "--rankfile-syntax",
+    type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
+    default="auto",
+    help="Rankfile MPI syntax. 'auto' (default) uses --rankfile for Open MPI 4.x and unknown, "
+    "and --map-by rankfile:file=... for Open MPI 5.x / PRRTE. "
+    "Use 'rankfile' to force --rankfile, 'map-by' to force --map-by rankfile:file=..., "
+    "or 'mca' for --mca rmaps_rankfile_path.",
+)
+@click.option(
+    "--force-rediscovery",
+    is_flag=True,
+    help="New mode only: always run Phase 1 (generate_rank_bindings) and overwrite the Phase 1 cache for "
+    "this MGD/host fingerprint, even if a cache hit would otherwise skip it (e.g. after a host link failure).",
+)
+@click.option(
+    "--tracy",
+    "tracy_args",
+    type=str,
+    default=None,
+    help=(
+        "Enable Tracy profiling for every rank. "
+        "Accepts the full `python -m tracy` argument string (quoted). "
+        "--port/-t and -o/--output-folder are automatically made per-rank "
+        f"(default base port {DEFAULT_TRACY_BASE_PORT}, output $TT_METAL_HOME/generated/profiler/ttrun). "
+        "All other tracy flags are forwarded verbatim. "
+        'Examples: --tracy "-r -v --no-device" or --tracy "" for defaults.'
+    ),
+)
+@click.pass_context
+def main(
+    ctx: click.Context,
+    rank_binding: Optional[Path],
+    mesh_graph_descriptor: Optional[Path],
+    hosts: Optional[List[str]],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
+    skip_mgd_check: bool,
+    bare: bool,
+    tcp_interface: Optional[str],
+    rankfile_syntax: str,
+    force_rediscovery: bool,
+    tracy_args: Optional[str],
+) -> None:
+    """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
+
+    tt-run operates in two modes:
+        - Legacy mode: Use --rank-binding (see legacy_flow function for detailed documentation)
+        - New mode: Use --mesh-graph-descriptor (mutually exclusive with --rank-binding)
+
+    The two modes are mutually exclusive - you must specify exactly one.
+
+    \b
+    Quick Start:
+        # Legacy mode
+        tt-run --rank-binding rank_binding.yaml ./my_app
+
+        # New mode (--mesh-graph-descriptor)
+        tt-run --mesh-graph-descriptor mesh_graph.yaml --hosts node1,node2 ./my_app
+        # Or with mock cluster (makes --hosts optional):
+        tt-run --mesh-graph-descriptor mesh_graph.yaml --mock-cluster-rank-binding mock.yaml ./my_app
+
+    For detailed documentation on legacy mode, see the legacy_flow function docstring.
+    """
+    if not verbose:
+        logger.remove()
+        logger.add(sys.stderr, level="INFO")
+
+    # Check for mutually exclusive options
+    if rank_binding is not None and mesh_graph_descriptor is not None:
+        raise click.ClickException(
+            "--rank-binding and --mesh-graph-descriptor are mutually exclusive. " "Please use only one of them."
+        )
+
+    if rank_binding is None and mesh_graph_descriptor is None:
+        raise click.ClickException(
+            "Either --rank-binding (legacy mode) or --mesh-graph-descriptor (new mode) must be specified."
+        )
+
+    # Legacy mode: use --rank-binding
+    if rank_binding is not None:
+        if force_rediscovery:
+            logger.warning(
+                f"{TT_RUN_PREFIX} --force-rediscovery applies only to new mode (--mesh-graph-descriptor); ignoring."
+            )
+        # Warn if new mode options are used with legacy mode
+        if hosts is not None:
+            logger.warning(
+                f"{TT_RUN_PREFIX} --hosts is ignored in legacy mode (--rank-binding). "
+                "Use --mesh-graph-descriptor to enable new mode."
+            )
+        legacy_flow(
+            ctx,
+            rank_binding,
+            dry_run,
+            verbose,
+            mpi_args,
+            debug_gdbserver,
+            mock_cluster_rank_binding,
+            skip_executable_check,
+            skip_mgd_check,
+            bare,
+            tcp_interface,
+            rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
+            tracy_args=tracy_args,
+        )
+        return
+
+    # New mode: --mesh-graph-descriptor is provided
+    # Validate required arguments for new mode
+    if mesh_graph_descriptor is not None:
+        # --hosts is required unless --mock-cluster-rank-binding is provided
+        if mock_cluster_rank_binding is None and hosts is None:
+            raise click.ClickException(
+                "--hosts is required for new mode (--mesh-graph-descriptor) "
+                "unless --mock-cluster-rank-binding is provided."
+            )
+
+        new_mode_flow(
+            ctx,
+            mesh_graph_descriptor,
+            hosts,
+            dry_run,
+            verbose,
+            mpi_args,
+            debug_gdbserver,
+            mock_cluster_rank_binding,
+            skip_executable_check,
+            skip_mgd_check,
+            bare,
+            tcp_interface,
+            rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
+            force_rediscovery=force_rediscovery,
+            tracy_args=tracy_args,
+        )
+        return
 
 
 if __name__ == "__main__":

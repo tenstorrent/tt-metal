@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/dprint.h"  // required in all kernels using DPRINT
+#include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
 #include "api/dataflow/dataflow_api.h"
 
 // Helper function to copy a tile from one CB to another CB (eg. input CB to output CB) via L1.
@@ -47,19 +47,21 @@ void kernel_main() {
 
     ////////// PRINT TILE (8-ELEMENT-STRIDED TILE SLICE) //////////
     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(0), .h1 = static_cast<uint8_t>(32), .hs = 8, .w0 = 0, .w1 = 32, .ws = 8};
-    DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false);
+    DEVICE_PRINT("Tile slice:\n{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 
     ////////// PRINT TILE (FULL TILE) //////////
     // for (uint8_t r = 0; r < 32; ++r) {
     //     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0,
-    //     .w1 = 32, .ws = 1}; DPRINT_DATA0({ DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR,
-    //     true, false); });
+    //     .w1 = 32, .ws = 1};
+    //     DEVICE_PRINT_DATA0("{}\n", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
     // }
 
     cb_push_back(cb_id_in0, 1);
 
-    DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
-           << "): Inbound kernel has received and acknowledged its tile." << ENDL() << ENDL();
+    DEVICE_PRINT(
+        "CORE ({},{}): Inbound kernel has received and acknowledged its tile.\n\n",
+        get_absolute_logical_x(),
+        get_absolute_logical_y());
 
     ////////// COPY TILE TO OUTBOUND KERNEL'S CB //////////
     cb_reserve_back(cb_id_out0, 1);

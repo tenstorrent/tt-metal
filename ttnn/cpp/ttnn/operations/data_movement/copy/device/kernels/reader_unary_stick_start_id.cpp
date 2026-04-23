@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -16,6 +17,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    experimental::CircularBuffer cb_in0(cb_id_in0);
 
     typedef ShardedInfo<
         get_compile_time_arg_val(2),
@@ -41,12 +43,12 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_shards; k++) {
 #endif
             uint32_t stick_index = i * num_shards + k;
-            cb_reserve_back(cb_id_in0, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            cb_in0.reserve_back(1);
+            uint32_t l1_write_addr = cb_in0.get_write_ptr();
             uint64_t src_noc_addr = s0.get_noc_addr(stick_index);
             noc_async_read(src_noc_addr, l1_write_addr, stick_size);
             noc_async_read_barrier();
-            cb_push_back(cb_id_in0, 1);
+            cb_in0.push_back(1);
         }
     }
 }

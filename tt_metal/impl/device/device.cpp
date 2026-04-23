@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -35,6 +36,9 @@
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "memory_tracking/memory_stats_shm.hpp"
+#include "memory_tracking/shm_tracking_processor.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -66,9 +70,6 @@ namespace tt::tt_metal {
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
-
-Device::Device(Device&& other) noexcept = default;
-Device& Device::operator=(Device&& other) noexcept = default;
 
 Device::Device(
     MetalEnv* env,
@@ -154,7 +155,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
         worker_l1_unreserved_start,
         {l1_bank_remap.begin(), l1_bank_remap.end()});
     config.allocator_mode =
-        tt::parse_env("TT_METAL_ALLOCATOR_MODE_HYBRID", false) ? AllocatorMode::HYBRID : AllocatorMode::LOCKSTEP;
+        context_->rtoptions().get_allocator_mode_hybrid() ? AllocatorMode::HYBRID : AllocatorMode::LOCKSTEP;
 
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
@@ -241,11 +242,11 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 }
 
 void Device::init_command_queue_host() {
-    // SystemMemoryManager now has internal stubs for mock devices
+    // SystemMemoryManager now has internal stubs for mock/emulated devices
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
 
-    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
-    if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -464,6 +465,61 @@ bool Device::initialize(
         return true;
     }
 
+    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
+    if (!MetalContext::instance().rtoptions().get_shm_tracking_disabled()) {
+        // Use UMD's chip_unique_ids for globally unique chip identification.
+        // This ID is computed by topology discovery from hardware-reported board_id and asic_location,
+        // and is consistent across all board types (P300, N300, UBB Wormhole, UBB Blackhole, etc.).
+        uint64_t asic_id = 0;
+
+        try {
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            auto* cluster_desc = cluster.get_cluster_desc();
+
+            if (cluster_desc) {
+                const auto& unique_ids = cluster_desc->get_chip_unique_ids();
+                auto it = unique_ids.find(this->id_);
+                if (it != unique_ids.end()) {
+                    asic_id = it->second;
+                    log_debug(
+                        tt::LogMetal,
+                        "Device {}: using UMD chip_unique_id=0x{:x} for SHM tracking",
+                        this->id_,
+                        asic_id);
+                } else {
+                    asic_id = this->id_;
+                    log_warning(
+                        tt::LogMetal, "Device {} not found in chip_unique_ids, using device_id as asic_id", this->id_);
+                }
+            } else {
+                asic_id = this->id_;
+                log_warning(
+                    tt::LogMetal,
+                    "ClusterDescriptor not available for device {}, using device_id as asic_id",
+                    this->id_);
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "Error getting asic_id for device {}: {}. Using device_id as fallback.",
+                this->id_,
+                e.what());
+            asic_id = this->id_;
+        }
+
+        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_);
+        log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
+
+        // Register ShmTrackingProcessor globally once (when first device with SHM is created)
+        static bool shm_processor_registered = false;
+        if (!shm_processor_registered) {
+            tt::tt_metal::GraphTracker::instance().push_processor(
+                std::make_shared<tt::tt_metal::ShmTrackingProcessor>());
+            log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
+            shm_processor_registered = true;
+        }
+    }
+
     this->initialized_ = true;
 
     return true;
@@ -484,6 +540,10 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
+
+    // Clean up shared memory stats provider
+    this->shm_stats_provider_.reset();
+
     this->initialized_ = false;
 
     return true;
@@ -789,7 +849,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
         bool noc_translation_enabled = true;
-        if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (!MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
             noc_translation_enabled =
                 MetalEnvAccessor(*env_).impl().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
                     this->id());
@@ -869,5 +929,75 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
+// Program tracking for accurate CB memory reporting
+void Device::register_program(detail::ProgramImpl* program) {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    active_programs_.insert(program);
+}
+
+void Device::unregister_program(detail::ProgramImpl* program) {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    active_programs_.erase(program);
+}
+
+uint64_t Device::get_total_cb_allocated() const {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+
+    // For PHYSICAL CB tracking accounting for address reuse:
+    // Collect L1 regions per core and merge overlapping addresses
+    // This handles cached/traced programs that share the same physical L1 addresses on the same core
+
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
+
+    for (const auto* program : active_programs_) {
+        size_t num_devices = program->get_num_cb_devices();
+
+        // Get L1 regions per core for this program on this device
+        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
+
+        // Merge into device-wide map
+        for (const auto& [core, regions] : program_regions) {
+            auto& core_regions = device_regions_per_core[core];
+            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
+        }
+    }
+
+    // Merge overlapping regions per core to get actual physical usage
+    uint64_t total_physical = 0;
+
+    for (auto& [core, regions] : device_regions_per_core) {
+        if (regions.empty()) {
+            continue;
+        }
+
+        // Sort by start address
+        std::sort(regions.begin(), regions.end());
+
+        // Merge overlapping ranges
+        std::vector<std::pair<uint64_t, uint64_t>> merged;
+        merged.push_back(regions[0]);
+
+        for (size_t i = 1; i < regions.size(); i++) {
+            auto& last = merged.back();
+            const auto& current = regions[i];
+
+            if (current.first <= last.second) {
+                // Overlapping - merge
+                last.second = std::max(last.second, current.second);
+            } else {
+                // Non-overlapping - add new region
+                merged.push_back(current);
+            }
+        }
+
+        // Sum merged regions for this core
+        for (const auto& [start, end] : merged) {
+            total_physical += (end - start);
+        }
+    }
+
+    return total_physical;
+}
 
 }  // namespace tt::tt_metal
