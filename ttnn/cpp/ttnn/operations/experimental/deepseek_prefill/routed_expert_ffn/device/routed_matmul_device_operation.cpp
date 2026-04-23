@@ -98,18 +98,29 @@ ttnn::Tensor routed_matmul(
     uint32_t curr_expert_iter,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    const tt::tt_metal::MemoryConfig& output_memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config,
+    std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<tt::tt_metal::DataType>& output_dtype) {
     namespace rmm = ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::device;
     using OperationType = rmm::RoutedMatmulDeviceOperation;
 
     const tt::tt_metal::DataType out_dtype = output_dtype.value_or(a.dtype());
 
+    // Resolve output_memory_config: explicit → caller's value; else inherit from
+    // optional_output_tensor (device op will use that tensor anyway); else
+    // default to DRAM interleaved.
+    const tt::tt_metal::MemoryConfig resolved_output_mem_cfg =
+        output_memory_config.has_value()
+            ? output_memory_config.value()
+            : (optional_output_tensor.has_value()
+                   ? optional_output_tensor->memory_config()
+                   : tt::tt_metal::MemoryConfig{
+                         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+
     return ttnn::device_operation::launch<OperationType>(
         rmm::RoutedMatmulParams{
-            program_config, compute_kernel_config, output_memory_config, out_dtype, curr_expert_iter},
-        rmm::RoutedMatmulInputs{a, b, max_expert_iter, optional_output_tensor});
+            program_config, compute_kernel_config, resolved_output_mem_cfg, out_dtype, curr_expert_iter},
+        rmm::RoutedMatmulInputs{a, b, max_expert_iter, std::move(optional_output_tensor)});
 }
 
 }  // namespace ttnn::prim

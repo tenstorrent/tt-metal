@@ -23,16 +23,16 @@ ttnn::Tensor routed_expert_ffn_bh(
     std::optional<ttnn::Tensor> output,
     const std::optional<ttnn::Tensor>& max_expert_iter) {
     const bool use_routed = max_expert_iter.has_value();
-    // Blackhole compute grid is fixed at 11x8 = 88 cores. All configs below
-    // are tuned for this grid; bail loudly if the device can't supply it.
-    // gate/up is output-sharded with per_core_N = div_up(N_gate, GRID_X),
-    // which is legal because input A is DRAM-interleaved (the "no padding"
-    // / Kt-divisibility asserts only fire for sharded input A). The multiply
-    // then reshards the block-sharded gate_result + up_result into L1
-    // interleaved, after which down runs with an unsharded input A — no
-    // divisor constraint on in0_block_w.
+    // Blackhole compute grid is 11x10 = 110 cores (test config; was 11x8 = 88).
+    // All configs below are tuned for this grid; bail loudly if the device
+    // can't supply it. gate/up is output-sharded with
+    // per_core_N = div_up(N_gate, GRID_X), which is legal because input A is
+    // DRAM-interleaved (the "no padding" / Kt-divisibility asserts only fire
+    // for sharded input A). The multiply then reshards the block-sharded
+    // gate_result + up_result into L1 interleaved, after which down runs
+    // with an unsharded input A — no divisor constraint on in0_block_w.
     constexpr uint32_t GRID_X = 11;
-    constexpr uint32_t GRID_Y = 8;
+    constexpr uint32_t GRID_Y = 10;
     const auto grid_size = x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
@@ -177,35 +177,36 @@ ttnn::Tensor routed_expert_ffn_bh(
         .fuse_batch = false,
     };
 
+    ttnn::Tensor result;
     if (use_routed) {
-        // down matmul output goes to DRAM interleaved (or the caller-provided output).
-        const auto down_out_mem_cfg =
-            output.has_value() ? output->memory_config()
-                               : tt::tt_metal::MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-        return routed_matmul(
+        // output_memory_config omitted — the device op inherits it from the
+        // caller-provided optional_output_tensor, or defaults to DRAM interleaved.
+        result = routed_matmul(
             /*a=*/activated,
             /*b=*/down_proj,
             /*max_expert_iter=*/max_expert_iter.value(),
             /*curr_expert_iter=*/curr_expert_iter,
             /*program_config=*/down_config,
             /*compute_kernel_config=*/compute_kernel_config.value(),
-            /*output_memory_config=*/down_out_mem_cfg,
+            /*output_memory_config=*/std::nullopt,
+            /*optional_output_tensor=*/std::move(output));
+    } else {
+        result = ttnn::matmul(
+            /*input_tensor_a=*/activated,
+            /*input_tensor_b=*/down_proj,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*memory_config=*/std::nullopt,
+            /*dtype=*/std::nullopt,
+            /*program_config=*/down_config,
+            /*activation=*/std::nullopt,
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*core_grid=*/std::nullopt,
+            /*output_tile=*/std::nullopt,
             /*optional_output_tensor=*/std::move(output));
     }
-
-    return ttnn::matmul(
-        /*input_tensor_a=*/activated,
-        /*input_tensor_b=*/down_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/std::nullopt,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/down_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
-        /*output_tile=*/std::nullopt,
-        /*optional_output_tensor=*/std::move(output));
+    activated.deallocate(/*force=*/true);
+    return result;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

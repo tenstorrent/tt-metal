@@ -27,8 +27,12 @@ ttnn::Tensor routed_matmul(
     uint32_t curr_expert_iter,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    const tt::tt_metal::MemoryConfig& output_memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+    // Output memory config. Optional: when an optional_output_tensor is also
+    // provided the device op ignores output_memory_config for allocation; when
+    // omitted we fall back to the optional tensor's config, or to DRAM
+    // interleaved if there's no optional tensor either.
+    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,
+    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
