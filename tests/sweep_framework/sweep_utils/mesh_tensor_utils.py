@@ -48,7 +48,7 @@ def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[tt
             # e.g., "['PlacementShard(2)', 'PlacementShard(3)']" -> shard on dims 2,3
             import re
 
-            shard_dims = re.findall(r"PlacementShard\((-?\d+)\)", placement_str)
+            shard_dims = re.findall(r"PlacementShard\((?:dim=)?(-?\d+)\)", placement_str)
 
             if shard_dims:
                 # For 2D mesh, we typically shard on the last dimension(s)
@@ -125,7 +125,7 @@ def _parse_shard_dim(placement_str: str) -> int:
     """Extract shard dimension from placement string, handling negative dims."""
     import re
 
-    shard_dims = re.findall(r"PlacementShard\((-?\d+)\)", placement_str)
+    shard_dims = re.findall(r"PlacementShard\((?:dim=)?(-?\d+)\)", placement_str)
     return int(shard_dims[-1]) if shard_dims else -1
 
 
@@ -219,7 +219,7 @@ def create_tensor_on_mesh(
         traced_cols = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else 1
         mesh_compatible = actual_rows >= traced_rows and actual_cols >= traced_cols
 
-        entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
+        entries = re.findall(r"Placement(?:Shard\((?:dim=)?-?\d+\)|Replicate(?:\(\))?)", placement_str)
 
         dist_raw = tensor_placement.get("distribution_shape", "")
         if isinstance(dist_raw, str):
@@ -239,7 +239,7 @@ def create_tensor_on_mesh(
         elif len(entries) >= 2:
             dims = []
             for entry in entries[:2]:
-                shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+                shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entry)
                 if shard_match:
                     dims.append(int(shard_match.group(1)))
                 else:
@@ -257,7 +257,7 @@ def create_tensor_on_mesh(
 
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
-            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entries[0])
+            shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entries[0])
             if shard_match:
                 dim = int(shard_match.group(1))
                 dims_tuple = (None, dim)

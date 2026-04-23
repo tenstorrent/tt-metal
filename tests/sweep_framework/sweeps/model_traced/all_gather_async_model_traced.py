@@ -100,7 +100,7 @@ def _parse_shard_dims_from_placement(tensor_placement):
     if isinstance(placement, list):
         placement = " ".join(str(p) for p in placement)
     dims = []
-    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", placement):
         if m.group(1) is not None:
             dims.append(int(m.group(1)))
         else:
