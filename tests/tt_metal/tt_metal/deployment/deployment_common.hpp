@@ -74,4 +74,14 @@ uint64_t read_eth_l1_u64(tt::tt_metal::IDevice* const device, const CoreCoord& c
     return (uint64_t)delta_vec[0] | ((uint64_t)delta_vec[1] << 32);
 }
 
+[[maybe_unused]]
+void get_env(const char* varname, uint32_t* var) {
+    const char* p = std::getenv(varname);
+    if (p) {
+        std::string snum(p);
+        *var = stoul(snum);
+        log_info(tt::LogTest, "{} {}", varname, *var);
+    }
+}
+
 #endif /* _DEPLOYMENT_COMMON_H */
