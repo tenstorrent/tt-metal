@@ -749,17 +749,24 @@ def prepare_attention_weights(
                 kv_b1 = kv_b1[:_MLA_TP1_KV_B1_HEIGHT, :].contiguous()
             if kv_b2.shape[1] == _MLA_TP1_KV_B2_WIDTH * 2:
                 kv_b2 = kv_b2[:, :_MLA_TP1_KV_B2_WIDTH].contiguous()
+        # KV RMSNorm has DoGamma=false: fold kv_norm into kv_b weights so the
+        # kernel computes rmsnorm_no_gamma(c_kv) @ kv_b_folded instead of
+        # rmsnorm_with_gamma(c_kv) @ kv_b_unfolded.  The KV cache stores the
+        # un-scaled c_kv/rms, which matches AttentionBlock.golden's rmsnorm_no_gamma path.
+        kv_norm = t[kv_norm_key]  # (kv_lora_rank,)
+        kv_b1 = kv_b1 * kv_norm  # (rows, kv_lora_rank) * (kv_lora_rank,)
+        kv_b2 = kv_b2 * kv_norm.reshape(-1, 1)  # (kv_lora_rank, cols) * (kv_lora_rank, 1)
         return preprocess_kv_b12(kv_b1, kv_b2, mla_tp)
 
     kv_fp = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(kv_b_key,)),
+        source=SourceTensorSelection(names=(kv_b_key, kv_norm_key)),
         target=KV_B12_SPEC,
     )
     kv_views = cache_config.cache.get_or_create(
         kv_fp,
         device,
         preprocess=_preprocess_kv_b12,
-        raw_tensors=lambda: {kv_b_key: state_dict[kv_b_key]},
+        raw_tensors=lambda: {kv_b_key: state_dict[kv_b_key], kv_norm_key: state_dict[kv_norm_key]},
     )
     if not isinstance(kv_views, dict):
         raise TypeError("expected dict[str, OverlappedTensor] for kv_b12 cache entry")

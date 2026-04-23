@@ -1045,7 +1045,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
+        0,  // gamma_cb unused (DoGamma=false)
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
         false>;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
@@ -1053,16 +1053,16 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm2_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),
+        0,  // gamma_cb unused (DoGamma=false)
         get_named_compile_time_arg_val("rmsnorm2_output_cb"),
         false>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
-        get_common_arg_val<uint32_t>(0),   // epsilon
-        get_common_arg_val<float>(1),      // scalar (1/sqrt(7168))
-        get_common_arg_val<uint32_t>(16),  // rmsnorm_gamma_addr
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
+        0,                                // gamma_addr unused (DoGamma=false)
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -1103,9 +1103,9 @@ void kernel_main() {
 
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
-        get_common_arg_val<uint32_t>(0),   // epsilon (same as rmsnorm1)
-        get_common_arg_val<float>(2),      // scalar (1/sqrt(1536))
-        get_common_arg_val<uint32_t>(17),  // rmsnorm2_gamma_addr
+        get_common_arg_val<uint32_t>(0),  // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),     // scalar (1/sqrt(1536))
+        0,                                // gamma_addr unused (DoGamma=false)
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -1182,15 +1182,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
+        0,  // gamma_cb unused (DoGamma=false)
         get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
         false>;
 
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
-        get_common_arg_val<uint32_t>(0),   // epsilon
-        get_common_arg_val<float>(3),      // kv_scalar (1/sqrt(512))
-        get_common_arg_val<uint32_t>(18),  // kv_rmsnorm_gamma_addr
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
+        0,                                // gamma_addr unused (DoGamma=false)
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::

@@ -12,7 +12,6 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
-    cb_descriptor_from_overlapped_tensor,
     cb_descriptor_from_overlapped_tensors,
     record_cb_metadata,
 )
@@ -906,7 +905,6 @@ class AttentionBlock:
 
         # CB indices (grouped by stage)
         input_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
-        gamma_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
         rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)
         # Matmul1 + gather-reduce + RMSNorm2 path
         matmul_weights_cb_overlapped = cb_id_context.get_cb_id(
@@ -914,9 +912,6 @@ class AttentionBlock:
         )
         matmul_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         matmul_input_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
-        rmsnorm2_gamma_cb = cb_id_context.get_cb_id(
-            data_format, TD_16x32
-        )  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
         rmsnorm2_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for RMSNorm2
         gather_reduce_scratch_cb = cb_id_context.get_cb_id(
             data_format, TD_16x32
@@ -957,7 +952,6 @@ class AttentionBlock:
         # KV cache branch
         dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
-        kv_rmsnorm_gamma_cb = rmsnorm2_gamma_cb
         kv_rmsnorm_output_cb = rmsnorm2_output_cb  # Reuse rmsnorm2 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         krope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: krope_grid col 8, rows 8-9)
         create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
@@ -1118,7 +1112,6 @@ class AttentionBlock:
         # RMSNorm reader compile-time args (named args for NCRISC)
         rmsnorm_reader_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_num_tiles", num_tiles),
         ]
 
@@ -1353,7 +1346,6 @@ class AttentionBlock:
         # RMSNorm compute compile-time args (named args for TRISC)
         rmsnorm_compute_named_compile_time_args = [
             ("rmsnorm_input_cb", input_cb),
-            ("rmsnorm_gamma_cb", gamma_cb),
             ("rmsnorm_output_cb", rmsnorm_output_cb),
             ("rmsnorm_fp32_acc", 1 if fp32_dest_acc_en else 0),
             ("rmsnorm_num_tiles", num_tiles),
@@ -1364,13 +1356,11 @@ class AttentionBlock:
         # Uses separate CBs with exact sizes for testing
         rmsnorm2_ncrisc_named_compile_time_args = [
             ("rmsnorm2_input_cb", rmsnorm2_input_cb),
-            ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
             ("rmsnorm2_output_cb", rmsnorm2_output_cb),
             ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
         ]
         rmsnorm2_trisc_named_compile_time_args = [
             ("rmsnorm2_input_cb", rmsnorm2_input_cb),
-            ("rmsnorm2_gamma_cb", rmsnorm2_gamma_cb),
             ("rmsnorm2_output_cb", rmsnorm2_output_cb),
             ("rmsnorm2_num_tiles", rmsnorm2_num_tiles),
         ]
@@ -1455,13 +1445,11 @@ class AttentionBlock:
 
         kv_rmsnorm_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
-            ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
         ]
         kv_rmsnorm_trisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
-            ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
         ]
@@ -2004,7 +1992,6 @@ class AttentionBlock:
         # Reference tensors from device 0 for CB descriptor creation
         # (all devices have identical buffer addresses, sizes, and layouts)
         ref_input_tensor = input_tensors_per_device[0]
-        ref_gamma_fused_tensor = gamma_fused_tensors_per_device[0]
         ref_fused_weights_tensor = fused_weights_tensors_per_device[0]
         ref_kv_b12_fused_tensor = kv_b12_fused_tensors_per_device[0]
         ref_trans_mat_tensor = trans_mat_tensors_per_device[0]
@@ -2078,18 +2065,6 @@ class AttentionBlock:
         # When forwarding metadata, the socket writes activation + metadata contiguously.
         # The metadata sits right after the activation data in the input CB's backing buffer.
         forwarded_metadata_l1_addr = input_cb_l1_addr + activation_size if forward_metadata else None
-
-        # CB: Gamma (backed by fused overlapped tensor)
-        gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(gamma_cb, gamma_tensor, ref_gamma_fused_tensor)
-        gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
-        gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
-
-        # CB: RMSNorm2 Gamma (backed by fused overlapped tensor)
-        rmsnorm2_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-            rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor, ref_gamma_fused_tensor
-        )
-        rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
-        rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
         # CB: CCL broadcast packet buffer.
         # This op builds device-invariant descriptor templates from reference tensors;
@@ -3376,12 +3351,10 @@ class AttentionBlock:
         # CB list assembly (device-invariant)
         # ========================================================================
         cbs_list = [
-            gamma_cb_descriptor,
             rmsnorm_output_cb_descriptor,
             fused_matmul_weights_cb_descriptor,
             matmul_output_cb_descriptor,
             matmul_input_cb_descriptor,
-            rmsnorm2_gamma_cb_descriptor,
             rmsnorm2_input_cb_descriptor,
             gather_reduce_scratch_cb_descriptor,
             rmsnorm2_output_cb_descriptor,
@@ -3493,13 +3466,9 @@ class AttentionBlock:
                     return t.buffer_address()
 
                 fused_weights_base_addr = _fused_base_addr(ref_fused_weights_tensor)
-                gamma_base_addr = _fused_base_addr(ref_gamma_fused_tensor)
                 matmul_weights_addr = fused_weights_base_addr + matmul_weights_tensor.byte_offset
                 matmul2_weights_addr = fused_weights_base_addr + matmul2_weights_tensor.byte_offset
                 dkv_matmul_weights_addr = fused_weights_base_addr + dkv_matmul_weights_tensor.byte_offset
-                gamma_addr = gamma_base_addr + gamma_tensor.byte_offset
-                rmsnorm2_gamma_addr = gamma_base_addr + rmsnorm2_gamma_tensor.byte_offset
-                kv_rmsnorm_gamma_addr = gamma_base_addr + dkv_rmsnorm_gamma_tensor.byte_offset
                 matmul3_weights_addr = _fused_base_addr(ref_kv_b12_fused_tensor) + matmul3_weights_tensor.byte_offset
                 matmul4_weights_addr = (
                     _fused_base_addr(ref_post_sdpa_weights1_fused_tensor) + post_sdpa_weights1_tensor.byte_offset
@@ -3527,9 +3496,6 @@ class AttentionBlock:
                     matmul4_weights_addr,  # idx 13
                     matmul5_weights_addr,  # idx 14
                     qrope_trans_mat_addr,  # idx 15
-                    gamma_addr,  # idx 16
-                    rmsnorm2_gamma_addr,  # idx 17
-                    kv_rmsnorm_gamma_addr,  # idx 18
                 ]
 
                 qrope_ncrisc_addr_args = [
