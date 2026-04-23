@@ -7,6 +7,7 @@
 #include <circular_buffer_constants.h>
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
