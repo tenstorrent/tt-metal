@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.5.3"
+        default: "v1.5.4"
       job-timeout:
         required: false
         type: number
@@ -195,7 +195,8 @@ jobs:
   ttnn-pytests:
     needs: define-ttsim-ttnn-tests
     if: ${{ inputs.run-ttsim-integration-tests }}
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     env:
       TTSIM_SKIP_LIST_YAML: tests/pipeline_reorg/ttsim-skip-list.yaml
     timeout-minutes: ${{ matrix.test-group.timeout || inputs.job-timeout }}
@@ -240,6 +241,10 @@ jobs:
         with:
           path: .
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
+          # This allows different retention policies for runtime JIT vs. C++ build artifacts
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
+          enable-kernel-ccache: true
 
       - name: Apply ttsim WH workaround patches
         run: |
@@ -299,11 +304,19 @@ jobs:
           ${{ matrix.test-group.serial_cmd }} -p no:timeout --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
           exit 1
 
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
+
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -339,6 +352,10 @@ jobs:
           path: .
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-kernel-ccache: true
+          # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
+          # This allows different retention policies for runtime JIT vs. C++ build artifacts
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
 
       - name: Compute ttsim asset name
         id: ttsim-asset
@@ -382,11 +399,20 @@ jobs:
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
           fi
+
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"
+
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Galaxy C++ tests - ${{ matrix.arch }}"
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -425,6 +451,10 @@ jobs:
           path: .
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-kernel-ccache: true
+          # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
+          # This allows different retention policies for runtime JIT vs. C++ build artifacts
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
 
       - name: Compute ttsim asset name
         id: ttsim-asset
@@ -450,3 +480,10 @@ jobs:
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"
+
+      - name: 📊 CCache Report
+        if: ${{ !cancelled() }}
+        run: |
+          echo "::group::CCache Statistics"
+          ccache --show-stats || echo "ccache stats not available"
+          echo "::endgroup::"

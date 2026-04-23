@@ -76,6 +76,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/jit_build/jit_build_utils.hpp"
+#include "impl/jit_server/remote_compile_coordinator.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -161,9 +163,49 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     }
 }
 
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+// Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
+void generate_kernel_source_files(
+    IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
+    const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+    jit_build_genfiles_descriptors(env, build_options);
+    if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
+    } else {
+        jit_build_genfiles_kernel_include(env, *kernel, kernel->kernel_source());
+    }
+}
+
+// Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
+KernelCompileDescriptor build_kernel_descriptor(
+    IDevice* device,
+    const std::shared_ptr<Kernel>& kernel,
+    const JitBuildOptions& build_options,
+    std::size_t kernel_hash) {
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+
+    KernelCompileDescriptor desc;
+    desc.kernel_hash = kernel_hash;
+    desc.request.build_key = build_env.build_key();
+    desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
+    desc.request.gpp = build_env.build_env.get_gpp();
+    static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
+    desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+    desc.output_dir = build_options.path;
+
+    int num_binaries = kernel->expected_num_binaries();
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
+        desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    return desc;
+}
 
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
@@ -1443,9 +1485,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1799,54 +1840,86 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
+    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().is_mock_or_emulated();
+    bool remote_enabled = jit_server::JitCompileRpcClient::enabled() && !is_mock;
     std::vector<std::shared_future<void>> events;
 
-    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
-                   tt::TargetDevice::Mock;
+    auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
+        JitBuildOptions build_options(build_env.build_env);
+        kernel->set_build_options(build_options);
+        if (this->compiled_.empty()) {
+            this->set_remote_circular_buffer_init(kernel);
+        }
+        this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+        this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+        this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+        this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
 
-    for (auto& kernels : kernels_) {
-        for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(force_slow_dispatch, kernel);
-            launch_build_step(
-                [kernel, device, this, &build_env, is_mock] {
-                    JitBuildOptions build_options(build_env.build_env);
-                    kernel->set_build_options(build_options);
-                    if (this->compiled_.empty()) {
-                        this->set_remote_circular_buffer_init(kernel);
-                    }
-                    this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+        kernel->set_full_name(kernel_path_suffix);
+        build_options.set_name(kernel_path_suffix);
 
-                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-                    kernel->set_full_name(kernel_path_suffix);
-                    build_options.set_name(kernel_path_suffix);
+        return std::pair{std::move(build_options), kernel_hash};
+    };
 
-                    if (!is_mock) {
-                        kernel->register_kernel_elf_paths_with_watcher(*device);
-                    }
+    if (remote_enabled) {
+        // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
+        // server.
+        auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+        TT_FATAL(
+            !endpoints.empty(),
+            "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
+            "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
+        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
 
-                    jit_build_once(kernel_hash, [&] {
+        std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
+
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                auto [build_options, kernel_hash] = prep_kernel(kernel);
+                kernel->register_kernel_elf_paths_with_watcher(*device);
+
+                generate_kernel_source_files(device, build_options, kernel);
+                auto desc = build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                coordinator.submit(std::move(desc));
+                submitted_kernels.emplace_back(kernel, std::move(build_options));
+            }
+        }
+
+        coordinator.finish();
+
+        for (const auto& [kernel, build_options] : submitted_kernels) {
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+        }
+    } else {
+        // Local path: parallel build via thread pool.
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                launch_build_step(
+                    [&, kernel] {
+                        auto [build_options, kernel_hash] = prep_kernel(kernel);
+
                         if (!is_mock) {
-                            GenerateBinaries(device, build_options, kernel);
+                            kernel->register_kernel_elf_paths_with_watcher(*device);
+                            jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
                         } else {
                             // Create empty stub binaries for mock devices
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
-                    });
-
-                    Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                },
-                events);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                    },
+                    events);
+            }
         }
+        sync_build_steps(events);
     }
-    sync_build_steps(events);
 
-    // Mock devices don't have binaries to read
+    // Mock/emulated devices don't have binaries to read.
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
