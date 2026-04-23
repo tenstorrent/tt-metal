@@ -74,6 +74,12 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # The master trace may record output_tensor=None and min=None as explicit kwargs.
+    # build_op_kwargs filters None values, so add them back when present in the test vector.
+    for key in ("output_tensor", "min"):
+        if key in kwargs and kwargs[key] is None and key not in op_kwargs:
+            op_kwargs[key] = None
+
     # Extract min/max from op_kwargs for golden computation (avoid shadowing Python built-ins)
     min_val = op_kwargs.get("min", None)
     max_val = op_kwargs.get("max", None)
