@@ -179,17 +179,19 @@ void prepare_weighted_coeffs_for_row() {
 //     coeff2 * x^3 + coeff1 * x^2 + coeff0 * x + bias.
 // - Emit one output tile to cb_output at the matching block index.
 //
-// Register schedule (4 regs):
-//   reg_acc   — running output accumulator.
-//   reg_x     — loaded once from cb_input_pass_2.
-//   reg_tmp   — holds x^2 across term3 and term2 (saves one recomputation per tile),
-//               then gets reused for per-term partial products.
-//   reg_bcast — column-broadcast scalar (coeff_k) or full-tile scalar (bias).
+// Uses Horner's method:
+//   y = coeff2·x^3 + coeff1·x^2 + coeff0·x + bias
+//     = x·(coeff0 + x·(coeff1 + x·coeff2)) + bias
+// This cuts the inner-loop multiplication count from 5 to 3 per output tile.
+//
+// Register schedule (3 regs used, 1 spare):
+//   reg_acc — running Horner accumulator.
+//   reg_x   — loaded once from cb_input_pass_2.
+//   reg_tmp — per-step scratch (coeff_k bcast, then bias).
 void emit_output_for_row() {
     constexpr uint32_t reg_acc = 0U;
     constexpr uint32_t reg_x = 1U;
     constexpr uint32_t reg_tmp = 2U;
-    constexpr uint32_t reg_bcast_or_scalar = 3U;
 
     cb_wait_front(cb_weighted_coeffs, /*num_tiles=*/3U);
 
@@ -200,43 +202,38 @@ void emit_output_for_row() {
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             tile_regs_acquire();
 
-            // Load x and precompute x^2 once; x^2 stays in reg_tmp and is reused by term2.
+            // Seed the accumulator with coeff2 (cubic branch) and load x once.
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
-            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_bcast_or_scalar);
+            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_acc);
             copy_tile_init(cb_input_pass_2);
             copy_tile(cb_input_pass_2, block_idx, reg_x);
-            mul_binary_tile_init();
-            mul_binary_tile(reg_x, reg_x, reg_tmp);  // reg_tmp = x^2 (kept for term2)
 
-            // term3 (cubic branch): coeff2 * x^3, using x^2 kept in reg_tmp.
-            // reg_acc = x^3 via (x^2 * x), then multiplied by coeff2.
-            reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
+            // Horner step 1: acc = x · coeff2.
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg_x, reg_acc);                // reg_acc = x^3
-            mul_binary_tile(reg_acc, reg_bcast_or_scalar, reg_acc);  // reg_acc = coeff2 * x^3
+            mul_binary_tile(reg_acc, reg_x, reg_acc);
 
-            // term2 (quadratic branch): coeff1 * x^2 (reuses reg_tmp = x^2 from above).
+            // Horner step 2: acc = coeff1 + x·coeff2; then acc *= x.
+            // Re-init bcast because the preceding copy_tile_init changed srcA to cb_input_pass_2.
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
-            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_bcast_or_scalar);
-            reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
-            mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // reg_tmp = coeff1 * x^2
+            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
-
-            // term1 (linear branch): coeff0 * x.
-            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
-            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_bcast_or_scalar);
-            reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_x, reg_bcast_or_scalar, reg_tmp);  // reg_tmp = coeff0 * x
+            mul_binary_tile(reg_acc, reg_x, reg_acc);
+
+            // Horner step 3: acc = coeff0 + x·(coeff1 + x·coeff2); then acc *= x.
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_tmp);
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
+            mul_binary_tile_init();
+            mul_binary_tile(reg_acc, reg_x, reg_acc);
 
             // Final affine shift and output write for this tile.
             copy_tile_init(cb_bias);
-            copy_tile(cb_bias, 0, reg_bcast_or_scalar);
-            add_binary_tile(reg_acc, reg_bcast_or_scalar, reg_acc);
+            copy_tile(cb_bias, 0, reg_tmp);
+            add_binary_tile_init();
+            add_binary_tile(reg_acc, reg_tmp, reg_acc);
 
             tile_regs_commit();
             // Keep reserve(block_size)/push(block_size) invariant, but only fill current_block_size slots.
