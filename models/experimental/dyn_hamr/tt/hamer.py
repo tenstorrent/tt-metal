@@ -140,10 +140,23 @@ class TtHamer:
             print(f"[dyn_hamr] ttnn import failed: {e}")
             return
         try:
-            self.device = ttnn.open_device(device_id=self.device_id)
+            # Mesh device (1×1) instead of plain open_device so we can capture
+            # a tt-nn trace and replay it per-call — eliminates Python dispatch
+            # overhead on the hot path.
+            self.device = ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(1, 1),
+                physical_device_ids=[self.device_id],
+                trace_region_size=200 * 1024 * 1024,  # 200 MiB scratch for the trace
+            )
+            self._is_mesh = True
         except Exception as e:
-            print(f"[dyn_hamr] tt-nn device open failed on id={self.device_id}: {e}")
-            self.device = None
+            print(f"[dyn_hamr] tt-nn mesh open failed on id={self.device_id}: {e}; trying plain open_device")
+            try:
+                self.device = ttnn.open_device(device_id=self.device_id)
+                self._is_mesh = False
+            except Exception as e2:
+                print(f"[dyn_hamr] tt-nn plain open also failed: {e2}")
+                self.device = None
 
     def _build_vit_params(self) -> None:
         """Lift the reference ViT-H + MANO head weights into bfloat16 tile
@@ -226,7 +239,10 @@ class TtHamer:
             return
         try:
             import ttnn  # noqa: WPS433
-            ttnn.close_device(self.device)
+            if getattr(self, "_is_mesh", False):
+                ttnn.close_mesh_device(self.device)
+            else:
+                ttnn.close_device(self.device)
         except Exception:
             pass
         self.device = None
