@@ -40,7 +40,7 @@ def _parse_shard_dims_from_placement(placements):
     else:
         placement_str = str(placements)
     dims = []
-    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement_str):
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", placement_str):
         dims.append(int(m.group(1)) if m.group(1) is not None else None)
     return tuple(dims) if len(dims) == 2 else None
 
