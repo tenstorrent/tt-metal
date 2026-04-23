@@ -14,9 +14,12 @@ def read_yaml(path: str):
     Any section missing from the YAML is returned as None.
 
     ``transformer_config`` can be provided either inline or via a
-    ``transformer_config_path`` key pointing to a separate YAML file
-    (resolved relative to the config file's directory).  The external
-    file must contain a top-level ``transformer_config`` mapping.
+    ``transformer_config_path`` key pointing to a separate YAML file.
+    The external path may use ``${TT_METAL_RUNTIME_ROOT}`` (recommended,
+    matching other tt-train configs) or be a plain absolute/relative
+    path; relative paths are resolved against the config file's
+    directory.  The external file must contain a top-level
+    ``transformer_config`` mapping.
 
     Returns:
         (transformer_config, device_config, optimizer_config, grpo_config)
@@ -30,7 +33,13 @@ def read_yaml(path: str):
 
     transformer_config = raw.get("transformer_config")
     if transformer_config is None and "transformer_config_path" in raw:
-        tc_path = raw["transformer_config_path"]
+        tc_path = os.path.expandvars(raw["transformer_config_path"])
+        if "${TT_METAL_RUNTIME_ROOT}" in tc_path or "$TT_METAL_RUNTIME_ROOT" in tc_path:
+            raise RuntimeError(
+                f"Unresolved TT_METAL_RUNTIME_ROOT in transformer_config_path: "
+                f"{raw['transformer_config_path']}. Please export "
+                "TT_METAL_RUNTIME_ROOT to the tt-metal repository root."
+            )
         if not os.path.isabs(tc_path):
             tc_path = os.path.join(config_dir, tc_path)
         with open(tc_path) as f:
