@@ -105,10 +105,10 @@ constexpr uint64_t kRegFpu2 = kRiscvDebugBase + 0x020;
 // cycle counter.
 constexpr uint64_t kPerfWindowStart = kRiscvDebugBase + 0x120;
 constexpr size_t kPerfWindowSize = 0x1F8 + 4 - 0x120;
-constexpr size_t kOffFpuOutL = 0x120 - 0x120;  // 0x00 — ref_cnt (cycles since last arm)
+constexpr size_t kOffFpuOutL = 0x120 - 0x120;  // 0x00 — ref_cnt (used by startup probe)
 constexpr size_t kOffFpuOutH = 0x124 - 0x120;  // 0x04 — req_cnt (FPU busy cycles since last arm)
-// WALL_CLOCK_{L,H} at +0xD0/+0xD8 are in the same read window but no longer
-// used in ratio mode — retained in the window for future extensions.
+constexpr size_t kOffWallL = 0x1F0 - 0x120;    // 0xD0 — low half of 64-bit wall clock
+constexpr size_t kOffWallH = 0x1F8 - 0x120;    // 0xD8 — high half
 
 // EWMA smoothing for compute_busy. alpha = 2/(N+1) for N-sample horizon.
 // N=10 gives a ~1s smoothing window at 10 Hz publish rate.
@@ -227,14 +227,18 @@ struct CoreState {
     uint64_t samples_seen = 0;
     uint8_t last_dispatched = 0;
 
-    // Phase 2.0 perf-counter state. We arm the FPU counter from host at
-    // startup; user kernels that call StartPerfCounters reset it, but because
-    // both OUT_L (ref_cnt) and OUT_H (req_cnt) reset together, their *ratio*
-    // remains a valid instantaneous busy% estimate regardless of resets.
-    // So we just read the ratio directly on every tick and EWMA-smooth it.
+    // Phase 2.0 perf-counter state. Delta math against wall clock.
+    //   busy_fraction_of_wall_time = delta(OUT_H) / delta(WALL_CLOCK)
+    // OUT_H only accumulates when the counter is armed, WALL_CLOCK always
+    // ticks — so idle gaps are correctly attributed as 0% busy.
+    // If OUT_H went backwards between ticks (kernel-side StartPerfCounters
+    // reset), use OUT_H as a conservative post-reset delta estimate rather
+    // than dropping the tick; over many ticks this converges to truth.
     bool counter_armed = false;
-    double compute_busy_ewma = 0.0;   // [0..1]
-    uint32_t last_fpu_out_l = 0;      // debug: last raw OUT_L we saw
+    bool perf_primed = false;
+    uint64_t last_wall_clock = 0;
+    uint32_t last_fpu_out_h = 0;
+    double compute_busy_ewma = 0.0;  // [0..1]
 };
 
 struct ChipState {
@@ -473,21 +477,24 @@ int main(int argc, char* argv[]) {
                         now_bit = (signal == static_cast<uint8_t>(RUN_MSG_GO)) ? 1 : 0;
                     }
 
-                    // Perf counters (Phase 2.0, ratio mode). Both FPU_OUT_L
-                    // (ref_cnt) and FPU_OUT_H (req_cnt) reset together when
-                    // anyone rising-edges the counter. Their ratio is a valid
-                    // instantaneous busy% estimate *regardless* of resets,
-                    // so we don't care whether kernels call StartPerfCounters.
+                    // Perf counters (Phase 2.0). busy% = delta(OUT_H) / delta(WALL_CLOCK).
+                    // WALL_CLOCK is a free-running 64-bit counter that ticks
+                    // unconditionally; OUT_H (FPU req count) only accumulates
+                    // while the counter is armed — so the ratio correctly
+                    // attributes idle time to 0% busy.
                     bool have_perf = false;
-                    uint32_t fpu_out_l_now = 0;
                     uint32_t fpu_out_h_now = 0;
+                    uint64_t wall_now = 0;
                     try {
                         c.device->read_from_device(perf_buf.data(), c.translated, kPerfWindowStart, kPerfWindowSize);
                         have_perf = true;
                     } catch (const std::exception&) {
                     }
                     if (have_perf) {
-                        std::memcpy(&fpu_out_l_now, perf_buf.data() + kOffFpuOutL, sizeof(fpu_out_l_now));
+                        uint32_t wl = 0, wh = 0;
+                        std::memcpy(&wl, perf_buf.data() + kOffWallL, sizeof(wl));
+                        std::memcpy(&wh, perf_buf.data() + kOffWallH, sizeof(wh));
+                        wall_now = (static_cast<uint64_t>(wh) << 32) | wl;
                         std::memcpy(&fpu_out_h_now, perf_buf.data() + kOffFpuOutH, sizeof(fpu_out_h_now));
                     }
 
@@ -502,15 +509,26 @@ int main(int argc, char* argv[]) {
                             c.last_dispatched = now_bit;
                         }
                         if (have_perf) {
-                            // Require enough ref cycles to avoid dividing by a
-                            // just-reset counter. 10k cycles ≈ 10 µs at 1 GHz.
-                            if (fpu_out_l_now > 10000u && fpu_out_h_now <= fpu_out_l_now) {
-                                const double inst =
-                                    static_cast<double>(fpu_out_h_now) / static_cast<double>(fpu_out_l_now);
-                                c.compute_busy_ewma =
-                                    kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.compute_busy_ewma;
+                            if (c.perf_primed) {
+                                const uint64_t wall_d = wall_now - c.last_wall_clock;
+                                // Estimate FPU-active cycles during this
+                                // interval. If OUT_H went backwards, a kernel
+                                // called StartPerfCounters somewhere in the
+                                // interval; conservatively take OUT_H as the
+                                // post-reset portion and discard the pre-reset
+                                // portion (unknown).
+                                const uint64_t fpu_d = (fpu_out_h_now >= c.last_fpu_out_h)
+                                                           ? static_cast<uint64_t>(fpu_out_h_now - c.last_fpu_out_h)
+                                                           : static_cast<uint64_t>(fpu_out_h_now);
+                                if (wall_d > 0 && wall_d < (1ull << 40) && fpu_d <= wall_d) {
+                                    const double inst = static_cast<double>(fpu_d) / static_cast<double>(wall_d);
+                                    c.compute_busy_ewma =
+                                        kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.compute_busy_ewma;
+                                }
                             }
-                            c.last_fpu_out_l = fpu_out_l_now;
+                            c.last_wall_clock = wall_now;
+                            c.last_fpu_out_h = fpu_out_h_now;
+                            c.perf_primed = true;
                         }
                     }
                 }
