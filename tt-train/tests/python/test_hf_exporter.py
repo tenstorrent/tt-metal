@@ -273,13 +273,17 @@ class TestRoundTripFidelity:
 
         exp = load_safetensors(str(out_dir / "model.safetensors"))
 
+        # Threshold accounts for float32 -> bfloat16 (TTML) -> float32 round-trip.
+        # BF16 epsilon ~0.0078, so values near 1.0 can differ by up to ~0.008.
+        threshold = 0.01
+
         failures = []
         for key, exp_arr in exp.items():
             if key not in orig:
                 failures.append(f"{key!r}: not found in original HF model")
                 continue
             max_diff = float(np.abs(orig[key] - exp_arr).max())
-            if max_diff >= 1e-3:
-                failures.append(f"{key}: max_diff={max_diff:.6f} (threshold 1e-3)")
+            if max_diff >= threshold:
+                failures.append(f"{key}: max_diff={max_diff:.6f} (threshold {threshold})")
 
         assert not failures, "Weight fidelity failures:\n" + "\n".join(failures)
