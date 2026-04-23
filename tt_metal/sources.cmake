@@ -27,6 +27,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/experimental/inspector.hpp
+    api/tt-metalium/experimental/offline_kernel_compile.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
@@ -125,7 +126,7 @@ set(TT_METAL_PUBLIC_API
 
 set(TT_METAL_SOURCES
     tt_metal.cpp
-    graph/graph_tracking.cpp
+    impl/graph/graph_tracking.cpp
     hal.cpp
 )
 
