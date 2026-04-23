@@ -29,12 +29,12 @@ inline void reduce_row_perform_transpose()
 {
     if (enforce_fp32_accumulation)
     {
-        // BH Issue #449 W/A: SFPU-staged 2-pass transpose of fp32 face data.
+#ifdef LLK_TTSIM_WA_MOVD2B_DEST_32B_LO
+        // BH Issue #449 W/A for ttsim (ttsim asserts on dest_32b_lo=1; HW handles it).
+        // SFPU-staged 2-pass transpose of fp32 face data using only dest_32b_lo=0 paths.
         //
         // Face fp32 values occupy two physical DEST rows per logical row via Adj32
-        // mapping: hi16 at DstBits[Adj32(R)], lo16 at DstBits[Adj32(R)+8]. BH Issue
-        // #449 blocks MOV* with dest_32b_lo=1; this W/A transposes hi and lo halves
-        // separately using only dest_32b_lo=0 paths.
+        // mapping: hi16 at DstBits[Adj32(R)], lo16 at DstBits[Adj32(R)+8].
         //
         // Phase 1 (SFPU, dbg=1): extract lo16 of each face row to LO16_STAGE scratch
         //   via SFPLOAD INT32 + SFPSTORE LO16_ONLY. (hi16 does not need staging —
@@ -50,11 +50,10 @@ inline void reduce_row_perform_transpose()
         //   lo16 physical rows {8,9,12,13,24,25,28,29} for D=0) without disturbing
         //   the hi16 Phase 2 hi wrote.
         //
-        // Uses only dest_32b_lo=0 in MOV* (avoids #449 HW bug). Fp32_enabled stays
-        // at 1 — MOV* use_dst32b path goes through Adj32 regardless of dbg bit.
-        // Assumes D=0: for D≠0 the face lo16 physical rows are at Adj32(D+R)+8
-        // which doesn't scale linearly; runtime DstRWC setup would be required
-        // for general D.
+        // Fp32_enabled stays at 1 — MOV* use_dst32b path goes through Adj32 regardless
+        // of dbg bit. Assumes D=0: for D≠0 the face lo16 physical rows are at
+        // Adj32(D+R)+8 which doesn't scale linearly; runtime DstRWC setup would be
+        // required for general D. Costs ~+26% vs native dest_32b_lo=1 path.
         constexpr std::uint32_t LO16_STAGE = 144;
 
         // Phase 1
@@ -82,7 +81,8 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // _llk_math_dbg_feature_enable_ does tensix_sync insternally. If this changes, need to add proper stalls here to ensure correct ordering.
+        // _llk_math_dbg_feature_enable_ does tensix_sync internally. If this changes,
+        // need to add proper stalls here to ensure correct ordering.
         _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
@@ -109,6 +109,35 @@ inline void reduce_row_perform_transpose()
             lltt::replay(2, 2);
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+#else
+        // Native BH HW path: MOVD2B/MOVB2D with dest_32b_lo=1 under Fp32_enabled=0.
+        // Works on silicon; ttsim asserts on this combo and must use the W/A above.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+
+        // Move hi16 bits D2B. Move to rows 16-31 to avoid clobbering SrcB weights.
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Note: TRNSPSRCB only operates on SrcB rows 16-31.
+        TTI_TRNSPSRCB;
+        // Re-fill SrcB rows 16-31 (for multi-tile reduce).
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        // Move lo16 bits D2B via DEST_32B_LOW (dest_32b_lo=1).
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+#endif
     }
     else
     {
@@ -359,8 +388,10 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // Phase 3 replay: advance SFPU DstRWC by 2 per iter via ADDR_MOD_7 on SFPSTORE.
-        // SFPLOAD uses ADDR_MOD_0 (no advance) — both ops in an iter share the same DstRWC.
+#ifdef LLK_TTSIM_WA_MOVD2B_DEST_32B_LO
+        // Phase 3 replay setup (ttsim W/A only): advance SFPU DstRWC by 2 per iter via
+        // ADDR_MOD_7 on SFPSTORE. SFPLOAD uses ADDR_MOD_0 (no advance) — both ops in
+        // an iter share the same DstRWC.
         addr_mod_t {
             .srca = {.incr = 0},
             .srcb = {.incr = 0},
@@ -380,6 +411,7 @@ inline void _llk_math_reduce_init_()
         lltt::record<lltt::NoExec>(2, 2);
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE_REPLAY);
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, 16);
+#endif
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
