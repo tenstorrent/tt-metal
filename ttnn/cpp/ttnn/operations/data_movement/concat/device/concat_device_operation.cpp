@@ -34,9 +34,16 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_is_sharded = args.output_mem_config.is_sharded();
 
     if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            return ConcatBlockShardedProgramFactory{};
+        }
+
+        const bool is_height_sharded = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+
+        // optimized 2-tensor kernels only support height-sharded.
+        if (input_tensors.size() == 2 && is_height_sharded) {
             TT_FATAL(
                 input_tensors[0].layout() == input_tensors[1].layout(),
                 "Expected all input tensors to have the same layout for 2-tensor sharded concat");
@@ -45,11 +52,10 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
                 return ConcatS2SRMProgramFactory{};
             }
             return ConcatS2STiledProgramFactory{};
-
-        }  // Multi-tensor s2s case
+        }
         return ConcatS2SMultiProgramFactory{};
     }
-    // Sharded-to-interleaved (s2i) case
+    // Sharded-to-interleaved (s2i) case - not enabled yet.
     return ConcatS2IProgramFactory{};
 }
 
@@ -67,8 +73,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
 
-    for (int i = 0; i < input_tensors.size(); i++) {
-        const Tensor& in_ref = input_tensors[i];
+    for (const auto& in_ref : input_tensors) {
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
@@ -95,13 +100,9 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
-            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
             TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Width sharded inputs are not supported for two tensors concat yet");
-            TT_FATAL(
-                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
-                "Block sharded inputs are not supported");
+                in_ref.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
+                "Sharded tensors must have the same shard orientation.");
         }
     }
     if (warn_about_alignment) {
@@ -127,14 +128,19 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
+        TT_FATAL(
+            args.output_mem_config.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
+            "Sharded output and inputs must have the same shard orientation.");
         if (args.dim == shape_first.rank() - 1) {
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Only support width concat on height-sharded tensors.");
+                memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "Only support width concat on height-sharded or block-sharded tensors.");
         } else if (args.dim == shape_first.rank() - 2) {
             TT_FATAL(
-                memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-                "Only support height concat on width-sharded tensors.");
+                memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                    memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+                "Only support height concat on width-sharded or block-sharded tensors.");
         } else {
             TT_FATAL(false, "Only width or height concat on sharded tensors");
         }
@@ -143,6 +149,16 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "Groups > 1 is only supported on height-sharded tensors (groups={} and memory_layout={} was provided)",
             args.groups,
             memory_layout);
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_FATAL(
+                tensor_args.input_tensors.size() <= 16,
+                "Block-sharded concat supports at most 16 input tensors (got {}). "
+                "Batching is not supported for block-sharded concat.",
+                tensor_args.input_tensors.size());
+            TT_FATAL(
+                first_input.shard_spec().value().grid.ranges().size() == 1,
+                "Block-sharded concat requires a single contiguous rectangular CoreRange.");
+        }
     }
 }
 
@@ -237,8 +253,17 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     const bool is_sharded = input_tensors[0].is_sharded();
 
     if (is_sharded) {
-        // Sharded concat uses different kernels with different arg patterns
-        // Using conservative estimate
+        const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // Block-sharded factory uses CB IDs 0..N-1 for inputs and CB 16 for output,
+            // so the hard max is 16 inputs.
+            constexpr uint32_t block_sharded_max = 16;
+            log_debug(tt::LogOp, "ttnn.concat: Block-sharded concat - max_tensors = {}", block_sharded_max);
+            return block_sharded_max;
+        }
+
+        // Other sharded layouts (height/width) use different kernels with different arg patterns
         constexpr uint32_t effective_args_limit = 256;
         constexpr uint32_t base_args = 4;
         constexpr uint32_t args_per_tensor = 4;
@@ -269,6 +294,7 @@ Tensor concat_impl(
     const MemoryConfig& output_mem_config,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
+
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     }
@@ -286,6 +312,12 @@ Tensor concat_impl(
     // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
     const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
     if (input_tensors.size() > max_tensors_per_concat) {
+        TT_FATAL(
+            !(input_tensors[0].is_sharded() &&
+              input_tensors[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
+            "Block-sharded concat supports at most 16 input tensors (got {}). "
+            "Batching with intermediate shard specs is not supported for block-sharded concat.",
+            input_tensors.size());
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;
         const size_t num_batches = tt::div_up(input_tensors.size(), max_tensors_per_concat);
@@ -325,7 +357,35 @@ Tensor concat_impl(
     uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
-        return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
+        if (output_mem_config.is_sharded()) {
+            return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
+        }
+        // Sharded inputs with interleaved output:
+        // Do sharded concat with a computed sharded output config, then convert to interleaved
+        const bool is_width_concat = normalized_dim == ref_rank - 1;
+        const bool is_height_concat = normalized_dim == ref_rank - 2;
+        if (is_width_concat || is_height_concat) {
+            const auto& first_shard = input_tensors[0].shard_spec().value();
+            auto output_shard_shape = first_shard.shape;
+            const uint32_t shard_concat_idx = is_width_concat ? 1 : 0;
+            output_shard_shape[shard_concat_idx] = 0;
+            for (const auto& t : input_tensors) {
+                output_shard_shape[shard_concat_idx] += t.shard_spec().value().shape[shard_concat_idx];
+            }
+            auto temp_shard_spec = ShardSpec(first_shard.grid, output_shard_shape, first_shard.orientation);
+            auto temp_sharded_config =
+                MemoryConfig(input_tensors[0].memory_config().memory_layout(), BufferType::L1, temp_shard_spec);
+
+            auto sharded_result = ttnn::prim::concat(input_tensors, dim, groups, temp_sharded_config);
+            return ttnn::to_memory_config(sharded_result, output_mem_config, std::nullopt);
+        }
+        // Non-H/W dim on sharded tensors: unshard inputs, then interleaved concat
+        std::vector<Tensor> interleaved_inputs;
+        interleaved_inputs.reserve(input_tensors.size());
+        for (const auto& input_tensor : input_tensors) {
+            interleaved_inputs.push_back(ttnn::to_memory_config(input_tensor, output_mem_config, std::nullopt));
+        }
+        return concat_impl(interleaved_inputs, dim, groups, output_mem_config, sub_core_grids);
     }
     if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
         for (const auto& input_tensor : input_tensors) {
@@ -365,6 +425,13 @@ Tensor concat_impl(
         }
     }
 
+    if (output_mem_config.is_sharded()) {
+        // Interleaved inputs with sharded output: do interleaved concat, then convert to sharded
+        auto interleaved_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+        auto interleaved_result =
+            ttnn::prim::concat(formatted_tensors, dim, groups, interleaved_config, sub_core_grids);
+        return ttnn::to_memory_config(interleaved_result, output_mem_config, std::nullopt);
+    }
     return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config, sub_core_grids);
 }
 
