@@ -46,11 +46,7 @@ def _safe_path_under_output_dir(output_dir: str, configured_name: str) -> Path:
 
 def _resolve_coordinator_tt_metal_home(explicit: str | None) -> Path | None:
     """tt-metal root on the runner (for resolving mesh_graph_desc_path)."""
-    for candidate in (
-        explicit,
-        os.environ.get("TT_METAL_HOME"),
-        os.environ.get("TT_METAL_COORDINATOR_HOME"),
-    ):
+    for candidate in (explicit, os.environ.get("TT_METAL_HOME")):
         if not candidate:
             continue
         root = Path(candidate).expanduser().resolve(strict=False)
@@ -83,8 +79,7 @@ def _mesh_graph_desc_path_for_rank_binding(
     if root is None:
         logger.error(
             "With --output-dir, mesh_graph_desc_path must resolve on the runner. "
-            "Set TT_METAL_HOME or TT_METAL_COORDINATOR_HOME to the coordinator tt-metal checkout, "
-            "or pass --coordinator-tt-metal-home."
+            "Set TT_METAL_HOME to the coordinator tt-metal checkout, or pass --coordinator-tt-metal-home."
         )
         sys.exit(1)
     root_resolved = root.resolve(strict=False)
@@ -378,7 +373,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Runner-side tt-metal root used to absolutize mesh_graph_desc_path when --output-dir is set. "
-        "Defaults to TT_METAL_HOME, then TT_METAL_COORDINATOR_HOME.",
+        "Defaults to TT_METAL_HOME.",
     )
     args = parser.parse_args()
     generate_pipeline_config_files(
