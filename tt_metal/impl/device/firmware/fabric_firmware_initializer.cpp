@@ -87,7 +87,7 @@ EdmInitProgress classify_edm_status(uint32_t raw_status) {
 
 struct RouterStatusReport {
     chan_id_t chan;
-    CoreCoord logical_core;
+    tt::umd::CoreCoord logical_core;
     uint32_t raw_status;
     EdmInitProgress stage;
     bool is_master;
@@ -133,7 +133,7 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
 [[noreturn]] void report_router_sync_timeout_and_throw(
     Device* dev,
     chan_id_t master_chan,
-    const CoreCoord& master_core,
+    const tt::umd::CoreCoord& master_core,
     uint32_t master_raw_status,
     uint32_t expected_status,
     uint32_t router_sync_address,
