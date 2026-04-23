@@ -17,7 +17,6 @@
 
 #include <bitset>
 #include <optional>
-#include <string_view>
 #include <vector>
 
 /**
@@ -115,7 +114,7 @@ struct KernelDescriptor {
         variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
 
-    std::string_view kernel_source;
+    std::string kernel_source;
     SourceType source_type = SourceType::FILE_PATH;
 
     CoreRangeSet core_ranges;

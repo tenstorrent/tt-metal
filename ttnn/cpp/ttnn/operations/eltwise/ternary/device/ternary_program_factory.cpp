@@ -1266,10 +1266,10 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
     }
 
-    std::string_view compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
-                                            operation_attributes.dtype == DataType::INT32)
-                                               ? override_addcmul_compute_kernel(compute_kernel)
-                                               : get_kernel_file_path(compute_kernel, is_fpu);
+    std::string compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+                                       operation_attributes.dtype == DataType::INT32)
+                                          ? override_addcmul_compute_kernel(compute_kernel)
+                                          : get_kernel_file_path(compute_kernel, is_fpu);
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;

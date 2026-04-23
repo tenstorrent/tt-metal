@@ -114,10 +114,10 @@ struct KernelLayout {
 
 // Struct to hold kernel file paths based on operation mode
 struct KernelPaths {
-    std::string_view reader_sender;
-    std::string_view reader_receiver;
-    std::string_view writer;
-    std::string_view compute;
+    std::string reader_sender;
+    std::string reader_receiver;
+    std::string writer;
+    std::string compute;
 
     static KernelPaths get(
         bool is_pre_all_gather, bool is_post_all_gather, bool use_row_major_kernel, bool use_welford);
@@ -261,10 +261,10 @@ struct CompileTimeArgs {
 // Struct to hold kernel configuration for building kernel descriptors
 struct KernelConfig {
     // Paths
-    std::string_view reader_sender_path;
-    std::string_view reader_receiver_path;
-    std::string_view writer_path;
-    std::string_view compute_path;
+    std::string reader_sender_path;
+    std::string reader_receiver_path;
+    std::string writer_path;
+    std::string compute_path;
 
     // Compile time args
     KernelDescriptor::CompileTimeArgs reader_sender_ct_args;

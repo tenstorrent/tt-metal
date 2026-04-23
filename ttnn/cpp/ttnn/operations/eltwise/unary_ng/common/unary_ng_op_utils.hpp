@@ -23,8 +23,7 @@ std::map<std::string, std::string> get_block_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
-std::string_view get_compute_kernel_path(
-    unary::UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
+std::string get_compute_kernel_path(unary::UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);

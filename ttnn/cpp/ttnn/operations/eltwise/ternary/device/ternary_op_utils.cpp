@@ -295,7 +295,7 @@ TernaryKernelConfig::TernaryKernelConfig(
     TT_FATAL(false, "Invalid ternary operation type, variant or broadcast type combination");
 }
 
-std::string_view get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
+std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     // All return values are string literals with static storage duration so the returned
     // std::string_view remains valid for the lifetime of the program.
     static constexpr const char* READER_NOSUBTILEBCAST_TTT =
@@ -376,7 +376,7 @@ std::string_view get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
     }
 }
 
-std::string_view override_addcmul_compute_kernel(KernelName kernel_name) {
+std::string override_addcmul_compute_kernel(KernelName kernel_name) {
     static constexpr const char* ADDCMUL_INT_SFPU =
         "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addcmul_int_sfpu.cpp";
     static constexpr const char* ADDCMUL_INT_SFPU_BCAST =

@@ -78,9 +78,9 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
     return "";
 }
 
-std::string_view get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
-    // All return values are string literals with static storage duration so the returned
-    // std::string_view remains valid for the lifetime of the program.
+std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
+    // Path constants are declared constexpr so the string data lives in read-only storage;
+    // each call copies into a std::string (safe for descriptor ownership).
     static constexpr const char* READER_NO_BCAST_NG =
         "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp";
     static constexpr const char* READER_ROW_BCAST_NG =

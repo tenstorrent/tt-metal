@@ -345,23 +345,22 @@ The ProgramDescriptor path calls `create_descriptor` on **every dispatch** (cach
 Everything built inside it — CBDescriptors, KernelDescriptors, CoreRangeSet copies,
 runtime arg vectors — is allocation overhead. Follow these patterns to keep it fast.
 
-### Use constexpr kernel paths
+### Prefer constexpr kernel paths
 
-Never build kernel paths with string concatenation. Always use `static constexpr const char*`:
+Prefer `static constexpr const char*` over runtime string concatenation for kernel paths.
+`kernel_source` is `std::string`, so each assignment copies — but starting from constexpr
+storage avoids the CPU + heap cost of formatting/concatenating the path per dispatch:
 
 ```cpp
-// BAD — heap allocation on every dispatch
+// BAD — formats/concatenates a new std::string every dispatch
 const std::string kernels_dir = "ttnn/cpp/ttnn/operations/my_op/device/kernels/";
 reader_desc.kernel_source = kernels_dir + "reader.cpp";
 
-// GOOD — zero cost
+// GOOD — path data lives in read-only storage; only one copy into the descriptor
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/my_op/device/kernels/reader.cpp";
 reader_desc.kernel_source = READER_KERNEL_PATH;
 ```
-
-`kernel_source` is `std::string_view` — it must point to a string that outlives the descriptor.
-`static constexpr const char*` satisfies this.
 
 ### Use KernelDescriptor type aliases for args
 

@@ -55,9 +55,9 @@ struct TernaryKernelConfig {
     KernelName writer_kernel;
 };
 
-std::string_view get_kernel_file_path(KernelName kernel_name, bool is_fpu = false);
+std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu = false);
 
-std::string_view override_addcmul_compute_kernel(KernelName kernel_name);
+std::string override_addcmul_compute_kernel(KernelName kernel_name);
 
 uint32_t pack_scalar_runtime_arg(ScalarVariant scalar, DataType dtype);
 

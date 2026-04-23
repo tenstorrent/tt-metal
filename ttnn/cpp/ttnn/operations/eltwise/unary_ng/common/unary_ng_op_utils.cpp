@@ -668,7 +668,7 @@ std::map<std::string, std::string> get_block_defines(
     return block_defines;
 }
 
-std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+std::string get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
     static constexpr const char* BASE = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/";
     static constexpr const char* LGAMMA_FAST =
         "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/lgamma_fast_kernel.cpp";

@@ -175,7 +175,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightAndWidthMu
     static constexpr const char* READER_SCALAR_INTERLEAVED =
         "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
         "reader_bcast_scalar_interleaved_partitioned.cpp";
-    std::string_view reader_kernel_path;
+    std::string reader_kernel_path;
     if (src1_buffer != nullptr) {
         TT_FATAL(src1_buffer->buffer_layout() == TensorMemoryLayout::INTERLEAVED, "src1_buffer must be interleaved");
         TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
