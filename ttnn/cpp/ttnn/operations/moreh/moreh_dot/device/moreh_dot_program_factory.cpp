@@ -3,31 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_device_operation.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_dot {
-MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::create(
+
+using namespace tt::tt_metal;
+
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
+static constexpr const char* WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
+static constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
+
+ProgramDescriptor MorehDotOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
-
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto* src0_buffer = input_a.buffer();
     auto* src1_buffer = input_b.buffer();
     auto* dst_buffer = output.buffer();
     float scaler = 1.0f;
 
-    Program program{};
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_a.dtype());
+    const uint32_t cb_tile_size = tile_size(cb_data_format);
 
     uint32_t num_tiles = input_a.physical_volume() / tt::constants::TILE_HW;
     const auto& a_shape_wo_padding = input_a.logical_shape();
@@ -36,10 +39,10 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
-    tt::tt_metal::IDevice* device = input_a.device();
+    IDevice* device = input_a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     const uint32_t in0_t = 2;   // a
     const uint32_t in1_t = 2;   // b
@@ -49,90 +52,112 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     const uint32_t im1_t = 1;
 
     CoreCoord core = {0, 0};
+    CoreRangeSet core_set(CoreRange(core, core));
 
-    CreateCircularBuffer(
-        program,
-        std::set<CoreRange>{CoreRange(core, core)},
-        cb_data_format,
-        {
-            {CBIndex::c_0, in0_t},
-            {CBIndex::c_1, in1_t},
-            {CBIndex::c_2, in2_t},
-            {CBIndex::c_16, out0_t},
-            {CBIndex::c_24, im0_t},
-            {CBIndex::c_25, im1_t},
-        });
+    ProgramDescriptor desc;
 
-    std::vector<uint32_t> reader_compile_time_args = {*reinterpret_cast<uint32_t*>(&scaler)};
-    TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
+    // Circular buffers — all share same data format and single core
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * cb_tile_size,
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0,
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * cb_tile_size,
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1,
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_t * cb_tile_size,
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_2,
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * cb_tile_size,
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_16,
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im0_t * cb_tile_size,
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_24,
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im1_t * cb_tile_size,
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_25,
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16};
-    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
+    // Reader kernel
+    KernelDescriptor::CompileTimeArgs reader_ct_args = {*reinterpret_cast<uint32_t*>(&scaler)};
+    TensorAccessorArgs(src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(src1_buffer).append_to(reader_ct_args);
 
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
-
-    std::vector<uint32_t> compute_kernel_args = {};
-    std::map<std::string, std::string> compute_defines;
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-
-    const uint32_t core_num = 1;
-    const auto* const compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
-    const auto compute_kernel_id = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core, core_num, compute_kernel_args},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
-
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = READER_KERNEL_PATH;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_set;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.runtime_args.emplace_back(
         core,
-        {src0_buffer->address(), src1_buffer->address(), num_tiles, 0, mask_h, mask_w});
-    SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles, 1});
-    SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), 1, 0});
+        KernelDescriptor::CoreRuntimeArgs{
+            src0_buffer->address(), src1_buffer->address(), num_tiles, 0u, mask_h, mask_w});
 
-    const std::vector<Tensor> input_tensors = {input_a, input_b};
+    // Writer kernel
+    KernelDescriptor::CompileTimeArgs writer_ct_args = {static_cast<uint32_t>(tt::CBIndex::c_16)};
+    TensorAccessorArgs(dst_buffer).append_to(writer_ct_args);
 
-    return {
-        std::move(program), {.unary_reader_kernel_id = reader_kernel_id, .unary_writer_kernel_id = writer_kernel_id}};
-}
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_set;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), 1u, 0u});
 
-void MorehDotOperation::SingleCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    // Compute kernel
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = std::move(core_set);
+    compute_desc.defines = {{"REDUCE_OP", "PoolType::SUM"}, {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"}};
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
+    compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles, 1u});
 
-    const auto& input_a = tensor_args.input_a;
-    const auto& input_b = tensor_args.input_b;
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-    auto* src_buffer_a = input_a.buffer();
-    auto* src_buffer_b = input_b.buffer();
-    auto* dst_buffer = output.buffer();
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = src_buffer_a->address();
-        runtime_args[1] = src_buffer_b->address();
-    }
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = dst_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_dot
