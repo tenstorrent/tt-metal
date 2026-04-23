@@ -34,7 +34,7 @@ from models.experimental.superpoint.tt.superpoint_ttnn import (
 )
 
 
-TRACE_REGION_SIZE = 6 * 1024 * 1024  # 6 MB trace region
+TRACE_REGION_SIZE = 12 * 1024 * 1024  # 12 MB — room for two traces (input double-buffer)
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -220,41 +220,71 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
 
-        # Second timed loop: end-to-end throughput with dual-CQ pipelining.
-        # CQ1 issues the next frame's H2D while CQ0 runs the current trace;
-        # D2H + host post-processing for the current frame run afterward on
-        # the Python thread. Steady-state per-iter cost becomes
-        # max(H2D, compute) + D2H + post.
+        # Second timed loop: end-to-end throughput with **input double-buffering**.
+        # CQ1's H2D for iter N+1 writes a SEPARATE buffer (tt_in_b) while CQ0
+        # runs trace[cur] reading tt_in[cur]. This breaks the
+        # "H2D waits for trace end" serialization on CQ1 and lets H2D
+        # overlap entirely with trace execution.
+        if trace_nms:
+            tt_in_b = tt_model.allocate_input(batch_size=b)
+            tt_model.load_input(tt_in_b, pixel_values)
+            tid_b = ttnn.begin_trace_capture(device, cq_id=0)
+            out_b = tt_model.run_device_compute(tt_in_b, b=b)
+            s_b, s_pooled_b, d_norm_b = out_b
+            ttnn.end_trace_capture(device, tid_b, cq_id=0)
+            ttnn.execute_trace(device, tid_b, cq_id=0, blocking=True)
+            # Pre-load both buffers so iter 0 and iter 1 have valid inputs.
+            tt_model.load_input_prepared(tt_in, host_input)
+            tt_model.load_input_prepared(tt_in_b, host_input)
+            ttnn.synchronize_device(device)
+
+            tt_ins = [tt_in, tt_in_b]
+            tids = [tid, tid_b]
+            s_pooled_outs = [s_pooled, s_pooled_b]
+            d_norm_outs = [d_norm, d_norm_b]
+
         e2e_phase_times = {"compute": 0.0, "d2h": 0.0, "post": 0.0}
         t0 = time.perf_counter()
         write_event = None
-        for _ in range(n_iter):
+        prev_compute_event = None
+        for n in range(n_iter):
             tp0 = time.perf_counter()
-            if write_event is not None:
-                ttnn.wait_for_event(0, write_event)
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-            compute_event = ttnn.record_event(device, 0)
-            ttnn.wait_for_event(1, compute_event)
-            tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
-            write_event = ttnn.record_event(device, 1)
-            # No explicit synchronize — the first ttnn.to_torch in D2H phase
-            # below blocks implicitly on CQ0 until trace outputs are ready;
-            # CQ1's H2D for the NEXT iter runs in background and we wait on
-            # write_event at the top of next iteration.
-            tp2 = time.perf_counter()
             if trace_nms:
+                cur = n % 2
+                nxt = (n + 1) % 2
+                # CQ0: trace[cur] reads tt_ins[cur] — wait for prior H2D to
+                # tt_ins[cur] (last written 2 iters ago / pre-loop).
+                if write_event is not None:
+                    ttnn.wait_for_event(0, write_event)
+                ttnn.execute_trace(device, tids[cur], cq_id=0, blocking=False)
+                compute_event = ttnn.record_event(device, 0)
+                # CQ1: H2D to tt_ins[nxt] — CAN START IMMEDIATELY (writes a
+                # different buffer than trace reads). Wait only for prev
+                # trace that read tt_ins[nxt] to ensure the read completed.
+                if prev_compute_event is not None:
+                    ttnn.wait_for_event(1, prev_compute_event)
+                tt_model.load_input_prepared(tt_ins[nxt], host_input, cq_id=1)
+                write_event = ttnn.record_event(device, 1)
+                tp2 = time.perf_counter()
                 nms_scores, desc_host = _device_to_host_post_with_nms(
-                    tt_model, s_pooled, d_norm, b, height, width
+                    tt_model, s_pooled_outs[cur], d_norm_outs[cur], b, height, width
                 )
                 tp3 = time.perf_counter()
                 for i in range(b):
                     kp, sc = tt_model._extract_keypoints_single(nms_scores[i : i + 1])
                     if kp.shape[0] > 0:
-                        # Cast keypoints to fp32 to match fp32 descriptor dtype
-                        # (grid_sample requires matching types).
                         _ = tt_model._sample_descriptors(kp.float()[None], desc_host[i : i + 1], scale=8)
                 tp4 = time.perf_counter()
+                prev_compute_event = compute_event
             else:
+                if write_event is not None:
+                    ttnn.wait_for_event(0, write_event)
+                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                compute_event = ttnn.record_event(device, 0)
+                ttnn.wait_for_event(1, compute_event)
+                tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
+                write_event = ttnn.record_event(device, 1)
+                tp2 = time.perf_counter()
                 scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
                 tp3 = time.perf_counter()
                 scores_full = tt_model._decode_keypoints(scores_host, apply_nms=True)
@@ -263,7 +293,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
                     if kp.shape[0] > 0:
                         _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
                 tp4 = time.perf_counter()
-            e2e_phase_times["compute"] += tp2 - tp0  # fused H2D+compute via dual CQ
+            e2e_phase_times["compute"] += tp2 - tp0
             e2e_phase_times["d2h"] += tp3 - tp2
             e2e_phase_times["post"] += tp4 - tp3
         elapsed_e2e = time.perf_counter() - t0
@@ -362,3 +392,5 @@ def test_superpoint_benchmark(device, height, width, input_kind):
 
     if tid is not None:
         ttnn.release_trace(device, tid)
+    if trace_nms and use_trace:
+        ttnn.release_trace(device, tid_b)
