@@ -66,7 +66,7 @@ trainer = GRPOTrainer(
         prompts_to_train=1600,
     ),
     reward_func=my_reward,
-    optimizer_config={"type": "MorehAdamW", "lr": 5e-6},
+    optimizer_dict={"type": "MorehAdamW", "lr": 5e-6},
     callbacks=[LogCallback()],
     model_source=model_id,
 )
@@ -191,7 +191,7 @@ GRPOTrainer(
     dataset,
     config,
     reward_func,
-    optimizer_config,
+    optimizer_dict,
     callbacks=None,
     model_source=None,
 )
@@ -203,7 +203,7 @@ GRPOTrainer(
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
 | `config` | `GRPOConfig` | Training configuration (see above). |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
-| `optimizer_config` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](../../docs/TTML_ONBOARDING.md). Must include a `"type"` key. |
+| `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](../../docs/TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `model_source` | `str \| None` | HuggingFace model ID or local path. Used only for saving HF config in checkpoints. |
 
@@ -330,7 +330,7 @@ Optimizer parameters passed as a dict with a `"type"` key. Forwarded to the
 ttml optimizer registry:
 
 ```python
-optimizer_config = {
+optimizer_dict = {
     "type": "MorehAdamW",
     "lr": 5.0e-6,
     "beta1": 0.9,

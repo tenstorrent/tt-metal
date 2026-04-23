@@ -8,5 +8,6 @@ from .grpo_trainer import (
     GRPOCompleter,
     GRPOConfig,
     GRPOTrainer,
+    get_grpo_config,
 )
 from ttml.modules.lora import LoraConfig

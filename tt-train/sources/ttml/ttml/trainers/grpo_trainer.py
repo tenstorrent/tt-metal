@@ -98,6 +98,22 @@ class GRPOConfig:
     warmup_steps: int
 
 
+def get_grpo_config(yaml_config: dict, output_dir: str = "") -> GRPOConfig:
+    """Build a :class:`GRPOConfig` from a top-level YAML config dict.
+
+    Looks for ``training_config.grpo_config`` in ``yaml_config`` and constructs
+    a :class:`GRPOConfig` from it. ``output_dir`` defaults to an empty string so
+    callers can fill it in once they have picked a run directory.
+    """
+    tc = yaml_config.get("training_config", {})
+    grpo_section = tc.get("grpo_config")
+    if grpo_section is None:
+        raise ValueError("training_config must contain a 'grpo_config' section")
+    fields = dict(grpo_section)
+    fields.setdefault("output_dir", output_dir)
+    return GRPOConfig(**fields)
+
+
 def _get_dp_mapper():
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     device = autograd_ctx.get_device()
@@ -261,7 +277,7 @@ class GRPOTrainer:
         dataset,
         config: GRPOConfig,
         reward_func: Callable,
-        optimizer_config: dict,
+        optimizer_dict: dict,
         callbacks: list = None,
         model_source: str = None,
     ):
@@ -269,7 +285,7 @@ class GRPOTrainer:
         self.dataset = dataset
         self.config = config
         self.reward_func = reward_func
-        self.optimizer_config_dict = optimizer_config
+        self.optimizer_dict = optimizer_dict
         self.callbacks = callbacks or []
         self.model_source = model_source
         self.model = None
@@ -308,7 +324,7 @@ class GRPOTrainer:
         tokenizer = completer.tokenizer
         self.model = tt_model
 
-        optimizer = create_optimizer(tt_model, self.optimizer_config_dict)
+        optimizer = create_optimizer(tt_model, self.optimizer_dict)
         base_lr = optimizer.get_lr()
 
         dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
