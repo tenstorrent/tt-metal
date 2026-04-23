@@ -32,8 +32,10 @@ CreatedProgram create_at(
 
     const auto& combine_output = tensor_args.combine_output;
     const auto& weights = tensor_args.weights;
-    const auto& indices = tensor_args.indices;
-    const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
+    const auto& indices_opt = tensor_args.indices;
+    const auto& dispatch_table_opt = tensor_args.expert_dispatch_table;
+    // both-or-neither enforced in validate(); here we just pick the skip mode
+    const bool use_dispatch_table_skip = indices_opt.has_value();
     auto* device = combine_output.device();
 
     const auto& combine_shape = combine_output.padded_shape();
@@ -48,16 +50,28 @@ CreatedProgram create_at(
         num_tokens *= combine_shape[i];
     }
 
-    constexpr uint32_t TILE_SIZE = 1024;  // 32 x 32
-    const uint32_t emb_dim_tiles = emb_dim / TILE_SIZE;
+    constexpr uint32_t TILE_SIZE = 1024;  // 32 x 32 bfloat16 tile (element count)
+    constexpr uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t BF16_BYTES = 2;
+
+    // Number of tile-sized CB pages needed to hold one emb_dim row.
+    // ceil(emb_dim / 1024) supports non-1024-aligned dims (e.g. GPT-OSS 2880).
+    const uint32_t emb_dim_cb_tiles = (emb_dim + TILE_SIZE - 1) / TILE_SIZE;
+    // Number of real 32x32 output tiles per 32-token block.
+    const uint32_t emb_dim_out_tiles = emb_dim / TILE_WIDTH;
+    // Raw byte count for NoC reads in the reader (handles non-aligned emb_dim).
+    const uint32_t emb_dim_bytes = emb_dim * BF16_BYTES;
 
     TT_FATAL(
-        emb_dim % TILE_SIZE == 0,
-        "Embedding dimension {} must be divisible by tile size (1024), got {} tiles",
+        emb_dim % TILE_WIDTH == 0,
+        "Embedding dimension {} must be divisible by tile width ({}), got {}",
         emb_dim,
-        emb_dim_tiles);
+        TILE_WIDTH,
+        emb_dim);
     TT_FATAL(
-        emb_dim_tiles <= 8, "Embedding dimension tiles {} must fit in 8 DST registers for batching", emb_dim_tiles);
+        emb_dim_cb_tiles <= 8,
+        "Embedding dimension tiles {} must fit in 8 DST registers for batching",
+        emb_dim_cb_tiles);
 
     constexpr uint32_t REQUIRED_TOKENS_PER_CORE = 32;
     TT_FATAL(
@@ -91,14 +105,11 @@ CreatedProgram create_at(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(combine_output.dtype());
     tt::DataFormat weight_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
-    tt::DataFormat indices_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices.dtype());
-    tt::DataFormat dispatch_table_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(expert_dispatch_table.dtype());
 
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_tiles * tile_size;
+    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_combine_config =
         tt::tt_metal::CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_0, input_cb_data_format}})
             .set_page_size(tt::CBIndex::c_0, tile_size);
@@ -111,35 +122,55 @@ CreatedProgram create_at(
             .set_page_size(tt::CBIndex::c_1, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 
-    // c_2: Dispatch table scratch — loaded once by writer, read by compute.
-    uint32_t dispatch_table_num_pages = get_num_pages(expert_dispatch_table);
-    uint32_t dispatch_table_aligned_page_size = get_aligned_page_size(expert_dispatch_table);
-    uint32_t dispatch_table_cb_size = dispatch_table_num_pages * dispatch_table_aligned_page_size;
-    tt::tt_metal::CircularBufferConfig cb_dispatch_table_config =
-        tt::tt_metal::CircularBufferConfig(dispatch_table_cb_size, {{tt::CBIndex::c_2, dispatch_table_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_2, dispatch_table_aligned_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_dispatch_table_config);
+    // c_2 / c_3 CBs (dispatch table, indices) are only allocated when the
+    // DeepSeek skip path is in use; the GPT-OSS path does not touch them.
+    uint32_t dispatch_table_num_pages = 0;
+    uint32_t dispatch_table_page_size_val = 0;
+    uint32_t dispatch_table_aligned_page_size = 0;
+    uint32_t indices_page_size_val = 0;
+    uint32_t indices_aligned_page_size = 0;
+    uint32_t indices_pages_per_core = 0;
 
-    // c_3: Indices scratch — loaded once by writer, read by compute.
-    // Each core handles TOKENS_PER_CORE tokens, each with num_experts index entries.
-    uint32_t indices_page_size = get_page_size(indices);
-    uint32_t indices_aligned_page_size = get_aligned_page_size(indices);
-    uint32_t indices_pages_per_core = REQUIRED_TOKENS_PER_CORE;  // one page per token
-    uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
-    tt::tt_metal::CircularBufferConfig cb_indices_config =
-        tt::tt_metal::CircularBufferConfig(indices_cb_size, {{tt::CBIndex::c_3, indices_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_3, indices_aligned_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_indices_config);
+    if (use_dispatch_table_skip) {
+        const auto& indices = *indices_opt;
+        const auto& expert_dispatch_table = *dispatch_table_opt;
+
+        tt::DataFormat indices_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices.dtype());
+        tt::DataFormat dispatch_table_cb_data_format =
+            tt::tt_metal::datatype_to_dataformat_converter(expert_dispatch_table.dtype());
+
+        // c_2: Dispatch table scratch — loaded once by writer, read by compute.
+        dispatch_table_num_pages = get_num_pages(expert_dispatch_table);
+        dispatch_table_page_size_val = get_page_size(expert_dispatch_table);
+        dispatch_table_aligned_page_size = get_aligned_page_size(expert_dispatch_table);
+        uint32_t dispatch_table_cb_size = dispatch_table_num_pages * dispatch_table_aligned_page_size;
+        tt::tt_metal::CircularBufferConfig cb_dispatch_table_config =
+            tt::tt_metal::CircularBufferConfig(
+                dispatch_table_cb_size, {{tt::CBIndex::c_2, dispatch_table_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_2, dispatch_table_aligned_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_dispatch_table_config);
+
+        // c_3: Indices scratch — loaded once by writer, read by compute.
+        // Each core handles TOKENS_PER_CORE tokens, each with num_experts index entries.
+        indices_page_size_val = get_page_size(indices);
+        indices_aligned_page_size = get_aligned_page_size(indices);
+        indices_pages_per_core = REQUIRED_TOKENS_PER_CORE;  // one page per token
+        uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
+        tt::tt_metal::CircularBufferConfig cb_indices_config =
+            tt::tt_metal::CircularBufferConfig(indices_cb_size, {{tt::CBIndex::c_3, indices_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_3, indices_aligned_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_indices_config);
+    }
 
     // c_16: Output
-    uint32_t output_cb_size = REQUIRED_TOKENS_PER_CORE * emb_dim_tiles * tile_size;
+    uint32_t output_cb_size = REQUIRED_TOKENS_PER_CORE * emb_dim_cb_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, tile_size);
     auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
     // c_17: Row-major scratch for tilize
-    uint32_t rowmajor_cb_size = 32 * emb_dim_tiles * tile_size;
+    uint32_t rowmajor_cb_size = 32 * emb_dim_cb_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_rowmajor_config =
         tt::tt_metal::CircularBufferConfig(rowmajor_cb_size, {{tt::CBIndex::c_17, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_17, tile_size);
@@ -147,43 +178,53 @@ CreatedProgram create_at(
 
     auto* combine_buffer = combine_output.buffer();
     auto* weight_buffer = weights.buffer();
-    auto* indices_buffer = indices.buffer();
-    auto* dispatch_table_buffer = expert_dispatch_table.buffer();
     auto* output_buffer = tensor_return_value.buffer();
+    auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
+    auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
-    // Reader compile-time args: num_experts, emb_dim_tiles, combine accessor
+    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor.
+    // Reader does not need to know about expert-skip; that logic lives in compute + writer.
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
-        emb_dim_tiles,
+        emb_dim_cb_tiles,
+        emb_dim_bytes,
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 
-    // Compute compile-time args: num_experts, emb_dim_tiles,
-    //   dispatch_table_num_pages, indices_pages_per_core
+    // Compute compile-time args. The skip-mode toggle is appended last so the
+    // DeepSeek-only args (dispatch_table / indices page counts) retain stable
+    // positions across both modes (they are zero in the GPT-OSS path).
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
-        emb_dim_tiles,
+        emb_dim_cb_tiles,
         dispatch_table_num_pages,
         indices_pages_per_core,
+        static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
     };
 
-    // Writer compile-time args: num_experts, emb_dim_tiles,
-    //   dispatch_table pages/sizes, indices pages/sizes,
-    //   weight accessor, output accessor, dispatch_table accessor, indices accessor
+    // Writer compile-time args use a fixed layout across both paths. In the
+    // GPT-OSS path the dispatch_table / indices metadata slots carry zeros and
+    // the dispatch_table_accessor_args / indices_accessor_args slots reuse the
+    // weight tensor's TensorAccessorArgs as an always-valid placeholder; the
+    // kernel guards every use of them with `if constexpr (use_dispatch_table_skip)`.
     std::vector<uint32_t> writer_compile_time_args = {
         num_experts,
-        emb_dim_tiles,
+        emb_dim_cb_tiles,
+        emb_dim_out_tiles,
         dispatch_table_num_pages,
-        get_page_size(expert_dispatch_table),
+        dispatch_table_page_size_val,
         dispatch_table_aligned_page_size,
         indices_pages_per_core,
-        indices_page_size,
+        indices_page_size_val,
         indices_aligned_page_size,
     };
     tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dispatch_table_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? dispatch_table_buffer : weight_buffer)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? indices_buffer : weight_buffer)
+        .append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back(static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0));
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -225,13 +266,18 @@ CreatedProgram create_at(
             token_start,
         };
 
+        // Writer runtime args: weight_addr, output_addr,
+        //   (deepseek only: dispatch_table_addr, indices_addr),
+        //   token_start. override_runtime_arguments mirrors this layout.
         std::vector<uint32_t> writer_runtime_args = {
             weight_buffer->address(),
             output_buffer->address(),
-            dispatch_table_buffer->address(),
-            indices_buffer->address(),
-            token_start,
         };
+        if (use_dispatch_table_skip) {
+            writer_runtime_args.push_back(dispatch_table_buffer->address());
+            writer_runtime_args.push_back(indices_buffer->address());
+        }
+        writer_runtime_args.push_back(token_start);
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
@@ -248,6 +294,7 @@ CreatedProgram create_at(
             .writer_kernel_id = writer_kernel_id,
             .output_cb_handle = cb_output_handle,
             .cores = cores,
+            .use_dispatch_table_skip = use_dispatch_table_skip,
         }};
 }
 
@@ -278,9 +325,10 @@ void PostCombineReduceProgramFactory::override_runtime_arguments(
     ttnn::Tensor& tensor_return_value) {
     auto* combine_buffer = tensor_args.combine_output.buffer();
     auto* weight_buffer = tensor_args.weights.buffer();
-    auto* indices_buffer = tensor_args.indices.buffer();
-    auto* dispatch_table_buffer = tensor_args.expert_dispatch_table.buffer();
     auto* output_buffer = tensor_return_value.buffer();
+    auto* indices_buffer = tensor_args.indices.has_value() ? tensor_args.indices->buffer() : nullptr;
+    auto* dispatch_table_buffer =
+        tensor_args.expert_dispatch_table.has_value() ? tensor_args.expert_dispatch_table->buffer() : nullptr;
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& svars = cached_workload.shared_variables.at(range);
@@ -292,8 +340,10 @@ void PostCombineReduceProgramFactory::override_runtime_arguments(
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, svars.writer_kernel_id, core);
             writer_runtime_args[0] = weight_buffer->address();
             writer_runtime_args[1] = output_buffer->address();
-            writer_runtime_args[2] = dispatch_table_buffer->address();
-            writer_runtime_args[3] = indices_buffer->address();
+            if (svars.use_dispatch_table_skip) {
+                writer_runtime_args[2] = dispatch_table_buffer->address();
+                writer_runtime_args[3] = indices_buffer->address();
+            }
         }
     }
 }
