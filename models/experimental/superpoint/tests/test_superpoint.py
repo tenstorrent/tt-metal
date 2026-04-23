@@ -232,7 +232,10 @@ def test_superpoint_benchmark(device, height, width, input_kind):
             ttnn.wait_for_event(1, compute_event)
             tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
             write_event = ttnn.record_event(device, 1)
-            ttnn.synchronize_device(device)
+            # No explicit synchronize — the first ttnn.to_torch in D2H phase
+            # below blocks implicitly on CQ0 until trace outputs are ready;
+            # CQ1's H2D for the NEXT iter runs in background and we wait on
+            # write_event at the top of next iteration.
             tp2 = time.perf_counter()
             if trace_nms:
                 nms_scores, desc_host = _device_to_host_post_with_nms(
