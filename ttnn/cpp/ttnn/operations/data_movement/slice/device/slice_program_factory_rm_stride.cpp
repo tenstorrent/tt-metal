@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
