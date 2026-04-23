@@ -99,7 +99,7 @@ public:
 
     size_t size() const { return args_.size(); }
 
-    auto& at(size_t idx) { return args_[idx]; }
+    auto& at(size_t idx) { return args_.at(idx); }
 
     void clear() { args_.clear(); }
 
