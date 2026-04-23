@@ -128,6 +128,9 @@ private:
     std::vector<tt::umd::TlbWindow*> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
+    // Number of entries written to the fetch queue but not yet observed as consumed.
+    // Used to disambiguate depth=0 from depth=N when ptrs == firmware_current.
+    std::vector<uint32_t> prefetch_q_in_flight;
     // Set to true by finish_and_reset_in_use() after quiesce; cleared when new work is enqueued.
     // Allows EventSynchronize() to return immediately for stale tensor-destructor events that
     // predate the quiesce, without the UINT32_MAX sentinel bleeding into the next workload cycle.
