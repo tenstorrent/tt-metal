@@ -126,4 +126,4 @@ def yolov8l_dram_sharded_input_from_torch(device, torch_input_tensor):
     tt_inputs_host = ttnn.from_host_shards(
         [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
     )
-    return tt_inputs_host.to(device, ttnn.L1_MEMORY_CONFIG)
+    return tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
