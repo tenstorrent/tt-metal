@@ -72,6 +72,47 @@ constexpr int kDefaultSampleHz = 100;
 constexpr int kWindowSamples = 100;  // rolling window for dispatch occupancy (~1s at 100Hz)
 constexpr int kDefaultPublishHz = 10;
 
+// Tensix RISC-V debug register layout on Wormhole. Same addresses on host-NOC:
+// per UMD/exalens, RISCV_DEBUG_REGS_START_ADDR is both the private and NOC
+// address for these regs. We read a 220-byte window covering
+// RISCV_DEBUG_REG_PERF_CNT_OUT_{L,H}_FPU (@0x120, 0x124) and
+// RISCV_DEBUG_REG_WALL_CLOCK_{L,H} (@0x1F0, 0x1F8) in one transaction.
+//
+// WH and BH share these offsets; the value lives in tensix.h. Hardcoded here
+// so the collector is self-contained (the firmware header cannot be included
+// in a host-only build without the HAL_BUILD dance).
+constexpr uint64_t kRiscvDebugBase = 0xFFB12000ull;
+
+// Perf-counter control registers (per tt_metal/tools/profiler/perf_counters.hpp):
+//   FPU0 @ 0x018: reference period (unused in continuous mode)
+//   FPU1 @ 0x01C: [7:0] mode (0 = continuous), [12:8] bank select (0 = FPU_COUNTER),
+//                 [16] output H selector (0 = req_cnt, 1 = grant_cnt)
+//   FPU2 @ 0x020: [0] start, [1] stop. Rising edge on [0] clears + starts the counter.
+constexpr uint64_t kRegFpu0 = kRiscvDebugBase + 0x018;
+constexpr uint64_t kRegFpu1 = kRiscvDebugBase + 0x01C;
+constexpr uint64_t kRegFpu2 = kRiscvDebugBase + 0x020;
+
+// Data window we read every tick: FPU_OUT_L/H (0x120, 0x124) and
+// WALL_CLOCK_L/H (0x1F0, 0x1F8). One NOC read covers 220 bytes including gaps.
+//
+// FPU_OUT_L and FPU_OUT_H are TWO INDEPENDENT 32-bit counters in the FPU
+// counter group — not the low/high halves of one 64-bit value:
+//   OUT_L = ref_cnt (cycles counter was armed)
+//   OUT_H = req_cnt (FPU request cycles) when FPU1[16]=0
+// We read OUT_H as "FPU busy" and use WALL_CLOCK as the denominator.
+//
+// WALL_CLOCK_L / WALL_CLOCK_H ARE paired halves of one 64-bit free-running
+// cycle counter.
+constexpr uint64_t kPerfWindowStart = kRiscvDebugBase + 0x120;
+constexpr size_t kPerfWindowSize = 0x1F8 + 4 - 0x120;
+constexpr size_t kOffFpuOutH = 0x124 - 0x120;  // 0x04 — "FPU busy" cycles (req_cnt)
+constexpr size_t kOffWallL = 0x1F0 - 0x120;    // 0xD0 — low half of 64-bit wall clock
+constexpr size_t kOffWallH = 0x1F8 - 0x120;    // 0xD8 — high half
+
+// EWMA smoothing for compute_busy. alpha = 2/(N+1) for N-sample horizon.
+// N=10 gives a ~1s smoothing window at 10 Hz publish rate.
+constexpr double kComputeEwmaAlpha = 2.0 / (10.0 + 1.0);
+
 struct CliOptions {
     int sample_hz = kDefaultSampleHz;
     int publish_hz = kDefaultPublishHz;
@@ -184,6 +225,18 @@ struct CoreState {
     uint32_t busy_count = 0;
     uint64_t samples_seen = 0;
     uint8_t last_dispatched = 0;
+
+    // Phase 2.0 perf-counter state. We arm the FPU counter from host at
+    // startup (continuous mode, bank=FPU_COUNTER, rising edge on start) so it
+    // free-runs until someone stops it. Tracks a 64-bit wall-clock and the
+    // 32-bit FPU_OUT_H counter; we extend that 32-bit value across wraps by
+    // tracking previous and adding 2^32 on decrement.
+    bool perf_primed = false;
+    bool counter_armed = false;
+    uint64_t last_wall_clock = 0;
+    uint32_t last_fpu_out_h = 0;
+    uint64_t fpu_out_h_extended = 0;  // tracks wraps
+    double compute_busy_ewma = 0.0;   // [0..1]
 };
 
 struct ChipState {
@@ -206,6 +259,26 @@ const char* arch_name(tt::ARCH a) {
         case tt::ARCH::QUASAR: return "Quasar";
         default: return "Unknown";
     }
+}
+
+// Arm the FPU counter on a single Tensix for free-running continuous mode
+// with bank=FPU_COUNTER. Rising edge on FPU2[0] both clears and starts.
+// Returns true on success; false if any of the four writes threw. A user
+// kernel that calls StartPerfCounters later will fight with this (transient
+// reset + new start), which our sampler's negative-delta guard tolerates.
+bool arm_fpu_counter(TTDevice* device, const tt_xy_pair& core) {
+    const auto write32 = [&](uint64_t addr, uint32_t value) {
+        device->write_to_device(&value, core, addr, sizeof(value));
+    };
+    try {
+        write32(kRegFpu0, 0u);  // reference period (unused in continuous)
+        write32(kRegFpu1, 0u);  // mode=0 continuous, bank=FPU_COUNTER, H=req_cnt
+        write32(kRegFpu2, 0u);  // ensure start bit is low
+        write32(kRegFpu2, 1u);  // rising edge on start clears + starts
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
@@ -307,13 +380,16 @@ int main(int argc, char* argv[]) {
         if (!chip.publisher.open(
                 chip.asic_id,
                 static_cast<uint32_t>(arch),
-                ttnvtop::SIGNAL_SRC_DISPATCH,
+                ttnvtop::SIGNAL_SRC_DISPATCH | ttnvtop::SIGNAL_SRC_COMPUTE,
                 static_cast<uint32_t>(chip.cores.size()))) {
             std::cerr << "ttnvtop-collector: failed to open /dev/shm for asic " << chip.asic_id << " (errno " << errno
                       << ").\n";
             continue;
         }
-        // Populate static per-core fields once.
+        // Populate static per-core fields once, and arm the FPU perf counter
+        // so it runs continuously. Kernels that call StartPerfCounters will
+        // transiently reset it; the sampler's delta guard drops those ticks.
+        int armed = 0;
         for (size_t i = 0; i < chip.cores.size(); ++i) {
             auto& v = chip.publisher.cores()[i];
             v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -321,7 +397,13 @@ int main(int argc, char* argv[]) {
             v.logical_x = 0;  // Phase 1: logical coords not yet wired
             v.logical_y = 0;
             v.is_remote = chip.is_remote ? 1u : 0u;
+            chip.cores[i].counter_armed = arm_fpu_counter(chip.cores[i].device, chip.cores[i].translated);
+            if (chip.cores[i].counter_armed) {
+                ++armed;
+            }
         }
+        std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " armed FPU counter on " << armed << "/"
+                  << chip.cores.size() << " cores.\n";
         chips.push_back(std::move(chip));
     }
 
@@ -335,37 +417,90 @@ int main(int argc, char* argv[]) {
 
     std::mutex state_mx;  // protects CoreState samples across sampler/publisher
 
-    // Sampling thread: one PCIe block read per core per tick. Kept as a single
-    // thread for simplicity; per-chip threads are a Phase 3 optimization.
+    // Sampling thread: two PCIe block reads per core per tick. One pulls the
+    // launch mailbox (dispatch signal), one pulls the Tensix perf-counter
+    // window (wall clock + FPU busy). Kept as a single thread for simplicity;
+    // per-chip threads are a Phase 3 optimization.
     auto sampler = [&]() {
         std::vector<uint8_t> buf(kReadSize);
+        std::vector<uint8_t> perf_buf(kPerfWindowSize);
         const auto period = std::chrono::microseconds(1'000'000 / cli.sample_hz);
         auto next = std::chrono::steady_clock::now();
         while (!g_stop.load(std::memory_order_relaxed)) {
             for (auto& chip : chips) {
                 for (auto& c : chip.cores) {
+                    uint8_t now_bit = 0;
+                    bool have_dispatch = false;
                     try {
                         c.device->read_from_device(buf.data(), c.translated, read_addr, kReadSize);
+                        have_dispatch = true;
                     } catch (const std::exception&) {
-                        continue;
+                        // continue — still try perf read below
                     }
-                    uint32_t idx = 0;
-                    std::memcpy(&idx, buf.data() + kIdxOffInBuf, sizeof(idx));
-                    if (idx >= go_message_num_entries) {
-                        idx = 0;
+                    if (have_dispatch) {
+                        uint32_t idx = 0;
+                        std::memcpy(&idx, buf.data() + kIdxOffInBuf, sizeof(idx));
+                        if (idx >= go_message_num_entries) {
+                            idx = 0;
+                        }
+                        uint32_t go_word = 0;
+                        std::memcpy(&go_word, buf.data() + idx * sizeof(uint32_t), sizeof(go_word));
+                        const uint8_t signal = static_cast<uint8_t>((go_word >> 24) & 0xFFu);
+                        now_bit = (signal == static_cast<uint8_t>(RUN_MSG_GO)) ? 1 : 0;
                     }
-                    uint32_t go_word = 0;
-                    std::memcpy(&go_word, buf.data() + idx * sizeof(uint32_t), sizeof(go_word));
-                    const uint8_t signal = static_cast<uint8_t>((go_word >> 24) & 0xFFu);
-                    const uint8_t now_bit = (signal == static_cast<uint8_t>(RUN_MSG_GO)) ? 1 : 0;
+
+                    // Perf counters (Phase 2.0). Free-running; deltas give
+                    // busy%. Negative deltas mean the kernel called
+                    // StartPerfCounters and reset — skip those ticks.
+                    bool have_perf = false;
+                    uint64_t wall_now = 0;
+                    uint32_t fpu_out_h_now = 0;  // 32-bit FPU busy counter snapshot
+                    try {
+                        c.device->read_from_device(perf_buf.data(), c.translated, kPerfWindowStart, kPerfWindowSize);
+                        have_perf = true;
+                    } catch (const std::exception&) {
+                    }
+                    if (have_perf) {
+                        uint32_t wl = 0, wh = 0;
+                        std::memcpy(&wl, perf_buf.data() + kOffWallL, sizeof(wl));
+                        std::memcpy(&wh, perf_buf.data() + kOffWallH, sizeof(wh));
+                        wall_now = (static_cast<uint64_t>(wh) << 32) | wl;
+                        std::memcpy(&fpu_out_h_now, perf_buf.data() + kOffFpuOutH, sizeof(fpu_out_h_now));
+                    }
+
                     {
                         std::lock_guard<std::mutex> lk(state_mx);
-                        const uint8_t was = c.samples[c.head];
-                        c.samples[c.head] = now_bit;
-                        c.head = (c.head + 1) % kWindowSamples;
-                        c.busy_count = c.busy_count + now_bit - was;
-                        c.samples_seen += 1;
-                        c.last_dispatched = now_bit;
+                        if (have_dispatch) {
+                            const uint8_t was = c.samples[c.head];
+                            c.samples[c.head] = now_bit;
+                            c.head = (c.head + 1) % kWindowSamples;
+                            c.busy_count = c.busy_count + now_bit - was;
+                            c.samples_seen += 1;
+                            c.last_dispatched = now_bit;
+                        }
+                        if (have_perf) {
+                            if (c.perf_primed) {
+                                const uint64_t wall_d = wall_now - c.last_wall_clock;
+                                // FPU_OUT_H is a 32-bit counter. Compute the
+                                // delta via 32-bit arithmetic (handles a single
+                                // wrap naturally) then sanity-check against wall
+                                // delta. If fpu_d > wall_d we must be seeing a
+                                // kernel-side reset (StartPerfCounters) or a
+                                // multi-wrap skip; drop that tick and keep old
+                                // EWMA (which will decay as we collect valid
+                                // samples).
+                                const uint64_t fpu_d = static_cast<uint64_t>(fpu_out_h_now - c.last_fpu_out_h);
+                                const bool wall_ok = wall_d > 0 && wall_d < (1ull << 40);
+                                if (wall_ok && fpu_d <= wall_d) {
+                                    const double inst = static_cast<double>(fpu_d) / static_cast<double>(wall_d);
+                                    c.compute_busy_ewma =
+                                        kComputeEwmaAlpha * inst + (1.0 - kComputeEwmaAlpha) * c.compute_busy_ewma;
+                                }
+                            }
+                            c.last_wall_clock = wall_now;
+                            c.last_fpu_out_h = fpu_out_h_now;
+                            c.perf_primed = true;
+                        }
                     }
                 }
             }
@@ -397,6 +532,14 @@ int main(int argc, char* argv[]) {
                 // busy_count is the count over kWindowSamples samples. Convert to per-mille.
                 v.dispatch_busy_p1000 = static_cast<uint16_t>((c.busy_count * 1000u) / kWindowSamples);
                 v.samples_seen = static_cast<uint32_t>(c.samples_seen);
+                // Compute busy: EWMA is in [0,1]; clamp and convert to per-mille.
+                double cb = c.compute_busy_ewma;
+                if (cb < 0.0) {
+                    cb = 0.0;
+                } else if (cb > 1.0) {
+                    cb = 1.0;
+                }
+                v.compute_busy_p1000 = static_cast<uint16_t>(cb * 1000.0);
                 // Phase 2+ fields stay at their zero-initialized values.
             }
             chip.publisher.mark_updated();

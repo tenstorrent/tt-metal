@@ -229,13 +229,31 @@ int main(int argc, char* argv[]) {
         out << "ttnvtop  |  chips=" << maps.size() << "  cores=" << total_cores << "  refresh=" << kRenderHz
             << "Hz  (SHM viewer)\n";
         out << "\n";
-        out << "What this measures (Phase 1 — dispatch occupancy):\n";
-        out << "  Per Tensix, fraction of the last ~1s in which a kernel was\n";
-        out << "  dispatched to that core (go_msg.signal == RUN_MSG_GO).\n";
-        out << "  100% = kernel dispatched the full window.  0% = idle.\n";
-        out << "  NOT the same as compute busy%: a dispatched kernel stalled\n";
-        out << "  on NOC/CB still reads 100%. Phase 2 will add true\n";
-        out << "  FPU/PACK/UNPACK busy% via on-chip perf-counter sampling.\n";
+        // Explanation depends on whether compute% is available on all chips.
+        bool all_have_compute = true;
+        for (const auto& m : maps) {
+            if ((m.header->signal_sources & ttnvtop::SIGNAL_SRC_COMPUTE) == 0) {
+                all_have_compute = false;
+                break;
+            }
+        }
+        if (all_have_compute) {
+            out << "What this measures (Phase 2.0 — FPU busy%):\n";
+            out << "  Per Tensix, fraction of AICLK cycles the FPU pipeline was busy,\n";
+            out << "  computed from RISCV_DEBUG_REG_PERF_CNT_FPU delta vs wall-clock\n";
+            out << "  delta between sampler ticks. Smoothed with a ~1s EWMA.\n";
+            out << "  100% = FPU firing every cycle.  0% = no compute.\n";
+            out << "  Caveats: sample gaps across kernel boundaries are dropped\n";
+            out << "  (counters reset on StartPerfCounters). UNPACK/PACK/stall\n";
+            out << "  breakdown is Phase 2.1 (on-chip sampler with mux rotation).\n";
+        } else {
+            out << "What this measures (Phase 1 — dispatch occupancy):\n";
+            out << "  Per Tensix, fraction of the last ~1s in which a kernel was\n";
+            out << "  dispatched to that core (go_msg.signal == RUN_MSG_GO).\n";
+            out << "  100% = kernel dispatched the full window.  0% = idle.\n";
+            out << "  NOT compute busy%: a dispatched kernel stalled on NOC/CB\n";
+            out << "  still reads 100%.\n";
+        }
         out << "\n";
 
         // Header row: chip title per column.
