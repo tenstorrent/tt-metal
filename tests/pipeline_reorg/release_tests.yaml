@@ -126,6 +126,35 @@
   team: models
   model-name: vgg_unet
 
+# N150 Unit tests (from models_unit_tests.yaml)
+- name: Llama 3.1-8B N150 unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
+    pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 300 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
+  model-name: llama3.1-8b
+  skus:
+    wh_n150:
+      timeout: 30
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Whisper N150 unit tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
+  model-name: whisper
+  skus:
+    wh_n150:
+      timeout: 10
+  owner_id: U0491KT8MNY # Mohamed Bahnas
+  team: models
+
 # N300 Core models
 - name: resnet N300 functional
   cmd: run_resnet_func
@@ -382,6 +411,35 @@
     wh_galaxy_release:
       timeout: 24
   owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+
+# Galaxy Unit tests (from models_unit_tests.yaml)
+- name: Galaxy Qwen3-32B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_decoder_prefill.py
+  model-name: qwen3-32b-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 10
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: Galaxy GPT-OSS 120B unit tests (high batch)
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit -k "4x8 and decode_high_throughput"
+  model-name: gpt-oss-120b-high-batch-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 25
+  owner_id: U08TJ70UFRT # Stuti Raizada
   team: models
 
 # ============================================================================
