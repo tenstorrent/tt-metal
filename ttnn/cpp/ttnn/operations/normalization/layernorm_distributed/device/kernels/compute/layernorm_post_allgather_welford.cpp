@@ -20,6 +20,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_math.hpp"
 #include "chain_llk.hpp"
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -129,21 +131,23 @@ void kernel_main() {
          * 1/sqrt(var + eps)
          */
 
+        // recip_sqrt_var = rsqrt(cb_stats_reduced[1] + cb_eps[0])
+        // A: absolute index 1 in cb_stats_reduced (waited above). B: cb_eps (waited
+        // once before outer loop). Result is rsqrt'd via PostOp chain.
         cb_wait_front(cb_stats_reduced, 2);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        tile_regs_acquire();
-        tile_regs_wait();
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_stats_reduced,
+            cb_eps,
+            cb_recip_sqrt_var,
+            compute_kernel_lib::BinaryInputBlockShape::single(),
+            compute_kernel_lib::sfpu_chain(
+                compute_kernel_lib::Rsqrt<compute_kernel_lib::Legacy::On, compute_kernel_lib::Approx::Exact>{}),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::BinaryInputExtras{.base = 1},
+            compute_kernel_lib::BinaryInputExtras{.base = 0});
 
         if constexpr (do_gamma && do_beta) {
             /*

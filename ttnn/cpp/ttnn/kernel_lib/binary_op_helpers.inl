@@ -297,10 +297,10 @@ ALWI void binary_op(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras,
-    BinaryInputExtras b_extras,
     PostOp post_op,
-    AccumT accum) {
+    AccumT accum,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras) {
     static_assert(
         std::is_same_v<PostOp, NoOp> || detail::is_sfpu_chain_v<PostOp>,
         "binary_op PostOp must be NoOp or an SfpuChain. Wrap single ops in sfpu_chain(...) "
@@ -615,10 +615,10 @@ ALWI void add(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras,
-    BinaryInputExtras b_extras,
     PostOp post_op,
-    AccumT accum) {
+    AccumT accum,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras) {
     binary_op<
         BinaryOpType::ADD,
         bcast_dim,
@@ -628,7 +628,7 @@ ALWI void add(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, a_extras, b_extras, post_op, accum);
+        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum, a_extras, b_extras);
 }
 
 template <
@@ -645,10 +645,10 @@ ALWI void sub(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras,
-    BinaryInputExtras b_extras,
     PostOp post_op,
-    AccumT accum) {
+    AccumT accum,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras) {
     binary_op<
         BinaryOpType::SUB,
         bcast_dim,
@@ -658,7 +658,7 @@ ALWI void sub(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, a_extras, b_extras, post_op, accum);
+        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum, a_extras, b_extras);
 }
 
 template <
@@ -675,10 +675,10 @@ ALWI void mul(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras,
-    BinaryInputExtras b_extras,
     PostOp post_op,
-    AccumT accum) {
+    AccumT accum,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras) {
     binary_op<
         BinaryOpType::MUL,
         bcast_dim,
@@ -688,7 +688,7 @@ ALWI void mul(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, a_extras, b_extras, post_op, accum);
+        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum, a_extras, b_extras);
 }
 
 template <
@@ -702,9 +702,9 @@ ALWI void square(
     uint32_t icb,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras extras,
     PostOp post_op,
-    AccumT accum) {
+    AccumT accum,
+    BinaryInputExtras extras) {
     binary_op<
         BinaryOpType::SQUARE,
         BroadcastDim::NONE,
@@ -714,7 +714,7 @@ ALWI void square(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb, icb, ocb, shape, extras, extras, post_op, accum);
+        AccumT>(icb, icb, ocb, shape, post_op, accum, extras, extras);
 }
 
 }  // namespace compute_kernel_lib

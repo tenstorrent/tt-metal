@@ -305,10 +305,10 @@ ALWI void binary_op(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras = {},
-    BinaryInputExtras b_extras = {},
     PostOp post_op = {},
-    AccumT accum = {});
+    AccumT accum = {},
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {});
 
 // =============================================================================
 // Convenience Aliases
@@ -329,10 +329,10 @@ ALWI void add(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras = {},
-    BinaryInputExtras b_extras = {},
     PostOp post_op = {},
-    AccumT accum = {});
+    AccumT accum = {},
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {});
 
 /** @brief Element-wise subtraction: A - B. See binary_op() for full documentation. */
 template <
@@ -349,10 +349,10 @@ ALWI void sub(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras = {},
-    BinaryInputExtras b_extras = {},
     PostOp post_op = {},
-    AccumT accum = {});
+    AccumT accum = {},
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {});
 
 /** @brief Element-wise multiplication: A * B. See binary_op() for full documentation. */
 template <
@@ -369,10 +369,10 @@ ALWI void mul(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras a_extras = {},
-    BinaryInputExtras b_extras = {},
     PostOp post_op = {},
-    AccumT accum = {});
+    AccumT accum = {},
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {});
 
 /** @brief Element-wise square: A * A. Uses a single input CB. See binary_op() for full documentation. */
 template <
@@ -386,9 +386,9 @@ ALWI void square(
     uint32_t icb,
     uint32_t ocb,
     BinaryInputBlockShape shape,
-    BinaryInputExtras extras = {},
     PostOp post_op = {},
-    AccumT accum = {});
+    AccumT accum = {},
+    BinaryInputExtras extras = {});
 
 // =============================================================================
 // Dest-Reuse PostOp

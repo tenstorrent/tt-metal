@@ -44,7 +44,12 @@ void kernel_main() {
          * No pop — the later reductions consume cb_inp's tiles.
          */
         square<BinaryInputPolicy::CumulativeWaitNoPop, BinaryOutputPolicy::Bulk>(
-            cb_inp, cb_x2, BinaryInputBlockShape::of(1, Wt), BinaryInputExtras{.wait_step = blk});
+            cb_inp,
+            cb_x2,
+            BinaryInputBlockShape::of(1, Wt),
+            NoOp{},
+            NoAccumulation{},
+            BinaryInputExtras{.wait_step = blk});
         /*
          * sum(x**2)
          */

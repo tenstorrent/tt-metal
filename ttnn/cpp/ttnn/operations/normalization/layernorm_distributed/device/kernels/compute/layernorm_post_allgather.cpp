@@ -164,19 +164,19 @@ void kernel_main() {
         reduce_uninit();
 
         /*
-         * E[x]**2
+         * E[x]**2 — square the mean tile (absolute index 1 in cb_stats_reduced).
+         * cb_stats_reduced was waited at the start of this ncht via cb_wait_front
+         * above (before the reduce); NoWaitNoPop here lets the helper read tile 1
+         * absolutely without re-waiting.
          */
-        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-        pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_reserve_back(cb_mean_squared, onetile);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        ACQ();
-        mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
-        pack_tile(0, cb_mean_squared);
-        REL();
-
-        cb_push_back(cb_mean_squared, 1);
+        compute_kernel_lib::square<compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_stats_reduced,
+            cb_mean_squared,
+            compute_kernel_lib::BinaryInputBlockShape::single(),
+            compute_kernel_lib::NoOp{},
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::BinaryInputExtras{.base = 1});
 
         // Stage 3 — cb_var = cb_stats_reduced[0] - cb_mean_squared
         // cb_stats_reduced is waited/popped by the enclosing scope (NoWaitNoPop).
