@@ -604,6 +604,69 @@ inline void _llk_unpack_fast_tilize_block_(
     switch_config_context(unp_cfg_context);
 }
 
+// ===========================================================================
+// Row streaming helpers (Proposal 3).
+//
+// Instead of one context-acquire/release per chunk, acquire once per row,
+// run all chunks under that context, release once at the end.
+// This eliminates (units_per_row - 1) context-switch sequences per row.
+//
+// Confirmed safe pattern: same as _llk_unpack_untilize_pass_ which runs
+// multiple MOPs between one semaphore_post and one t6_semaphore_get.
+//
+// Contract:
+//   _llk_unpack_fast_tilize_row_begin_ once per row
+//   _llk_unpack_fast_tilize_row_chunk_ once per chunk (col_start already
+//       encoded in base_address passed to row_begin when using API wrapper)
+//   _llk_unpack_fast_tilize_row_end_ once per row
+// ===========================================================================
+
+// Acquire context, program row base address, sync with T6. Call once per row.
+// base_address should encode the row start (col=0) with any row offset already folded in.
+inline void _llk_unpack_fast_tilize_row_begin_(const std::uint32_t base_address)
+{
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+    _llk_unpack_configure_single_address_(base_address, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    // Set zmask hi16 once for all chunks in this row.
+    constexpr std::uint32_t ZMASK = 0x80808080;
+    TT_MOP_CFG(ZMASK >> 16);
+}
+
+// Reset per-chunk counter state, advance Y to col_start, run one MOP.
+// base_address already encodes the chunk column (see API wrapper); col_start=0 expected.
+// If calling from direct LLK code with non-zero col_start, pass the col tiles offset.
+inline void _llk_unpack_fast_tilize_row_chunk_(const std::uint32_t col_start = 0)
+{
+    // Reset CH0_X=0, CH0_Y=0; reset all Z, W.
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011);
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
+
+    {
+        std::uint32_t remaining = col_start;
+        while (remaining > 0)
+        {
+            std::uint32_t inc = (remaining > 7) ? 7 : remaining;
+            TT_INCADCXY(p_setadc::UNP_A, 0, 0, inc, 0);
+            remaining -= inc;
+        }
+    }
+
+    constexpr std::uint32_t ZMASK = 0x80808080;
+    TT_MOP(0, 32 - 1, ZMASK & 0xFFFF);
+}
+
+// Release the context acquired by row_begin. Call once after all row_chunk calls.
+inline void _llk_unpack_fast_tilize_row_end_()
+{
+    // T6 posts UNPACK_SYNC once after processing all MOPs under this context.
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_fast_tilize_uninit_()
 {
