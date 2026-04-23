@@ -2626,6 +2626,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (is_sender_channel_serviced[0] && MY_ERISC_ID == 0) {
                 // WAN debug (ERISC 0 only): snapshot into CT-arg L1, optional mirror to DRAM ring.
                 if (WAN_DEBUG_REGISTER_STATE_BASE_ADDR != 0) {
+                    // Call the status check API directly, it will snaposhot some of the counters to accumulate
+                    invalidate_l1_cache();
+                    reinterpret_cast<void (*)(uint32_t)>(
+                        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(
+                        0xFFFFFFFF);
+
                     auto* wan_l1 =
                         reinterpret_cast<volatile tt_l1_ptr WANDebugRegisterState*>(WAN_DEBUG_REGISTER_STATE_BASE_ADDR);
                     // MMIO-backed snapshot fields: use READ_REG (volatile tt_reg_ptr) per risc_common.h, not plain
@@ -2641,30 +2647,30 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             READ_REG(WAN_DEBUG_REGISTER_SET_9_BASE + i * WAN_DEBUG_REGISTER_SET_9_OFFSET);
                     }
                     for (uint32_t i = 0; i < WAN_DEBUG_REGISTER_SET_10_NUM; i++) {
-                        wan_l1->wan_debug_register_set_10[i] =
+                        uint32_t reg_val =
                             READ_REG(WAN_DEBUG_REGISTER_SET_10_BASE + i * WAN_DEBUG_REGISTER_SET_10_OFFSET);
+                        wan_l1->wan_debug_register_set_10[i] += reg_val;
                     }
-                    // WAN_DEBUG_REGISTER_11..20: L1-backed words (not READ_REG targets).
-                    wan_l1->wan_debug_register_11 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_11);
-                    wan_l1->wan_debug_register_12 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_12);
-                    wan_l1->wan_debug_register_13 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_13);
-                    wan_l1->wan_debug_register_14 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_14);
-                    wan_l1->wan_debug_register_15 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_15);
-                    wan_l1->wan_debug_register_16 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_16);
-                    wan_l1->wan_debug_register_17 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_17);
-                    wan_l1->wan_debug_register_18 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_18);
-                    wan_l1->wan_debug_register_19 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_19);
-                    wan_l1->wan_debug_register_20 =
-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_20);
+                    // L1-backed counters from eth_live_status_t (corr/uncorr codewords, TXQ0/1/2
+                    // resend counts, bytes_txd/rxd). Access via volatile pointer — no bulk struct
+                    // copy since C++ can't copy-construct from a volatile lvalue.
+                    auto* live_status =
+                        reinterpret_cast<const volatile tt_l1_ptr eth_live_status_t*>(MEM_SYSENG_ETH_LIVE_STATUS);
+                    const uint64_t corr_cw = live_status->corr_cw;
+                    const uint64_t uncorr_cw = live_status->uncorr_cw;
+                    const uint64_t txq0_resend_cnt = live_status->txq0_resend_cnt;
+                    const uint64_t txq1_resend_cnt = live_status->txq1_resend_cnt;
+                    const uint64_t txq2_resend_cnt = live_status->txq2_resend_cnt;
+                    wan_l1->corr_cw_lo = static_cast<uint32_t>(corr_cw);
+                    wan_l1->corr_cw_hi = static_cast<uint32_t>(corr_cw >> 32);
+                    wan_l1->uncorr_cw_lo = static_cast<uint32_t>(uncorr_cw);
+                    wan_l1->uncorr_cw_hi = static_cast<uint32_t>(uncorr_cw >> 32);
+                    wan_l1->txq0_resend_cnt_lo = static_cast<uint32_t>(txq0_resend_cnt);
+                    wan_l1->txq0_resend_cnt_hi = static_cast<uint32_t>(txq0_resend_cnt >> 32);
+                    wan_l1->txq1_resend_cnt_lo = static_cast<uint32_t>(txq1_resend_cnt);
+                    wan_l1->txq1_resend_cnt_hi = static_cast<uint32_t>(txq1_resend_cnt >> 32);
+                    wan_l1->txq2_resend_cnt_lo = static_cast<uint32_t>(txq2_resend_cnt);
+                    wan_l1->txq2_resend_cnt_hi = static_cast<uint32_t>(txq2_resend_cnt >> 32);
                     for (uint32_t pi = 0; pi < WAN_DEBUG_REGISTER_STATE_RESERVED_PAD_U32; pi++) {
                         wan_l1->reserved_pad_u32_for_16byte_stride[pi] = 0;
                     }
@@ -3814,6 +3820,18 @@ void kernel_main() {
             reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
         auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
         state_manager_l1->state = RouterState::INITIALIZING;
+    }
+
+    // Zero the WAN debug L1 snapshot slot once before the main loop so host tooling can
+    // distinguish "never written" (sequence_number == 0) from a stale pre-kernel value.
+    if constexpr (is_sender_channel_serviced[0] && MY_ERISC_ID == 0) {
+        if (WAN_DEBUG_REGISTER_STATE_BASE_ADDR != 0) {
+            auto* wan_l1_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WAN_DEBUG_REGISTER_STATE_BASE_ADDR);
+            constexpr uint32_t wan_l1_size_u32 = sizeof(WANDebugRegisterState) / sizeof(uint32_t);
+            for (uint32_t i = 0; i < wan_l1_size_u32; i++) {
+                wan_l1_u32[i] = 0;
+            }
+        }
     }
 
     //////////////////////////////

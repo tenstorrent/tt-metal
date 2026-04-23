@@ -10,8 +10,10 @@
 #include <cstdint>
 #include "wan_debug_register_addresses.h"
 
+static_assert(WAN_DEBUG_REG_ADDR_VERSION == 0x0102, "WAN debug register address version mismatch, expected 0x0102");
+
 /// Trailing snapshot pad (zeroed by fabric ERISC); sized so 50 MiB / sizeof(WANDebugRegisterState) is even.
-/// Payload growth (e.g. `wan_debug_register_15`..`20`) shrinks this pad so total `sizeof` stays 256 B / 16-aligned.
+/// Payload growth shrinks this pad so total `sizeof` stays 256 B / 16-aligned.
 inline constexpr std::uint32_t WAN_DEBUG_REGISTER_STATE_RESERVED_PAD_U32 = 8;
 
 struct WANDebugRegisterState {
@@ -28,18 +30,18 @@ struct WANDebugRegisterState {
     uint32_t wan_debug_register_set_9[WAN_DEBUG_REGISTER_SET_9_NUM];
     /// `WAN_DEBUG_REGISTER_SET_10_BASE` + i * `WAN_DEBUG_REGISTER_SET_10_OFFSET` (byte stride between SET_10 words).
     uint32_t wan_debug_register_set_10[WAN_DEBUG_REGISTER_SET_10_NUM];
-    /// L1-backed 32-bit words at `WAN_DEBUG_REGISTER_11`..`WAN_DEBUG_REGISTER_14` (load via `tt_l1_ptr`, not READ_REG).
-    uint32_t wan_debug_register_11;
-    uint32_t wan_debug_register_12;
-    uint32_t wan_debug_register_13;
-    uint32_t wan_debug_register_14;
-    /// L1-backed words at `WAN_DEBUG_REGISTER_15`..`WAN_DEBUG_REGISTER_20` (same load style as 11..14).
-    uint32_t wan_debug_register_15;
-    uint32_t wan_debug_register_16;
-    uint32_t wan_debug_register_17;
-    uint32_t wan_debug_register_18;
-    uint32_t wan_debug_register_19;
-    uint32_t wan_debug_register_20;
+    /// L1-backed fields sourced from `eth_live_status_t` (see blackhole/eth_fw_api.h).
+    /// Lo/hi 32-bit halves of the 64-bit counters; loaded via a single volatile struct copy.
+    uint32_t corr_cw_lo;
+    uint32_t corr_cw_hi;
+    uint32_t uncorr_cw_lo;
+    uint32_t uncorr_cw_hi;
+    uint32_t txq0_resend_cnt_lo;
+    uint32_t txq0_resend_cnt_hi;
+    uint32_t txq1_resend_cnt_lo;
+    uint32_t txq1_resend_cnt_hi;
+    uint32_t txq2_resend_cnt_lo;
+    uint32_t txq2_resend_cnt_hi;
     /// Trailing dwords: 16 B NOC DRAM slot alignment, and even `WAN_DEBUG_DRAM_NUM_ENTRIES` for half-ring split
     /// (50 MiB / sizeof(slot) must be even; 208 B would yield an odd entry count).
     uint32_t reserved_pad_u32_for_16byte_stride[WAN_DEBUG_REGISTER_STATE_RESERVED_PAD_U32]{};
