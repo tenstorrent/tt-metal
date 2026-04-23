@@ -57,10 +57,13 @@ inline constexpr std::uint32_t ETH_MSG_TYPE_PORT_ACTION = 0x0009u;
 inline constexpr std::uint32_t ETH_PORT_ACTION_LINK_UP = 1;
 inline constexpr std::uint32_t ETH_PORT_ACTION_LINK_DOWN = 2;
 
-// Arguments for ETH_MSG_PORT_REINIT_MACPCS(enable, reinit_option, _)
-// reinit_option 2 => reinit MAC + SERDES from reset.
+// Arguments for ETH_MSG_PORT_REINIT_MACPCS(retries, reinit_option, _).
+// The FW calls eth_port_reinit(retries, reinit_option).
 inline constexpr std::uint32_t ETH_PORT_REINIT_ENABLE = 1;
-inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES = 2;
+inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_ONLY = 0;          // Reinit MAC only (SERDES already trained).
+inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES_RETRAIN = 1;  // Reinit MAC + SERDES via SERDES retrain.
+inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES = 2;          // Reinit MAC + SERDES from reset.
+inline constexpr std::uint32_t ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER = 3;  // Same as 2 but with TX barrier.
 
 // Selected boot_results_t field addresses in L1. See
 // `umd/device/types/blackhole_eth.hpp` for the full layout (BOOT_RESULTS_ADDR = 0x7CC00).

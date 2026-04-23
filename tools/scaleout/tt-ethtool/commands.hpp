@@ -30,4 +30,9 @@ int run_link_down(LinkRef link);
 // Query and print the status of a single ethernet link. Returns process exit code.
 int run_link_status(LinkRef link);
 
+// Re-initialize a single ethernet link at the MAC/PCS level (and optionally SERDES).
+// `reinit_option` selects the flavor (see `eth_fw.hpp::ETH_PORT_REINIT_OPT_*`).
+// `retries` is the number of retry attempts the FW will perform. Returns process exit code.
+int run_link_reinit(LinkRef link, unsigned int reinit_option, unsigned int retries);
+
 }  // namespace tt_ethtool

@@ -165,6 +165,17 @@ constexpr std::string_view bh_port_status_to_str(std::uint32_t status) {
     }
 }
 
+constexpr std::string_view bh_reinit_option_to_str(std::uint32_t option) {
+    namespace bh = eth_fw::blackhole;
+    switch (option) {
+        case bh::ETH_PORT_REINIT_OPT_MAC_ONLY: return "mac-only";
+        case bh::ETH_PORT_REINIT_OPT_MAC_SERDES_RETRAIN: return "mac+serdes-retrain";
+        case bh::ETH_PORT_REINIT_OPT_MAC_SERDES: return "mac+serdes-reset";
+        case bh::ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER: return "mac+serdes-reset-tx-barrier";
+        default: return "?";
+    }
+}
+
 constexpr std::string_view wh_train_status_to_str(std::uint32_t status) {
     namespace wh = eth_fw::wormhole;
     switch (status) {
@@ -333,6 +344,61 @@ int run_link_status_action(LinkRef link) {
     }
 }
 
+int run_link_reinit_action(LinkRef link, unsigned int reinit_option, unsigned int retries) {
+    namespace bh = eth_fw::blackhole;
+    if (reinit_option > bh::ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER) {
+        std::cerr << fmt::format(
+            "Invalid reinit option {}; expected 0..{}.\n", reinit_option, bh::ETH_PORT_REINIT_OPT_MAC_SERDES_TX_BARRIER);
+        return EXIT_FAILURE;
+    }
+    if (!validate_link_ref(link)) {
+        return EXIT_FAILURE;
+    }
+
+    tt::umd::Cluster cluster;
+    const tt::ARCH arch = cluster.get_cluster_description()->get_arch(link.chip_id);
+    const tt::umd::CoreCoord core = get_eth_core(cluster, link.chip_id, link.channel);
+
+    std::cout << fmt::format(
+        "Reinitializing chip {} channel {} (arch={}, NOC0=({},{}), reinit_option={} ({}), retries={})\n",
+        link.chip_id,
+        link.channel,
+        tt::arch_to_str(arch),
+        core.x,
+        core.y,
+        reinit_option,
+        bh_reinit_option_to_str(reinit_option),
+        retries);
+
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE: {
+            bh_send_mailbox_msg(
+                cluster,
+                link.chip_id,
+                link.channel,
+                core,
+                bh::ETH_MSG_TYPE_PORT_REINIT_MACPCS,
+                {retries, reinit_option, 0},
+                /*wait_for_done=*/true);
+
+            const auto args = bh_read_mailbox_args(cluster, link.chip_id, core);
+            const std::uint32_t result = args[0];
+            std::cout << fmt::format(
+                "Chip {} channel {}: ETH FW acknowledged reinit; result=0x{:08x} (mailbox arg0).\n",
+                link.chip_id,
+                link.channel,
+                result);
+            return EXIT_SUCCESS;
+        }
+        default:
+            std::cerr << fmt::format(
+                "Unsupported architecture for link reinit: {}. Only Blackhole exposes "
+                "ETH_MSG_PORT_REINIT_MACPCS; use 'link up' on Wormhole to trigger a retrain.\n",
+                tt::arch_to_str(arch));
+            return EXIT_FAILURE;
+    }
+}
+
 }  // namespace
 
 LinkRef parse_link_ref(std::string_view input) {
@@ -352,5 +418,9 @@ int run_link_up(LinkRef link) { return run_link_action(link, LinkAction::UP); }
 int run_link_down(LinkRef link) { return run_link_action(link, LinkAction::DOWN); }
 
 int run_link_status(LinkRef link) { return run_link_status_action(link); }
+
+int run_link_reinit(LinkRef link, unsigned int reinit_option, unsigned int retries) {
+    return run_link_reinit_action(link, reinit_option, retries);
+}
 
 }  // namespace tt_ethtool
