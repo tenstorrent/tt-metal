@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
 
@@ -22,13 +23,16 @@ void kernel_main() {
     constexpr uint32_t num_trids = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+
     const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
     uint32_t stick_id = start_id;
-    cb_reserve_back(cb_id_in0, block_height);
-    uint32_t dest_write_addr = get_write_ptr(cb_id_in0);
+    cb_in0.reserve_back(block_height);
+    uint32_t dest_write_addr = cb_in0.get_write_ptr();
     if (aligned) {
         for (uint32_t h = 0; h < block_height; ++h) {
-            uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+            uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
             noc_async_read(src_noc_addr, dest_write_addr, block_width_bytes);
             stick_id++;
             dest_write_addr += padded_block_width_bytes;
@@ -44,8 +48,8 @@ void kernel_main() {
 
         constexpr uint32_t trid_base = 1;
 
-        cb_reserve_back(cb_id_in1, num_trids);
-        uint32_t scratch_write_addr_base = get_write_ptr(cb_id_in1);
+        cb_in1.reserve_back(num_trids);
+        uint32_t scratch_write_addr_base = cb_in1.get_write_ptr();
         uint32_t scratch_cb_page_size = get_local_cb_interface(cb_id_in1).fifo_page_size;
         SlotState slot_states[num_trids];
         uint32_t dest_write_addrs[num_trids];
@@ -67,7 +71,7 @@ void kernel_main() {
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
                     // Start new src->scratch transfer
                     noc_async_read_set_trid(active_trid);
-                    uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+                    uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
                     noc_async_read(src_noc_addr, scratch_write_addrs[slot], aligned_block_width_bytes);
                     dest_write_addrs[slot] = dest_write_addr;
                     slot_states[slot] = SlotState::SRC_PENDING;
@@ -103,5 +107,5 @@ void kernel_main() {
 
     }
     noc_async_read_set_trid(0);
-    cb_push_back(cb_id_in0, block_height);
+    cb_in0.push_back(block_height);
 }

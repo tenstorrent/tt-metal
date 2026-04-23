@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
     DeepSeekV3MTPWeights,
+    DeepSeekV3SpecWeights,
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
     SharedExpertWeights,
@@ -41,6 +42,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
+    prepare_spec_weights,
 )
 
 
@@ -720,6 +722,7 @@ def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict
         f"model.layers.{mtp_layer_idx}.hnorm.weight": torch.randn(H, generator=g, dtype=dtype),
         f"model.layers.{mtp_layer_idx}.enorm.weight": torch.randn(H, generator=g, dtype=dtype),
         f"model.layers.{mtp_layer_idx}.eh_proj.weight": torch.randn(H, 2 * H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.shared_head.norm.weight": torch.randn(H, generator=g, dtype=dtype),
     }
 
 
@@ -742,6 +745,22 @@ def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
     assert weights.h_gamma.shape == (1, H)
     assert weights.e_gamma.shape == (1, H)
     assert weights.eh_projection.shape == (2 * H, H)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_spec_weights_4x2(bh_2d_mesh_device):
+    """Prepare spec-stage weights on 4x2 mesh; verify type and shapes."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    state = _mtp_state_dict()
+    weights = prepare_spec_weights(state, submesh)
+    H = LogicalModelDimensions.HIDDEN_SIZE
+    assert isinstance(weights, DeepSeekV3SpecWeights)
+    assert weights.shared_head_norm.shape == (1, H)
 
 
 @pytest.mark.parametrize(
@@ -1120,6 +1139,38 @@ def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     assert (
         len(artifact_dirs) >= 3
     ), f"Expected at least 3 cached artifacts (h/e gamma, eh_proj), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_spec_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare spec weights via TensorCache on 4x2 mesh: cold miss then warm hit for shared_head_norm."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_test_cache_context())
+
+    state = _mtp_state_dict()
+    H = LogicalModelDimensions.HIDDEN_SIZE
+
+    weights = prepare_spec_weights(state, submesh, cache_config=cache_config)
+    assert isinstance(weights, DeepSeekV3SpecWeights)
+    assert weights.shared_head_norm.shape == (1, H)
+
+    expected_shape = weights.shared_head_norm.shape
+
+    ttnn.deallocate(weights.shared_head_norm, force=True)
+
+    weights_hit = prepare_spec_weights(state, submesh, cache_config=cache_config)
+    assert weights_hit.shared_head_norm.shape == expected_shape
+
+    objects_dir = cache_config.cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert (
+        len(artifact_dirs) >= 1
+    ), f"Expected at least 1 cached artifact (shared_head_norm), found {len(artifact_dirs)}"
 
 
 # =============================================================================
