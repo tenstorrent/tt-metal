@@ -111,7 +111,6 @@ inline void _llk_unpack_tilize_(
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
 
     // --- Top faces (common path) ---
-
     TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
 
     wait_for_next_context(2);
@@ -132,7 +131,6 @@ inline void _llk_unpack_tilize_(
     ckernel::ckernel_template::run();
 
     // --- Bottom faces, dest path: stay in same context ---
-
     if (unpack_to_dest && num_loops > 1)
     {
         TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::UNPACK);
@@ -160,7 +158,6 @@ inline void _llk_unpack_tilize_(
     }
 
     // --- Release context (common path) ---
-
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     if (unpack_to_dest)
@@ -171,7 +168,6 @@ inline void _llk_unpack_tilize_(
     switch_config_context(unp_cfg_context);
 
     // --- Bottom faces, normal path: uses a new context ---
-
     if (!unpack_to_dest && num_loops > 1)
     {
         TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
