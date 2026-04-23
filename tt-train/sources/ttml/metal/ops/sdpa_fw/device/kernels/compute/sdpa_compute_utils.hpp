@@ -152,10 +152,10 @@ void matmul_qk_by_v(
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    reconfig_data_format(cb_value, cb_attention_weights);
-    pack_reconfig_data_format(cb_cur_mm_out);
     mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
+    pack_reconfig_data_format(cb_cur_mm_out);
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
+    reconfig_data_format(cb_value, cb_attention_weights);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {

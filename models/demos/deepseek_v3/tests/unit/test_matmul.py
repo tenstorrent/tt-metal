@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
+from models.common.utility_functions import is_watcher_enabled
 from models.demos.deepseek_v3.tests.unit.utils import run_test
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
@@ -172,7 +172,6 @@ def run_test_matmul_dram_sharded(
 # =============================================================================
 
 
-@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 @pytest.mark.parametrize(
     "M, K, N",
     [
@@ -225,7 +224,6 @@ def test_matmul_dram_sharded_single_device(
     )
 
 
-@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 @pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 @pytest.mark.parametrize(
     "M, K, N",
