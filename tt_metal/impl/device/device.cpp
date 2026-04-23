@@ -390,6 +390,11 @@ void Device::configure_fabric(
         return;
     }
 
+    // FIX P2 (#42429): Persist pre_dead_channels so quiesce Phase 5 can skip them.
+    // These channels have no fabric firmware loaded; Phase 5's READY_FOR_TRAFFIC check must
+    // not throw for them (they will never reach that state).
+    fabric_pre_dead_channels_ = pre_dead_channels;
+
     // Returns FabricCoresHealth describing per-channel reset results.
     // newly_dead_channels: channels that NEWLY failed soft reset in this call (not pre-known).
     // If only pre-known dead channels exist, we can continue in degraded mode with a warning;
@@ -1067,27 +1072,60 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
 
         if (!unhealthy.empty()) {
-            std::string details;
+            // FIX P2 (#42429): Separate pre-known-dead channels from genuinely new failures.
+            // Pre-dead channels were identified during configure_fabric() (probe timed out or
+            // corrupt state) and never received firmware — they will never reach READY_FOR_TRAFFIC.
+            // Only channels that WERE loaded with firmware but failed to become healthy are errors.
+            std::vector<UnhealthyChannel> truly_unhealthy;
+            std::vector<UnhealthyChannel> pre_dead_unhealthy;
             for (const auto& u : unhealthy) {
-                details += fmt::format(
-                    "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                if (fabric_pre_dead_channels_.count(u.eth_chan_id)) {
+                    pre_dead_unhealthy.push_back(u);
+                } else {
+                    truly_unhealthy.push_back(u);
+                }
             }
-            TT_THROW(
-                "Fabric health check failed after quiesce restart on Device {} — "
-                "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}). "
-                "Possible corrupt ERISC state from prior process crash (#42429). "
-                "Run tt-smi -r to reset chips.\n{}",
-                this->id(),
-                unhealthy.size(),
-                expected_status,
-                details);
+            if (!pre_dead_unhealthy.empty()) {
+                std::string dead_details;
+                for (const auto& u : pre_dead_unhealthy) {
+                    dead_details += fmt::format(
+                        "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                }
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} Phase 5: {} pre-known-dead ERISC "
+                    "channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) — expected, no firmware was "
+                    "loaded for these channels (#42429):\n{}",
+                    this->id(),
+                    pre_dead_unhealthy.size(),
+                    expected_status,
+                    dead_details);
+            }
+            if (!truly_unhealthy.empty()) {
+                std::string details;
+                for (const auto& u : truly_unhealthy) {
+                    details += fmt::format(
+                        "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                }
+                TT_THROW(
+                    "Fabric health check failed after quiesce restart on Device {} — "
+                    "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}). "
+                    "Possible corrupt ERISC state from prior process crash (#42429). "
+                    "Run tt-smi -r to reset chips.\n{}",
+                    this->id(),
+                    truly_unhealthy.size(),
+                    expected_status,
+                    details);
+            }
         }
 
         log_info(
             tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} Phase 5: all {} ERISC channels healthy",
+            "quiesce_and_restart_fabric_workers: Device {} Phase 5: {} ERISC channels healthy, "
+            "{} pre-known dead (no firmware, skipped)",
             this->id(),
-            chans.size());
+            chans.size() - fabric_pre_dead_channels_.size(),
+            fabric_pre_dead_channels_.size());
     }
 
     log_info(tt::LogMetal, "Fabric MUX workers restarted on Device {}", this->id_);

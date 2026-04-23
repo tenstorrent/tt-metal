@@ -241,6 +241,10 @@ private:
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
+    // FIX P2 (#42429): ETH channel IDs confirmed dead during configure_fabric() — no firmware
+    // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
+    // expect them to reach READY_FOR_TRAFFIC.
+    std::unordered_set<uint32_t> fabric_pre_dead_channels_;
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
