@@ -274,6 +274,40 @@ void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     }
 }
 
+bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+
+    // bytes_acked_ is monotonically increasing -> more bytes acked => more bytes_free
+    // If we bytes_acked_old < bytes_acked_new => bytes_free_old < bytes_free_new
+    // If bytes_free_old > num_bytes then this is safe as bytes_free_new > bytes_free_old > num_bytes necessarily
+    if (bytes_free >= num_bytes) {
+        return true;
+    }
+
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+    bytes_acked_ = bytes_acked_value;
+    return bytes_free >= num_bytes;
+}
+
+bool H2DSocket::acked_past(uint32_t watermark) {
+    // in_flight = bytes_sent_ - bytes_acked_ (unsigned, always <= fifo_size_)
+    // bytes_since_watermark = bytes_sent_ - watermark (unsigned, in [0, fifo_size_])
+    // Write at watermark is done iff bytes_acked_ >= watermark, equivalently
+    // in_flight <= bytes_since_watermark.
+    uint32_t bytes_since_watermark = bytes_sent_ - watermark;
+    if (bytes_sent_ - bytes_acked_ <= bytes_since_watermark) {
+        return true;
+    }
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_acked_ = bytes_acked_value;
+    return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
+}
+
 void H2DSocket::push_bytes(uint32_t num_bytes) {
     if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
