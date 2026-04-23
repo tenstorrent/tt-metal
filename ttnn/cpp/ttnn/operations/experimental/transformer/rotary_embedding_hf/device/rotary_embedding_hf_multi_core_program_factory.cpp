@@ -170,39 +170,22 @@ RotaryEmbeddingHfMultiCore::cached_program_t RotaryEmbeddingHfMultiCore::create(
     auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
-    if (in_sharded) {
-        reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)rotated_input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)src_scalar_cb_index,
-            (std::uint32_t)bfloat16_scalar,
-            (std::uint32_t)Ht,
-            (std::uint32_t)Wt,
-            (std::uint32_t)HtWt,
-            (std::uint32_t)half_Wt,
-        };
-        tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    } else {
-        reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)rotated_input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)src_scalar_cb_index,
-            (std::uint32_t)bfloat16_scalar,
-            (std::uint32_t)Ht,
-            (std::uint32_t)Wt,
-            (std::uint32_t)HtWt,
-            (std::uint32_t)half_Wt,
-        };
-        tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    }
+
+    reader_compile_time_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)rotated_input_cb_index,
+        (std::uint32_t)cos_cb_index,
+        (std::uint32_t)sin_cb_index,
+        (std::uint32_t)src_scalar_cb_index,
+        (std::uint32_t)bfloat16_scalar,
+        (std::uint32_t)Ht,
+        (std::uint32_t)Wt,
+        (std::uint32_t)HtWt,
+        (std::uint32_t)half_Wt,
+    };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
