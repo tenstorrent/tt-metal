@@ -93,7 +93,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -113,6 +113,13 @@ def run_dispatch_op(mesh_device, use_l1_small):
     )
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
+        mesh_mapper=ep_mesh_mapper,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
+    tt_expert_region_offsets = ttnn.from_torch(
+        expert_region_offsets,
         mesh_mapper=ep_mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -145,6 +152,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
         dispatched_buffer,
         dispatch_metadata,
         tt_expert_token_counts,
+        tt_expert_region_offsets,
         dispatch_group_size,
         experts_per_chip,
         num_experts_per_tok,
@@ -159,6 +167,7 @@ def run_combine_op(
     dispatched_buffer,
     dispatch_metadata,
     tt_expert_token_counts,
+    tt_expert_region_offsets,
     dispatch_group_size,
     experts_per_chip,
     num_experts_per_tok,
@@ -171,6 +180,7 @@ def run_combine_op(
         dispatched_buffer,
         dispatch_metadata,
         tt_expert_token_counts,
+        tt_expert_region_offsets,
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
@@ -239,6 +249,7 @@ def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op
         dispatched_buffer,
         dispatch_metadata,
         tt_expert_token_counts,
+        tt_expert_region_offsets,
         dispatch_group_size,
         experts_per_chip,
         num_experts_per_tok,
@@ -254,6 +265,7 @@ def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op
             dispatched_buffer,
             dispatch_metadata,
             tt_expert_token_counts,
+            tt_expert_region_offsets,
             dispatch_group_size,
             experts_per_chip,
             num_experts_per_tok,
@@ -263,7 +275,7 @@ def test_deepseek_prefill_l1_small_semaphores(mesh_device, device_params, ccl_op
         )
         tensors_to_free.append(combine_output)
 
-    tensors_to_free.extend([dispatched_buffer, dispatch_metadata, tt_expert_token_counts])
+    tensors_to_free.extend([dispatched_buffer, dispatch_metadata, tt_expert_token_counts, tt_expert_region_offsets])
 
     print_l1_buffers(mesh_device, f"after_{ccl_op}")
     print_l1_small_buffers(mesh_device, f"after_{ccl_op}")
