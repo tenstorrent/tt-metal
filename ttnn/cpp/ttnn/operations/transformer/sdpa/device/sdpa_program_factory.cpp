@@ -84,7 +84,13 @@ bool can_use_streaming_compute(
     uint32_t dst_size,
     uint32_t padded_Sk,
     uint32_t Sk,
-    uint32_t Sq_chunk_t) {
+    uint32_t Sq_chunk_t,
+    bool flatten_work) {
+    // Streaming branch doesn't honor SDPA_FLAT_WORK; falling into its hierarchical loops would
+    // silently break the flat-work proxy. Revisit once SDPA_FLAT_WORK is threaded through streaming.
+    if (flatten_work) {
+        return false;
+    }
     if (is_causal || use_provided_mask || use_attention_sink) {
         return false;
     }
@@ -353,6 +359,46 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
+    // Flat work distribution (optional): treat (batch, head, q_chunk) as one linear space and split
+    // it evenly across cores. When disabled (default), use the hierarchical batch -> heads -> q_chunks
+    // split. Zigzag sub-mode engages automatically for causal + even q_num_chunks to pair light/heavy
+    // q_chunks per core for load balancing.
+    //
+    // Note: at ring iter 0 of a causal + balanced ring SDPA, each device runs plain causal SDPA on
+    // its local Q/K/V with this same flat distribution, so flatten_work=true makes a single-chip SDPA
+    // an equivalent perf proxy for that iteration.
+    const bool flatten_work = program_config.has_value() && program_config->flatten_work;
+    const ttnn::operations::transformer::RingProxyCase proxy_case =
+        program_config.has_value() ? program_config->ring_proxy_case
+                                   : ttnn::operations::transformer::RingProxyCase::None;
+    const bool is_proxy_up = (proxy_case == ttnn::operations::transformer::RingProxyCase::Up);
+    const bool is_proxy_down = (proxy_case == ttnn::operations::transformer::RingProxyCase::Down);
+    const bool is_proxy = is_proxy_up || is_proxy_down;
+    if (flatten_work) {
+        TT_FATAL(!is_chunked, "SDPAProgramConfig::flatten_work does not support chunked prefill");
+        TT_FATAL(!use_attention_sink, "SDPAProgramConfig::flatten_work does not support attention_sink");
+    }
+    if (is_proxy) {
+        TT_FATAL(flatten_work, "ring_proxy_case requires flatten_work=true");
+        TT_FATAL(
+            !is_causal,
+            "ring_proxy_case requires is_causal=false (proxy simulates non-diag ring iters, where causality is off)");
+        TT_FATAL(!is_chunked, "ring_proxy_case incompatible with chunked prefill");
+        TT_FATAL(!use_attention_sink, "ring_proxy_case incompatible with attention_sink");
+        TT_FATAL(!use_provided_mask, "ring_proxy_case incompatible with user-provided attn mask");
+        TT_FATAL(q_num_chunks % 2 == 0, "ring_proxy_case requires even q_num_chunks");
+        if (is_proxy_up) {
+            TT_FATAL(
+                k_num_chunks % 2 == 0,
+                "ring_proxy_case=up requires even k_num_chunks (the kernel caps K loop at k_num_chunks/2)");
+        }
+    } else if (flatten_work) {
+        TT_FATAL(
+            is_causal,
+            "SDPAProgramConfig::flatten_work currently requires is_causal=true (use ring_proxy_case for non-causal "
+            "flat work)");
+    }
+
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
     uint32_t batch_parallel_factor = std::min(B, num_cores);
@@ -375,7 +421,32 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
     const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
 
-    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+    // Flat-distribution per-core assignments (only used when flatten_work is true).
+    // Evenly split total_q_chunks across cores. With zigzag sub-mode (causal + even num_q_chunks),
+    // distribute in pairs so every core gets balanced light/heavy work after linear_to_zigzag remap.
+    // DOWN proxy: only the heavy Q half is assigned to cores; UP / none: all Q chunks assigned.
+    const uint32_t total_q_chunks = B * NQH * (is_proxy_down ? (q_num_chunks / 2) : q_num_chunks);
+    const bool flat_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
+    uint32_t base_chunks_per_core = 0;
+    uint32_t cores_doing_extra = 0;
+    uint32_t extra_chunks_per_core = 0;
+    if (flat_zigzag) {
+        const uint32_t total_pairs = total_q_chunks / 2;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
+        cores_doing_extra = (num_cores == 0) ? 0 : (total_pairs % num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
+    } else {
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+        cores_doing_extra = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
+    }
+    // Upper bound per-core flat count — used to size the Q CB in flatten mode.
+    const uint32_t max_flat_chunks_per_core =
+        base_chunks_per_core + (cores_doing_extra > 0 ? extra_chunks_per_core : 0);
+
+    const uint32_t q_buffer_factor_hier = (q_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor_flat = (max_flat_chunks_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor = flatten_work ? q_buffer_factor_flat : q_buffer_factor_hier;
 
     log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
@@ -398,10 +469,18 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         dst_size,
         padded_Sk,
         Sk,
-        Sq_chunk_t);
+        Sq_chunk_t,
+        flatten_work);
 
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
+
+    // KV chain forwarding is active for non-causal SDPA, and for the flat-work causal path when
+    // the lightweight causal mask is in use.  Chain participants over-read K past each Q's
+    // logical q_high; the lightweight causal mask zeroes those softmax columns, keeping output
+    // correct.  Without lightweight_causal we have no mechanism to kill the phantom columns, so
+    // stay on the per-Q truncated-K (no-chain) path.  See RingSDPA_SingleChip_CausalChain_Plan.md.
+    const bool chain_enabled = !is_chunked && (!is_causal || (flatten_work && lightweight_causal));
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
@@ -530,14 +609,17 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
+    // Flat-distribution zigzag sub-mode (tail arg; kernel reads via
+    // chunk_start_idx_args.next_compile_time_args_offset()).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
 
-    // Create semaphores for KV chain forwarding BEFORE kernel compilation (non-causal only)
+    // Create semaphores for KV chain forwarding BEFORE kernel compilation (when chain_enabled)
     // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
     uint32_t sender_semaphore_id = 0;
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
-    if (!is_causal) {
+    if (chain_enabled) {
         sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
         receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
         valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
@@ -581,6 +663,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    // Flat-distribution zigzag sub-mode (tail arg; kernel reads via out_args.next_compile_time_args_offset()).
+    writer_compile_time_args.push_back(static_cast<uint32_t>(flat_zigzag));
 
     const bool uniform_dataformat = check_uniform_dataformat(
         input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
@@ -620,6 +704,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_streaming_compute,  // arg 30
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
         (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
+        (std::uint32_t)flat_zigzag,            // arg 33: flat-distribution zigzag sub-mode (see SDPA_FLAT_WORK)
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -632,12 +717,30 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
-        (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
+        (!flatten_work && is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
+    // Flat work distribution gate. The zigzag sub-mode is passed as a compile-time arg
+    // (flat_zigzag) to reader/writer/compute below, mirroring ring_joint_sdpa's pattern.
+    if (flatten_work) {
+        defines["SDPA_FLAT_WORK"] = "1";
+    }
+    if (is_proxy_up) {
+        defines["SDPA_RING_PROXY_UP"] = "1";
+    } else if (is_proxy_down) {
+        defines["SDPA_RING_PROXY_DOWN"] = "1";
+    }
+    if (chain_enabled) {
+        defines["SDPA_KV_CHAIN_ENABLED"] = "1";
+    }
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
+    log_debug(
+        tt::LogOp,
+        "SDPA_FLAT_WORK: {}",
+        flatten_work ? (flat_zigzag ? "1 (zigzag)" : "1 (linear)") : "0 (hierarchical)");
+    log_debug(tt::LogOp, "SDPA_RING_PROXY: {}", is_proxy_up ? "up" : is_proxy_down ? "down" : "none");
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -815,53 +918,101 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked) {
+    if (chain_enabled) {
         head_segments.resize(total_heads);
+
+        // DOWN proxy maps only the heavy Q half; decompose against the effective size so that
+        // (nb, nq) agree with the reader/writer/compute decomposition (see reader_interleaved.cpp
+        // _proxy_q_num_effective).  UP proxy and non-proxy use full q_num_chunks.
+        const uint32_t q_num_effective = is_proxy_down ? (q_num_chunks / 2) : q_num_chunks;
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
         log_debug(tt::LogOp, "Total heads (B * NQH): {}", total_heads);
-        log_debug(tt::LogOp, "Q chunks per head: {}", q_num_chunks);
+        log_debug(tt::LogOp, "Q chunks per head (effective): {}", q_num_effective);
         log_debug(tt::LogOp, "Grid size: {}x{} = {} cores", grid_size.x, grid_size.y, num_cores);
 
         // First pass: Record work distribution for each core
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-            uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-            uint32_t local_batch_end = local_batch_start + batch_per_core;
-            uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-            uint32_t local_nh_end = local_nh_start + nh_per_core;
-            uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-            uint32_t local_q_end = local_q_start + q_per_core;
-
-            // Clamp to max values
-            local_batch_start = std::min(local_batch_start, B);
-            local_batch_end = std::min(local_batch_end, B);
-            local_nh_start = std::min(local_nh_start, NQH);
-            local_nh_end = std::min(local_nh_end, NQH);
-            local_q_start = std::min(local_q_start, q_num_chunks);
-            local_q_end = std::min(local_q_end, q_num_chunks);
-
             auto& work = core_work[i];
             work.logical_core = core;
             work.physical_core = device->worker_core_from_logical_core(core);
 
-            // Track each (batch, head, q_chunk_range) this core handles
-            for (uint32_t b = local_batch_start; b < local_batch_end; ++b) {
-                for (uint32_t h = local_nh_start; h < local_nh_end; ++h) {
-                    uint32_t q_count = local_q_end - local_q_start;
-                    if (q_count > 0) {
-                        work.head_work.push_back(CoreHeadWork{
-                            .batch = b,
-                            .head = h,
-                            .q_chunk_start = local_q_start,
-                            .q_chunk_count = q_count,
-                        });
+            if (flatten_work) {
+                // Flat distribution: each core owns [global_q_start, global_q_start + global_q_count)
+                // in B*NQH*q_num_effective space.  Decompose into per-(batch, head) segments matching
+                // the reader's decompose_flat_q_index(_, q_num_effective, NQH, flat_use_zigzag=false).
+                uint32_t core_flat_start =
+                    i * base_chunks_per_core + std::min(i, cores_doing_extra) * extra_chunks_per_core;
+                uint32_t core_flat_count =
+                    base_chunks_per_core + ((i < cores_doing_extra) ? extra_chunks_per_core : 0u);
+                if (core_flat_start >= total_q_chunks) {
+                    core_flat_start = total_q_chunks;
+                    core_flat_count = 0;
+                } else if (core_flat_start + core_flat_count > total_q_chunks) {
+                    core_flat_count = total_q_chunks - core_flat_start;
+                }
 
-                        uint32_t head_id = (b * NQH) + h;
-                        if (head_id < head_segments.size()) {
-                            head_segments[head_id].push_back(HeadSegmentRef{
-                                .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                uint32_t remaining = core_flat_count;
+                uint32_t flat_chunk = core_flat_start;
+                while (remaining > 0) {
+                    const uint32_t nb = flat_chunk / (NQH * q_num_effective);
+                    const uint32_t nq = (flat_chunk / q_num_effective) % NQH;
+                    const uint32_t q_chunk_idx = flat_chunk % q_num_effective;
+                    const uint32_t chunk_capacity_in_head = q_num_effective - q_chunk_idx;
+                    const uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+                    work.head_work.push_back(CoreHeadWork{
+                        .batch = nb,
+                        .head = nq,
+                        .q_chunk_start = q_chunk_idx,
+                        .q_chunk_count = chunk_take,
+                    });
+
+                    const uint32_t head_id = (nb * NQH) + nq;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+
+                    remaining -= chunk_take;
+                    flat_chunk += chunk_take;
+                }
+            } else {
+                uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
+                uint32_t local_batch_end = local_batch_start + batch_per_core;
+                uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
+                uint32_t local_nh_end = local_nh_start + nh_per_core;
+                uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
+                uint32_t local_q_end = local_q_start + q_per_core;
+
+                // Clamp to max values
+                local_batch_start = std::min(local_batch_start, B);
+                local_batch_end = std::min(local_batch_end, B);
+                local_nh_start = std::min(local_nh_start, NQH);
+                local_nh_end = std::min(local_nh_end, NQH);
+                local_q_start = std::min(local_q_start, q_num_chunks);
+                local_q_end = std::min(local_q_end, q_num_chunks);
+
+                // Track each (batch, head, q_chunk_range) this core handles
+                for (uint32_t b = local_batch_start; b < local_batch_end; ++b) {
+                    for (uint32_t h = local_nh_start; h < local_nh_end; ++h) {
+                        uint32_t q_count = local_q_end - local_q_start;
+                        if (q_count > 0) {
+                            work.head_work.push_back(CoreHeadWork{
+                                .batch = b,
+                                .head = h,
+                                .q_chunk_start = local_q_start,
+                                .q_chunk_count = q_count,
+                            });
+
+                            uint32_t head_id = (b * NQH) + h;
+                            if (head_id < head_segments.size()) {
+                                head_segments[head_id].push_back(HeadSegmentRef{
+                                    .core_idx = i,
+                                    .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                            }
                         }
                     }
                 }
@@ -920,20 +1071,43 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
             const std::size_t start = chain_start_idx.value();
 
-            // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
-            // Break on conflict (core already in a different chain).
+            // Build chain order. In flatten_work mode, use linear traversal only
+            // (mirror ring_joint_sdpa): chain_start_idx already picks the first
+            // non-straddling core, and proceeding forward from there naturally
+            // places the (possibly lighter) trailing straddler last — which
+            // satisfies the kernel's descending-q invariant without an explicit
+            // sort, and also avoids the injector-clustering pattern that the
+            // wrap+sort path produces for mixed-q chains (see
+            // RingSDPA_ChainInjectorDRAMProfile.md).  In the hierarchical
+            // (non-flat) path, keep the wrap+reorder behavior.
             std::vector<std::size_t> chain_order;
-            for (std::size_t step = 0; step < segments.size(); ++step) {
-                std::size_t idx = (start + step) % segments.size();
-                const auto& seg = segments[idx];
-                const uint32_t core_idx = seg.core_idx;
-                if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
-                    continue;
+            if (flatten_work) {
+                for (std::size_t idx = start; idx < segments.size(); ++idx) {
+                    const auto& seg = segments[idx];
+                    const uint32_t core_idx = seg.core_idx;
+                    if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
+                        continue;
+                    }
+                    if (core_chain_info[core_idx].participates) {
+                        break;
+                    }
+                    chain_order.push_back(idx);
                 }
-                if (core_chain_info[core_idx].participates) {
-                    break;
+            } else {
+                // Wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
+                // Break on conflict (core already in a different chain).
+                for (std::size_t step = 0; step < segments.size(); ++step) {
+                    std::size_t idx = (start + step) % segments.size();
+                    const auto& seg = segments[idx];
+                    const uint32_t core_idx = seg.core_idx;
+                    if (core_idx >= core_work.size() || seg.head_work_index >= core_work[core_idx].head_work.size()) {
+                        continue;
+                    }
+                    if (core_chain_info[core_idx].participates) {
+                        break;
+                    }
+                    chain_order.push_back(idx);
                 }
-                chain_order.push_back(idx);
             }
 
             if (chain_order.size() < 2) {
@@ -960,7 +1134,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 }
             }
 
-            if (uniform_q) {
+            if (flatten_work) {
+                // Linear-only flat mode: leave chain_order[0] as the injector.
+                // Descending-q invariant is satisfied structurally because the
+                // only lighter segment (if any) is the trailing straddler at the
+                // tail of the chain.
+            } else if (uniform_q) {
                 // All cores have equal q_chunk_count — safe to pick any injector.
                 // Choose the core whose physical X is furthest from existing
                 // injectors to spread DRAM reads across channels.
@@ -1299,7 +1478,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
+        // Hierarchical (default) assignment — also used as a fallback for compile-time args
+        // not touched by the flat path. In flatten_work mode these are effectively unused.
         uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
         uint32_t local_batch_end = local_batch_start + batch_per_core;
         uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
@@ -1315,6 +1495,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
 
+        // Flat-mode per-core range (only used when SDPA_FLAT_WORK is compiled in).
+        uint32_t global_q_start = 0;
+        uint32_t global_q_count = 0;
+        if (flatten_work) {
+            global_q_start = i * base_chunks_per_core + std::min(i, cores_doing_extra) * extra_chunks_per_core;
+            global_q_count = base_chunks_per_core + ((i < cores_doing_extra) ? extra_chunks_per_core : 0u);
+            if (global_q_start >= total_q_chunks) {
+                global_q_start = total_q_chunks;
+                global_q_count = 0;
+            } else if (global_q_start + global_q_count > total_q_chunks) {
+                global_q_count = total_q_chunks - global_q_start;
+            }
+        }
+
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
@@ -1324,6 +1518,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
         log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
         log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
+        if (flatten_work) {
+            log_debug(tt::LogOp, "global_q_start: {}, global_q_count: {}", global_q_start, global_q_count);
+        }
 
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
@@ -1345,11 +1542,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             local_q_end,
             num_phases,
             chunked_q_chunk_offset,
-            read_offset  // read_offset
+            read_offset,  // read_offset
+            global_q_start,
+            global_q_count,
         };
 
-        // Add chain metadata for non-causal case
-        if (!is_causal) {
+        // Add chain metadata when chain forwarding is enabled (non-causal, or flat-work causal)
+        if (chain_enabled) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
             reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
@@ -1382,7 +1581,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              num_phases,
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),
              chunked_q_chunk_offset,
-             write_offset});  // write_offset
+             write_offset,  // write_offset
+             global_q_start,
+             global_q_count});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -1396,7 +1597,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              local_q_end,
              num_phases,
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),
-             chunked_q_chunk_offset});
+             chunked_q_chunk_offset,
+             global_q_start,
+             global_q_count,
+             // is_chain_participant — only meaningful under SDPA_KV_CHAIN_ENABLED (else ignored).
+             // Chain cores must loop the full k_num_chunks to stay in sync with reader/writer, which
+             // over-read K under causal + chain; lightweight_causal_mask zeroes out the extra columns.
+             static_cast<uint32_t>(chain_enabled ? chain.participates : 0u)});
     }
 
     return cached_program_t{

@@ -22,32 +22,52 @@
 namespace ttnn::operations::transformer {
 
 void py_module(nb::module_& mod) {
+    nb::enum_<RingProxyCase>(mod, "RingProxyCase")
+        .value("NONE", RingProxyCase::None)
+        .value("UP", RingProxyCase::Up)
+        .value("DOWN", RingProxyCase::Down);
+
     nb::class_<SDPAProgramConfig>(mod, "SDPAProgramConfig")
         .def(
-            nb::init<CoreCoord, std::optional<CoreRangeSet>, std::size_t, std::size_t, std::optional<bool>, uint32_t>(),
+            nb::init<
+                CoreCoord,
+                std::optional<CoreRangeSet>,
+                std::size_t,
+                std::size_t,
+                std::optional<bool>,
+                uint32_t,
+                bool,
+                RingProxyCase>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("q_chunk_size").noconvert(),
             nb::arg("k_chunk_size").noconvert(),
             nb::arg("exp_approx_mode") = nb::none(),
-            nb::arg("max_cores_per_head_batch") = 16)
+            nb::arg("max_cores_per_head_batch") = 16,
+            nb::arg("flatten_work") = false,
+            nb::arg("ring_proxy_case") = RingProxyCase::None)
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
         .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
         .def_rw("max_cores_per_head_batch", &SDPAProgramConfig::max_cores_per_head_batch)
+        .def_rw("flatten_work", &SDPAProgramConfig::flatten_work)
+        .def_rw("ring_proxy_case", &SDPAProgramConfig::ring_proxy_case)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
-                "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={})",
+                "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, flatten_work={}, "
+                "ring_proxy_case={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
                 config.k_chunk_size,
                 config.exp_approx_mode,
-                config.max_cores_per_head_batch);
+                config.max_cores_per_head_batch,
+                config.flatten_work,
+                static_cast<uint8_t>(config.ring_proxy_case));
         });
 
     bind_attention_softmax(mod);

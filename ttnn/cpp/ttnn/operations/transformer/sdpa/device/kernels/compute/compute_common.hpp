@@ -1727,7 +1727,8 @@ void sdpa_inner_loop(
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const bool is_chain_participant = false) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1738,7 +1739,25 @@ void sdpa_inner_loop(
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
             uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
+#if defined(SDPA_FLAT_WORK)
+            // Flat work distribution: q_iter is a global index into B*NQH*q_num_chunks. Only q_chunk
+            // is needed by compute (reader/writer do the full (nb, nq, q_chunk) decomposition to
+            // fetch the right Q/K/V). Mirrors the RING branch's internal remap pattern.
+            // Zigzag sub-mode is carried as compile-time arg 33 (see program factory).
+            //
+            // Ring proxy DOWN: decompose against q_num_chunks/2 and shift into the heavy Q half.
+            // Keeps compute's q_chunk aligned with reader/writer under the same proxy case.
+            constexpr bool _flat_use_zigzag = get_compile_time_arg_val(33) == 1;
+#if defined(SDPA_RING_PROXY_DOWN)
+            const uint32_t _proxy_q_num_effective = q_num_chunks / 2;
+            const uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
+#else
+            const uint32_t _proxy_q_num_effective = q_num_chunks;
+            const uint32_t _proxy_q_chunk_offset = 0;
+#endif
+            q_chunk = remap_q_index(q_iter, _proxy_q_num_effective, _flat_use_zigzag) % _proxy_q_num_effective +
+                      _proxy_q_chunk_offset;
+#elif defined BALANCED_Q_PARALLEL
             uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
             if (q_iter < q_chunk_div_2) {             // bottom half
                 q_chunk = local_q_start + q_iter;
@@ -1756,6 +1775,10 @@ void sdpa_inner_loop(
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
                 q_high_tile = q_start_tile + Sq_chunk_t;
+                // Also used by the chain-participant skip inside the K loop (matches RING's
+                // causal_k_limit): chain cores walk the full K range for CB sync but pop &
+                // continue past here instead of doing masked-out matmul/softmax cycles.
+                causal_k_limit = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
             } else {
                 q_high_tile = Skt;
             }
@@ -1781,8 +1804,23 @@ void sdpa_inner_loop(
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
+#if defined(SDPA_RING_PROXY_UP)
+            // Ring proxy UP (single-chip): cap K loop at k_num_chunks/2 to mirror the ring_joint
+            // non-diag iter that sees only half of K per Q. For STANDARD path sdpa_standard passes
+            // iter_k_chunk_end == k_num_chunks, so iter_k_chunk_end / 2 == k_num_chunks / 2.
+            k_chunk_end = iter_k_chunk_end / 2;
+#else
+#if defined(SDPA_KV_CHAIN_ENABLED)
+            // Chain participants loop the full k_num_chunks (iter_k_chunk_end) so reader + writer
+            // + compute stay in sync with the chain's K forwarding; lightweight_causal_mask zeroes
+            // out softmax contributions past each Q's true q_high.  Alone cores (not chain
+            // participants) keep the per-Q truncated K loop.
+            k_chunk_end = is_chain_participant ? iter_k_chunk_end : ((q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t);
+#else
             // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_tile.
             k_chunk_end = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
+#endif
         } else {  // RING or JOINT.
             k_chunk_end = iter_k_chunk_end;
         }
@@ -1802,7 +1840,8 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            if (sdpa_type == RING && k_chunk >= causal_k_limit && is_causal) {
+            if (is_causal && k_chunk >= causal_k_limit &&
+                (sdpa_type == RING || (sdpa_type == STANDARD && is_chain_participant))) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
@@ -2190,7 +2229,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool is_chain_participant = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2265,7 +2305,11 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        /*is_balanced=*/false,
+        /*use_zigzag_balancing=*/false,
+        /*is_last_ring_iter=*/true,
+        is_chain_participant);
 }
 
 /**

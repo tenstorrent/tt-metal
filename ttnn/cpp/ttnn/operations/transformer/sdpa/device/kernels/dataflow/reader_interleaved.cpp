@@ -84,6 +84,9 @@ void kernel_main() {
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    // Flat-distribution zigzag sub-mode (tail arg; only meaningful when SDPA_FLAT_WORK is defined).
+    constexpr bool flat_use_zigzag =
+        get_compile_time_arg_val(chunk_start_idx_args.next_compile_time_args_offset()) == 1;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -111,6 +114,14 @@ void kernel_main() {
     }
     uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
     uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
+
+#if defined(SDPA_FLAT_WORK)
+    // Flat work distribution: causal only, non-chunked, no attention sink. num_phases is always 1
+    // for this factory, so these args sit right after read_offset_phase_1 with no intervening args.
+    // Zigzag sub-mode is compile-time arg flat_use_zigzag (declared above).
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
+#endif
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -140,7 +151,8 @@ void kernel_main() {
     uint64_t mcast_sem_noc_addr = 0;
     uint32_t sender_wait_count = 1;
 
-    if constexpr (!is_causal) {
+#if defined(SDPA_KV_CHAIN_ENABLED)
+    {
         is_chain_participant = get_arg_val<uint32_t>(argidx++);
         is_injector = get_arg_val<uint32_t>(argidx++);
         is_sink = get_arg_val<uint32_t>(argidx++);
@@ -187,6 +199,7 @@ void kernel_main() {
             }
         }
     }
+#endif
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
@@ -282,6 +295,57 @@ void kernel_main() {
             valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
         }
 
+#if defined(SDPA_FLAT_WORK)
+        // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Restrictions enforced on host:
+        // is_causal=true, !is_chunked, !use_attention_sink (or ring_proxy_case={up,down} which forces
+        // is_causal=false but keeps the same restrictions), so chunked page_table and attention_sink reads
+        // are skipped, and mask_batch_offset is recomputed per (nb) change below.
+        //
+        // Ring proxy (single-chip): DOWN assigns only the heavy Q half by decomposing against
+        // q_num_chunks/2 and shifting q_chunk up by q_num_chunks/2. UP keeps all Q chunks but caps
+        // the K loop further below. None: identity.
+#if defined(SDPA_RING_PROXY_DOWN)
+        constexpr uint32_t _proxy_q_num_effective = q_num_chunks / 2;
+        constexpr uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
+#else
+        constexpr uint32_t _proxy_q_num_effective = q_num_chunks;
+        constexpr uint32_t _proxy_q_chunk_offset = 0;
+#endif
+        uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
+        uint32_t mask_batch_offset = 0;
+        // q_iter_local resets at every (batch, head) transition so chain forwarding/receive
+        // guards (`q_iter_local < next_core_q_chunks`) count slots within the current head only.
+        // For straddling cores whose range spans multiple heads, this is off from _gq.
+        uint32_t q_iter_local_counter = 0;
+        uint32_t prev_head_id_flat = static_cast<uint32_t>(-1);
+        for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
+            const auto _decoded =
+                decompose_flat_q_index(global_q_start + _gq, _proxy_q_num_effective, NQH, flat_use_zigzag);
+            const uint32_t nb = _decoded.nb;
+            const uint32_t nq = _decoded.nq;
+            const uint32_t q_iter = _gq;
+            const uint32_t _cur_head_id = nb * NQH + nq;
+            if (_cur_head_id != prev_head_id_flat) {
+                q_iter_local_counter = 0;
+                prev_head_id_flat = _cur_head_id;
+            } else {
+                q_iter_local_counter++;
+            }
+            const uint32_t q_iter_local = q_iter_local_counter;
+            if (nb != prev_nb_flat) {
+                prev_nb_flat = nb;
+                if constexpr (!broadcast_provided_mask_batch) {
+                    if constexpr (broadcast_provided_mask_heads) {
+                        mask_batch_offset = nb * valid_Sqt * valid_Skt;
+                    } else {
+                        mask_batch_offset = nb * valid_Sqt * valid_Skt * NQH;
+                    }
+                }
+            }
+            {
+                {
+                    uint32_t q_chunk = _decoded.q_chunk + _proxy_q_chunk_offset;
+#else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
                 // Chunked means that we have paged attention
@@ -344,6 +408,10 @@ void kernel_main() {
 #else
                     q_chunk = local_q_start + q_iter;
 #endif
+                    // Non-flat mode: one (nb, nq) pair per q_iter loop, so q_iter already counts
+                    // slots within the current head.  Flat mode declares q_iter_local above.
+                    const uint32_t q_iter_local = q_iter;
+#endif
                     /*
                     Determine how many rows of Q will be read. Both start and end rows are
                     capped by valid_Sqt, since Sq padding is independent of Sk padding.
@@ -380,18 +448,34 @@ void kernel_main() {
                     const uint32_t k_head = nq / q_heads_per_k;
                     const uint32_t v_head = nq / q_heads_per_v;
 
-                    // Chain forwarding conditions are loop-invariant — compute once
+                    // Chain forwarding conditions are loop-invariant — compute once.
+                    // q_iter_local counts slots within the current (batch, head) so that straddling
+                    // cores in flat mode (whose range spans multiple heads) gate forwards on the
+                    // per-head slot count rather than the whole-range _gq.
                     bool should_forward = false;
                     bool should_receive = false;
-                    if constexpr (!is_causal) {
-                        should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                         (q_iter < next_core_q_chunks);
-                        should_receive =
-                            is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
-                    }
+#if defined(SDPA_KV_CHAIN_ENABLED)
+                    should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                     (q_iter_local < next_core_q_chunks);
+                    should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+#endif
 
-                    // loop while k_low < q_high
-                    for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                    // loop while k_low < q_high. Ring proxy UP caps K loop at k_num_chunks/2 to
+                    // mirror the ring_joint non-diag iter that sees only half of K per Q.
+                    // Under SDPA_KV_CHAIN_ENABLED, chain cores loop the full k_num_chunks regardless
+                    // of Q position so injector + receivers walk matching K ranges — lightweight_causal
+                    // mask zeroes out the extra columns past q_high_idx.
+#if defined(SDPA_RING_PROXY_UP)
+                    const uint32_t k_chunk_end = k_num_chunks / 2;
+#else
+#if defined(SDPA_KV_CHAIN_ENABLED)
+                    const uint32_t k_chunk_end =
+                        is_chain_participant ? k_num_chunks : ((q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t);
+#else
+                    const uint32_t k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
+#endif
+                    for (uint32_t k_chunk = 0; k_chunk < k_chunk_end; ++k_chunk) {
                         const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                         const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                         const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
@@ -441,7 +525,7 @@ void kernel_main() {
                                         Sk_chunk_t,
                                         DHt);
                                 } else {
-                                    read_chunk_with_padding<k_tile_bytes>(
+                                    read_chunk_with_padding<k_tile_bytes, decltype(k_reader), true, false>(
                                         k_reader,
                                         cb_k_in,
                                         k_start_tile_id,
@@ -604,7 +688,7 @@ void kernel_main() {
                                         vDHt,
                                         skip_src_cols);
                                 } else {
-                                    read_chunk_with_padding<v_tile_bytes>(
+                                    read_chunk_with_padding<v_tile_bytes, decltype(v_reader), true, false>(
                                         v_reader,
                                         cb_v_in,
                                         v_start_tile_id,
@@ -646,13 +730,14 @@ void kernel_main() {
                                 cb_push_back(cb_v_in, v_chunk_tiles);
                             }
                         }
-                    }
-                }
-            }
-
+                    }  // close k_chunk
+                }  // close q_iter / flatten innermost
+            }  // close nq / flatten middle
+#if !defined(SDPA_FLAT_WORK)
             if constexpr (is_chunked) {
                 cb_pop_front(cb_id_page_table, 1);
             }
-        }
-    }
+#endif
+        }  // close nb / flatten outer (_gq)
+    }  // close phase
 }
