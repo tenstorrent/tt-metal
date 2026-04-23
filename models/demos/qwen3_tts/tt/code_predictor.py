@@ -101,16 +101,15 @@ class CodePredictor(LightweightModule):
                 bias_key = "talker.code_predictor.small_to_mtp_projection.bias"
                 if bias_key in state_dict:
                     b = state_dict[bias_key]
-                    bias_tt = ttnn.from_torch(
-                        b,
+                    # TILE bias avoids extra tilize inside ttnn.linear vs ROW_MAJOR bias.
+                    self.input_proj_bias = ttnn.from_torch(
+                        b.reshape(1, 1, 1, -1),
                         device=device,
                         dtype=ttnn.bfloat16,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        layout=ttnn.TILE_LAYOUT,
                         memory_config=_dram,
                         mesh_mapper=_mesh_mapper,
                     )
-                    h = int(bias_tt.shape[0])
-                    self.input_proj_bias = ttnn.reshape(bias_tt, [1, 1, 1, h], memory_config=_dram)
                 else:
                     self.input_proj_bias = None
             else:
@@ -123,17 +122,17 @@ class CodePredictor(LightweightModule):
             embed_key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
             if embed_key in state_dict:
                 w = state_dict[embed_key]
-                vocab_size, emb_dim = int(w.shape[0]), int(w.shape[1])
+                # Match Talker.codec_embedding: TILE weight table so ttnn.embedding does not
+                # pay TilizeDeviceOperation on every lookup (ROW_MAJOR tables tilize each call).
                 embed_tt = ttnn.from_torch(
-                    w,
+                    w.unsqueeze(0).unsqueeze(0),
                     device=device,
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    layout=ttnn.TILE_LAYOUT,
                     memory_config=_dram,
                     mesh_mapper=_mesh_mapper,
                 )
-                embed_4d = ttnn.reshape(embed_tt, [1, 1, vocab_size, emb_dim], memory_config=_dram)
-                self.codec_embeddings_tt.append(embed_4d)
+                self.codec_embeddings_tt.append(embed_tt)
             else:
                 print(f"  WARNING: Missing CodePredictor embedding {embed_key}")
                 self.codec_embeddings_tt.append(None)
