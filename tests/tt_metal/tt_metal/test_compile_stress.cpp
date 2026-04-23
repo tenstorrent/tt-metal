@@ -177,11 +177,11 @@ void write_result_json(const std::string& path, const StressResult& r) {
     out << "  \"shared_fraction\": " << fmt::format("{:.6f}", r.shared_fraction) << ",\n";
     out << "  \"shared_seed\": " << r.shared_seed << ",\n";
     out << "  \"num_shared\": " << r.num_shared << ",\n";
-    out << "  \"arch\": \"" << r.arch_name << "\",\n";
+    out << R"(  "arch": ")" << r.arch_name << "\",\n";
     out << "  \"num_chips\": " << r.num_chips << ",\n";
     out << "  \"num_kernels\": " << r.num_kernels << ",\n";
     out << "  \"num_programs\": " << r.num_programs << ",\n";
-    out << "  \"target_device_type\": \"" << r.target_device_type << "\",\n";
+    out << R"(  "target_device_type": ")" << r.target_device_type << "\",\n";
     out << "  \"start_unix_ns\": " << r.start_unix_ns << ",\n";
     out << "  \"end_unix_ns\": " << r.end_unix_ns << ",\n";
     out << "  \"total_elapsed_ms\": " << fmt::format("{:.3f}", r.total_elapsed_ms) << "\n";
