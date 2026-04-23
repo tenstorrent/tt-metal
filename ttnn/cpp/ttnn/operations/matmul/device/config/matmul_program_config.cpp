@@ -174,6 +174,52 @@ ttnn::DeviceComputeKernelConfig deref_compute_kernel_config_or_default(
     return ttnn::DeviceComputeKernelConfig{};
 }
 
+// Returns true iff the estimated CB footprint for this (per_core_M, per_core_N,
+// in0_block_w) fits in the available L1 space, with margin to absorb secondary
+// CBs not covered by get_estimated_size_of_cbs (sync / sparsity / sharded-in0 /
+// in0-intermediate, depending on factory path). Measured margin needed: 128 KB
+// on Wormhole 2D mcast for a 2048^3 DRAM matmul — get_estimated_size_of_cbs
+// missed ~80 KB of secondary CBs, and the output tensor's eventual L1
+// allocation further tightens the budget since lowest_occupied_compute_l1_address
+// does not reflect tensors allocated after config time. Budgeting 128 KB keeps
+// auto-config conservative.
+//
+// The matmul mcast factories share out_cb and interm0_cb L1 regions by default
+// (so real use is max(out, interm) per core), but when the auto-config emits
+// row_major_output=true the Bug 3 fix forces them to separate regions — real
+// use becomes out + interm. get_estimated_size_of_cbs already sums both, so its
+// return value is the correct upper bound for the row_major_output=true path.
+// Call this BEFORE enabling row_major_output so L1-tight shapes fall back to
+// the legacy shared-CB layout automatically instead of failing at compile time.
+bool row_major_output_fits_in_l1(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
+    const uint32_t bias_single_tile_size,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    uint32_t in0_block_w,
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const tt::tt_metal::DataType output_dtype) {
+    constexpr uint32_t kL1Margin = 128 * 1024;  // 128 KB safety margin, see comment.
+    const uint32_t max_l1_space = utilities::get_max_l1_space(input_tensor_a);
+    if (max_l1_space <= kL1Margin) {
+        return false;
+    }
+    const uint32_t estimated_size = utilities::get_estimated_size_of_cbs(
+        per_core_M,
+        per_core_N,
+        in0_block_w,
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype),
+        bias_single_tile_size);
+    return estimated_size + kL1Margin < max_l1_space;
+}
+
 // Delegates to the auto-tuner with fast-path preference and no layout constraints —
 // callers here are auto-config sites that emit row_major_output=true on mcast configs
 // or non-mcast configs whose factory always emits ROW_MAJOR_OUTPUT=1. DST capacity is
@@ -291,15 +337,29 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
-    auto matmul_params =
-        get_subblock_sizes(out_block_h, out_block_w, deref_compute_kernel_config_or_default(compute_kernel_config));
-    uint32_t out_subblock_h = std::get<0>(matmul_params);
-    uint32_t out_subblock_w = std::get<1>(matmul_params);
+    const bool rmo_fits_systolic = row_major_output_fits_in_l1(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        bias_single_tile_size,
+        batch_and_m_tiles_per_core,
+        n_tiles_per_core,
+        k_tiles_per_core,
+        compute_kernel_config,
+        output_dtype);
+    auto_tune::SubblockTuneInputs subblock_inputs_systolic{
+        .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
+    subblock_inputs_systolic.per_core_M = out_block_h;
+    subblock_inputs_systolic.per_core_N = out_block_w;
+    subblock_inputs_systolic.subblock_w_eq_per_core_n_required = !rmo_fits_systolic;
+    subblock_inputs_systolic.prefer_fast_path = true;
+    auto subblock_choice_systolic = auto_tune::determine_largest_subblock(subblock_inputs_systolic);
     return MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
         .in0_block_w = k_tiles_per_core,
-        .out_subblock_h = out_subblock_h,
-        .out_subblock_w = out_subblock_w,
+        .out_subblock_h = subblock_choice_systolic.out_subblock_h,
+        .out_subblock_w = subblock_choice_systolic.out_subblock_w,
         .out_block_h = out_block_h,
         .out_block_w = out_block_w,
         .per_core_M = batch_and_m_tiles_per_core,
@@ -307,7 +367,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         .fuse_batch = true,
         .fused_activation = fused_activation,
         .mcast_in0 = is_wide,
-        .row_major_output = true,
+        .row_major_output = rmo_fits_systolic,
     };
 }
 
@@ -398,11 +458,23 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
+    const bool rmo_fits = row_major_output_fits_in_l1(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        bias_single_tile_size,
+        per_core_M,
+        per_core_N,
+        in0_block_w,
+        compute_kernel_config,
+        output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs{
         .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
     subblock_inputs.per_core_M = out_block_h;
     subblock_inputs.per_core_N = out_block_w;
     subblock_inputs.subblock_h_eq_per_core_m_required = per_core_M_equals_subblock_h_constraint;
+    subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
     subblock_inputs.prefer_fast_path = true;
     auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
@@ -418,7 +490,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         .fuse_batch = fuse_batch,
         .fused_activation = fused_activation,
         .mcast_in0 = mcast_in0,
-        .row_major_output = true,
+        .row_major_output = rmo_fits,
     };
 }
 
@@ -602,10 +674,26 @@ MatmulProgramConfig create_matmul_program_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
-    auto matmul_params =
-        get_subblock_sizes(out_block_h, out_block_w, deref_compute_kernel_config_or_default(compute_kernel_config));
-    uint32_t out_subblock_h = std::get<0>(matmul_params);
-    uint32_t out_subblock_w = std::get<1>(matmul_params);
+    const bool rmo_fits = row_major_output_fits_in_l1(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a,
+        transpose_b,
+        bias_single_tile_size,
+        m_tiles_per_core,
+        n_tiles_per_core,
+        k_tiles_per_core,
+        compute_kernel_config,
+        output_dtype);
+    auto_tune::SubblockTuneInputs subblock_inputs{
+        .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
+    subblock_inputs.per_core_M = out_block_h;
+    subblock_inputs.per_core_N = out_block_w;
+    subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
+    subblock_inputs.prefer_fast_path = true;
+    auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
+    uint32_t out_subblock_h = subblock_choice.out_subblock_h;
+    uint32_t out_subblock_w = subblock_choice.out_subblock_w;
     bool transpose_mcast =
         a_is_block_sharded && input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
     // Pre-refactor this path forced out_subblock_h = 1 whenever out_subblock_w != per_core_N
@@ -624,7 +712,7 @@ MatmulProgramConfig create_matmul_program_config(
         .per_core_N = n_tiles_per_core,
         .transpose_mcast = transpose_mcast,
         .fused_activation = fused_activation,
-        .row_major_output = true,
+        .row_major_output = rmo_fits,
     };
 }
 
@@ -723,10 +811,22 @@ MatmulProgramConfig get_matmul_program_config(
             uint32_t out_block_h = mutlti_dim_per_core_factor[0];
             uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
+            const bool rmo_fits = row_major_output_fits_in_l1(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                bias_single_tile_size,
+                per_core_M,
+                per_core_N,
+                in0_block_w,
+                compute_kernel_config,
+                output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
+            subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
             subblock_inputs.prefer_fast_path = true;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
@@ -742,7 +842,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .fuse_batch = true,
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
-                .row_major_output = true,
+                .row_major_output = rmo_fits,
             };
         }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
@@ -805,10 +905,22 @@ MatmulProgramConfig get_matmul_program_config(
             uint32_t out_block_h = mutlti_dim_per_core_factor[0];
             uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
+            const bool rmo_fits = row_major_output_fits_in_l1(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                bias_single_tile_size,
+                per_core_M,
+                per_core_N,
+                in0_block_w,
+                compute_kernel_config,
+                output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
+            subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
             subblock_inputs.prefer_fast_path = true;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
 
@@ -823,7 +935,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = fused_activation,
-                .row_major_output = true,
+                .row_major_output = rmo_fits,
             };
         }
     } else {
@@ -1296,10 +1408,28 @@ MatmulProgramConfig create_simple_matmul_program_config(
             // Pre-refactor, the non-DRAM branch hardcoded (4, 2) with an override to (1, 2)
             // when out_subblock_w != per_core_N; the DRAM branch called get_matmul_subblock_params
             // with no constraints. Both collapse to a single auto_tuner call here.
+            //
+            // Gate row_major_output on the L1-fit check: the flag triggers separate
+            // out_cb / interm0_cb regions (Bug 3 fix), which doubles the output-space
+            // footprint. For large per_core_M/per_core_N, that can push CBs past L1.
+            const bool rmo_fits = row_major_output_fits_in_l1(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                bias_single_tile_size,
+                per_core_M,
+                per_core_N,
+                in0_block_w,
+                compute_kernel_config,
+                output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
                 .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
             subblock_inputs.per_core_M = out_block_h;
             subblock_inputs.per_core_N = out_block_w;
+            // When L1 is too tight for row_major_output, fall back to subblock-major
+            // layout which requires (out_subblock_w == per_core_N || out_subblock_h == 1).
+            subblock_inputs.subblock_w_eq_per_core_n_required = !rmo_fits;
             subblock_inputs.prefer_fast_path = true;
             auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
             out_subblock_h = subblock_choice.out_subblock_h;
@@ -1316,7 +1446,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
                 .fuse_batch = false,
-                .row_major_output = true,
+                .row_major_output = rmo_fits,
             };
         }
     }
