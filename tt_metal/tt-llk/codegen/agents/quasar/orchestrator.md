@@ -352,7 +352,7 @@ Agent tool:
     The analyzer is the ONLY arch-research step in this pipeline — there is no
     separate arch-lookup agent. You own discovering target instructions,
     register layouts, and format constraints. Follow the
-    codegen/skills/llk-arch-lookup/SKILL.md page index for Confluence fetches.
+    llk-arch-lookup skill (via Skill tool) for Confluence fetches.
 
     WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this
     prompt resolve inside the worktree, not the source branch. Never write outside it.
@@ -1143,7 +1143,7 @@ cp codegen/artifacts/{op}_report.md "$LOG_DIR/"
 | `tt_llk_{arch}/instructions/assembly.yaml` | ISA definition (cross-check, use grep — large file) |
 | `codegen/references/common-errors.md` | Known error patterns |
 | `codegen/agents/quasar/` | All agent playbooks (co-located with this orchestrator) |
-| `codegen/skills/llk-arch-lookup/SKILL.md` | Confluence page index and arch-research protocol |
+| `.claude/skills/llk-arch-lookup/SKILL.md` | Confluence page index and arch-research protocol (invoked via `Skill: llk-arch-lookup`) |
 
 ## Commands
 

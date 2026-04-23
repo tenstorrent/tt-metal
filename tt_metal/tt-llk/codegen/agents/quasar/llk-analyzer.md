@@ -1,8 +1,8 @@
 ---
 name: llk-analyzer
-description: Analyze a problem (kernel generation or issue fix) and produce a solution approach grounded in target-architecture instructions. Runs first on every LLK task; follows codegen/skills/llk-arch-lookup/SKILL.md to discover usable instructions.
+description: Analyze a problem (kernel generation or issue fix) and produce a solution approach grounded in target-architecture instructions. Runs first on every LLK task; invokes the llk-arch-lookup skill to discover usable instructions.
 model: opus
-tools: Read, Glob, Grep, Write, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question
+tools: Read, Glob, Grep, Write, Skill, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question
 ---
 
 # LLK Analyzer Agent
@@ -154,13 +154,13 @@ For math/pack/unpack, locate the matching `_llk_{family}_params_` wrapper and re
 
 ## Step 3: Instruction Discovery via `llk-arch-lookup`
 
-The `llk-arch-lookup` skill is a local file, **not** a Claude Code registered skill — you cannot invoke it through a `Skill` tool. Instead, Read it directly and follow the instructions inside:
+Invoke the `llk-arch-lookup` skill via the Skill tool — it injects the full Confluence page index, CQL search patterns, and MCP-fetch protocol into your context:
 
 ```
-Read: codegen/skills/llk-arch-lookup/SKILL.md
+Skill: llk-arch-lookup
 ```
 
-That file provides the curated Confluence page index, CQL search patterns, and the MCP-fetch protocol. Treat it as your playbook for this step. For the problem at hand, follow its SFPU / math / pack-unpack track:
+Treat the injected content as your playbook for this step. For the problem at hand, follow its SFPU / math / pack-unpack track:
 
 1. **Primary arch spec** — SFPU MAS (`1256423592`) for SFPU; FPU MAS (`881197063`) for math; pack/unpack discovery via CQL.
 2. **Instruction set** — Tensix SFPU ISA (`1170505767`) or the full ISA tree (`1613201604`). Search for the specific instructions you expect:

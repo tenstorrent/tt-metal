@@ -340,7 +340,9 @@ additional symbols it needs.
 
 ## Code Style Guidelines
 
-The primary rule is: **match the sibling kernel the analysis cites.** Do not invent new conventions, even if you think they're better.
+- The primary rule is: **match the sibling kernel the analysis cites.** Do not invent new conventions, even if you think they're better.
+- **NEVER create single-instruction wrapper functions** — add an inline comment next to the instruction to describe what it does instead.
+
 
 ## Instruction Macro and Constant Rules
 
