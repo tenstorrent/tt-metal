@@ -119,7 +119,7 @@ inline void swiglu_init() {
 namespace ckernel {
 
 inline void llk_math_eltwise_binary_sfpu_swiglu_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init<APPROXIMATE>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::swiglu_init);
 }
 
 template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::SwiGLUConfigGPTOSS>
