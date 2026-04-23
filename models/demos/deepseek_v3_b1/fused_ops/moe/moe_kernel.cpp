@@ -316,9 +316,7 @@ void kernel_main() {
     // Setup all tensor-backed sharded buffers (marks pre-loaded tiles as ready)
     auto setup_all_sharded_buffers = [&]() {
         if constexpr (Core::is_sender_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
-                get_named_compile_time_arg_val("moe_rmsnorm_gamma_num_pages"));
+            // moe_rmsnorm gamma not loaded (DoGamma=false, gamma folded into weights)
 #ifdef ENABLE_ROUTING
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_bias_cb"), 1);
             unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("gate_input_indices_cb"), 1);
@@ -829,8 +827,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("moe_rmsnorm_fp32_acc") == 1,
                 get_named_compile_time_arg_val("moe_rmsnorm_num_tiles"),
                 get_named_compile_time_arg_val("moe_rmsnorm_rsqrt_fast_approx") == 1,
-                get_named_compile_time_arg_val("moe_rmsnorm_input_cb"),  // residual_mcast_src_cb
-                get_named_compile_time_arg_val("moe_rmsnorm_gamma_cb"),
+                get_named_compile_time_arg_val("moe_rmsnorm_input_cb"),   // residual_mcast_src_cb
+                0,                                                        // gamma_cb unused (DoGamma=false)
                 get_named_compile_time_arg_val("moe_rmsnorm_output_cb"),  // rmsnorm_output_cb
                 false>;
             deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
