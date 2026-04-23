@@ -493,6 +493,7 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
 
 
 def test_softmax_sd(device):
+    torch.manual_seed(0)
     shape = (1, 16, 256, 256)
 
     input = torch.randn(shape, dtype=torch.bfloat16).float() * 10
