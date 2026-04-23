@@ -318,11 +318,11 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
         compute_kernel_config=ckcfg,
     )
 
-    q, k, v = _split_qkv_sdpa(qkv, num_heads)
+    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads, transpose_key=False)
     ctx = ttnn.transformer.scaled_dot_product_attention(
         q, k, v, is_causal=False, scale=HEAD_DIM_RAW ** -0.5,
     )
-    ctx = _merge_heads(ctx, num_heads)
+    ctx = ttnn.transformer.concatenate_heads(ctx)  # (B, N, h*HEAD_DIM_PAD)
 
     attn_out = ttnn.experimental.minimal_matmul(
         ctx, block_params["attn"]["proj_w"],
