@@ -59,7 +59,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1, 5},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0, 6},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1, 7},
-     // Grant counters (counter_sel + 256 = out_fmt bit 16 set)
+     // Grant counters
      {PerfCounterType::L1_0_UNPACKER_0_GRANT, 256},
      {PerfCounterType::L1_0_PORT1_GRANT, 257},
      {PerfCounterType::L1_0_TDMA_BUNDLE_0_GRANT, 258},

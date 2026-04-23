@@ -1726,8 +1726,7 @@ def compute_device_only_metrics(
 
         return fn
 
-    # On BH, L1 unpacker grant counter has different signal semantics
-    # (grant ~25-45 while req ~8000+). Only compute when median grant/req > 10%.
+    # Skip when grant and req measure unrelated events (BH signal-mismatch case).
     _unp_req = eff_pivot.get("value_L1_0_UNPACKER_0", pd.Series(dtype=float))
     _unp_gnt = eff_pivot.get("value_L1_0_UNPACKER_0_GRANT", pd.Series(dtype=float))
     _valid = _unp_req[_unp_req > 0]
@@ -1738,7 +1737,6 @@ def compute_device_only_metrics(
             safe_single_bp("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
             axis=1,
         )
-    # L1 Packer Port: BH uses L1_0_UNIFIED_PACKER, WH uses L1_0_UNPACKER_1_ECC_PACK1
     packer_req_key = (
         "value_L1_0_UNIFIED_PACKER"
         if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
