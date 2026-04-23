@@ -8,26 +8,24 @@ Same structure and parameter coverage as test_sfpu_square_quasar.
 """
 
 import math
-from typing import List
 
 import pytest
 import torch
-from helpers.format_config import (
-    MXFP8_E4M3_MAX_NORMAL,
-    MXFP8_E5M2_MAX_NORMAL,
-    DataFormat,
-    FormatConfig,
-)
+from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
-from helpers.llk_params import (
-    DestAccumulation,
-    ImpliedMathFormat,
-    MathOperation,
-    format_dict,
+from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
+from helpers.param_config import (
+    generate_sfpu_format_dest_acc_combinations,
+    input_output_formats,
+    parametrize,
 )
-from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import (
+    apply_log_uniform_magnitudes,
+    compute_safe_input_magnitude_range,
+    format_elem_max,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -38,168 +36,9 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-
-def prepare_square_inputs(
-    src_A: torch.Tensor,
-    src_B: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-) -> torch.Tensor:
-    """
-    Prepare input tensor for square operation with safe value ranges.
-
-    Applies log-uniform distribution and clamps values to ensure:
-    - Input values fit in the input format
-    - Squared output values fit in the output format
-    - Good test coverage across orders of magnitude
-
-    Args:
-        src_A: Source tensor A (used for magnitude distribution)
-        src_B: Source tensor B (used for sign distribution)
-        input_format: Input data format
-        output_format: Output data format
-
-    Returns:
-        Prepared tensor with safe values for squaring
-    """
-    input_torch_format = format_dict[input_format]
-    output_torch_format = format_dict[output_format]
-    input_finfo = torch.finfo(input_torch_format)
-    output_finfo = torch.finfo(output_torch_format)
-
-    def mx_elem_max(df: DataFormat) -> float:
-        if df == DataFormat.MxFp8R:
-            return MXFP8_E5M2_MAX_NORMAL
-        if df == DataFormat.MxFp8P:
-            return MXFP8_E4M3_MAX_NORMAL
-        raise ValueError(f"mx_elem_max: not an MX format: {df}")
-
-    # For squaring, x² must fit in the OUTPUT format; |x| must fit the INPUT format.
-    if output_format.is_mx_format():
-        cap_from_output = math.sqrt(mx_elem_max(output_format)) * 0.9
-    else:
-        cap_from_output = math.sqrt(output_finfo.max) * 0.9
-
-    if input_format.is_mx_format():
-        cap_from_input = mx_elem_max(input_format) * 0.9
-    else:
-        cap_from_input = math.sqrt(input_finfo.max) * 0.9
-
-    max_safe_value = min(cap_from_output, cap_from_input)
-
-    # bfloat16 (non-MX): limit |x| so squaring keeps reasonable precision.
-    if input_torch_format == torch.bfloat16 and not input_format.is_mx_format():
-        max_safe_value = min(max_safe_value, 1e4)  # 10000² = 1e8 fits comfortably
-
-    # MX uses torch.bfloat16 as the logical dtype; same denormal floor as other formats.
-    min_magnitude = max(1e-6, input_finfo.tiny * 100)
-
-    # Ensure src_A and src_B don't contain inf/nan before normalization
-    src_A_float = src_A.to(torch.float32)
-    src_B_float = src_B.to(torch.float32)
-
-    # Normalize src_A to [0, 1] range for log-uniform distribution
-    src_A_min = src_A_float.min()
-    src_A_max = src_A_float.max()
-    src_A_normalized = (
-        (src_A_float - src_A_min) / (src_A_max - src_A_min)
-        if src_A_max > src_A_min
-        else torch.zeros_like(src_A_float)
-    )
-
-    # Use log-uniform distribution for magnitudes to test across orders of magnitude
-    log_min = torch.log(torch.tensor(min_magnitude, dtype=torch.float32))
-    log_max = torch.log(torch.tensor(max_safe_value, dtype=torch.float32))
-    magnitudes = torch.exp(log_min + src_A_normalized * (log_max - log_min))
-
-    # Randomly assign signs to get both positive and negative values
-    src_B_min = src_B_float.min()
-    src_B_max = src_B_float.max()
-    src_B_normalized = (
-        (src_B_float - src_B_min) / (src_B_max - src_B_min)
-        if src_B_max > src_B_min
-        else torch.zeros_like(src_B_float)
-    )
-    signs = torch.where(src_B_normalized < 0.5, -1.0, 1.0)
-
-    # Apply signs and clamp to safe range BEFORE converting to input format
-    src_A_values = signs * magnitudes
-    src_A_values = torch.clamp(src_A_values, -max_safe_value, max_safe_value)
-    result = src_A_values.to(input_torch_format)
-
-    return result
-
-
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if format combination is invalid for Quasar.
-
-    Args:
-        fmt: Format configuration with input and output formats
-        dest_acc: Destination accumulation mode
-
-    Returns:
-        True if the combination is invalid, False otherwise
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    return False
-
-
-def generate_sfpu_square_combinations(
-    formats_list: List[FormatConfig],
-):
-    """
-    Generate SFPU square test combinations.
-
-    Args: Input-output format pairs
-
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
-    """
-    combinations = []
-
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-
-        if in_fmt.is_32_bit():
-            dest_acc_modes = (DestAccumulation.Yes,)
-        elif in_fmt.is_mx_format():
-            dest_acc_modes = (DestAccumulation.No,)
-        else:
-            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-
-        for dest_acc in dest_acc_modes:
-            # Skip invalid format combinations for Quasar
-            if _is_invalid_quasar_combination(fmt, dest_acc):
-                continue
-
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                for input_dimensions in [[32, 32], [64, 64], [32, 64]]:
-                    combinations.append(
-                        (fmt, dest_acc, implied_math_format, input_dimensions)
-                    )
-
-    return combinations
-
+# Safety factor applied to format maxima when clamping square operands.
+# Keeps x² comfortably within the output format and |x| within the input format.
+SQUARE_RANGE_SAFETY_FACTOR = 0.9
 
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
@@ -211,13 +50,16 @@ SFPU_SQUARE_FORMATS = input_output_formats(
     ]
 )
 
+SFPU_SQUARE_COMBINATIONS = [
+    (fmt, dest_acc, implied_math_format, input_dimensions)
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_SQUARE_FORMATS)
+    for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    for input_dimensions in [[32, 32], [64, 64]]
+]
+
 
 @pytest.mark.quasar
-@parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_square_combinations(
-        SFPU_SQUARE_FORMATS
-    ),
-)
+@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_SQUARE_COMBINATIONS)
 def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
     """
     Test isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
@@ -237,8 +79,32 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         sfpu=True,
     )
 
-    src_A = prepare_square_inputs(
-        src_A, src_B, formats.input_format, formats.output_format
+    # Both caps invert the squaring op so x² stays representable. For the input
+    # cap this is because the SFPU squares in the input format's math precision
+    # (except for MX, where squaring uses a wider intermediate and |x| itself
+    # is the binding constraint -- mx_elem_max is already small).
+    input_elem_max = format_elem_max(formats.input_format)
+    input_magnitude_cap = (
+        input_elem_max
+        if formats.input_format.is_mx_format()
+        else math.sqrt(input_elem_max)
+    ) * SQUARE_RANGE_SAFETY_FACTOR
+    output_magnitude_cap = (
+        math.sqrt(format_elem_max(formats.output_format)) * SQUARE_RANGE_SAFETY_FACTOR
+    )
+
+    min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
+        formats.input_format,
+        formats.output_format,
+        input_magnitude_cap=input_magnitude_cap,
+        output_magnitude_cap=output_magnitude_cap,
+    )
+    src_A = apply_log_uniform_magnitudes(
+        src_A,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        sign_source=src_B,
     )
 
     num_faces = 4
