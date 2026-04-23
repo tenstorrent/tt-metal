@@ -698,8 +698,12 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
                                                    sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
+        // Wrap the write pointer back to base. No second space-check needed:
+        // if fences == base, firmware already consumed slot base and advanced to
+        // base+1, so slot base IS free (false-positive "full" would deadlock).
+        // if fences != base, ptrs(base) != fences so wait_for_fetch_q_space()
+        // would return immediately anyway.
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        wait_for_fetch_q_space();
     }
 }
 
