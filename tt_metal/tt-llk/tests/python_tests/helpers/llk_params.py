@@ -322,6 +322,13 @@ class Tilize(Enum):
         else:
             return "false"
 
+    @property
+    def pack_mode_value(self):
+        if self.value == True:
+            return "PackMode::Tilize"
+        else:
+            return "PackMode::Default"
+
 
 class FastMode(Enum):
     Yes = True

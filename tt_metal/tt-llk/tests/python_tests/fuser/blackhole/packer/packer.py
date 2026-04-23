@@ -40,12 +40,12 @@ class Packer(BasePacker):
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
-        bh_tilize = operation.bh_tilize.cpp_enum_value
+        bh_pack_mode = operation.bh_tilize.pack_mode_value
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
-            f"    _llk_pack_init_<false, false, {bh_tilize}>(\n"
+            f"    _llk_pack_init_<{bh_pack_mode}, false>(\n"
             f"        pack_dst_format{stage}, pack_dst_format{stage}, {face_r_dim}, TILE_C_DIM, {num_faces}, false, false\n"
             f"    );\n"
             f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"

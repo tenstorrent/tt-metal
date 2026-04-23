@@ -361,7 +361,7 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        bh_tilize = operation.bh_tilize.cpp_enum_value
+        bh_pack_mode = operation.bh_tilize.pack_mode_value
         dest_acc = config.dest_acc.cpp_enum_value
         pack_size = operation.tile_size_pack
         face_r_dim = operation.face_r_dim
@@ -370,13 +370,13 @@ class ComputePipeline:
         if stage == 1:
             if config.architecture == ChipArchitecture.BLACKHOLE:
                 code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, false, {bh_tilize}>(\n"
+                    f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
                     f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}, {face_r_dim}, TILE_C_DIM, {num_faces}\n"
                     f");\n"
                 )
             elif config.architecture == ChipArchitecture.WORMHOLE:
                 code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
+                    f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
                     f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}, {face_r_dim}, {num_faces}\n"
                     f");\n"
                 )
