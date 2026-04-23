@@ -54,6 +54,14 @@ constexpr auto kCoeff1CbIndex = tt::CBIndex::c_18;
 constexpr auto kCoeff2CbIndex = tt::CBIndex::c_19;
 constexpr auto kCoeff3CbIndex = tt::CBIndex::c_20;
 
+// Preweighted inv_rms (three 1-tile bfloat16 CBs) — one per polynomial branch:
+//   c_24 = w2 * inv_rms_x    (linear)
+//   c_25 = w1 * inv_rms_x2   (quadratic)
+//   c_26 = w0 * inv_rms_x3   (cubic)
+constexpr auto kWeightedInvRmsXCbIndex = tt::CBIndex::c_24;
+constexpr auto kWeightedInvRmsX2CbIndex = tt::CBIndex::c_25;
+constexpr auto kWeightedInvRmsX3CbIndex = tt::CBIndex::c_26;
+
 // Output CBs
 constexpr auto kOutputCbIndex = tt::CBIndex::c_21;
 constexpr auto kPackedPartialsOutputCbIndex = tt::CBIndex::c_22;
@@ -208,6 +216,15 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         create_circular_buffer(program, all_cores, kCoeff2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_coeff_3 =
         create_circular_buffer(program, all_cores, kCoeff3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+
+    // Preweighted inv_rms tiles (bfloat16, one per branch) used by Pass-2 emit_output_for_row().
+    // See kernel comment in compute/polynorm_bw_kernel.cpp for the bf16 precision trade-off.
+    [[maybe_unused]] auto cb_weighted_inv_rms_x = create_circular_buffer(
+        program, all_cores, kWeightedInvRmsXCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_weighted_inv_rms_x2 = create_circular_buffer(
+        program, all_cores, kWeightedInvRmsX2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_weighted_inv_rms_x3 = create_circular_buffer(
+        program, all_cores, kWeightedInvRmsX3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
 
     // Output CBs
     [[maybe_unused]] auto cb_output =
