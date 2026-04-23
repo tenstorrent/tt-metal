@@ -1086,12 +1086,36 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         std::rethrow_exception(first_ex);
     }
 
+    // FIX J (#42429): Two-phase probe-then-configure to prevent non-MMIO relay read races.
+    //
+    // PROBLEM: The original single loop interleaved terminate_stale_erisc_routers() (probe reads)
+    // with configure_fabric() (switches ETH channels to fabric firmware).  On T3K, Devices 0-3
+    // are MMIO and Devices 4-7 are non-MMIO, relaying through Devices 0-3's ETH ERISCs.
+    //
+    // Timeline of the race:
+    //   1. Device 0-3 are probed and configured (ETH channels switch to fabric firmware).
+    //   2. Device 4's probe read routes through Device 0-3's ETH relay.
+    //   3. Fabric firmware on the relay does NOT service UMD relay-read protocol.
+    //   4. UMD relay read times out after 5s → relay_broken=true → Device 4-7 added to
+    //      dead_relay_devices_ → no fabric firmware loaded on them.
+    //   5. Device 0's subordinate ERISCs connecting to Device 4-7 wait forever for peer
+    //      ETH handshake → edm_local_sync_ptr never reaches num_local_edms-1 → master
+    //      never writes LOCAL_HANDSHAKE_COMPLETE → wait_for_fabric_router_sync() sees
+    //      0x00000000 and throws "Timeout after 10000 ms".
+    //
+    // FIX: Run ALL probe reads FIRST (while relay is still base UMD firmware), then run
+    // ALL configure_fabric() calls.  This eliminates the race entirely.
+    //
     // FIX H (#42429): Once any non-MMIO device confirms its relay is broken, all subsequent
     // non-MMIO devices share the same fate — on T3K the relay path to all remote chips routes
     // through the same MMIO-device ETH relay ERISCs.  Rather than paying 3×15s probe timeouts
     // per additional non-MMIO device, track whether any relay broke and fast-path the rest.
+
+    // PHASE 1: Probe ALL devices FIRST before any configure_fabric() call.
+    // At this point all ETH relay ERISCs are still running base UMD firmware and can service
+    // the relay read protocol used by terminate_stale_erisc_routers().
+    std::unordered_map<ChipId, std::unordered_set<uint32_t>> probe_dead_channels_map;
     bool any_relay_broken = false;
-    size_t configured_count = 0;
     for (auto* dev : compiled_devices) {
         if (dev) {
             const bool is_non_mmio = (cluster_.get_associated_mmio_device(dev->id()) != dev->id());
@@ -1158,7 +1182,19 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 }
             }
 
-            dev->configure_fabric(probe_dead_channels);
+            probe_dead_channels_map[dev->id()] = std::move(probe_dead_channels);
+        }
+    }
+
+    // PHASE 2: Configure ALL devices now that probing is complete.
+    // configure_fabric() switches ETH channels from base UMD firmware to fabric firmware.
+    // Doing this after all probes guarantees that non-MMIO relay reads in PHASE 1 always
+    // go through base UMD firmware (which services the relay read protocol), not fabric
+    // firmware (which does not).
+    size_t configured_count = 0;
+    for (auto* dev : compiled_devices) {
+        if (dev) {
+            dev->configure_fabric(probe_dead_channels_map[dev->id()]);
             configured_count++;
         }
     }
