@@ -1220,7 +1220,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             }
 
             in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
-            in0_sender_kernel_desc.buffer_bindings.push_back({core, 0u, in0_buffer});
 
             // in0 receiver
         } else {
@@ -1378,11 +1377,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     }
                 }
                 in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
-                in1_sender_writer_kernel_desc.buffer_bindings.push_back({core, 0u, in1_buffer});
-                in1_sender_writer_kernel_desc.buffer_bindings.push_back({core, 7u, out_buffer});
-                if (bias_buffer) {
-                    in1_sender_writer_kernel_desc.buffer_bindings.push_back({core, 18u, bias_buffer});
-                }
 
                 // in1 receiver
             } else {
@@ -1467,12 +1461,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 // left half
                 if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
                     in1_receiver_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
-                    in1_receiver_writer_kernel_desc.buffer_bindings.push_back({core, 2u, out_buffer});
                 }
                 // right half
                 else {
                     in1_receiver_writer_other_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
-                    in1_receiver_writer_other_kernel_desc.buffer_bindings.push_back({core, 2u, out_buffer});
                 }
             }
         }
