@@ -24,8 +24,11 @@ constexpr uint32_t realtime_profiler_page_size = RT_PROFILER_ENTRY_SIZE;  // 64 
 // PCIE_NOC_X        - PCIe core X coordinate in NOC-0 space (WH only)
 // PCIE_NOC_Y        - PCIe core Y coordinate in NOC-0 space (WH only)
 
+// L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
+// reserved RT-profiler tensix core. Mirrors cq_realtime_profiler.cpp; address via compile-time
+// define REALTIME_PROFILER_MSG_ADDR set by host.
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
 

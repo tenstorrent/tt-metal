@@ -69,12 +69,11 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO) {
-            // Real-time profiler FIFO is dispatch-core-local L1 shared between cq_dispatch BRISC
-            // (producer) and cq_dispatch_subordinate NCRISC (consumer). Carving it here keeps
-            // it out of the per-core mailboxes_t that every worker pays for.
-            device_cq_addr_sizes_[dev_addr_idx] = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
-                                                      .size_of<dev_msgs::realtime_profiler_dispatch_fifo_t>();
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
+            // Real-time profiler mailbox: dispatch-core-local L1 region shared between the
+            // dispatch cores and the reserved RT-profiler tensix core.
+            device_cq_addr_sizes_[dev_addr_idx] =
+                hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::realtime_profiler_msg_t>();
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -91,7 +90,7 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
-            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO) {
+            dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }

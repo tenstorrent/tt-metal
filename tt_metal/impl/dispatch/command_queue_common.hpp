@@ -26,11 +26,14 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     FABRIC_HEADER_RB = 7,
     FABRIC_SYNC_STATUS = 8,
     DISPATCH_PROGRESS = 9,
-    // Real-time profiler program-id FIFO. Producer is cq_dispatch BRISC, consumer is
-    // cq_dispatch_subordinate NCRISC; both run on the same dispatch core, so this is a
-    // dispatch-core-local L1 region rather than a mailbox replicated on every worker.
-    // Holds dev_msgs::realtime_profiler_dispatch_fifo_t.
-    REALTIME_PROFILER_PROGRAM_ID_FIFO = 10,
+    // Real-time profiler mailbox. Shared between the dispatch cores (cq_dispatch BRISC /
+    // cq_dispatch_subordinate NCRISC / TRISC) and the reserved RT-profiler tensix core
+    // (cq_realtime_profiler + cq_realtime_profiler_push). Holds dev_msgs::realtime_profiler_msg_t,
+    // which carries state, ping-pong timestamps, host<->device sync, and the 32-entry
+    // program-id handoff FIFO between cq_dispatch BRISC (producer) and cq_dispatch_subordinate
+    // NCRISC (consumer). Allocated as a dispatch-core-local region — not as a per-core mailbox
+    // field — because no worker core reads or writes it.
+    REALTIME_PROFILER_MSG = 10,
     UNRESERVED = 11,
 };
 

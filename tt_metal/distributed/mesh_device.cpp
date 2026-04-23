@@ -1885,16 +1885,19 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     // HAL offsets are the same for all devices (same arch)
     const auto& hal = MetalContext::instance().hal();
     const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
-    uint32_t realtime_profiler_offset =
-        factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::realtime_profiler);
+    // realtime_profiler_msg_t lives in a dispatch-core-local L1 region assigned by
+    // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG; it is only reachable on the dispatch
+    // cores and the reserved RT-profiler tensix core. Per-field offsets are still computed off
+    // realtime_profiler_msg_t itself.
+    const uint32_t realtime_profiler_base_addr =
+        MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
     uint32_t config_buffer_addr_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
         dev_msgs::realtime_profiler_msg_t::Field::config_buffer_addr);
     uint32_t sync_request_offset =
         factory.offset_of<dev_msgs::realtime_profiler_msg_t>(dev_msgs::realtime_profiler_msg_t::Field::sync_request);
     uint32_t sync_host_timestamp_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
         dev_msgs::realtime_profiler_msg_t::Field::sync_host_timestamp);
-    uint32_t realtime_profiler_base_addr =
-        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) + realtime_profiler_offset;
     uint32_t realtime_profiler_mailbox_addr = realtime_profiler_base_addr + config_buffer_addr_offset;
 
     auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
@@ -2112,6 +2115,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             brisc_config.defines["DISPATCH_DATA_ADDR_A"] = std::to_string(dispatch_data_addr_a);
             brisc_config.defines["DISPATCH_DATA_ADDR_B"] = std::to_string(dispatch_data_addr_b);
             brisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
+            brisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_kernel_path, realtime_profiler_core, brisc_config);
 
@@ -2120,6 +2124,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             ncrisc_config.processor = DataMovementProcessor::RISCV_1;
             ncrisc_config.noc = NOC::RISCV_1_default;
             ncrisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
+            ncrisc_config.defines["REALTIME_PROFILER_MSG_ADDR"] = std::to_string(realtime_profiler_base_addr);
             if (need_pcie_noc_defines) {
                 ncrisc_config.defines["RT_PROFILER_PCIE_NOC_X"] = std::to_string(pcie_noc_x);
                 ncrisc_config.defines["RT_PROFILER_PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
@@ -2133,9 +2138,10 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             ::tt::tt_metal::detail::LaunchProgram(
                 device, realtime_profiler_program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
 
-            // Write config_buffer_addr AFTER launch — LaunchProgram writes to the
-            // mailboxes_t region (launch messages, go signals) which can clobber the
-            // realtime_profiler_msg_t.config_buffer_addr field if written beforehand.
+            // realtime_profiler_msg_t lives outside mailboxes_t (see
+            // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG), so LaunchProgram's writes to
+            // launch messages / go signals do not overlap with config_buffer_addr. The write is
+            // performed here to keep ordering deterministic relative to launch.
             uint32_t config_buffer_addr = dev_state.socket->get_config_buffer_address();
             std::vector<uint32_t> addr_data = {config_buffer_addr};
             tt::tt_metal::detail::WriteToDeviceL1(

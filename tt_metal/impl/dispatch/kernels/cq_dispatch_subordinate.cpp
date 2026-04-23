@@ -55,13 +55,12 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uint32_t cb_end = cb_base + cb_size;
 
+// Dispatch-core-local L1 region assigned by DispatchMemMap via
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
+// REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
+// description; this kernel is the consumer side of the embedded program_id_fifo.
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
-
-// Dispatch-core-local L1 FIFO shared with cq_dispatch BRISC (producer). Address provided by
-// host via REALTIME_PROFILER_PROGRAM_ID_FIFO_ADDR compile-time define; carved by DispatchMemMap.
-volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t* realtime_profiler_program_id_fifo =
-    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t*>(REALTIME_PROFILER_PROGRAM_ID_FIFO_ADDR);
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static bool rt_profiler_enabled = false;
 
@@ -388,8 +387,8 @@ void kernel_main() {
     // iteration after host enables RT races with dispatch_d, which can append
     // program_host_id entries before dispatch_s runs — wiping the FIFO drops
     // the first (and sometimes last) program IDs seen by the profiler core.
-    realtime_profiler_program_id_fifo->program_id_fifo_start = 0;
-    realtime_profiler_program_id_fifo->program_id_fifo_end = 0;
+    realtime_profiler_mailbox->program_id_fifo_start = 0;
+    realtime_profiler_mailbox->program_id_fifo_end = 0;
     realtime_profiler_mailbox->kernel_start_a.id = 0;
     realtime_profiler_mailbox->kernel_end_a.id = 0;
     realtime_profiler_mailbox->kernel_start_b.id = 0;
@@ -404,7 +403,7 @@ void kernel_main() {
         uint32_t popped_pid = 0;
         if (rt_profiler_enabled) {
             record_realtime_timestamp(realtime_profiler_mailbox, true);
-            popped_pid = pop_program_id(realtime_profiler_program_id_fifo);
+            popped_pid = pop_program_id(realtime_profiler_mailbox);
         }
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 

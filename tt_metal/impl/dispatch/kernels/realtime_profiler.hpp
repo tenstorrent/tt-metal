@@ -19,38 +19,38 @@ constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 // Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
 
-// Append a program ID to the circular buffer.
+// Append a program ID to the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful, false if the buffer is full.
-// The FIFO lives in dispatch-core-local L1 (carved by CommandQueueDeviceAddrType::
-// REALTIME_PROFILER_PROGRAM_ID_FIFO), not in mailboxes_t — see realtime_profiler_dispatch_fifo_t.
+// The mailbox (including this FIFO) lives in dispatch-core-local L1, assigned by
+// CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG.
 FORCE_INLINE
-bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t* fifo, uint32_t program_id) {
-    uint32_t end = fifo->program_id_fifo_end;
+bool program_id_fifo_append(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox, uint32_t program_id) {
+    uint32_t end = mailbox->program_id_fifo_end;
     uint32_t next_end = (end + 1) % PROGRAM_ID_FIFO_SIZE;
 
     // Check if buffer is full (next write position equals read position)
-    if (next_end == fifo->program_id_fifo_start) {
+    if (next_end == mailbox->program_id_fifo_start) {
         return false;
     }
 
-    fifo->program_id_fifo[end] = program_id;
-    fifo->program_id_fifo_end = next_end;
+    mailbox->program_id_fifo[end] = program_id;
+    mailbox->program_id_fifo_end = next_end;
     return true;
 }
 
-// Pop a program ID from the circular buffer.
+// Pop a program ID from the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful (and stores the value in *program_id), false if the buffer is empty.
 FORCE_INLINE
-bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t* fifo, uint32_t* program_id) {
-    uint32_t start = fifo->program_id_fifo_start;
+bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox, uint32_t* program_id) {
+    uint32_t start = mailbox->program_id_fifo_start;
 
     // Check if buffer is empty (read position equals write position)
-    if (start == fifo->program_id_fifo_end) {
+    if (start == mailbox->program_id_fifo_end) {
         return false;
     }
 
-    *program_id = fifo->program_id_fifo[start];
-    fifo->program_id_fifo_start = (start + 1) % PROGRAM_ID_FIFO_SIZE;
+    *program_id = mailbox->program_id_fifo[start];
+    mailbox->program_id_fifo_start = (start + 1) % PROGRAM_ID_FIFO_SIZE;
     return true;
 }
 
@@ -87,9 +87,9 @@ void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* mailb
 // Call this early to maintain timing (FIFO pop involves L1 reads/writes),
 // then call write_buffer_id() later once the command type is known.
 FORCE_INLINE
-uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t* fifo) {
+uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* mailbox) {
     uint32_t id = 0;
-    program_id_fifo_pop(fifo, &id);
+    program_id_fifo_pop(mailbox, &id);
     return id;
 }
 
