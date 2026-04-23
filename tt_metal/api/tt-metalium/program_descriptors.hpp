@@ -144,10 +144,30 @@ struct KernelDescriptor {
     // O(1) patching on cache hits without calling create_descriptor() again.
     BufferBindings buffer_bindings;
 
+    // Builder for dynamically-constructed runtime arg lists.  Buffer* entries
+    // auto-register as buffer bindings; uint32_t entries embed their value.
+    // The variant type is hidden — callers push typed values directly.
+    struct RTArgList {
+        void push_back(uint32_t v) { items_.emplace_back(v); }
+        void push_back(Buffer* b) { items_.emplace_back(b); }
+        void reserve(size_t n) { items_.reserve(n); }
+        // Append a plain uint32_t range (e.g. from fused-op signaler helpers).
+        void append(const std::vector<uint32_t>& v) {
+            for (uint32_t x : v) {
+                items_.emplace_back(x);
+            }
+        }
+
+    private:
+        std::vector<std::variant<uint32_t, Buffer*>> items_;
+        friend struct KernelDescriptor;
+    };
+
     // Push a core's runtime args, automatically registering any Buffer* entries
     // as buffer bindings at their position.  Use this instead of
     // runtime_args.emplace_back() when some args are buffer base addresses.
     void emplace_runtime_args(const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args);
+    void emplace_runtime_args(const CoreCoord& core, RTArgList args);
 };
 
 struct ProgramDescriptor {
