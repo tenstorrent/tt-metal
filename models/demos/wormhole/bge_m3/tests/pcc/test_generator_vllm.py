@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pytest checks for `generator_vllm.py`, aligned with the vLLM BGE-M3 reference tests."""
+"""PCC tests for `BgeM3ForEmbedding` (dense, sparse, ColBERT) with fixed reference tensors."""
 
 import pytest
 import torch
@@ -19,7 +19,7 @@ from models.demos.wormhole.bge_m3.demo.m3_scores import (
 MODEL_NAME = "BAAI/bge-m3"
 MAX_MODEL_LEN = 512
 
-# Example and references from tests/pcc/test_reference_vllm.py
+# Example queries/documents and fixed tensors for score checks (Wormhole-tuned reference values).
 sentences_1 = ["What is BGE M3?", "Definition of BM25"]
 sentences_2 = [
     "BGE M3 is an embedding model supporting dense retrieval, " "lexical matching and multi-vector interaction.",
@@ -76,7 +76,6 @@ def _build_generator_model(
         tt_data_parallel=tt_data_parallel,
         dtype=ttnn.bfloat8_b,
         model_name=model_name,
-        # Match BGE-M3 reference dense semantics from flag_embedding_model.py.
         sentence_pooling_method="cls",
         return_dense=True,
         return_sparse=True,
