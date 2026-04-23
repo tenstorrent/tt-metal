@@ -706,7 +706,6 @@ def _enrich_ops_from_device_logs(
             if perf_counter_df is not None and not perf_counter_df.empty:
                 print_counter_statistics_summary(perf_counter_df, device)
 
-        # Compute all perf counter metrics
         perf_metrics = None
         if perf_counter_df is not None and not perf_counter_df.empty:
             total_compute_cores = device_data["deviceInfo"]["max_compute_cores"]
@@ -734,7 +733,6 @@ def _enrich_ops_from_device_logs(
                 per_op_counts = perf_metrics["per_op_counts"]
                 lookup_key = (global_call_count, trace_id_counter)
 
-                # Helper to assign a metric dict's 4 stats to device_op
                 def assign_metric(base_name, metric_dict, suffix=" (%)", lookup=lookup_key):
                     if metric_dict:
                         device_op[f"{base_name} Min{suffix}"] = metric_dict["min"].get(lookup, nan)
@@ -742,17 +740,14 @@ def _enrich_ops_from_device_logs(
                         device_op[f"{base_name} Max{suffix}"] = metric_dict["max"].get(lookup, nan)
                         device_op[f"{base_name} Avg{suffix}"] = metric_dict["avg"].get(lookup, nan)
 
-                # Core utilization metrics (SFPU, FPU, MATH)
                 assign_metric("SFPU Util", per_op_stats.get("SFPU Util", {}))
                 assign_metric("FPU Util", per_op_stats.get("FPU Util", {}))
                 assign_metric("MATH Util", per_op_stats.get("MATH Util", {}))
 
-                # Per-op average counts
                 device_op["avg_sfpu_count"] = per_op_counts.get("avg_sfpu_count", {}).get(lookup_key, nan)
                 device_op["avg_fpu_count"] = per_op_counts.get("avg_fpu_count", {}).get(lookup_key, nan)
                 device_op["avg_math_count"] = per_op_counts.get("avg_math_count", {}).get(lookup_key, nan)
 
-                # Unpacker/Packer efficiency metrics
                 assign_metric("Unpacker0 Write Efficiency", per_op_stats.get("Unpacker0 Write Efficiency", {}))
                 assign_metric("Unpacker1 Write Efficiency", per_op_stats.get("Unpacker1 Write Efficiency", {}))
                 assign_metric("Unpacker Write Efficiency", per_op_stats.get("Unpacker Write Efficiency", {}))
@@ -1055,7 +1050,6 @@ def get_device_data_generate_report(
                     agg_metrics, eff_summary_rows = compute_device_only_metrics(perf_counter_df, device_arch)
                     device_efficiency_metrics[device] = agg_metrics
 
-                    # Print efficiency summary
                     if eff_summary_rows:
                         print_efficiency_metrics_summary(pd.DataFrame(eff_summary_rows), device)
 
@@ -1130,7 +1124,6 @@ def get_device_data_generate_report(
                     lookup_key = (global_call_count, trace_id_counter)
                     metrics = device_efficiency_metrics[device]
 
-                    # Write all metrics to CSV row systematically
                     for base_name, m in metrics.items():
                         is_raw = (
                             "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"

@@ -971,30 +971,25 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     available_math = get_counter_series("AVAILABLE_MATH")
     fpu_instrn_available_1 = get_counter_series("FPU_INSTRN_AVAILABLE_1")
 
-    # Calculate utilization metrics (value / ref_cnt * 100)
     sfpu_util = (sfpu_counter / sfpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
     fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
     math_util = (math_counter / math_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
 
-    # SFPU Counter aggregations
     per_op_stats["SFPU Util"] = _group_to_stat_dict(sfpu_util)
     per_op_counts["avg_sfpu_count"] = (
         sfpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
     ).to_dict()
 
-    # FPU Counter aggregations
     per_op_stats["FPU Util"] = _group_to_stat_dict(fpu_util)
     per_op_counts["avg_fpu_count"] = (
         fpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
     ).to_dict()
 
-    # MATH Counter aggregations
     per_op_stats["MATH Util"] = _group_to_stat_dict(math_util)
     per_op_counts["avg_math_count"] = (
         math_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
     ).to_dict()
 
-    # Calculate per-core efficiency metrics
     unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
     unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
 
@@ -1028,27 +1023,19 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
     ).replace([float("inf"), -float("inf")], nan)
 
-    # Aggregate per operation (min, median, max, avg)
     per_op_stats["Unpacker0 Write Efficiency"] = _group_to_stat_dict(unpack0_eff)
     per_op_stats["Unpacker1 Write Efficiency"] = _group_to_stat_dict(unpack1_eff)
 
-    # Combined Unpacker Write Efficiency (average per core, then aggregate)
     unpack_combined = pd.concat([unpack0_eff, unpack1_eff], axis=1).mean(axis=1, skipna=True)
     per_op_stats["Unpacker Write Efficiency"] = _group_to_stat_dict(unpack_combined)
 
     per_op_stats["Packer Efficiency"] = _group_to_stat_dict(pack_eff)
 
-    # FPU Execution Efficiency: FPU_COUNTER / FPU_INSTRN_AVAILABLE_1
     fpu_exec_eff = (fpu_counter / fpu_instrn_available_1 * 100).replace([float("inf"), -float("inf")], nan)
     per_op_stats["FPU Execution Efficiency"] = _group_to_stat_dict(fpu_exec_eff)
 
-    # Math Pipeline Utilization
     per_op_stats["Math Pipeline Utilization"] = _group_to_stat_dict(math_pipe_util)
-
-    # Math-to-Pack Handoff Efficiency
     per_op_stats["Math-to-Pack Handoff Efficiency"] = _group_to_stat_dict(math_pack_eff)
-
-    # Unpacker-to-Math Data Flow
     per_op_stats["Unpacker-to-Math Data Flow"] = _group_to_stat_dict(unpack_math_flow)
 
     # === Thread stall metrics ===
@@ -1276,7 +1263,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
 
     # === L1 composite metrics ===
     if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0"):
-        # L1 Total Bandwidth Util: sum of all 8 port reqs / (8 * ref_cnt)
         packer_key = "L1_0_UNIFIED_PACKER" if has_counter("L1_0_UNIFIED_PACKER") else "L1_0_UNPACKER_1_ECC_PACK1"
         port_keys = [
             "L1_0_UNPACKER_0",
@@ -1383,7 +1369,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             per_op_stats[f"Stall Overlap T{t}"] = _group_to_stat_dict(ratio)
 
     # === Packer Load Imbalance ===
-    # (max - min) / max of 4 packer engine utilization. WH only (PACK_COUNT=4).
     if all(has_counter(f"PACKER_BUSY_{i}") for i in range(3)) and has_counter("PACKER_BUSY"):
         engines = [get_counter_series(f"PACKER_BUSY_{i}") for i in range(3)] + [get_counter_series("PACKER_BUSY")]
         engine_max = pd.concat(engines, axis=1).max(axis=1)
@@ -1392,7 +1377,6 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Packer Load Imbalance"] = _group_to_stat_dict(imbalance)
 
     # === Compute-to-Unpack Ratio ===
-    # MATH_COUNTER / (UNPACK0_BUSY + UNPACK1_BUSY). >100% = compute-bound, <100% = memory-bound.
     if has_counter("MATH_COUNTER") and has_counter("UNPACK0_BUSY_THREAD0") and has_counter("UNPACK1_BUSY_THREAD0"):
         math = get_counter_series("MATH_COUNTER")
         unpack = get_counter_series("UNPACK0_BUSY_THREAD0") + get_counter_series("UNPACK1_BUSY_THREAD0")
@@ -1429,7 +1413,6 @@ def compute_device_only_metrics(
             ``pd.DataFrame(eff_summary_rows)`` → ``print_efficiency_metrics_summary``
     """
 
-    # Create efficiency dataframe
     efficiency_records = []
     for _, row in perf_counter_df.iterrows():
         efficiency_records.append(
@@ -1446,7 +1429,6 @@ def compute_device_only_metrics(
 
     eff_df = pd.DataFrame(efficiency_records)
 
-    # Pivot to get all counter types per (op, core)
     eff_pivot = eff_df.pivot_table(
         index=["run_host_id", "trace_id_count", "core_x", "core_y"],
         columns="counter_type",
@@ -1454,14 +1436,11 @@ def compute_device_only_metrics(
         aggfunc="first",
     ).reset_index()
 
-    # Flatten column names
     eff_pivot.columns = ["_".join(col).strip("_") if col[1] else col[0] for col in eff_pivot.columns.values]
 
-    # Helper function for safe division
     def safe_div(num, denom):
         return (num / denom * 100) if denom > 0 else nan
 
-    # Calculate per-core efficiency metrics
     eff_pivot["SFPU Util"] = eff_pivot.apply(
         lambda x: (
             (x.get("value_SFPU_COUNTER", 0) / x.get("ref_cnt_SFPU_COUNTER", 1) * 100)
@@ -1772,7 +1751,6 @@ def compute_device_only_metrics(
 
         return fn
 
-    # Instruction availability rate = cycles available / ref_cnt * 100
     eff_pivot["CFG Instrn Avail Rate T0"] = eff_pivot.apply(
         safe_util("value_CFG_INSTRN_AVAILABLE_0", "ref_cnt_CFG_INSTRN_AVAILABLE_0"),
         axis=1,
@@ -1827,7 +1805,6 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Dest read and math stall metrics
     def safe_bp_single(req_key, grant_key):
         def fn(x):
             r = x.get(req_key, 0)
@@ -2026,7 +2003,6 @@ def compute_device_only_metrics(
 
     # === Composite metrics ===
 
-    # Stall Cause Overlap Factor per thread
     for t in [0, 1, 2]:
         stalls_col = f"value_THREAD_STALLS_{t}"
         reason_cols = [
@@ -2048,7 +2024,6 @@ def compute_device_only_metrics(
                 axis=1,
             )
 
-    # Packer Load Imbalance
     busy_cols = ["value_PACKER_BUSY_0", "value_PACKER_BUSY_1", "value_PACKER_BUSY_2", "value_PACKER_BUSY"]
     if all(c in eff_pivot.columns for c in busy_cols):
         eff_pivot["Packer Load Imbalance"] = eff_pivot.apply(
@@ -2062,7 +2037,6 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Compute-to-Unpack Ratio
     if "value_MATH_COUNTER" in eff_pivot.columns and "value_UNPACK0_BUSY_THREAD0" in eff_pivot.columns:
         eff_pivot["Compute-to-Unpack Ratio"] = eff_pivot.apply(
             lambda x: (
@@ -2075,10 +2049,8 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Aggregate metrics per operation (min, median, max, avg)
     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
 
-    # All metric base names that use (%) suffix
     _pct_metric_names = [
         "SFPU Util",
         "FPU Util",
@@ -2180,7 +2152,6 @@ def compute_device_only_metrics(
                 "avg": grouped_eff[base_name].mean().to_dict(),
             }
 
-    # Build efficiency summary rows
     eff_summary_rows: List[Dict] = []
     first_metric = next(iter(agg_metrics.values()), {})
     first_stat = first_metric.get("min", {})
