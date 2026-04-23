@@ -85,7 +85,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
 
 uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
     // Collect all the parameters that affect the build configuration
-    FNV1a hasher;
+    StableHasher hasher;
 
     hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
