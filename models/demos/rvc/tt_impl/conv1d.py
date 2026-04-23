@@ -4,19 +4,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal, Optional
-
 import torch
 import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-InputLayout = Literal["NLC", "NHWC"]
-OutputLayout = Literal["NLC", "NHWC"]
-PaddingType = int | tuple[int, int] | Literal["same"]
-
+from .utils import ConvConfiguration, _normalize_conv2d_activation, get_shard_strategy_for_conv, resolve_padding_1d
 
 PARAMS_TO_CONFIG_VALUES = {
     # (1, 512, 10): (100_000, 32 * 8),
@@ -53,136 +47,7 @@ PARAMS_TO_CONFIG_VALUES = {
 }
 
 
-@dataclass(frozen=True)
-class Conv1dConfiguration:
-    in_channels: int
-    out_channels: int
-    kernel_size: int
-    stride: int = 1
-    padding: tuple[int, int] = (0, 0)  # (padding_left, padding_right)
-    dilation: int = 1
-    groups: int = 1
-    activation: Optional[ttnn.UnaryWithParam] = None
-    activation_dtype: ttnn.DataType = ttnn.bfloat16
-    weights_dtype: ttnn.DataType = ttnn.bfloat16
-    dtype: ttnn.DataType = ttnn.bfloat16
-    output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
-    deallocate_input: bool = False
-    # slice_strategy: Optional[SliceStrategy] = None
-    # math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
-    # fp32_dest_acc_en: bool = False
-    # packer_l1_acc: bool = False
-    # enable_act_double_buffer: bool = False
-    # enable_weights_double_buffer: bool = False
-    # deallocate_activation: bool = True
-    # reallocate_halo_output: bool = True
-    # config_tensors_in_dram: bool = True
-
-
-def input_shape_to_memory_config(
-    input_shape, output_length, in_channels, kernel_size, device: ttnn.MeshDevice
-) -> ttnn.MemoryConfig:
-    batch_size, input_height, input_width, in_channels = input_shape
-    memory_cost = batch_size * input_height * input_width * in_channels * 2  # assuming bfloat16, so 2 bytes per element
-    if (output_length, in_channels, kernel_size) in dims_to_num_slices:
-        return ttnn.DRAM_MEMORY_CONFIG
-
-    # Keep tiny-channel inputs interleaved to avoid expensive/invalid sharding setups.
-
-    if memory_cost > 64 * 1_400_000:  # if input is larger than 1.4MB, use DRAM to avoid L1 thrashing
-        return ttnn.DRAM_MEMORY_CONFIG
-    if in_channels < 16:
-        return ttnn.DRAM_MEMORY_CONFIG
-
-    nhw = batch_size * input_height * input_width
-
-    # Use best sharding strategy based on NHW-to-C ratio:
-    # - HEIGHT_SHARDED if NHW >> C
-    # - WIDTH_SHARDED if C >> NHW
-    # - BLOCK_SHARDED if NHW ~= C
-    if nhw >= 4 * in_channels:
-        strategy = ttnn.ShardStrategy.HEIGHT
-    elif in_channels >= 4 * nhw:
-        strategy = ttnn.ShardStrategy.WIDTH
-    else:
-        strategy = ttnn.ShardStrategy.BLOCK
-
-    grid_size = device.compute_with_storage_grid_size()
-    candidate_grids = [
-        ttnn.CoreGrid(y=grid_size.y, x=grid_size.x),
-        ttnn.CoreGrid(y=grid_size.y, x=1),
-        ttnn.CoreGrid(y=1, x=grid_size.x),
-        ttnn.CoreGrid(y=1, x=1),
-    ]
-
-    for core_grid in candidate_grids:
-        try:
-            return ttnn.create_sharded_memory_config_(
-                input_shape,
-                core_grid=core_grid,
-                strategy=strategy,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-        except RuntimeError:
-            continue
-
-    return ttnn.DRAM_MEMORY_CONFIG
-
-
-def _normalize_conv2d_activation(activation: str | tuple[str, dict] | None) -> ttnn.UnaryWithParam | None:
-    if activation is None:
-        return None
-    if isinstance(activation, tuple):
-        activation_name, kwargs = activation
-    else:
-        activation_name = activation.strip().lower()
-    activation_aliases = {
-        "swish": "silu",
-    }
-    activation_name = activation_aliases.get(activation_name, activation_name)
-
-    if activation_name == "relu":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-    if activation_name == "silu":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
-    if activation_name == "gelu":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)
-    if activation_name == "sigmoid":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
-    if activation_name == "tanh":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH)
-    if activation_name == "leaky_relu":
-        return ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, kwargs["negative_slope"])
-
-    supported = "relu, silu (alias swish), gelu, sigmoid, tanh, leaky_relu"
-    raise ValueError(f"Unsupported conv activation '{activation}'. Supported activations: {supported}")
-
-
-def resolve_padding(
-    padding: PaddingType,
-    kernel_size: int,
-    stride: int,
-    dilation: int,
-) -> tuple[int, int]:
-    if isinstance(padding, str):
-        if padding != "same":
-            raise ValueError(f"Unsupported padding mode: {padding}")
-        if stride != 1:
-            raise ValueError("Only stride=1 is supported for 'same' padding")
-        padding_needed = dilation * (kernel_size - 1)
-        left_padding = padding_needed // 2
-        right_padding = padding_needed - left_padding
-        return (left_padding, right_padding)
-
-    if isinstance(padding, tuple):
-        if len(padding) != 2:
-            raise ValueError(f"padding tuple must contain 2 values, got {len(padding)}")
-        return (padding[0], padding[1])
-
-    return (padding, padding)
-
-
-def output_length_from_input_length(input_length, conv1d_config: Conv1dConfiguration):
+def output_length_from_input_length(input_length, conv1d_config: ConvConfiguration):
     padding_left, padding_right = conv1d_config.padding[0], conv1d_config.padding[1]
     return (
         input_length + padding_left + padding_right - conv1d_config.dilation * (conv1d_config.kernel_size - 1) - 1
@@ -200,19 +65,11 @@ def get_conv2d_config_values(output_length, in_channels, out_channels, kernel_si
     return (slice_num, act_block_h_override)
 
 
-def get_shard_strategy_for_conv(batch_size, input_length, in_channels):
-    nhw = batch_size * input_length
-    if nhw >= 4 * in_channels:
-        return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    elif in_channels >= 4 * nhw:
-        return ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    else:
-        return ttnn.TensorMemoryLayout.BLOCK_SHARDED
-
-
 def get_conv_configs(
-    input_length, conv1d_config: Conv1dConfiguration, device: ttnn.Device
+    input_shape, conv1d_config: ConvConfiguration, device: ttnn.Device
 ) -> tuple[ttnn.Conv2dConfig, ttnn.Conv2dSliceConfig, ttnn.DeviceComputeKernelConfig]:
+    input_length = input_shape[1]
+
     output_length = output_length_from_input_length(input_length, conv1d_config)
 
     slice_num, act_block_h_override = get_conv2d_config_values(
@@ -226,12 +83,7 @@ def get_conv_configs(
     #     shard_layout = None
 
     act_block_w_div = 1
-    if slice_config is None:
-        shard_layout = get_shard_strategy_for_conv(
-            batch_size=1, input_length=input_length, in_channels=conv1d_config.in_channels
-        )
-    else:
-        shard_layout = None
+    shard_layout = get_shard_strategy_for_conv(input_shape) if slice_config is None else None
 
     return (
         ttnn.Conv2dConfig(
@@ -268,7 +120,7 @@ class Conv1d:
 
     def __init__(
         self,
-        device: ttnn.MeshDevice | None = None,
+        device: ttnn.MeshDevice,
         *,
         in_channels: int | None = None,
         out_channels: int | None = None,
@@ -281,15 +133,10 @@ class Conv1d:
         activation: str | tuple[str, dict] | None = None,
         deallocate_input: bool = False,
     ) -> None:
-        if device is None:
-            raise ValueError("device is required")
-        if in_channels is None or out_channels is None or kernel_size is None:
-            raise ValueError(
-                "in_channels, out_channels, and kernel_size are required when configuration is not provided"
-            )
+        self.device = device
         if isinstance(padding, str) and padding != "same":
             raise ValueError(f"Unsupported padding mode: {padding}")
-        padding_final = resolve_padding(
+        padding_final = resolve_padding_1d(
             padding=padding,
             kernel_size=kernel_size,
             stride=stride,
@@ -304,7 +151,7 @@ class Conv1d:
         else:
             output_layout = ttnn.ROW_MAJOR_LAYOUT
 
-        configuration = Conv1dConfiguration(
+        self.configuration = ConvConfiguration(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -317,10 +164,6 @@ class Conv1d:
             output_layout=output_layout,
             deallocate_input=deallocate_input,
         )
-
-        self.device = device
-        self.configuration = configuration
-        self.memory_config = ttnn.L1_MEMORY_CONFIG
 
     def load_state_dict(
         self,
@@ -356,8 +199,10 @@ class Conv1d:
         self,
         input_tensor: ttnn.Tensor,
     ):
-        batch_size, input_length, in_channels = input_tensor.shape
-        conv2d_config, slice_config, compute_config = get_conv_configs(input_length, self.configuration, self.device)
+        batch_size, input_length, _ = input_tensor.shape
+        conv2d_config, slice_config, compute_config = get_conv_configs(
+            input_tensor.shape, self.configuration, self.device
+        )
         out, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
             input_tensor=ttnn.unsqueeze(input_tensor, dim=1),
             weight_tensor=self.weight_tensor,

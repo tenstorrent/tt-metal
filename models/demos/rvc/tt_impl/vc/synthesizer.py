@@ -18,7 +18,7 @@ LRELU_SLOPE = 0.1
 
 
 def _mesh_mapper_and_composer(device):
-    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+    if device.get_num_devices() > 1:
         return ttnn.ShardTensorToMesh(device, dim=0), ttnn.ConcatMeshToTensor(device, dim=0)
     return None, None
 
@@ -91,6 +91,7 @@ def ttnn_gather_fallback(x: ttnn.Tensor, dim: int, index: ttnn.Tensor, device) -
     # Fallback implementation of gather using to_host, torch.gather, and from_torch.
     # needed since ttnn.gather is 4-8x slower than this fallback version
     mesh_mapper, mesh_composer = _mesh_mapper_and_composer(device)
+    x = ttnn.reallocate(x)
     x_torch = ttnn.to_torch(x, mesh_composer=mesh_composer)
     index_torch = ttnn.to_torch(index, mesh_composer=mesh_composer).to(torch.int64)
     gathered_torch = torch.gather(x_torch, dim=dim, index=index_torch)

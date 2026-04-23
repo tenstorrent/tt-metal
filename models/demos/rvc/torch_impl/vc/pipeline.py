@@ -14,7 +14,7 @@ from pysptk import sptk
 from safetensors.torch import load_file
 from scipy import signal
 
-from models.demos.rvc.torch_impl.rmve import RMVEPitchAlgorithm
+from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
 from models.demos.rvc.torch_impl.vc.hubert import HubertModel
 from models.demos.rvc.torch_impl.vc.synthesizer import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
 from models.demos.rvc.utils.audio import load_audio
@@ -166,7 +166,7 @@ class Pipeline:
         self.rms_mix_rate = rms_mix_rate
         self.protect = protect
         self.speaker_id = speaker_id
-        self._rmve_pitch_algorithm: RMVEPitchAlgorithm | None = None
+        self._rmvpe_pitch_algorithm: RMVPEPitchAlgorithm | None = None
 
         self.synthesizer, data_cfg = _load_synthesizer(self.config, self.if_f0, self.version, self.num)
         self.tgt_sr = data_cfg["sampling_rate"]
@@ -190,11 +190,11 @@ class Pipeline:
         self.t_max = self.sr * x_max
         self.device = config.device
 
-    def _get_rmve_pitch_algorithm(self) -> RMVEPitchAlgorithm:
-        if self._rmve_pitch_algorithm is None:
+    def _get_rmvpe_pitch_algorithm(self) -> RMVPEPitchAlgorithm:
+        if self._rmvpe_pitch_algorithm is None:
             device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
-            self._rmve_pitch_algorithm = RMVEPitchAlgorithm(sample_rate=self.sr, hop_size=self.window)
-        return self._rmve_pitch_algorithm
+            self._rmvpe_pitch_algorithm = RMVPEPitchAlgorithm(sample_rate=self.sr, hop_size=self.window)
+        return self._rmvpe_pitch_algorithm
 
     def _get_f0(self, audio, num_frames):
         f0_min = 50
@@ -233,8 +233,8 @@ class Pipeline:
             f0 = pw.stonemask(audio_np, f0, t, self.sr)
             f0 = torch.from_numpy(f0.astype(np.float32))
             f0 = f0.unsqueeze(0)
-        elif self.f0_method is F0Method.RMVE:
-            f0, _ = self._get_rmve_pitch_algorithm().extract_continuous_periodicity(audio)
+        elif self.f0_method is F0Method.RMVPE:
+            f0 = self._get_rmvpe_pitch_algorithm().extract_pitch(audio)
 
         else:
             raise ValueError(f"Unsupported f0_method: {self.f0_method}, must be one of {list(F0Method)}")

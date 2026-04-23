@@ -16,7 +16,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_FOLDER="${SCRIPT_DIR}/rvc-nano"
-RMVE_REPO_FOLDER="${SCRIPT_DIR}/rmve"
+RMVPE_REPO_FOLDER="${SCRIPT_DIR}/rmvpe"
 DATA_DIR="${SCRIPT_DIR}/data"
 TARGET_ASSETS_DIR="${DATA_DIR}/assets"
 TARGET_CONFIGS_DIR="${DATA_DIR}/configs"
@@ -57,20 +57,20 @@ rm -rf .git
 
 popd
 
-if [[ -d "${RMVE_REPO_FOLDER}" ]]; then
-  if [[ -d "${RMVE_REPO_FOLDER}/.git" ]]; then
-    echo "Reusing existing ${RMVE_REPO_FOLDER} clone."
+if [[ -d "${RMVPE_REPO_FOLDER}" ]]; then
+  if [[ -d "${RMVPE_REPO_FOLDER}/.git" ]]; then
+    echo "Reusing existing ${RMVPE_REPO_FOLDER} clone."
   else
-    echo "Removing existing ${RMVE_REPO_FOLDER} (not a git clone)."
-    rm -rf "${RMVE_REPO_FOLDER}"
+    echo "Removing existing ${RMVPE_REPO_FOLDER} (not a git clone)."
+    rm -rf "${RMVPE_REPO_FOLDER}"
   fi
 fi
 
-if [[ ! -d "${RMVE_REPO_FOLDER}" ]]; then
-  git clone --depth=1 --no-single-branch https://huggingface.co/mert-kurttutan/rmve "${RMVE_REPO_FOLDER}"
+if [[ ! -d "${RMVPE_REPO_FOLDER}" ]]; then
+  git clone --depth=1 --no-single-branch https://huggingface.co/mert-kurttutan/rmvpe "${RMVPE_REPO_FOLDER}"
 fi
 
-pushd "${RMVE_REPO_FOLDER}"
+pushd "${RMVPE_REPO_FOLDER}"
 
 git config advice.detachedHead false
 
@@ -91,8 +91,8 @@ rm -rf "${TARGET_ASSETS_DIR}" "${TARGET_CONFIGS_DIR}"
 mv "${REPO_FOLDER}/assets" "${TARGET_ASSETS_DIR}"
 mv "${REPO_FOLDER}/configs" "${TARGET_CONFIGS_DIR}"
 mv "${REPO_FOLDER}/sample-speech.wav" "${TARGET_SAMPLE_FILE}"
-mv "${RMVE_REPO_FOLDER}/rmvpe.safetensors" "${TARGET_RMVPE_FILE}"
+mv "${RMVPE_REPO_FOLDER}/rmvpe.safetensors" "${TARGET_RMVPE_FILE}"
 
 
 rm -rf "${REPO_FOLDER}"
-rm -rf "${RMVE_REPO_FOLDER}"
+rm -rf "${RMVPE_REPO_FOLDER}"

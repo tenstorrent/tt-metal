@@ -49,7 +49,7 @@ def run_rvc_e2e_inference(device) -> None:
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 8192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 64192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
 )
 def test_rvc_e2e(device):
     run_rvc_e2e_inference(device)
@@ -58,7 +58,7 @@ def test_rvc_e2e(device):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 8192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 64192, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
 )
 def test_rvc_e2e_dp(mesh_device):
     run_rvc_e2e_inference(mesh_device)
