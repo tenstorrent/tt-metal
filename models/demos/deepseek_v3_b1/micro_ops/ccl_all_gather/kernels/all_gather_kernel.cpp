@@ -76,7 +76,6 @@ void kernel_main() {
     if constexpr (Core::is_transport_core) {
         DeviceZoneScopedN("ALLGATHER_TRANSPORT");
         deepseek_b1_ops::AllGather::TransportSender<TransportCT> sender;
-        sender.open_connections(transport_args);
         sender(transport_args);
     }
 #endif
