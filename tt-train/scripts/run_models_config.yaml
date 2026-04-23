@@ -9,31 +9,16 @@
 #   args:     List of arguments passed to the configured executable or script
 
 models:
-# CPP Models
-  - name: "NanoGPT Shakespeare"
-    filename: "nanogpt"
-    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
-      - "--track_memory"
-
-  - name: "NanoLlama3 Shakespeare"
-    filename: "nanollama"
-    binary: "${TT_METAL_RUNTIME_ROOT}/build/tt-train/sources/examples/nano_gpt/nano_gpt"
-    args:
-      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
-      - "--track_memory"
-
 # Python Models
   - name: "NanoGPT Shakespeare"
-    filename: "nanogpt_shakespeare_python"
+    filename: "nanogpt_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
       - "--track_memory"
 
   - name: "NanoLlama3 Shakespeare"
-    filename: "nanollama_shakespeare_python"
+    filename: "nanollama_shakespeare"
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
