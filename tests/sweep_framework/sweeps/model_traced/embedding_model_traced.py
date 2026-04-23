@@ -215,7 +215,15 @@ def run(
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config, **op_kwargs)
+    # Only pass dtype/memory_config when not None — passing None creates extra keys
+    # in the sweep trace that the master doesn't have, causing validation diffs.
+    embedding_kwargs = {}
+    if dtype is not None:
+        embedding_kwargs["dtype"] = dtype
+    if memory_config is not None:
+        embedding_kwargs["memory_config"] = memory_config
+    embedding_kwargs.update(op_kwargs)
+    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()
