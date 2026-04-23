@@ -308,9 +308,11 @@ class ThroughputExperts:
         if self.prefill_deepseek_config is not None:
             pc = self.prefill_deepseek_config
             seq_per_device = hidden_states.shape[2] if len(hidden_states.shape) > 3 else hidden_states.shape[0]
-            per_device_rows = hidden_states.shape[0] if len(hidden_states.shape) > 3 else 1
-            # Skip DeepSeek if: single-user prefill (replicated rows), or seq_len mismatch
-            if per_device_rows < pc.dispatch_group_size or seq_per_device != pc.seq_len_per_chip:
+            # With packed batched prefill (upr users per row packed along seq), per-device
+            # hidden_states has shape (1, 1, upr*seq_len_per_chip, H/cols); rows=1 always.
+            # The seq_len check alone correctly gates DeepSeek for both batched and single-user
+            # modes (single-user uses a different prefill path in text_demo entirely).
+            if seq_per_device != pc.seq_len_per_chip:
                 pass  # fall through to chunked-decode
             else:
                 try:
