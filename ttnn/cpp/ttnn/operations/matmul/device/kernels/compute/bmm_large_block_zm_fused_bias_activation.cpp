@@ -229,7 +229,14 @@ void kernel_main() {
                     PostFn{},
                     PreFn{},
                     /*retain_in0=*/false,
-                    /*in1_per_core_w=*/in1_block_w);
+                    // in1_block_w is the in1 CB read stride (= per_core_N_in1_sender on
+                    // DRAM-sharded, possibly smaller than the output pack width). out_block_w
+                    // = out_subblock_w * in1_num_subblocks is the row stride the compute
+                    // actually packs into — on DRAM-sharded this is the padded
+                    // per_core_N_compute, so row-major reserve/push and multi-row
+                    // absolute-offset pack need it, not in1_block_w.
+                    /*in1_per_core_w=*/in1_block_w,
+                    /*out_row_width=*/out_block_w);
 
                 // ── Phase 2: Bias addition ──────────────────────────────
 #ifdef FUSE_BIAS
@@ -256,11 +263,27 @@ void kernel_main() {
                     bias_cb_id,
                     untilize_mode_out_cb_id,
                     row_broadcast_bias,
+                    row_major_output,
                     SFPUPostCompute>(
-                    in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, SFPUPostCompute{});
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    out_subblock_h,
+                    out_subblock_w,
+                    SFPUPostCompute{},
+                    /*out_row_width=*/out_block_w);
 #else
-                add_bias_bcast_rows<mm_partials_cb_id, bias_cb_id, untilize_mode_out_cb_id, row_broadcast_bias>(
-                    in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w);
+                add_bias_bcast_rows<
+                    mm_partials_cb_id,
+                    bias_cb_id,
+                    untilize_mode_out_cb_id,
+                    row_broadcast_bias,
+                    row_major_output>(
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    out_subblock_h,
+                    out_subblock_w,
+                    compute_kernel_lib::bias_add_config::NoPostBias{},
+                    /*out_row_width=*/out_block_w);
 #endif
 
                 if constexpr (num_blocks_w_dim > 1) {

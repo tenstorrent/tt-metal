@@ -71,9 +71,15 @@ void kernel_main() {
     constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
     // Don't need batch; same as batch from READER args
 
+    // Output block width in tiles. Equals out_block_w / in1_per_core_w / the bias block
+    // width. Used by the FUSE_BIAS path for the in3 block, and by the ROW_MAJOR_OUTPUT
+    // path to compute the row-group size. Always populated by the factory (no
+    // placeholder), so kernels can read it regardless of build flags.
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(17);
+
 #ifdef FUSE_BIAS
-    // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
+    // in3 block args — bias width equals in1_block_w.
+    constexpr uint32_t in3_block_w = in1_block_w;
 
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
@@ -149,7 +155,15 @@ void kernel_main() {
 #endif
 
 #ifndef OUT_SHARDED
-                // WRITER
+                // WRITER — layout of tiles arriving from compute depends on factory intent:
+                //   ROW_MAJOR_OUTPUT defined  → compute packs per M-row-group in row-major
+                //                               order; one CB push carries out_subblock_h
+                //                               rows of in1_block_w tiles laid out row-first.
+                //                               Writer walks rows then N-subblocks, so padded
+                //                               subblocks on the right are absorbed into the
+                //                               row-group pop (no separate per-row pad pop).
+                //   ROW_MAJOR_OUTPUT undefined → compute packs sequentially per subblock;
+                //                                writer reads subblock-by-subblock (legacy).
                 uint32_t num_blocks_h_dim_ = bh >= last_num_blocks_h_dim - 1 ? last_num_blocks_h_dim : num_blocks_h_dim;
                 uint32_t num_blocks_w_dim_ = bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
                 uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
@@ -161,6 +175,58 @@ void kernel_main() {
                     out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
                 }
                 uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
+#ifdef ROW_MAJOR_OUTPUT
+                constexpr uint32_t out_row_group_tiles = out_subblock_h * in1_block_w;
+                constexpr uint32_t out_row_stride_bytes = in1_block_w * output_single_tile_size_bytes;
+
+                for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
+                    uint32_t out_subblock_h_ = out_subblock_h;
+                    if (bh == num_blocks_h_dim_ - 1 && sbh == out_num_nonzero_subblocks_h_ - 1) {
+                        out_subblock_h_ = out_last_subblock_h;
+                    }
+
+                    cb_out.wait_front(out_row_group_tiles);
+                    uint32_t out_read_row_base_bytes = 0;
+                    uint32_t out_tensor_row_start_tile_id = out_tensor_sbh_start_tile_id;
+
+                    for (uint32_t h = 0; h < out_subblock_h_; ++h) {
+                        uint32_t out_read_offset = out_read_row_base_bytes;
+                        uint32_t out_tensor_sb_tile_id = out_tensor_row_start_tile_id;
+
+                        for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
+                            uint32_t out_subblock_w_ = out_subblock_w;
+                            uint32_t subblock_tiles_addr_skip = 0;
+                            if (bw == num_blocks_w_dim_ - 1 && sbw == out_num_nonzero_subblocks_w_ - 1) {
+                                out_subblock_w_ = out_last_subblock_w;
+                                subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
+                            }
+
+                            uint32_t out_tensor_tile_id = out_tensor_sb_tile_id;
+                            for (uint32_t w = 0; w < out_subblock_w_; ++w) {
+                                if (bh < num_blocks_h_dim_ && bw < num_blocks_w_dim_) {
+                                    noc.async_write(
+                                        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                                        s,
+                                        output_single_tile_size_bytes,
+                                        {.offset_bytes = out_read_offset},
+                                        {.page_id = out_tensor_tile_id});
+                                }
+                                out_read_offset += output_single_tile_size_bytes;
+                                out_tensor_tile_id += out_tensor_stride_w;
+                            }
+                            out_read_offset += subblock_tiles_addr_skip;
+                            out_tensor_sb_tile_id += out_tensor_next_subblock_stride_w;
+                        }
+
+                        out_read_row_base_bytes += out_row_stride_bytes;
+                        out_tensor_row_start_tile_id += out_tensor_stride_h;
+                    }
+
+                    noc.async_write_barrier();
+                    cb_out.pop_front(out_row_group_tiles);
+                    out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
+                }
+#else
                 for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
                     uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
                     for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
@@ -213,7 +279,8 @@ void kernel_main() {
                     }
                     out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                 }
-                // Pop row(s) of fully padded subblocks
+#endif  // ROW_MAJOR_OUTPUT
+        // Pop row(s) of fully padded subblocks
                 if (bh == num_blocks_h_dim_ - 1) {
                     cb_out.wait_front(padded_block_tiles_h_skip);
                     cb_out.pop_front(padded_block_tiles_h_skip);

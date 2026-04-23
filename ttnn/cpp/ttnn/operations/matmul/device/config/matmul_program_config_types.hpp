@@ -33,6 +33,11 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    // When true, factory emits ROW_MAJOR_OUTPUT to compute + writer kernels so the pack
+    // LLK writes tiles at absolute CB offsets row-first across all N-subblocks, and the
+    // writer reads per-M-row-group. Unlocks multi-row subblocks (out_subblock_h > 1 with
+    // out_subblock_w < per_core_N) by decoupling subblock shape from writer tile order.
+    bool row_major_output = false;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
@@ -51,6 +56,8 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
+    // See MatmulMultiCoreReuseMultiCastProgramConfig::row_major_output.
+    bool row_major_output = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
