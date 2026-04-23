@@ -91,19 +91,14 @@ def _device_to_host_post(tt_model, s_sm, d_norm, b, h, w):
     return scores_nchw, descriptors_nchw
 
 
-def _device_to_host_post_with_nms(tt_model, combined, b, h, w):
-    """Hot-loop D2H: single ``ttnn.to_torch`` on a device-side concat of the
-    NMS map and descriptor. Saves one ``from_device`` call (~6-9 ms of
-    Python-dispatch overhead) versus pulling the two tensors separately.
-    Layout: [NMS map : b*h*w bf16 elems][descriptor : b*enc_h*enc_w*256 bf16 elems].
+def _device_to_host_post_with_nms(tt_model, s_pooled, d_norm, b, h, w):
+    """Hot-loop D2H: pull the device-NMS'd map (single-channel, row-major)
+    and descriptors. ``sp_eq_mul_mask`` + on-device channel-0 slice make the
+    D2H payload 32× smaller than the 32-padded eq-mul output.
     """
     enc_h, enc_w = h // 8, w // 8
-    hw = b * h * w
-    enc_size = b * enc_h * enc_w * DESCRIPTOR_DIM
-    combined_host = ttnn.to_torch(combined).reshape(-1)
-    nms_scores = combined_host[:hw].reshape(b, h, w).float()
-    desc_flat = combined_host[hw : hw + enc_size]
-    descriptors_nhwc = desc_flat.reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
+    descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
+    nms_scores = ttnn.to_torch(s_pooled).reshape(b, h, w).float()
     descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
     return nms_scores, descriptors_nchw
 
@@ -150,9 +145,9 @@ def test_superpoint_benchmark(device, height, width, input_kind):
     def _do_warmup():
         out = tt_model.run_device_compute(tt_in, b=b)
         if trace_nms:
-            sw, combined_w = out
+            sw, pw, dw = out
             ttnn.synchronize_device(device)
-            ttnn.deallocate(sw); ttnn.deallocate(combined_w)
+            ttnn.deallocate(sw); ttnn.deallocate(pw); ttnn.deallocate(dw)
         else:
             sw, dw = out
             ttnn.synchronize_device(device)
@@ -173,14 +168,9 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         tid = ttnn.begin_trace_capture(device, cq_id=0)
         out = tt_model.run_device_compute(tt_in, b=b)
         if trace_nms:
-            # run_device_compute now packs descriptor + NMS map into ``combined``
-            # so the hot-loop D2H is a single ttnn.to_torch.
-            s, combined = out
-            d_norm = None
-            s_pooled = None
+            s, s_pooled, d_norm = out
         else:
             s, d_norm = out
-            combined = None
             s_pooled = None
         ttnn.end_trace_capture(device, tid, cq_id=0)
 
@@ -190,17 +180,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         # Produce one forward result via the traced path for PCC comparison.
         tt_model.load_input(tt_in, pixel_values)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        if trace_nms:
-            enc_h, enc_w = height // 8, width // 8
-            tt_scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h, enc_w, KEYPOINT_DIM)
-            tt_scores_nchw = tt_scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
-            _, tt_desc_nchw = _device_to_host_post_with_nms(
-                tt_model, combined, b, height, width
-            )
-        else:
-            tt_scores_nchw, tt_desc_nchw = _device_to_host_post(
-                tt_model, s, d_norm, b, height, width
-            )
+        tt_scores_nchw, tt_desc_nchw = _device_to_host_post(tt_model, s, d_norm, b, height, width)
 
         # Pre-build the host bf16 tensor once. ttnn.from_torch with a bf16 cast
         # costs ~10 ms/iter if repeated in the hot loop — moving that out of
@@ -231,10 +211,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
             tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
             write_event = ttnn.record_event(device, 1)
         ttnn.synchronize_device(device)
-        if trace_nms:
-            _ = _device_to_host_post_with_nms(tt_model, combined, b, height, width)
-        else:
-            _ = _device_to_host_post(tt_model, s, d_norm, b, height, width)
+        _ = _device_to_host_post(tt_model, s, d_norm, b, height, width)
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
 
@@ -262,7 +239,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
             tp2 = time.perf_counter()
             if trace_nms:
                 nms_scores, desc_host = _device_to_host_post_with_nms(
-                    tt_model, combined, b, height, width
+                    tt_model, s_pooled, d_norm, b, height, width
                 )
                 tp3 = time.perf_counter()
                 for i in range(b):
@@ -290,17 +267,7 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         for _ in range(n_iter):
             tt_model.load_input_prepared(tt_in, host_input)
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-            if trace_nms:
-                enc_h_, enc_w_ = height // 8, width // 8
-                scores_nhwc = ttnn.to_torch(s).reshape(b, enc_h_, enc_w_, KEYPOINT_DIM)
-                scores_host = scores_nhwc.permute(0, 3, 1, 2).contiguous().float()
-                _, desc_host = _device_to_host_post_with_nms(
-                    tt_model, combined, b, height, width
-                )
-            else:
-                scores_host, desc_host = _device_to_host_post(
-                    tt_model, s, d_norm, b, height, width
-                )
+            scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
             scores_pre = tt_model._decode_keypoints(scores_host, apply_nms=False)
             for i in range(b):
                 flat = scores_pre[i].flatten()
