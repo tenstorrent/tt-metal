@@ -356,21 +356,20 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     )
     hidden = hidden + attn_out
 
-    # --- MLP: fc1/fc2 use LoFi+bf16dest (BFP4 weights are compute-bound after BFP4 bandwidth cut) ---
-    lofi = _fused_compute_config_lofi(dev)
+    # --- MLP: fc1 with fused GELU, fc2 with fused bias ---
     h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"])
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc1_w"],
         bias_tensor=block_params["mlp"]["fc1_b"],
         config=_mm_cfg(192, 1280, 5120, dev),
-        compute_kernel_config=lofi,
+        compute_kernel_config=ckcfg,
         fused_activation=(ttnn.UnaryOpType.GELU, False),
     )
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc2_w"],
         bias_tensor=block_params["mlp"]["fc2_b"],
         config=_mm_cfg(192, 5120, 1280, dev),
-        compute_kernel_config=lofi,
+        compute_kernel_config=ckcfg,
     )
     hidden = hidden + h
     return hidden
