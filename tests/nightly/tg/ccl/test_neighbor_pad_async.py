@@ -785,3 +785,205 @@ def test_neighbor_pad_logical_h(
         logical_h=logical_h,
         num_links=num_links,
     )
+
+
+# ---------------------------------------------------------------------------
+# 2D logical_h masking tests — exercises W reader Phase 1 masking
+# ---------------------------------------------------------------------------
+
+
+def run_neighbor_pad_2d_logical_h_impl(
+    mesh_device,
+    input_shape,
+    h_dim,
+    w_dim,
+    h_axis,
+    w_axis,
+    pH,
+    pW,
+    logical_h,
+    num_links,
+    input_dtype=ttnn.bfloat16,
+    use_persistent_output_buffer=False,
+):
+    """
+    Test 2D neighbor_pad with logical_h masking.
+
+    Rows at global H index >= logical_h in the input contain non-zero random data
+    (simulating mesh-partition padding). The op must zero those rows both in the
+    local copy and in the W fabric exchange, so the output matches a golden
+    computed by zeroing those rows before padding.
+
+    This specifically exercises the bug where W reader Phase 1 read unmasked
+    input boundary columns for rows >= logical_h and sent non-zero data to the
+    W neighbor.
+    """
+    torch.manual_seed(0)
+    mesh_shape = tuple(mesh_device.shape)
+    h_factor = mesh_shape[h_axis]
+    w_factor = mesh_shape[w_axis]
+
+    assert (
+        input_shape[h_dim] % h_factor == 0
+    ), f"input_shape[{h_dim}]={input_shape[h_dim]} must be divisible by h_factor={h_factor}"
+    assert (
+        input_shape[w_dim] % w_factor == 0
+    ), f"input_shape[{w_dim}]={input_shape[w_dim]} must be divisible by w_factor={w_factor}"
+    assert (
+        0 < logical_h <= input_shape[h_dim]
+    ), f"logical_h={logical_h} must be in (0, input_shape[{h_dim}]={input_shape[h_dim]}]"
+
+    input_tensor = torch.rand(input_shape).bfloat16()
+
+    # Golden: zero rows >= logical_h, then apply 2D padding
+    masked_input = input_tensor.clone()
+    slices = [slice(None)] * input_tensor.ndim
+    slices[h_dim] = slice(logical_h, None)
+    masked_input[tuple(slices)] = 0.0
+    goldens = compute_2d_pad_golden(masked_input, mesh_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, "zeros")
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+
+    dims = [None, None]
+    dims[h_axis] = h_dim
+    dims[w_axis] = w_dim
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    persistent_output_buffer = None
+    if use_persistent_output_buffer:
+        output_shape = list(input_shape)
+        output_shape[h_dim] += h_factor * (pH + pH)
+        output_shape[w_dim] += w_factor * (pW + pW)
+        persistent_output_buffer = ttnn.from_torch(
+            torch.zeros(output_shape).bfloat16(),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=input_dtype,
+            memory_config=mem_config,
+            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        )
+
+    # Pass UNMASKED input — logical_h in the op must handle masking
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=input_dtype,
+        memory_config=mem_config,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+    )
+
+    output_tensor = ttnn.experimental.neighbor_pad_async(
+        input_tensor_mesh,
+        [h_dim, w_dim],
+        [pH, pW],
+        [pH, pW],
+        "zeros",
+        [h_axis, w_axis],
+        [h_neighbor_sem, w_neighbor_sem],
+        [barrier_sem],
+        num_links=[num_links, num_links],
+        memory_config=mem_config,
+        topology=ttnn.Topology.Linear,
+        persistent_output_buffer=persistent_output_buffer,
+        logical_h=logical_h,
+    )
+    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+
+    output_host = ttnn.from_device(output_tensor)
+    device_tensors = ttnn.get_device_tensors(output_host)
+
+    for row in range(mesh_shape[0]):
+        for col in range(mesh_shape[1]):
+            device_idx = row * mesh_shape[1] + col
+            dev_tensor = ttnn.to_torch(device_tensors[device_idx])
+            golden = goldens[(row, col)]
+            assert (
+                dev_tensor.shape == golden.shape
+            ), f"Device ({row},{col}): shape mismatch: got {dev_tensor.shape}, expected {golden.shape}"
+            eq, msg = comp_equal(dev_tensor, golden)
+            assert eq, f"Device ({row},{col}): {msg}"
+
+    mesh_device.reset_sub_device_stall_group()
+    mesh_device.clear_loaded_sub_device_manager()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, h_dim, w_dim, h_axis, w_axis, pH, pW, logical_h, num_links, use_persistent_output_buffer",
+    [
+        # Core repro: H=92 (23*4), logical_h=90 → device 3 rows 21-22 masked.
+        # 2 W links exercises the T-batch distribution across links.
+        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False),
+        # Same shape, logical_h at exact shard boundary — no masking, regression check
+        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 23 * 4, 2, False),
+        # Larger C, confirms W reader loop doesn't corrupt inter-stick indices
+        ([1, 3, 23 * 4, 20 * 8, 96], 2, 3, 0, 1, 1, 1, 90, 2, False),
+        # More masked rows: H=96 (24*4), logical_h=90 → device 3 rows 18-23 masked
+        ([1, 3, 24 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, False),
+        # Persistent output buffer — exercises the ping-pong path with masking
+        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 2, True),
+        # 1 W link
+        ([1, 3, 23 * 4, 20 * 8, 32], 2, 3, 0, 1, 1, 1, 90, 1, False),
+    ],
+    ids=[
+        "vae_720p_h90_of_92_2link",
+        "vae_no_masking_2link",
+        "vae_large_c_h90_of_92_2link",
+        "vae_h90_of_96_2link",
+        "vae_persistent_buf_2link",
+        "vae_720p_h90_of_92_1link",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
+    indirect=True,
+)
+def test_neighbor_pad_2d_logical_h(
+    mesh_device,
+    input_shape,
+    h_dim,
+    w_dim,
+    h_axis,
+    w_axis,
+    pH,
+    pW,
+    logical_h,
+    num_links,
+    use_persistent_output_buffer,
+    device_params,
+):
+    """2D neighbor pad with logical_h masking — specifically targets W reader Phase 1 masking."""
+    if not is_blackhole():
+        pytest.skip("Sized for 4x8 BH mesh")
+    if num_links > 2:
+        pytest.skip("Skipping num_links > 2 on BH")
+
+    run_neighbor_pad_2d_logical_h_impl(
+        mesh_device,
+        input_shape=list(input_shape),
+        h_dim=h_dim,
+        w_dim=w_dim,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        pH=pH,
+        pW=pW,
+        logical_h=logical_h,
+        num_links=num_links,
+        use_persistent_output_buffer=use_persistent_output_buffer,
+    )

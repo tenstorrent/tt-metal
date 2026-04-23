@@ -69,8 +69,11 @@ void kernel_main() {
     const uint32_t h_in = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t h_pad_bot = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t t_front_pad = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t logical_h = get_arg_val<uint32_t>(arg_idx++);        // 0 = no masking
+    const uint32_t device_h_offset = get_arg_val<uint32_t>(arg_idx++);  // device_index * h_in
 
     const uint32_t h_out = h_pad_top + h_in + h_pad_bot;
+    const bool do_h_masking = (logical_h > 0);
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
@@ -85,12 +88,18 @@ void kernel_main() {
         uint32_t t_input = is_t_front ? 0u : (t_abs - t_front_pad);
 
         for (uint32_t h = 0; h < h_in; ++h) {
+            // Row is masked (beyond logical_h) if H masking is active and the global H
+            // index falls at or past logical_h. This mirrors the fused masking in the
+            // local_copy_writer: unmasked input rows must produce zeros in the W exchange
+            // just as they do in the local output copy.
+            const bool h_masked = do_h_masking && (device_h_offset + h >= logical_h);
+
             // Base stick index in input tensor for this (t_input, h) row
             uint32_t input_row_base = (t_input * h_in + h) * num_interior_sticks;
 
             if (is_first_chip) {
                 cb_reserve_back(cb_output_id, 1);
-                if (is_t_front || is_padding_zeros) {
+                if (is_t_front || h_masked || is_padding_zeros) {
                     zeroPad<stick_size>(cb_output_id);
                     noc_async_read_barrier();
                 } else {
@@ -110,7 +119,7 @@ void kernel_main() {
                 // (is_first_chip branch above), never inter-device boundaries.
                 for (uint32_t pad_id = padding; pad_id > 0; pad_id--) {
                     cb_reserve_back(cb_output_id, 1);
-                    if (is_t_front) {
+                    if (is_t_front || h_masked) {
                         zeroPad<stick_size>(cb_output_id);
                         noc_async_read_barrier();
                     } else {

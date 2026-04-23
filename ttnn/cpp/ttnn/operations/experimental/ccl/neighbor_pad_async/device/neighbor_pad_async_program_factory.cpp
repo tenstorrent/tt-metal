@@ -793,21 +793,27 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
                 // W reader runtime args (addresses in CRTAs, not here)
                 // Phase 1: reads interior rows from INPUT; Phase 2: reads H-pad rows from OUTPUT.
+                // logical_h/device_h_offset mirror the same masking applied in local_copy_writer:
+                // rows at global H index >= logical_h must be zeroed in the W exchange too.
+                uint32_t w_reader_device_h_offset =
+                    (operation_attributes.logical_h > 0) ? (device_index * input_halo_dim_size) : 0u;
                 std::vector<uint32_t> w_reader_rt_args = {
-                    w_t_count,   // t_count: T batches for this link
-                    w_t_start,   // t_start: starting T batch (includes t_front_pad offset)
+                    w_t_count,  // t_count: T batches for this link
+                    w_t_start,  // t_start: starting T batch (includes t_front_pad offset)
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
                     barrier_count,
-                    output_num_sticks_per_halo_dim,  // output_row_width (W')
-                    operation_attributes.pad2_left,  // pad2_left
-                    num_sticks_per_halo_dim,         // num_interior_sticks (W_in)
+                    output_num_sticks_per_halo_dim,                      // output_row_width (W')
+                    operation_attributes.pad2_left,                      // pad2_left
+                    num_sticks_per_halo_dim,                             // num_interior_sticks (W_in)
                     w_direction ? is_last_w_device : is_first_w_device,  // is_first_chip
                     w_direction ? is_first_w_device : is_last_w_device,  // is_last_chip
-                    w_direction,                                          // direction
-                    operation_attributes.padding_left,   // h_pad_top
-                    input_halo_dim_size,                 // h_in
-                    operation_attributes.padding_right,  // h_pad_bot
-                    t_front_pad};                        // t_front_pad
+                    w_direction,                                         // direction
+                    operation_attributes.padding_left,                   // h_pad_top
+                    input_halo_dim_size,                                 // h_in
+                    operation_attributes.padding_right,                  // h_pad_bot
+                    t_front_pad,                                         // t_front_pad
+                    operation_attributes.logical_h,                      // logical_h (0 = no masking)
+                    w_reader_device_h_offset};                           // device_h_offset = device_index * h_in
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // W writer runtime args (addresses in CRTAs, not here)
