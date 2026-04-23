@@ -395,16 +395,14 @@ class TtSuperPoint:
         s64 = ttnn.slice(s_sm, [0, 0, 0, 0], [b, 1, enc_h * enc_w, 64], memory_config=DRAM)
         s64_rm = ttnn.to_layout(s64, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         ttnn.deallocate(s64)
-        s_nhwc = ttnn.reshape(s64_rm, [b, enc_h, enc_w, 64], memory_config=DRAM)
+        # Direct 4-D → 5-D reshape skips the intermediate (b,enc_h,enc_w,64) view.
+        s5d = ttnn.reshape(s64_rm, [b, enc_h, enc_w, 8, 8], memory_config=DRAM)
         ttnn.deallocate(s64_rm)
-        s5d = ttnn.reshape(s_nhwc, [b, enc_h, enc_w, 8, 8], memory_config=DRAM)
-        ttnn.deallocate(s_nhwc)
         s_perm = ttnn.permute(s5d, (0, 1, 3, 2, 4), memory_config=DRAM)
         ttnn.deallocate(s5d)
-        s_dense = ttnn.reshape(s_perm, [b, H, W, 1], memory_config=DRAM)
+        # Direct permute-output → flat reshape skips the intermediate (b,H,W,1) view.
+        s_flat = ttnn.reshape(s_perm, [1, 1, b * H * W, 1], memory_config=DRAM)
         ttnn.deallocate(s_perm)
-        s_flat = ttnn.reshape(s_dense, [1, 1, b * H * W, 1], memory_config=DRAM)
-        ttnn.deallocate(s_dense)
         zeros_pad = self._get_nms_zero_pad(b)  # persistent, trace-compatible
         s_padded = ttnn.concat([s_flat, zeros_pad], dim=-1, memory_config=DRAM)
         ttnn.deallocate(s_flat)
