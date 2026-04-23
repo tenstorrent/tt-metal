@@ -16,16 +16,14 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
-
-    constexpr uint32_t onetile = 1;
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
@@ -38,21 +36,16 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
-         * x**2
+         * x**2 — cumulative wait on cb_inp (grows to wt+blk each outer iter),
+         * no pop (both later reductions still need cb_inp's tiles). Absolute
+         * index `wt + wtr` on A and B; bulk output reserve/push of blk tiles.
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
-            }
-            REL();
-            cb_push_back(cb_x2, blk);
+            square<BinaryInputPolicy::CumulativeWaitNoPop, BinaryOutputPolicy::Bulk>(
+                cb_inp,
+                cb_x2,
+                BinaryInputBlockShape::of(1, blk),
+                BinaryInputExtras{.base = wt, .wait_total = wt + blk});
         }
         /*
          * sum(x**2)

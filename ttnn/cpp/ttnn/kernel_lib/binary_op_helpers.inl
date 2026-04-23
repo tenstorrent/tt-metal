@@ -52,6 +52,7 @@ constexpr bool waits_upfront(BinaryInputPolicy p) {
 constexpr bool waits_caller_managed(BinaryInputPolicy p) {
     return p == BinaryInputPolicy::NoWaitNoPop || p == BinaryInputPolicy::NoWaitPopAtEnd;
 }
+constexpr bool waits_cumulative(BinaryInputPolicy p) { return p == BinaryInputPolicy::CumulativeWaitNoPop; }
 
 constexpr bool pops_per_tile(BinaryInputPolicy p) { return p == BinaryInputPolicy::WaitAndPopPerTile; }
 constexpr bool pops_per_chunk(BinaryInputPolicy p) { return p == BinaryInputPolicy::WaitAndPopPerChunk; }
@@ -296,6 +297,8 @@ ALWI void binary_op(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras,
     PostOp post_op,
     AccumT accum) {
     static_assert(
@@ -335,6 +338,9 @@ ALWI void binary_op(
     // Upfront waits
     if constexpr (waits_upfront(input_a_policy)) {
         cb_wait_front(icb_a, total_tiles_a);
+    } else if constexpr (waits_cumulative(input_a_policy)) {
+        // GAP-2: caller-supplied running total across outer iterations.
+        cb_wait_front(icb_a, a_extras.wait_total);
     }
 
     // B policy: ROW and SCALAR always wait upfront
@@ -345,6 +351,8 @@ ALWI void binary_op(
             }
         } else if constexpr (waits_upfront(input_b_policy)) {
             if (!same_cb) cb_wait_front(icb_b, b_tile_count);
+        } else if constexpr (waits_cumulative(input_b_policy)) {
+            if (!same_cb) cb_wait_front(icb_b, b_extras.wait_total);
         }
     }
 
@@ -414,25 +422,28 @@ ALWI void binary_op(
                     tile_a = wt;
                     dst_idx = base_dst + wt;
                 } else {
-                    tile_a = ht * Wt + wt_base + wt;
+                    // Absolute-index branch (WaitUpfront*, NoWait*, CumulativeWaitNoPop).
+                    // a_extras.base shifts the read into the CB; default 0 preserves
+                    // the classic "read from front" behavior.
+                    tile_a = a_extras.base + ht * Wt + wt_base + wt;
                     dst_idx = base_dst + wt;
                 }
 
                 if constexpr (is_square) {
                     tile_b = tile_a;
                 } else if constexpr (bcast_dim == BroadcastDim::SCALAR) {
-                    tile_b = 0;
+                    tile_b = b_extras.base;
                 } else if constexpr (bcast_dim == BroadcastDim::ROW) {
-                    tile_b = wt_base + wt;
+                    tile_b = b_extras.base + wt_base + wt;
                 } else if constexpr (bcast_dim == BroadcastDim::COL) {
-                    tile_b = waits_per_tile(input_b_policy) ? 0 : ht;
+                    tile_b = b_extras.base + (waits_per_tile(input_b_policy) ? 0 : ht);
                 } else {  // NONE
                     if constexpr (waits_per_tile(input_b_policy)) {
                         tile_b = 0;
                     } else if constexpr (waits_per_chunk(input_b_policy)) {
                         tile_b = wt;
                     } else {
-                        tile_b = ht * Wt + wt_base + wt;
+                        tile_b = b_extras.base + ht * Wt + wt_base + wt;
                     }
                 }
 
@@ -586,6 +597,8 @@ ALWI void add(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras,
     PostOp post_op,
     AccumT accum) {
     binary_op<
@@ -597,7 +610,7 @@ ALWI void add(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum);
+        AccumT>(icb_a, icb_b, ocb, shape, a_extras, b_extras, post_op, accum);
 }
 
 template <
@@ -614,6 +627,8 @@ ALWI void sub(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras,
     PostOp post_op,
     AccumT accum) {
     binary_op<
@@ -625,7 +640,7 @@ ALWI void sub(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum);
+        AccumT>(icb_a, icb_b, ocb, shape, a_extras, b_extras, post_op, accum);
 }
 
 template <
@@ -642,6 +657,8 @@ ALWI void mul(
     uint32_t icb_b,
     uint32_t ocb,
     BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras,
+    BinaryInputExtras b_extras,
     PostOp post_op,
     AccumT accum) {
     binary_op<
@@ -653,7 +670,7 @@ ALWI void mul(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb_a, icb_b, ocb, shape, post_op, accum);
+        AccumT>(icb_a, icb_b, ocb, shape, a_extras, b_extras, post_op, accum);
 }
 
 template <
@@ -667,6 +684,7 @@ ALWI void square(
     uint32_t icb,
     uint32_t ocb,
     BinaryInputBlockShape shape,
+    BinaryInputExtras extras,
     PostOp post_op,
     AccumT accum) {
     binary_op<
@@ -678,7 +696,7 @@ ALWI void square(
         reconfig,
         init,
         PostOp,
-        AccumT>(icb, icb, ocb, shape, post_op, accum);
+        AccumT>(icb, icb, ocb, shape, extras, extras, post_op, accum);
 }
 
 }  // namespace compute_kernel_lib

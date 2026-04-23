@@ -166,7 +166,10 @@ enum class BinaryInputPolicy {
     WaitUpfrontNoPop,     // Wait for all tiles upfront, don't pop (persistent)
     WaitUpfrontPopAtEnd,  // Wait for all tiles upfront, pop at end (consume)
     NoWaitNoPop,          // Caller manages wait/pop (preloaded)
-    NoWaitPopAtEnd        // Caller manages wait, pop at end (preloaded, consume)
+    NoWaitPopAtEnd,       // Caller manages wait, pop at end (preloaded, consume)
+    CumulativeWaitNoPop   // GAP-2: helper waits for extras.wait_total tiles visible; no pop
+                          // (caller pops externally after all consumers). Use with extras.base to
+                          // read tiles [base, base + Wt) on this side.
 };
 
 /**
@@ -200,6 +203,23 @@ struct BinaryInputBlockShape {
     static constexpr BinaryInputBlockShape single() { return {1, 1}; }
     static constexpr BinaryInputBlockShape row(uint32_t c) { return {1, c}; }
     static constexpr BinaryInputBlockShape col(uint32_t r) { return {r, 1}; }
+};
+
+/**
+ * @brief Per-operand runtime extras: tile-index base + cumulative wait target.
+ *
+ * `base` — added to the per-iter tile index for this operand (enables absolute
+ * indexing like `mul_tiles(cb, cb, wt+wtr, wt+wtr, wtr)` without a hand-written
+ * tile loop). Default 0 (sequential from CB front).
+ *
+ * `wait_total` — only used under BinaryInputPolicy::CumulativeWaitNoPop. The
+ * helper issues `cb_wait_front(cb, wait_total)` once before processing, so the
+ * caller can pre-wait a growing total across outer iterations without popping
+ * tiles until all consumers are done. Ignored for any other policy.
+ */
+struct BinaryInputExtras {
+    uint32_t base = 0;
+    uint32_t wait_total = 0;
 };
 
 struct BinaryAccumulate {
@@ -275,7 +295,14 @@ template <
     typename PostOp = NoOp,
     typename AccumT = NoAccumulation>
 ALWI void binary_op(
-    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {},
+    PostOp post_op = {},
+    AccumT accum = {});
 
 // =============================================================================
 // Convenience Aliases
@@ -292,7 +319,14 @@ template <
     typename PostOp = NoOp,
     typename AccumT = NoAccumulation>
 ALWI void add(
-    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {},
+    PostOp post_op = {},
+    AccumT accum = {});
 
 /** @brief Element-wise subtraction: A - B. See binary_op() for full documentation. */
 template <
@@ -305,7 +339,14 @@ template <
     typename PostOp = NoOp,
     typename AccumT = NoAccumulation>
 ALWI void sub(
-    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {},
+    PostOp post_op = {},
+    AccumT accum = {});
 
 /** @brief Element-wise multiplication: A * B. See binary_op() for full documentation. */
 template <
@@ -318,7 +359,14 @@ template <
     typename PostOp = NoOp,
     typename AccumT = NoAccumulation>
 ALWI void mul(
-    uint32_t icb_a, uint32_t icb_b, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
+    uint32_t icb_a,
+    uint32_t icb_b,
+    uint32_t ocb,
+    BinaryInputBlockShape shape,
+    BinaryInputExtras a_extras = {},
+    BinaryInputExtras b_extras = {},
+    PostOp post_op = {},
+    AccumT accum = {});
 
 /** @brief Element-wise square: A * A. Uses a single input CB. See binary_op() for full documentation. */
 template <
@@ -328,7 +376,13 @@ template <
     bool init = true,
     typename PostOp = NoOp,
     typename AccumT = NoAccumulation>
-ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp post_op = {}, AccumT accum = {});
+ALWI void square(
+    uint32_t icb,
+    uint32_t ocb,
+    BinaryInputBlockShape shape,
+    BinaryInputExtras extras = {},
+    PostOp post_op = {},
+    AccumT accum = {});
 
 // =============================================================================
 // Dest-Reuse PostOp
