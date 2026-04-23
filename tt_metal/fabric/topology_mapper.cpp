@@ -1652,8 +1652,37 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     auto physical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_physical(
         cluster.get_cluster_type(), physical_system_descriptor, asic_id_to_mesh_rank);
 
+    // Diagnostic: log physical adjacency so we can understand what the hardware looks like
+    if (physical_adjacency_matrix.contains(MeshId{0})) {
+        const auto& padj = physical_adjacency_matrix.at(MeshId{0});
+        log_warning(
+            tt::LogFabric,
+            "TopologyMapper: physical adjacency for {} chips:",
+            total_number_of_chips);
+        for (const auto& [asic_id, neighbors] : padj.get_adjacency_map()) {
+            std::string neighbors_str;
+            for (const auto& n : neighbors) {
+                if (!neighbors_str.empty()) neighbors_str += ", ";
+                neighbors_str += std::to_string(n.get());
+            }
+            log_warning(
+                tt::LogFabric,
+                "  chip {} -> [{}]",
+                asic_id.get(),
+                neighbors_str);
+        }
+    }
+
     // Generate possible mesh shapes
     std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
+    {
+        std::string shapes_str;
+        for (const auto& s : mesh_shapes_to_try) {
+            if (!shapes_str.empty()) shapes_str += ", ";
+            shapes_str += std::to_string(s[0]) + "x" + std::to_string(s[1]);
+        }
+        log_warning(tt::LogFabric, "TopologyMapper: will try shapes: [{}]", shapes_str);
+    }
 
     // FIX K: Compute MMIO chip ASIC IDs upfront so we can detect when topology degradation
     // excludes them. MMIO devices dispatch via PCIe (not ETH relay) and must always be present
@@ -1703,8 +1732,24 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
         }
 
+        log_warning(
+            tt::LogFabric,
+            "TopologyMapper: trying shape {}x{} ({} nodes) for {} physical chips",
+            mesh_shape[0],
+            mesh_shape[1],
+            mesh_shape.mesh_size(),
+            total_number_of_chips);
+
         auto solver_result =
             solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED, true);
+
+        if (!solver_result.success) {
+            log_warning(
+                tt::LogFabric,
+                "TopologyMapper: shape {}x{} solver failed — no valid mapping found",
+                mesh_shape[0],
+                mesh_shape[1]);
+        }
 
         // Return mesh_graph if mapping is successful
         if (solver_result.success) {
