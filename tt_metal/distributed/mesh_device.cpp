@@ -160,7 +160,7 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
 // Result of evaluating whether the real-time profiler can be brought up on a given device.
 struct RealtimeProfilerEligibility {
     bool enabled = false;
-    CoreCoord core{};  // Only meaningful when enabled == true; tensix core reserved for the RT profiler kernel.
+    CoreCoord core;  // Only meaningful when enabled == true; tensix core reserved for the RT profiler kernel.
 };
 
 // Consolidated eligibility check for the real-time profiler on a single device.
