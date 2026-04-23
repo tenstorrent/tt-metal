@@ -988,6 +988,121 @@ class LlamaAttention(TTNNModule):
             new_attn.init_parameters()
         return new_attn
 
+    def _forward_decode_paged(
+        self,
+        hidden_states,
+        position_embeddings,
+        past_key_values,
+        cache_position,
+    ):
+        batch_size = hidden_states.shape[0]
+        seq_length = hidden_states.shape[1]
+        head_dim = self.torch_layer.head_dim
+        num_heads = self.torch_layer.config.num_attention_heads
+        num_kv_heads = self.torch_layer.config.num_key_value_heads
+
+        q_out = self.q_proj(hidden_states)
+        k_out = self.k_proj(hidden_states)
+        v_out = self.v_proj(hidden_states)
+
+        query_states = ttnn.reshape(q_out, (batch_size, seq_length, num_heads, head_dim))
+        query_states = ttnn.transpose(query_states, 1, 2)
+        key_states = ttnn.reshape(k_out, (batch_size, seq_length, num_kv_heads, head_dim))
+        key_states = ttnn.transpose(key_states, 1, 2)
+        value_states = ttnn.reshape(v_out, (batch_size, seq_length, num_kv_heads, head_dim))
+        value_states = ttnn.transpose(value_states, 1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = self.rope(query_states, key_states, cos, sin)
+
+        layer_idx = self.torch_layer.layer_idx
+
+        if cache_position is None:
+            cur_pos = past_key_values.get_seq_length(layer_idx)
+            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
+        else:
+            cp = cache_position
+            if isinstance(cp, TorchTTNNTensor):
+                cp = cp.to_torch
+            if isinstance(cp, ttnn.Tensor):
+                mesh_composer = None
+                if cp.device() is not None and cp.device().get_num_devices() > 1:
+                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
+                cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
+            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+
+        cur_pos_tt = ttnn.from_torch(
+            cache_position_tensor,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        query_states = ttnn.permute(query_states, (2, 0, 1, 3))
+        key_states = ttnn.permute(key_states, (2, 0, 1, 3))
+        value_states = ttnn.permute(value_states, (2, 0, 1, 3))
+
+        if self.device.get_num_devices() > 1:
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+            for name, states in [("query", query_states), ("key", key_states), ("value", value_states)]:
+                t_torch = ttnn.to_torch(states, mesh_composer=mesh_composer)
+                t_torch = t_torch[:1]
+                repl = ttnn.from_torch(
+                    t_torch,
+                    device=self.device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                    dtype=states.dtype,
+                    layout=states.layout,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if name == "query":
+                    query_states = repl
+                elif name == "key":
+                    key_states = repl
+                else:
+                    value_states = repl
+
+        tile_size = 32
+        shard_h = ((num_kv_heads + tile_size - 1) // tile_size) * tile_size
+
+        core_grid = ttnn.CoreGrid(y=1, x=batch_size)
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(shard_h, head_dim),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        key_states = ttnn.to_memory_config(key_states, shard_cfg)
+        value_states = ttnn.to_memory_config(value_states, shard_cfg)
+
+        past_key_values.paged_update_on_device(
+            key_states,
+            value_states,
+            layer_idx=layer_idx,
+            current_pos=cur_pos_tt,
+        )
+        ttnn.deallocate(key_states)
+        ttnn.deallocate(value_states)
+
+        attn_output = past_key_values.paged_sdpa_decode(
+            query_states,
+            layer_idx,
+            current_pos=cur_pos_tt,
+            scale=self.torch_layer.scaling,
+            program_config=self.sdpa.program_config,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+        )
+
+        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))
+        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, num_heads * head_dim))
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None
+
     def forward(
         self,
         hidden_states,
@@ -1005,14 +1120,37 @@ class LlamaAttention(TTNNModule):
                 "Warning: attention_mask is not None, but TTNN LlamaAttention does not support it yet."
             )  # --- IGNORE ---
         past_key_values = kwargs.get("past_key_value", past_key_values) if past_key_values is None else past_key_values
+
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+        seq_length = hidden_states.shape[1]
+
+        if use_paged and seq_length == 1:
+            return self._forward_decode_paged(
+                hidden_states,
+                position_embeddings,
+                past_key_values,
+                cache_position,
+            )
+
         if self.qkv_same_shape:
             query_states, key_states, value_states = self.qkv_proj(hidden_states)
         else:
-            input_shape = list(hidden_states.shape)[:-1]
-            hidden_shape = (*input_shape, -1, self.torch_layer.head_dim)
-            query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-            key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+            head_dim = self.torch_layer.head_dim
+            num_heads = self.torch_layer.config.num_attention_heads
+            num_kv_heads = self.torch_layer.config.num_key_value_heads
+            batch_size = hidden_states.shape[0]
+            seq_len = hidden_states.shape[1]
+
+            q_out = self.q_proj(hidden_states)
+            k_out = self.k_proj(hidden_states)
+            v_out = self.v_proj(hidden_states)
+
+            query_states = ttnn.reshape(q_out, (batch_size, seq_len, num_heads, head_dim))
+            query_states = ttnn.transpose(query_states, 1, 2)
+            key_states = ttnn.reshape(k_out, (batch_size, seq_len, num_kv_heads, head_dim))
+            key_states = ttnn.transpose(key_states, 1, 2)
+            value_states = ttnn.reshape(v_out, (batch_size, seq_len, num_kv_heads, head_dim))
+            value_states = ttnn.transpose(value_states, 1, 2)
 
         if position_embeddings is None:
             print("Warning: position_embeddings is None, computing from position_ids.")  # --- IGNORE ---
@@ -1023,19 +1161,25 @@ class LlamaAttention(TTNNModule):
         query_states, key_states = self.rope(query_states, key_states, cos, sin)
 
         if past_key_values is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_values.update(
-                key_states, value_states, self.torch_layer.layer_idx, cache_kwargs
-            )
+            if use_paged:
+                layer_idx = self.torch_layer.layer_idx
+                past_key_values.paged_fill_on_device(
+                    key_states,
+                    value_states,
+                    layer_idx=layer_idx,
+                    batch_idx=0,
+                )
+            else:
+                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+                key_states, value_states = past_key_values.update(
+                    key_states, value_states, self.torch_layer.layer_idx, cache_kwargs
+                )
 
         original_q_len = query_states.shape[2]
         kv_len = key_states.shape[2]
 
         if self.torch_layer.is_causal and original_q_len < kv_len:
-            # Pad query: [B, H, q_len, D] -> [B, H, kv_len, D]
             pad_len = kv_len - original_q_len
-            # Create zero padding on device
             pad_shape = (query_states.shape[0], query_states.shape[1], pad_len, query_states.shape[3])
             zero_pad = ttnn.zeros(
                 pad_shape,
@@ -1059,9 +1203,7 @@ class LlamaAttention(TTNNModule):
         )
         attn_out = ttnn.experimental.nlp_concat_heads(attn_out)
         attn_out = ttnn.squeeze(attn_out, 1)
-        # Slice output if query was padded
         if self.torch_layer.is_causal and original_q_len < kv_len:
-            # Slice: [B, kv_len, D] -> [B, q_len, D]
             attn_out = attn_out[:, -original_q_len:, :]
 
         return self.o_proj(attn_out), None
