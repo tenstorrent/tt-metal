@@ -7,28 +7,23 @@ No MATH kernel. Two operands unpacked to SrcS slices 0 and 1, added by SFPU,
 result packed from SrcS slice 2 to L1.
 """
 
-from typing import List
-
 import pytest
 import torch
-from helpers.format_config import (
-    MXFP8_E4M3_MAX_NORMAL,
-    MXFP8_E4M3_MIN_MAGNITUDE,
-    MXFP8_E5M2_MAX_NORMAL,
-    MXFP8_E5M2_MIN_MAGNITUDE,
-    DataFormat,
-    FormatConfig,
-)
+from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
-from helpers.llk_params import (
-    DestAccumulation,
-    ImpliedMathFormat,
-    MathOperation,
-    format_dict,
+from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
+from helpers.param_config import (
+    generate_sfpu_format_dest_acc_combinations,
+    input_output_formats,
+    parametrize,
 )
-from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import (
+    apply_log_uniform_magnitudes,
+    compute_safe_input_magnitude_range,
+    format_elem_max,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -39,174 +34,10 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-
-def prepare_add_inputs(
-    src_A: torch.Tensor,
-    src_B: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-):
-    """
-    Prepare input tensors for add operation with safe value ranges.
-
-    Clamps values so that a + b fits in both the input and output formats.
-
-    Args:
-        src_A: Source tensor A
-        src_B: Source tensor B
-        input_format: Input data format
-        output_format: Output data format
-
-    Returns:
-        Tuple of prepared (src_A, src_B) tensors
-    """
-    input_torch_format = format_dict[input_format]
-    output_torch_format = format_dict[output_format]
-    input_finfo = torch.finfo(input_torch_format)
-    output_finfo = torch.finfo(output_torch_format)
-
-    def mx_elem_max(df: DataFormat) -> float:
-        if df == DataFormat.MxFp8R:
-            return MXFP8_E5M2_MAX_NORMAL
-        if df == DataFormat.MxFp8P:
-            return MXFP8_E4M3_MAX_NORMAL
-        raise ValueError(f"mx_elem_max: not an MX format: {df}")
-
-    # Safety factor applied to format maxima when clamping add operands.
-    # Ensures |a| + |b| stays within representable range with headroom for
-    # rounding/quantization (two operands each capped at 45% of max -> sum <= 90% of max).
-    ADD_RANGE_SAFETY_FACTOR = 0.45
-
-    if output_format.is_mx_format():
-        cap_from_output = mx_elem_max(output_format) * ADD_RANGE_SAFETY_FACTOR
-    else:
-        cap_from_output = output_finfo.max * ADD_RANGE_SAFETY_FACTOR
-
-    if input_format.is_mx_format():
-        cap_from_input = mx_elem_max(input_format) * ADD_RANGE_SAFETY_FACTOR
-    else:
-        cap_from_input = input_finfo.max * ADD_RANGE_SAFETY_FACTOR
-
-    max_safe_value = min(cap_from_output, cap_from_input)
-
-    # bfloat16: limit magnitude for reasonable precision
-    if input_torch_format == torch.bfloat16 and not input_format.is_mx_format():
-        max_safe_value = min(max_safe_value, 1e4)
-
-    # Use format-appropriate minimum magnitude.
-    # MX formats map to torch.bfloat16 in format_dict, but actual FP8 element
-    # types have much larger minimums than bfloat16.tiny.  Using bfloat16.tiny
-    # produces values far below FP8 representable range, causing quantization
-    # mismatches between golden and hardware.
-    if input_format.is_mx_format():
-        if input_format == DataFormat.MxFp8P:
-            min_magnitude = MXFP8_E4M3_MIN_MAGNITUDE
-        else:
-            min_magnitude = MXFP8_E5M2_MIN_MAGNITUDE
-    else:
-        min_magnitude = max(1e-6, input_finfo.tiny * 100)
-
-    # Also respect output format minimum if output is MX
-    if output_format.is_mx_format():
-        if output_format == DataFormat.MxFp8P:
-            min_magnitude = max(min_magnitude, MXFP8_E4M3_MIN_MAGNITUDE)
-        else:
-            min_magnitude = max(min_magnitude, MXFP8_E5M2_MIN_MAGNITUDE)
-
-    def clamp_tensor(src: torch.Tensor) -> torch.Tensor:
-        src_float = src.to(torch.float32)
-        src_min = src_float.min()
-        src_max = src_float.max()
-        normalized = (
-            (src_float - src_min) / (src_max - src_min)
-            if src_max > src_min
-            else torch.zeros_like(src_float)
-        )
-        log_min = torch.log(torch.tensor(min_magnitude, dtype=torch.float32))
-        log_max = torch.log(torch.tensor(max_safe_value, dtype=torch.float32))
-        magnitudes = torch.exp(log_min + normalized * (log_max - log_min))
-        # Alternate signs based on element index for coverage
-        signs = torch.where(
-            torch.arange(src.numel()) % 3 == 0,
-            torch.tensor(-1.0),
-            torch.tensor(1.0),
-        )
-        values = signs * magnitudes
-        values = torch.clamp(values, -max_safe_value, max_safe_value)
-        return values.to(input_torch_format)
-
-    return clamp_tensor(src_A), clamp_tensor(src_B)
-
-
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if format combination is invalid for Quasar.
-
-    Args:
-        fmt: Format configuration with input and output formats
-        dest_acc: Destination accumulation mode
-
-    Returns:
-        True if the combination is invalid, False otherwise
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    return False
-
-
-def generate_sfpu_add_combinations(
-    formats_list: List[FormatConfig],
-):
-    """
-    Generate SFPU add test combinations.
-
-    Args: Input-output format pairs
-
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
-    """
-    combinations = []
-
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-
-        if in_fmt.is_32_bit():
-            dest_acc_modes = (DestAccumulation.Yes,)
-        elif in_fmt.is_mx_format():
-            dest_acc_modes = (DestAccumulation.No,)
-        else:
-            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-
-        for dest_acc in dest_acc_modes:
-            if _is_invalid_quasar_combination(fmt, dest_acc):
-                continue
-
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                for input_dimensions in [[32, 32], [64, 64], [32, 64]]:
-                    combinations.append(
-                        (fmt, dest_acc, implied_math_format, input_dimensions)
-                    )
-
-    return combinations
-
+# Safety factor applied to format maxima when clamping add operands.
+# Ensures |a| + |b| stays within representable range with headroom for rounding /
+# quantization (two operands each capped at 45% of max -> sum <= 90% of max).
+ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
@@ -218,13 +49,16 @@ SFPU_ADD_FORMATS = input_output_formats(
     ]
 )
 
+SFPU_ADD_COMBINATIONS = [
+    (fmt, dest_acc, implied_math_format, input_dimensions)
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
+    for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    for input_dimensions in [[32, 32], [64, 64]]
+]
+
 
 @pytest.mark.quasar
-@parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_add_combinations(
-        SFPU_ADD_FORMATS
-    ),
-)
+@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
 def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     """
     Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
@@ -244,8 +78,27 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         sfpu=True,
     )
 
-    src_A, src_B = prepare_add_inputs(
-        src_A, src_B, formats.input_format, formats.output_format
+    min_magnitude, max_magnitude = compute_safe_input_magnitude_range(
+        formats.input_format,
+        formats.output_format,
+        input_magnitude_cap=format_elem_max(formats.input_format)
+        * ADD_RANGE_SAFETY_FACTOR,
+        output_magnitude_cap=format_elem_max(formats.output_format)
+        * ADD_RANGE_SAFETY_FACTOR,
+    )
+    src_A = apply_log_uniform_magnitudes(
+        src_A,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        alternate_sign_every_n=3,
+    )
+    src_B = apply_log_uniform_magnitudes(
+        src_B,
+        min_magnitude=min_magnitude,
+        max_magnitude=max_magnitude,
+        cast_to_format=formats.input_format,
+        alternate_sign_every_n=3,
     )
 
     num_faces = 4
