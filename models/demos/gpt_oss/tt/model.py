@@ -336,7 +336,6 @@ class Model:
         user_id=0,
         sampling_on_device=False,
         batch_size=1,
-        skip_lm_head=False,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -391,9 +390,6 @@ class Model:
                 logits.deallocate(True)
                 logits = logits_sliced
             hidden_states = logits
-
-        if skip_lm_head:
-            return hidden_states
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
@@ -469,7 +465,6 @@ class Model:
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
-        skip_lm_head=False,
     ):
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
@@ -494,7 +489,6 @@ class Model:
             is_decode=False,
             user_id=user_id,
             batch_size=batch_size,
-            skip_lm_head=skip_lm_head,
         )
 
         return logits
@@ -513,196 +507,6 @@ class Model:
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
         return logits
-
-    def prepare_row_sharded_prefill_iter(
-        self, tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks
-    ):
-        """Prepare one iteration of row-sharded batched prefill."""
-        num_rows = self.mesh_device.shape[0]
-        users_per_row = len(prompt_lens) // num_rows
-        user_indices = [
-            row * users_per_row + iter_idx
-            for row in range(num_rows)
-            if row * users_per_row + iter_idx < len(prompt_lens)
-        ]
-        while len(user_indices) < num_rows:
-            user_indices.append(user_indices[0])
-        tokens_list, pt_list, last_idxs = [], [], []
-        for uid in user_indices:
-            plen = int(prompt_lens[uid])
-            toks = torch.cat(
-                [tokens[uid : uid + 1, :plen], torch.zeros(1, max_padded_len - plen, dtype=tokens.dtype)], dim=-1
-            )
-            tokens_list.append(toks)
-            pt_list.append(page_table[uid : uid + 1, :max_num_blocks])
-            last_idxs.append(plen - 1)
-        return torch.cat(tokens_list, dim=0), torch.cat(pt_list, dim=0), last_idxs, user_indices
-
-    def run_row_sharded_prefill_forward(self, tokens_iter, pt_iter, kv_cache, fixed_glt, skip_lm_head=False):
-        """Run one non-traced row-sharded prefill iteration."""
-        host_out = self.prepare_inputs_prefill(tokens_iter, page_table=pt_iter, batched_prefill=True)
-        return self.ttnn_prefill_forward(
-            host_out[0],
-            rot_mats_global=host_out[1],
-            rot_mats_local=host_out[2],
-            user_id=0,
-            page_table=host_out[3],
-            get_last_token=fixed_glt,
-            kv_cache=kv_cache,
-            batch_size=1,
-            skip_lm_head=skip_lm_head,
-        )
-
-    def extract_prefill_logits_to_host(self, tt_logits, last_idxs, user_indices, fixed_glt, output_tensor):
-        """Extract per-row TP-gathered logits to host output_tensor."""
-        device_tensors = ttnn.get_device_tensors(tt_logits)
-        nc = self.mesh_device.shape[1]
-        for row_idx, uid in enumerate(user_indices):
-            if uid >= output_tensor.shape[0]:
-                continue
-            device_base = row_idx * nc
-            row_logits = [ttnn.to_torch(device_tensors[device_base + col]) for col in range(nc)]
-            torch_output = torch.cat(row_logits, dim=-1)
-            pos = last_idxs[row_idx] % 32 if fixed_glt != -1 else last_idxs[row_idx]
-            output_tensor[uid, 0] = torch_output[..., pos, : self.vocab_size].view(-1)
-
-    def clear_kv_caches(self):
-        """Clear all KV caches (guard against None for vLLM)."""
-        for layer_obj in self.layers:
-            lp = getattr(layer_obj.self_attn, "layer_past", None)
-            if lp is not None:
-                ttnn.mul(lp[0], 0, output_tensor=lp[0])
-                ttnn.mul(lp[1], 0, output_tensor=lp[1])
-
-    def row_sharded_batched_prefill(
-        self,
-        tokens,
-        page_table,
-        kv_cache,
-        prompt_lens,
-        prefill_seq_lens,
-        enable_trace=True,
-        sampling_params=None,
-        model_args=None,
-        trace_cache=None,
-    ):
-        """Row-parallel batched prefill: 1 user per row per iteration."""
-        from models.tt_transformers.tt.common import copy_host_to_device, get_block_size, num_blocks_in_seq
-
-        mesh_device = self.mesh_device
-        num_rows = mesh_device.shape[0]
-        batch_size = len(prompt_lens)
-        actual_batch_size = batch_size
-        # Pad to multiple of num_rows
-        if batch_size % num_rows != 0:
-            users_per_row = (batch_size + num_rows - 1) // num_rows
-            pad_count = users_per_row * num_rows - batch_size
-            tokens = torch.cat([tokens, torch.zeros(pad_count, tokens.shape[1], dtype=tokens.dtype)], dim=0)
-            prompt_lens = list(prompt_lens) + [int(prompt_lens[0])] * pad_count
-            prefill_seq_lens = list(prefill_seq_lens) + [prefill_seq_lens[0]] * pad_count
-            if page_table is not None:
-                page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
-            batch_size = users_per_row * num_rows
-        users_per_row = batch_size // num_rows
-
-        max_padded_len = max(prefill_seq_lens)
-        block_size = get_block_size(kv_cache)
-        max_num_blocks = num_blocks_in_seq(max_padded_len, block_size)
-        all_last_idxs = [int(prompt_lens[uid]) - 1 for uid in range(batch_size)]
-        fixed_glt = (min(all_last_idxs) // 32) * 32
-        if (max(all_last_idxs) // 32) * 32 != fixed_glt:
-            fixed_glt = -1
-        skip_lm = sampling_params is not None
-
-        vocab_size = model_args.vocab_size if model_args else self.vocab_size
-        output_tensor = torch.zeros(batch_size, 1, vocab_size)
-        trace_key = "rsbp_" + str(max_padded_len) + ("_nolm" if skip_lm else "_lm")
-        enable_trace_current = enable_trace and model_args.can_enable_trace(max_padded_len, 0)
-
-        tc_ids = trace_cache["ids"]
-        tc_inputs = trace_cache["inputs"]
-        tc_outputs = trace_cache["outputs"]
-
-        if enable_trace_current:
-            if tc_ids[trace_key] is None:
-                # Compile
-                t0, p0, l0, u0 = self.prepare_row_sharded_prefill_iter(
-                    tokens, page_table, prompt_lens, 0, max_padded_len, max_num_blocks
-                )
-                ho = self.prepare_inputs_prefill(t0, page_table=p0, trace_enabled=True, batched_prefill=True)
-                rot_g, rot_l = ho[1], ho[2]
-                hi = (ho[0], ho[3], ho[4])
-                di = copy_host_to_device(hi, mesh_device=mesh_device)
-                tr = self.transform_and_embed_prefill_inputs_device(*di)
-                tt_out = self.ttnn_prefill_forward(
-                    tr[0],
-                    rot_mats_global=rot_g,
-                    rot_mats_local=rot_l,
-                    user_id=0,
-                    page_table=tr[1],
-                    get_last_token=fixed_glt,
-                    kv_cache=kv_cache,
-                    batch_size=1,
-                    skip_lm_head=skip_lm,
-                )
-                if not skip_lm:
-                    self.extract_prefill_logits_to_host(tt_out, l0, u0, fixed_glt, output_tensor)
-                ttnn.synchronize_device(mesh_device)
-                self.clear_kv_caches()
-                # Capture trace
-                ho = self.prepare_inputs_prefill(t0, page_table=p0, trace_enabled=True, batched_prefill=True)
-                hi = (ho[0], ho[3], ho[4])
-                di = copy_host_to_device(hi, mesh_device=mesh_device)
-                tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                tr = self.transform_and_embed_prefill_inputs_device(*di)
-                tt_out = self.ttnn_prefill_forward(
-                    tr[0],
-                    rot_mats_global=rot_g,
-                    rot_mats_local=rot_l,
-                    user_id=0,
-                    page_table=tr[1],
-                    get_last_token=fixed_glt,
-                    kv_cache=kv_cache,
-                    batch_size=1,
-                    skip_lm_head=skip_lm,
-                )
-                ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-                ttnn.synchronize_device(mesh_device)
-                tc_ids[trace_key] = tid
-                tc_inputs[trace_key] = di
-                tc_outputs[trace_key] = tt_out
-                self.clear_kv_caches()
-
-            for iter_idx in range(users_per_row):
-                ti, pi, li, ui = self.prepare_row_sharded_prefill_iter(
-                    tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks
-                )
-                ho = self.prepare_inputs_prefill(ti, page_table=pi, trace_enabled=True, batched_prefill=True)
-                hi = (ho[0], ho[3], ho[4])
-                copy_host_to_device(hi, device_tensors=tc_inputs[trace_key], mesh_device=mesh_device)
-                ttnn.execute_trace(mesh_device, tc_ids[trace_key], cq_id=0, blocking=False)
-                if not skip_lm:
-                    self.extract_prefill_logits_to_host(tc_outputs[trace_key], li, ui, fixed_glt, output_tensor)
-        else:
-            for iter_idx in range(users_per_row):
-                ti, pi, li, ui = self.prepare_row_sharded_prefill_iter(
-                    tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks
-                )
-                tt_out = self.run_row_sharded_prefill_forward(ti, pi, kv_cache, fixed_glt, skip_lm_head=skip_lm)
-                if not skip_lm:
-                    self.extract_prefill_logits_to_host(tt_out, li, ui, fixed_glt, output_tensor)
-
-        ttnn.synchronize_device(mesh_device)
-        if sampling_params is not None:
-            # GPT-OSS always emits <|channel|> (token 200005) as the first generated token
-            # regardless of prompt content. Skipping lm_head and returning this hardcoded
-            # token saves ~100ms/user by avoiding the 201K-vocab matmul. vLLM device
-            # sampling accepts this as a pre-sampled token ID.
-            CHANNEL_TOKEN_ID = 200005
-            return torch.full((actual_batch_size, 1), CHANNEL_TOKEN_ID, dtype=torch.int64), torch.zeros(
-                actual_batch_size, 1, dtype=torch.float32
-            )
-        return output_tensor[:actual_batch_size]
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
