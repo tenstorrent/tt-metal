@@ -149,7 +149,7 @@ void kernel_main() {
                 uint32_t l1_write_addr = cb_out.get_write_ptr();
 
                 // Read the full input row first
-                uint64_t input_row_noc_addr = get_noc_addr(input_row_idx, s0);
+                uint64_t input_row_noc_addr = s0.get_noc_addr(input_row_idx);
                 noc_async_read(input_row_noc_addr, l1_write_addr, input_bytes_per_row);
                 noc_async_read_barrier();
 
