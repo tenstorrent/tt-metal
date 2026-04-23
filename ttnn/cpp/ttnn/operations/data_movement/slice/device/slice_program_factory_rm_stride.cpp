@@ -50,9 +50,9 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
     }
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t actual_input_w = input_shape[-1];
-    uint32_t input_bytes_per_row = actual_input_w * element_size;
-    uint32_t cb_page_size = input_bytes_per_row;
+    uint32_t actual_output_w = output_shape[-1];
+    uint32_t output_bytes_per_row = actual_output_w * element_size;
+    uint32_t cb_page_size = output_bytes_per_row;
 
     auto src_buffer_alignment = input_tensor.buffer()->alignment();
     auto dst_buffer_alignment = output.buffer()->alignment();
