@@ -65,6 +65,8 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
                 return create_device_tensor(item, device);
             });
             return result;
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, tt::tt_metal::distributed::MeshDevice>) {
+            return std::ref(arg);
         } else {
             return std::forward<decltype(arg)>(arg);
         }

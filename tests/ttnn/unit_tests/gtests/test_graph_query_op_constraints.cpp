@@ -1349,7 +1349,6 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     const auto semaphore_cores = CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{kNumCores - 1, 0}}};
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(this->device_, semaphore_cores, 0);
 
-    auto* dev = this->device_;
     const ttnn::prim::LayerNormShardedMultiCoreProgramConfig program_config{
         .compute_with_storage_grid_size = CoreCoord{kNumCores, 1},
         .subblock_w = 1,
@@ -1357,34 +1356,26 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
         .block_w = kTilesPerCore,
         .inplace = false};
 
-    // MeshDevice& and GlobalSemaphore cannot pass through transform_arg (non-copyable /
-    // device-allocated), so they are captured in the lambda.  input, weight, and stats
-    // are passed as TensorSpec/DistributedTensorSpec args and transformed automatically.
     auto query = ttnn::graph::query_op_constraints(
-        [dev, &semaphore, program_config, shard_mem_cfg](auto&& input, auto&& weight, auto&& stats) {
-            return ttnn::fused_rms_minimal(
-                input,
-                program_config,
-                /*cluster_axis=*/uint32_t(1),
-                *dev,
-                semaphore,
-                /*persistent_output_tensor=*/std::optional<Tensor>{},
-                /*num_preferred_links=*/std::optional<size_t>(1),
-                /*topology=*/tt::tt_fabric::Topology::Linear,
-                /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
-                /*dtype=*/std::optional<DataType>{},
-                /*compute_kernel_config=*/std::optional<DeviceComputeKernelConfig>{},
-                /*memory_config=*/std::optional<MemoryConfig>(shard_mem_cfg),
-                /*residual_input_tensor=*/std::optional<Tensor>{},
-                /*epsilon=*/1e-5f,
-                /*weight=*/std::optional<Tensor>(weight),
-                /*stats=*/std::optional<Tensor>(stats),
-                /*use_noc1_only=*/false);
-        },
+        [](auto&&... args) { return ttnn::fused_rms_minimal(std::forward<decltype(args)>(args)...); },
         this->device_,
-        dist_input,
-        weight_spec,
-        stats_spec);
+        dist_input,      // → Tensor
+        program_config,  // copied as-is
+        /*cluster_axis=*/uint32_t(1),
+        *this->device_,  // → reference_wrapper<MeshDevice>
+        semaphore,       // → GlobalSemaphore copy
+        /*persistent_output_tensor=*/std::optional<Tensor>{},
+        /*num_preferred_links=*/std::optional<size_t>(1),
+        /*topology=*/tt::tt_fabric::Topology::Linear,
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*dtype=*/std::optional<DataType>{},
+        /*compute_kernel_config=*/std::optional<DeviceComputeKernelConfig>{},
+        /*memory_config=*/std::optional<MemoryConfig>(shard_mem_cfg),
+        /*residual_input_tensor=*/std::optional<Tensor>{},
+        /*epsilon=*/1e-5f,
+        weight_spec,  // → Tensor
+        stats_spec,   // → Tensor
+        /*use_noc1_only=*/false);
 
     if (query.status == ttnn::graph::ExecutionStatus::Error) {
         GTEST_LOG_(INFO) << "fused_rms_minimal query error: " << query.error_message.value_or("unknown");

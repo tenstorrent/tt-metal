@@ -150,6 +150,10 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
                     return create_device_tensor(item, device);
                 });
                 return result;
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, tt::tt_metal::distributed::MeshDevice>) {
+                // MeshDevice is non-copyable; wrap in reference_wrapper so make_tuple can store it.
+                // reference_wrapper<MeshDevice> implicitly converts to MeshDevice& at the call site.
+                return std::ref(arg);
             } else {
                 return std::forward<decltype(arg)>(arg);
             }
