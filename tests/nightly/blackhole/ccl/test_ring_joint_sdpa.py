@@ -23,7 +23,7 @@ import math
 import torch
 from dataclasses import dataclass, field
 from itertools import product
-from typing import ClassVar, List, Tuple, Dict
+from typing import ClassVar, List, Tuple, Dict, Optional
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -75,6 +75,10 @@ class ModelConfig:
 
     # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
     seq_len: int
+
+    # Override worker L1 size for configs whose kernel binary exceeds the default buffer.
+    # None means use the device default.
+    worker_l1_size: Optional[int] = None
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -213,6 +217,28 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
 
     configs.append(
         ModelConfig(
+            name="mla_100k_straddle",  # k_chunk doesn't divide seq_len
+            nhq=mla_nhq,
+            nhk=1,
+            nhv=mla_nhq,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],
+            k_chunk_sizes=[256],
+            seq_len=3200,
+            # Sk_chunk_t=8 straddle-mask branch exceeds default kernel config buffer.
+            # Empirically tuned to give +5 KiB headroom on this shape.
+            worker_l1_size=1456640,
+        )
+    )
+
+    configs.append(
+        ModelConfig(
             name="mla_128k",
             nhq=mla_nhq,
             nhk=1,
@@ -338,6 +364,7 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
                     model.is_balanced,
                     model.q_dtype,
                     model.kv_dtype,
+                    model.worker_l1_size,
                 )
             )
             config_ids.append(get_test_case_id(model, q_chunk, k_chunk))
@@ -371,6 +398,7 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
+    worker_l1_size=None,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -452,7 +480,10 @@ def run_ring_joint_sdpa(
 
     # Open mesh device based on calculated configuration
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    open_kwargs = {}
+    if worker_l1_size is not None:
+        open_kwargs["worker_l1_size"] = worker_l1_size
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **open_kwargs)
     num_links = 2
 
     try:
@@ -771,12 +802,26 @@ TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,worker_l1_size",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
 def test_ring_joint_attention_sdpa_sweep_perf_impl(
-    b, sq, nhq, nhk, nhv, d_q, d_k, d_v, q_chunk_size, k_chunk_size, is_causal, is_balanced, q_dtype, kv_dtype
+    b,
+    sq,
+    nhq,
+    nhk,
+    nhv,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    is_balanced,
+    q_dtype,
+    kv_dtype,
+    worker_l1_size,
 ):
     """
     Performance sweep test for ring joint attention SDPA.
@@ -802,12 +847,13 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
         is_causal=is_causal,
         is_balanced=is_balanced,
         do_check=False,
+        worker_l1_size=worker_l1_size,
     )
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,worker_l1_size",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -826,6 +872,7 @@ def test_ring_joint_attention_sdpa_accuracy(
     is_balanced,
     q_dtype,
     kv_dtype,
+    worker_l1_size,
 ):
     """
     Accuracy verification test for ring joint attention SDPA.
@@ -860,12 +907,13 @@ def test_ring_joint_attention_sdpa_accuracy(
         is_balanced=is_balanced,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
+        worker_l1_size=worker_l1_size,
     )
 
 
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,worker_l1_size",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -884,6 +932,7 @@ def test_ring_joint_attention_sdpa_determinism(
     is_balanced,
     q_dtype,
     kv_dtype,
+    worker_l1_size,
 ):
     """
     Test ring joint attention SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
@@ -908,6 +957,7 @@ def test_ring_joint_attention_sdpa_determinism(
         is_causal=is_causal,
         is_balanced=is_balanced,
         num_iterations=num_iterations,
+        worker_l1_size=worker_l1_size,
     )
 
 
@@ -978,6 +1028,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
             is_balanced,
             q_dtype,
             kv_dtype,
+            worker_l1_size,
         ) = config
 
         # Config now contains global (TP/SP-scaled) values
