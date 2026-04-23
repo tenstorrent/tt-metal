@@ -250,6 +250,17 @@ void read_paged_chunk_with_padding(
         }
         physical_tile_id += skip_src_cols;  // Skip src cols if needed
     }
+
+    // Zero out the padding
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            if (row < src_rows && col < src_cols) {
+                continue;
+            }
+            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
+            fill_zeros_async(base_write_ptr + tile_id * tile_bytes, tile_bytes);
+        }
+    }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
 }
