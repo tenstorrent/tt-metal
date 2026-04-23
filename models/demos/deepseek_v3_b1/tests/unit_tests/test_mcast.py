@@ -70,6 +70,21 @@ from models.demos.deepseek_v3_b1.micro_ops.mcast.op import McastSingleCore
             ),
             ttnn.NOC.NOC_1,
         ),  # loopback test for testing, not used in model
+        (
+            14336,
+            ttnn.CoreCoord(12, 9),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(8, 9)),
+                }
+            ),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(12, 9),
+            ),
+            ttnn.NOC.NOC_1,
+        ),  # mcast greater than burst size
     ],
 )
 def test_mcast(device, width, mcast_core, mcast_receivers, mcast_grid, noc):

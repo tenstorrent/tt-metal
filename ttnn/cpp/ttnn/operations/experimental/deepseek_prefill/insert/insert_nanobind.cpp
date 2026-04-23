@@ -19,10 +19,8 @@ void bind_insert(nb::module_& mod) {
         R"doc(
             Insert operation for DeepSeek prefill MoE — inverse of extract.
 
-            Each device independently looks up its global expert id via
-            global_expert_id = global_expert_idx_table[local_expert_id]
-            (all device-resident; no host round-trip), reads start[global_expert_id] and
-            counts[global_expert_id] from its own DRAM, and copies the first
+            Each device independently reads start[global_expert_id] and
+            counts[global_expert_id] from its own DRAM and copies the first
             ceil_tile(counts[global_expert_id]) rows/tokens of local_tensor into
             global_tensor[start : start + ceil_tile(counts), :].
 
@@ -40,9 +38,8 @@ void bind_insert(nb::module_& mod) {
                     global_tensor.
                 counts (ttnn.Tensor): 1D tensor (or 2D with first dim == 1) of UINT32,
                     DRAM interleaved, giving the per-expert row/token counts.
-                global_expert_idx_table (ttnn.Tensor): 1D tensor (or 2D with first dim == 1)
-                    of UINT32, DRAM interleaved, mapping local_expert_id -> global_expert_id.
-                local_expert_id (int): UINT32 scalar index into global_expert_idx_table.
+                global_expert_id (int): UINT32 scalar selecting which expert's slice
+                    to write.
 
             Returns:
                 ttnn.Tensor: The same global_tensor handle, now with the slice
@@ -53,9 +50,8 @@ void bind_insert(nb::module_& mod) {
         nb::arg("local_tensor").noconvert(),
         nb::arg("start").noconvert(),
         nb::arg("counts").noconvert(),
-        nb::arg("global_expert_idx_table").noconvert(),
         nb::kw_only(),
-        nb::arg("local_expert_id"));
+        nb::arg("global_expert_id"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert::detail

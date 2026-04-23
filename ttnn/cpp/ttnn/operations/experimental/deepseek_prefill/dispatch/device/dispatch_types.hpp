@@ -18,10 +18,7 @@ struct DispatchParams {
     uint32_t num_routed_experts;
     uint32_t num_experts_per_tok;
     uint32_t metadata_len;
-    // Total token capacity of the dispatch buffer (shared across all local experts
-    // via dynamic offsets). Used to size the per-chip dispatch buffer and as the
-    // in-kernel bounds check.
-    uint32_t max_dispatch_buffer_token_size;
+    uint32_t max_dispatched_tokens_per_expert;
     std::optional<uint32_t> axis;
     uint32_t num_links;
     tt::tt_fabric::Topology topology;
@@ -35,7 +32,7 @@ struct DispatchParams {
         "num_routed_experts",
         "num_experts_per_tok",
         "metadata_len",
-        "max_dispatch_buffer_token_size",
+        "max_dispatched_tokens_per_expert",
         "axis",
         "num_links",
         "topology",
@@ -50,7 +47,7 @@ struct DispatchParams {
             num_routed_experts,
             num_experts_per_tok,
             metadata_len,
-            max_dispatch_buffer_token_size,
+            max_dispatched_tokens_per_expert,
             axis,
             num_links,
             topology,

@@ -60,14 +60,7 @@ def test_matmul_1d_in0_batched(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-
-        bias_t = ttnn.from_torch(
-            bias,
-            dtype=weights_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=interleaved_mem_config,
-        )
+        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -166,13 +159,8 @@ def test_linear_fp32_acc_l1(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = ttnn.from_torch(
-            bias.reshape(bias_shape),
-            dtype=weights_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=interleaved_mem_config,
-        )
+        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
@@ -388,13 +376,7 @@ def test_matmul_1d_fp32_input_output(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = ttnn.from_torch(
-            bias.reshape(bias_shape),
-            dtype=weights_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=interleaved_mem_config,
-        )
+        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -719,13 +701,8 @@ def test_sharded_matmul_2d(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = ttnn.from_torch(
-        bias.reshape(bias_shape),
-        dtype=weights_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=interleaved_mem_config,
-    )
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
@@ -811,13 +788,7 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
     # Generate the tensor
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = ttnn.from_torch(
-        bias.reshape(bias_shape),
-        dtype=weights_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=interleaved_mem_config,
-    )
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
     if in0_sharded:
         in0_t = ttnn.interleaved_to_sharded(
@@ -909,14 +880,7 @@ def test_sharded_matmul_2d_transposed(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-
-    bias_t = ttnn.from_torch(
-        bias,
-        dtype=weights_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=interleaved_mem_config,
-    )
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -994,14 +958,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
     weight_t = torch2tt_tensor(weight, device, tt_memory_config=interleaved_mem_config)
-
-    bias_t = ttnn.from_torch(
-        bias,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=interleaved_mem_config,
-    )
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
 
     in0_t = ttnn.interleaved_to_sharded(
         in0_t,
@@ -1048,7 +1005,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
     tt_out = tt2torch_tensor(output_matmul_t)
 
-    pt_out = (in0 + in1) @ weight + bias
+    pt_out = (in0 + in1) @ weight
 
     assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
@@ -1098,13 +1055,8 @@ def test_sharded_matmul_1d_in0(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = ttnn.from_torch(
-        bias.reshape(bias_shape),
-        dtype=weights_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=interleaved_mem_config,
-    )
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
@@ -1177,13 +1129,7 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
-    bias_t = ttnn.from_torch(
-        bias.reshape(bias_shape),
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=interleaved_mem_config,
-    )
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)[0]
 
     output_mem_config = sharded_mem_config
 

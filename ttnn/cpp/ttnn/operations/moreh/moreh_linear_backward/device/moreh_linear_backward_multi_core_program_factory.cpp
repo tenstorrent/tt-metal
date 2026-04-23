@@ -8,6 +8,7 @@
 #include "moreh_linear_backward_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -85,8 +86,12 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = TensorAccessorArgs(output_grad.buffer()).get_compile_time_args();
-    std::vector<uint32_t> writer_compile_time_args = TensorAccessorArgs(bias_grad.buffer()).get_compile_time_args();
+    const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
+    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler_value};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";

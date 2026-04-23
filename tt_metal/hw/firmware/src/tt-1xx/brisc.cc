@@ -19,7 +19,6 @@
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/perf_counters.hpp"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
@@ -539,9 +538,6 @@ int main() {
             WAYPOINT("D");
 
             wait_ncrisc_trisc();
-
-            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
-            ReadPerfCounters();
 
             trigger_sync_register_init();
 

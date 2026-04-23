@@ -8,8 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "experimental/noc.h"
@@ -55,14 +54,11 @@ void kernel_main() {
     experimental::Semaphore<> reducer_sem(reducer_semaphore_id);
 
     // Generate constant tiles for reduce scalar
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_reduce,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-        /*compute_uses_reduce_tile=*/true>();
+    uint32_t scaler = get_arg_val<uint32_t>(8);
+
+    generate_reduce_scaler(cb_reduce, scaler);
     if (is_merge_core) {
-        dataflow_kernel_lib::prepare_zero_tile<cb_zero>();
+        generate_reduce_scaler(cb_zero, 0);
     }
 
     uint32_t inp_tile_idx = tile_offset;

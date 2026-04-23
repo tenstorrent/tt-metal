@@ -9,7 +9,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <map>
 #include <memory>

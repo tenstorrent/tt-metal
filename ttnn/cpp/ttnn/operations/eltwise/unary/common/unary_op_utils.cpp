@@ -457,9 +457,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     static_cast<uint32_t>(datatype_to_dataformat_converter((DataType)params[1])))};
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
-            [[fallthrough]];
-        case UnaryOpType::LOGIT:
-            // Logit uses its own kernel (logit_kernel.cpp); scalars are passed via runtime args
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
             return {};
         case UnaryOpType::MAXIMUM:
             TT_FATAL(
@@ -819,6 +817,12 @@ std::map<std::string, std::string> get_defines_impl(
 }
 }  // namespace
 
+bool get_op_approx_mode(UnaryOpType op_type) {
+    switch (op_type) {
+        default: return false;
+    }
+}
+
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
@@ -1011,11 +1015,20 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
             }
             return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
-        case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp";
+        case UnaryOpType::TANHSHRINK:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return "tanhshrink_sfpu_kernel.cpp";
+            } else {
+                return "tanhshrink_kernel.cpp";
+            }
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::LOGIT: return "logit_kernel.cpp";
-        case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
+        case UnaryOpType::HARDSWISH:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return "hardswish_kernel_sfpu.cpp";
+            } else {
+                return "hardswish_kernel.cpp";
+            }
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";
     }

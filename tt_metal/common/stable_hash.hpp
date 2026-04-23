@@ -4,28 +4,25 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string_view>
+#include <string>
 
 namespace tt {
 
-// Stable hash for cache paths and persistence.
-class StableHasher {
+// Stable hash for cache paths and persistence. std::hash is not guaranteed to be
+// stable across runs or implementations.
+class FNV1a {
 public:
-    StableHasher();
-    ~StableHasher();
+    // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+    static constexpr uint64_t FNV_PRIME = 0x100000001b3;
+    static constexpr uint64_t FNV_OFFSET = 0xcbf29ce484222325;
 
-    StableHasher(StableHasher&&) noexcept;
-    StableHasher& operator=(StableHasher&&) noexcept;
+    FNV1a(uint64_t offset = FNV_OFFSET) : hash_(offset) {}
 
-    StableHasher(const StableHasher&) = delete;
-    StableHasher& operator=(const StableHasher&) = delete;
-
-    void update(uint64_t data);
-    void update(const void* data, std::size_t size);
-    void update(std::string_view data);
+    void update(uint64_t data) {
+        hash_ ^= data;
+        hash_ *= FNV_PRIME;
+    }
 
     template <typename ForwardIterator>
     void update(ForwardIterator begin, ForwardIterator end) {
@@ -34,11 +31,12 @@ public:
         }
     }
 
-    uint64_t digest() const;
+    void update(const std::string& s) { update(s.begin(), s.end()); }
+
+    uint64_t digest() const { return hash_; }
 
 private:
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    uint64_t hash_;
 };
 
 }  // namespace tt

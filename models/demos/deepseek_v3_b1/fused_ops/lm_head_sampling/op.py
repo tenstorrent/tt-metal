@@ -453,11 +453,6 @@ class LMHeadSampling:
                 "persistent_next_iter_semaphore is required when persistent_mode=True "
                 "(must be a global semaphore on the full device grid)"
             )
-        if persistent_mode and termination_semaphore is None:
-            raise ValueError(
-                "termination_semaphore is required when persistent_mode=True "
-                "(must be a global semaphore on the full device grid)"
-            )
         global_sem_addr = (
             int(ttnn.get_global_semaphore_address(global_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
@@ -466,9 +461,6 @@ class LMHeadSampling:
         )
         persistent_next_iter_global_sem_addr = (
             int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore)) if persistent_mode else 0
-        )
-        termination_global_sem_addr = (
-            int(ttnn.get_global_semaphore_address(termination_semaphore)) if persistent_mode else 0
         )
         # Calculate packet size and page info for CCL broadcast
 
@@ -1148,7 +1140,6 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
-                    ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
@@ -1270,7 +1261,6 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
-                    ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
@@ -1372,7 +1362,6 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
-                    ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),

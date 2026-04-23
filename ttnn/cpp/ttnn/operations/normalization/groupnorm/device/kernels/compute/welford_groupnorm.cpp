@@ -4,6 +4,9 @@
 
 #include <cstdint>
 
+#define REDUCE_OP PoolType::SUM
+#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
+
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 

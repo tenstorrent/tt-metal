@@ -289,25 +289,6 @@ _DEFAULT_BLOCKINGS = {
 }
 
 
-def register_conv3d_configs(configs: dict) -> None:
-    """Register additional conv3d blocking configs from external models.
-
-    Entries are added to the fallback table keyed by ``(in_channels, out_channels, kernel_size)``.
-
-    Args:
-        configs: Mapping from ``(in_channels, out_channels, kernel_size)``
-            to ``(C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)``.
-
-    Example::
-
-        register_conv3d_configs({
-            (32, 96, (3, 3, 3)): (32, 96, 1, 8, 16),
-            (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
-        })
-    """
-    _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
-
-
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):

@@ -133,7 +133,6 @@ set(HW_JIT_API_HEADERS
     inc/experimental/noc.h
     inc/experimental/circular_buffer.h
     inc/experimental/dataflow_buffer.h
-    inc/experimental/kernel_args.h
     inc/experimental/noc_semaphore.h
     inc/experimental/endpoints.h
     inc/experimental/core_local_mem.h

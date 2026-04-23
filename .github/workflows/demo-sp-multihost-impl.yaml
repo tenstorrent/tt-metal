@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
-      allocation_spec: ${{ steps.extract-allocation.outputs.allocation_spec }}
+      mgd: ${{ steps.extract-mgd.outputs.mgd }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
@@ -42,14 +42,22 @@ jobs:
           fi
           echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
 
-      - name: Extract allocation configuration from SKU
-        id: extract-allocation
+      - name: Extract MGD configuration from SKU
+        id: extract-mgd
         run: |
           {
-            echo "allocation_spec<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
+            echo "mgd<<EOF"
+            python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml
             echo "EOF"
           } >> $GITHUB_OUTPUT
+
+      - name: Debug - Show extracted MGD
+        run: |
+          echo "=== Extracted MGD content ==="
+          cat << 'DEBUG_EOF'
+          ${{ steps.extract-mgd.outputs.mgd }}
+          DEBUG_EOF
+          echo "=== End MGD ==="
 
       - name: Verify test timeouts against budget
         run: |
@@ -116,7 +124,13 @@ jobs:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
           spec: |
-            ${{ needs.load-test-matrix.outputs.allocation_spec }}
+            allocationType: MGD
+            matchLabels:
+              exabox.tenstorrent.com/purpose: ci-metal
+            topologyKeys:
+              - exabox.tenstorrent.com/quad
+            mgd: |
+            ${{ needs.load-test-matrix.outputs.mgd }}
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
@@ -191,7 +205,7 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
+          mgd: ${{ needs.load-test-matrix.outputs.mgd }}
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 

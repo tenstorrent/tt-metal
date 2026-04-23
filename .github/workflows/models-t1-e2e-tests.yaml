@@ -2,8 +2,9 @@ name: "(Tier 1) Models End-To-End Tests"
 
 on:
   schedule:
-    # Once a day at 02:00 UTC — all models, all SKUs
+    # Twice a day at 02:00 and 14:00 UTC — all models, all SKUs
     - cron: "0 2 * * *"
+    - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
       model:

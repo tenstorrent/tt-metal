@@ -196,7 +196,10 @@ class DestAccumulation(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class L1Accumulation(Enum):
@@ -246,7 +249,10 @@ class Haloize(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class ApproximationMode(Enum):
@@ -255,7 +261,10 @@ class ApproximationMode(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class Transpose(Enum):
@@ -264,7 +273,10 @@ class Transpose(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class MathFidelity(Enum):
@@ -293,52 +305,10 @@ class NarrowTile(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
-
-
-class PartialFace(Enum):
-    Yes = True
-    No = False
-
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
-
-
-class EnforceFP32Accumulation(Enum):
-    Yes = True
-    No = False
-
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
-
-
-class ClearFP32DstAcc(Enum):
-    Yes = True
-    No = False
-
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
-
-
-class AccToDest(Enum):
-    Yes = True
-    No = False
-
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
-
-
-class UnpackToDest(Enum):
-    Yes = True
-    No = False
-
-    @property
-    def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class Tilize(Enum):
@@ -347,7 +317,10 @@ class Tilize(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class FastMode(Enum):
@@ -356,7 +329,10 @@ class FastMode(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class StableSort(Enum):
@@ -365,7 +341,10 @@ class StableSort(Enum):
 
     @property
     def cpp_enum_value(self):
-        return str(self.value).lower()
+        if self.value == True:
+            return "true"
+        else:
+            return "false"
 
 
 class Mailboxes(Enum):
@@ -513,11 +492,6 @@ class ReluConfig(Enum):
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1
-
-
-class GoldenType(Enum):
-    L1_GOLDEN = "L1_GOLDEN"
-    MASTER_GOLDEN = "MASTER_GOLDEN"
 
 
 # *********************************

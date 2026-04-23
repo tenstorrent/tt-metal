@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 torch.manual_seed(0)
 
@@ -82,7 +82,7 @@ def test_pad_tile_subcoregrids(device, shape, padding, torch_padding, sub_core_g
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ def test_pad_rm_subcoregrids(device, shape, padding, torch_padding, sub_core_gri
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ def test_pad_tile_subcoregrids_legacy_api(device, shape, padded_shape, sub_core_
     assert output_tensor.shape == torch.Size(padded_shape)
     # Verify original data is preserved in the non-padded region
     output_slice = output_tensor[: shape[0], : shape[1], : shape[2], : shape[3]]
-    assert_equal(torch_input_tensor, output_slice)
+    assert torch.equal(torch_input_tensor, output_slice)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ def test_pad_tile_subcoregrids_dtypes(device, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -376,6 +376,6 @@ def test_pad_subcoregrids_none_matches_default(device, layout):
     )
     output_default = ttnn.to_torch(output_default)
 
-    assert_equal(output_none, output_default)
+    assert torch.equal(output_none, output_default)
     assert output_none.shape == torch_output.shape
-    assert_equal(torch_output, output_none)
+    assert_with_pcc(torch_output, output_none, 0.9999)

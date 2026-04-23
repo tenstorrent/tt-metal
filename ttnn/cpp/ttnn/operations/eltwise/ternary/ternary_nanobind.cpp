@@ -200,7 +200,7 @@ void bind_ternary_addcmul(
 
                * - Dtypes
                  - Layouts
-               * - {4}
+               * - FLOAT32, BFLOAT16, BFLOAT8_B, INT32
                  - TILE
 
             Only TTT (tensor-tensor-tensor) variant is supported.
@@ -345,7 +345,7 @@ void py_module(nb::module_& mod) {
             :attr:`input_tensor_a`.
             Returns a tensor with the same layout as :attr:`input_tensor_a`.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + (value * \mathrm{input\_tensor\_b}_i * \mathrm{input\_tensor\_c}_i))doc",
-        "FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32");
+        "FLOAT32, BFLOAT16, BFLOAT8_B, INT32");
 
     bind_ternary_addcdiv(
         mod,

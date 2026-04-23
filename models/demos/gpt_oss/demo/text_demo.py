@@ -131,6 +131,9 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
+            use_deepseek_prefill=use_throughput,  # Use DeepSeek prefill ops when throughput experts enabled
+            prefill_seq_len=128,
+            num_layers=int(os.environ.get("GPT_OSS_NUM_LAYERS", 0)) or None,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -962,10 +965,9 @@ def test_gpt_oss_demo(
         )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
-            ml_model_name=model_args[0].base_model_name,
+            run_type=f"{tt_device_name}-demo",
+            ml_model_name=model_name,
             ml_model_type="llm",
-            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},

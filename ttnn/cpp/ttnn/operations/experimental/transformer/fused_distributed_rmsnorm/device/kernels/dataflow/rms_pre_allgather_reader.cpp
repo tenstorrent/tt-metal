@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 
@@ -17,7 +17,8 @@ void kernel_main() {
     constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(1);
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(2);
     constexpr uint32_t block_size = get_compile_time_arg_val(3);
-    constexpr auto input_args = TensorAccessorArgs<4>();
+    constexpr uint32_t scalar_val = get_compile_time_arg_val(4);
+    constexpr auto input_args = TensorAccessorArgs<5>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);  // Source address in dram
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
@@ -28,8 +29,7 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_args, input_addr);
 
     // Generate constant tiles for reduce scalar
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<reduce_scalar_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    generate_reduce_scaler(reduce_scalar_cb, scalar_val);
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t input_tile_idx = tile_row * num_tile_cols;

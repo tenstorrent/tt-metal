@@ -34,28 +34,21 @@ def _fabric_config_for_num_procs(num_procs: int):
     raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
 
 
-def _needs_extended_worker_l1(num_procs: int) -> bool:
-    """True for the one host that required extra L1 (``TT_MESH_ID`` from tt-run, or legacy global rank).
-
-    For 4×16 pod layouts, tt-run sets ``TT_MESH_ID=3`` on the mesh that replaced global rank 62.
-    With only mesh id, single-mesh 16-proc cannot be identified via env (all ranks share the same id),
-    so the rank fallback is used for 16 procs.
-    """
-    mid = os.environ.get("TT_MESH_ID")
-    if num_procs == 64:
-        return int(mid) == 62
-    if num_procs == 16:
-        return int(mid) == 14
-    return False
-
-
 @contextlib.contextmanager
 def open_mesh_device():
-    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
+    my_rank = int(ttnn.distributed_context_get_rank())
     num_procs = int(ttnn.distributed_context_get_size())
-    worker_l1_size = 1499000 if _needs_extended_worker_l1(num_procs) else 1431568
+    worker_l1_size = 1431568
+    if num_procs == 64:
+        if my_rank == 62:
+            worker_l1_size = 1499000
+    elif num_procs == 16:
+        if my_rank == 14:
+            worker_l1_size = 1499000
+    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
+    num_procs = int(ttnn.distributed_context_get_size())
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(15232),
@@ -233,9 +226,7 @@ def run_demo(
                 logger.info("Shutting down launch-only pipeline after interrupt.")
 
         model_pipeline.barrier()
-
-        logger.info("Pod pipeline complete - terminating now...")
-        model_pipeline.terminate()
+        logger.info("Pod pipeline complete")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,7 +263,6 @@ def main(argv: list[str] | None = None) -> int:
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
-        num_slots=args.num_slots,
     )
     print(file=sys.stdout, flush=True)
     return 0

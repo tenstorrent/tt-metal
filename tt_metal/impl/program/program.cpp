@@ -200,7 +200,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // watcher/dprint enabled are accounted for in the build key.
-    tt::StableHasher hasher;
+    tt::FNV1a hasher;
     hasher.update(build_key);
     hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
     hasher.update(kernel->compute_hash());
@@ -502,11 +502,15 @@ uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const 
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
+void ProgramImpl::register_kernel_rta_schema(
+    const KernelSpecName& name,
+    const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
+    size_t num_common_runtime_args) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(name, schema);
+    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(
+        name, KernelRTASchema{num_runtime_args_per_node, num_common_runtime_args});
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
@@ -1311,21 +1315,6 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::optional<DeviceAddr> lowest_address =
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
-    const auto& allocator = device->allocator_impl();
-    const bool hybrid_mode = allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
-
-    // In HYBRID mode, per-core allocations live on each per-device allocator (not the mesh
-    // allocator). Collect the physical allocators we must consult so we can see per-core state.
-    std::vector<AllocatorImpl*> physical_allocators;
-    if (hybrid_mode) {
-        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (IDevice* dev : mesh->get_devices()) {
-                physical_allocators.push_back(dev->allocator_impl().get());
-            }
-        } else {
-            physical_allocators.push_back(allocator.get());
-        }
-    }
 
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
@@ -1339,23 +1328,6 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 cb_region_end,
                 max_l1_size);
-        }
-        if (hybrid_mode) {
-            // Per-core allocations (experimental_set_per_core_allocation) can land at different
-            // addresses per core, so query only the banks this CB covers on each physical allocator.
-            // Prevents per-core tensors on unrelated cores from spuriously tightening this CB's
-            // budget, and lets us see per-core state that lives on per-device (not mesh) allocators.
-            lowest_address = std::nullopt;
-            for (const auto& core : cb_allocator.core_range) {
-                for (auto* phys_alloc : physical_allocators) {
-                    auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
-                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
-                    if (addr.has_value()) {
-                        lowest_address =
-                            lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
-                    }
-                }
-            }
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
             TT_THROW(
@@ -1427,48 +1399,6 @@ void detail::ProgramImpl::add_semaphore(
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     validate_semaphore_id(crs, semaphore_id, core_type);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
-}
-
-uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
-    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
-    TT_FATAL(
-        MetalContext::instance().is_coord_in_range(crs.ranges().back().end_coord, core_type),
-        "Coordinates out of range");
-
-    // The allocated ID must be free on every core in crs. Find the max ID that's free on each
-    // range (they each return the smallest free ID on their cores) and use that everywhere.
-    std::optional<uint32_t> semaphore_id;
-    for (const auto& core_range : crs.ranges()) {
-        std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                CoreCoord logical_core(x, y);
-                auto existing = this->semaphores_on_core(logical_core, core_type);
-                if (existing.size() == NUM_SEMAPHORES) {
-                    TT_THROW(
-                        "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
-                        logical_core.str(),
-                        NUM_SEMAPHORES);
-                }
-                for (const auto& semaphore : existing) {
-                    semaphore_histogram[semaphore.get().id()]++;
-                }
-            }
-        }
-        std::optional<uint32_t> candidate;
-        for (uint32_t sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-            if (semaphore_histogram[sem_id] == 0) {
-                candidate = sem_id;
-                break;
-            }
-        }
-        TT_FATAL(candidate.has_value(), "Unable to initialize semaphores on core range {}", core_range.str());
-        semaphore_id = semaphore_id.has_value() ? std::max(*semaphore_id, *candidate) : candidate;
-    }
-    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
-
-    this->add_semaphore(crs, *semaphore_id, initial_value, core_type);
-    return *semaphore_id;
 }
 
 std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {

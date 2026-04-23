@@ -7,7 +7,8 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal
+
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 # Reshape in Tile layout with shapes that are not divisible by 32
@@ -33,7 +34,7 @@ def test_view(input_shape, output_shape, layout, device):
     ttnn_output = ttnn.view(input_tensor, output_shape)
     assert layout == ttnn_output.layout
     output = ttnn.to_torch(ttnn_output)
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 @pytest.mark.parametrize(

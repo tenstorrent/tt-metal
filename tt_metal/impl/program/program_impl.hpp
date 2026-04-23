@@ -309,14 +309,6 @@ public:
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
-    // Allocate the next free semaphore ID on the given cores and insert the semaphore.
-    // Returns the allocated ID; TT_FATALs if no slot can be found.
-    uint32_t create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type);
-
-    // Insert a semaphore at the caller-specified ID. Used by:
-    //   - Construction paths where the ID is already decided upstream (ProgramDescriptor ctor path).
-    //   - create_semaphore above
-    // The ProgramDescriptor path is something of a hack; it will eventually be deprecated in favor of Metal 2.0.
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
@@ -347,23 +339,17 @@ public:
         return get_kernel(get_kernel_handle(name));
     }
 
-    // Metal 2.0: Runtime argument schema for validation.
-    // Includes both the named args (declaration-order name lists) and the vararg counts.
+    // Metal 2.0: Runtime argument schema for validation
     struct KernelRTASchema {
-        // Named arg names, in declaration order. Used to serialize ProgramRunParams values
-        // into the dispatch buffer and to validate that every declared name is supplied.
-        std::vector<std::string> named_runtime_args;
-        std::vector<std::string> named_common_runtime_args;
-
-        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
-        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
-        // broadcast count.
-        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
-        size_t num_common_runtime_varargs = 0;
+        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
+        size_t num_common_runtime_args = 0;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
+    void register_kernel_rta_schema(
+        const KernelSpecName& name,
+        const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
+        size_t num_common_runtime_args);
     const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)

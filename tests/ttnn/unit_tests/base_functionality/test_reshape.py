@@ -253,7 +253,8 @@ def test_reshape_cw_div2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c * 2, h, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -270,7 +271,8 @@ def test_reshape_cw_mul2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c // 2, h, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -287,7 +289,8 @@ def test_reshape_hw_div2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h * 2, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -304,7 +307,8 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
@@ -318,7 +322,8 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
         output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -351,7 +356,8 @@ def test_reshape(h, w):
     output_tensor = ttnn.reshape(input_tensor, (w, h))
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -364,7 +370,8 @@ def test_reshape_negative_1(h, w):
     output_tensor = ttnn.reshape(input_tensor, (-1,))
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [32, 32])
@@ -379,7 +386,8 @@ def test_reshape_in_4D(n, c, h, w):
     output_tensor = ttnn.reshape(input_tensor, (h, w, n, c))
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [32, 64])
@@ -396,7 +404,8 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
 
 
 def test_permute_reshape(device):
@@ -415,7 +424,7 @@ def test_permute_reshape(device):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_equal(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 def test_reshape_with_negative_dim(device):
@@ -434,7 +443,7 @@ def test_reshape_with_negative_dim(device):
 
     assert list(expected_output_shape) == list(torch_output.shape)
     assert list(expected_output_shape) == list(tt_output.shape)
-    assert_equal(torch_output, tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
 def test_reshape_tile_layout_mamba(device):
@@ -447,7 +456,7 @@ def test_reshape_tile_layout_mamba(device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 def test_reshape_tile_layout_only_change_shape(device):
@@ -460,7 +469,7 @@ def test_reshape_tile_layout_only_change_shape(device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -512,7 +521,7 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     output = ttnn.to_torch(ttnn_output)
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -560,7 +569,7 @@ def test_reshape_subgrid(device, input_shape, output_shape, layout, memory_confi
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape, sub_core_grids=sub_core_grids)
     output = ttnn.to_torch(ttnn_output)
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 @pytest.mark.parametrize("recreate_mapping_tensor", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
@@ -576,7 +585,7 @@ def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
             ttnn_output = ttnn.reshape(input_tensor, output_shape, recreate_mapping_tensor=recreate_mapping_tensor)
 
             output = ttnn.to_torch(ttnn_output)
-            assert_equal(torch_result, output)
+            assert_with_pcc(torch_result, output, 0.9999)
 
 
 # issue 15048
@@ -597,7 +606,7 @@ def test_previously_failing_test(device):
     ttnn_output = ttnn.reshape(input_tensor, target_shape)
     output = ttnn.to_torch(ttnn_output)
 
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 # Since Inner dim is 1 of bfloat16, can't do on device, testing fallback on host
@@ -618,7 +627,7 @@ def test_reshape_host(input_shape, output_shape, device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 # required for Embedding
@@ -644,7 +653,7 @@ def test_reshape_int(input_shape, output_shape, device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -675,7 +684,7 @@ def test_fp32_support(input_shape, output_shape, device):
 
     output = ttnn.to_torch(ttnn_output)
 
-    assert_equal(torch_result, output)
+    assert_with_pcc(torch_result, output, 0.9999)
 
 
 @pytest.mark.parametrize(

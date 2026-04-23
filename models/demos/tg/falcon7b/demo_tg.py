@@ -105,4 +105,5 @@ def test_demo_multichip(
         expected_greedy_output_path=expected_greedy_output_path,
         json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
+        galaxy_type=galaxy_type,
     )

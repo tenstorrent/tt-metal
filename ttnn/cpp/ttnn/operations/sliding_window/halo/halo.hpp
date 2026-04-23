@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
@@ -13,7 +12,6 @@ namespace ttnn {
 Tensor halo(
     const Tensor& input_tensor,
     const operations::sliding_window::SlidingWindowConfig& config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t pad_val = 0x0,
     bool remote_read = false,
     bool transpose_mcast = true,

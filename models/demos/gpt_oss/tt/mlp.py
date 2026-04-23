@@ -33,6 +33,8 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        use_deepseek_prefill=False,
+        prefill_seq_len=128,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -68,24 +70,22 @@ class MLP:
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
-            # DeepSeek prefill config: always created when throughput experts are
-            # enabled. The two were previously gated by separate flags but were always
-            # set together by every caller; now bundled.
-            prefill_config = None
+            # Create DeepSeek prefill config if requested
+            prefill_deepseek_config = None
             deepseek_permuted_weights = None
-            if use_throughput_experts:
+            if use_deepseek_prefill:
                 import torch as _torch
 
-                from .experts_throughput.prefill import _compute_weight_permutation
+                from .experts_throughput.prefill_deepseek import _compute_weight_permutation
 
-                prefill_config = DeepSeekPrefillConfig(
+                prefill_deepseek_config = DeepSeekPrefillConfig(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
                     dispatch_group_size=mesh_device.shape[0],
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
-                    seq_len_per_chip=1024,
-                    num_links=4,
+                    seq_len_per_chip=prefill_seq_len,
+                    num_links=1,
                 )
                 # Permute expert state_dict to GROUP-BASED ordering before loading
                 perm = _compute_weight_permutation(
@@ -107,7 +107,7 @@ class MLP:
                     weight_dtype=ttnn.bfloat4_b,
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts_ds_perm"),
                 )
-                prefill_config.permuted_weights = deepseek_permuted_weights
+                prefill_deepseek_config.permuted_weights = deepseek_permuted_weights
 
             # Create TT experts module
             self.experts = ThroughputExperts(
@@ -121,7 +121,7 @@ class MLP:
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 fused_config=fused_config,
-                prefill_config=prefill_config,
+                prefill_deepseek_config=prefill_deepseek_config,
             )
         else:
             # Create expert config from HF config
