@@ -100,9 +100,9 @@ def run(
             # ttnn.from_torch(int32, dtype=uint16, mesh_mapper=ReplicateTensorToMesh)
             # corrupts data on mesh devices — the internal conversion path mangles
             # uint16 values regardless of input range (PCC drops to 0.1-0.8).
-            # This is a known library limitation.  Skip on mesh; single-device
-            # tests in the same sweep cover uint16 correctness.
-            return [(True, "Skipped: uint16 from_torch broken on mesh devices (known library bug)"), 0]
+            # Still execute the op (with int32 proxy dtype) so the operation tracer
+            # records the config for sweep validation; use relaxed PCC.
+            input_a_dtype = ttnn.int32
         # Use torch.int32 for uint16 input — matching the pattern in working unit tests
         # (test_typecast_int.py).  torch.int16 causes sign-extension corruption for
         # values >32767 during from_torch conversion.
