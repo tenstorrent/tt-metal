@@ -555,6 +555,15 @@ def log_warning(message: str) -> None:
     global WARNING_CHECKS, WARNING_CHECKS_LOCK
     with WARNING_CHECKS_LOCK:
         WARNING_CHECKS.append(message)
+    # Triage scripts invoked from the test harness use run_script(..., return_result=True),
+    # which skips serialize_result() — the only place WARNING_CHECKS is otherwise flushed.
+    # Without this immediate print, every log_warning_* on that path is silently dropped,
+    # which is exactly why TT_TRIAGE_VERBOSE_SKIPS=1 produced no output in CI. Mirror to
+    # stderr so the verbose mode actually reaches the build log.
+    if verbose_skips_enabled():
+        import sys
+
+        print(f"[triage warning] {message}", file=sys.stderr, flush=True)
 
 
 def log_warning_device(device: Device, message: str) -> None:
