@@ -33,6 +33,8 @@
 #include "buffer.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include "device/device_impl.hpp"
+#include "dispatch/command_queue_common.hpp"
+#include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "host_api.hpp"
 #include "mesh_config.hpp"
