@@ -457,26 +457,44 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_INIT"] = "where_tile_init";
             if (dtype == DataType::FLOAT32) {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float32>";
+                defines["TERNARY_OP_WHERE_FP32"] = "1";
             } else if (dtype == DataType::INT32) {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Int32>";
+                defines["TERNARY_OP_WHERE_INT32"] = "1";
             } else {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float16_b>";
+                defines["TERNARY_OP_WHERE_FP16B"] = "1";
             }
             break;
         case TernaryOpType::LERP:
             defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
-            defines["TERNARY_SFPU_OP_FUNC"] =
-                (dtype == DataType::FLOAT32) ? "lerp_tile<DataFormat::Float32>" : "lerp_tile<DataFormat::Float16_b>";
+            if (dtype == DataType::FLOAT32) {
+                defines["TERNARY_SFPU_OP_FUNC"] = "lerp_tile<DataFormat::Float32>";
+                defines["TERNARY_OP_LERP_FP32"] = "1";
+            } else {
+                defines["TERNARY_SFPU_OP_FUNC"] = "lerp_tile<DataFormat::Float16_b>";
+                defines["TERNARY_OP_LERP_FP16B"] = "1";
+            }
             break;
         case TernaryOpType::ADDCMUL:
             defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";
-            defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcmul_tile<DataFormat::Float32>"
-                                                                           : "addcmul_tile<DataFormat::Float16_b>";
+            if (dtype == DataType::FLOAT32) {
+                defines["TERNARY_SFPU_OP_FUNC"] = "addcmul_tile<DataFormat::Float32>";
+                defines["TERNARY_OP_ADDCMUL_FP32"] = "1";
+            } else {
+                defines["TERNARY_SFPU_OP_FUNC"] = "addcmul_tile<DataFormat::Float16_b>";
+                defines["TERNARY_OP_ADDCMUL_FP16B"] = "1";
+            }
             break;
         case TernaryOpType::ADDCDIV:
             defines["TERNARY_SFPU_OP_INIT"] = "addcdiv_tile_init";
-            defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
-                                                                           : "addcdiv_tile<DataFormat::Float16_b>";
+            if (dtype == DataType::FLOAT32) {
+                defines["TERNARY_SFPU_OP_FUNC"] = "addcdiv_tile<DataFormat::Float32>";
+                defines["TERNARY_OP_ADDCDIV_FP32"] = "1";
+            } else {
+                defines["TERNARY_SFPU_OP_FUNC"] = "addcdiv_tile<DataFormat::Float16_b>";
+                defines["TERNARY_OP_ADDCDIV_FP16B"] = "1";
+            }
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }

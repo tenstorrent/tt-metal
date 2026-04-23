@@ -554,6 +554,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
         auto binary_op_str = enchantum::to_string(fpu_binary_op);
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
+        defines[fmt::format("BINARY_FPU_{}", binary_op_str)] = "1";
         return defines;
     }
     auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);

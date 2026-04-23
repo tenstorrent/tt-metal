@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
@@ -22,6 +23,33 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+
+    // Explicit FPU path: no activations, operation selected at compile time via BINARY_FPU_*.
+    // BINARY_FPU_ADD/SUB/MUL are set by the host alongside BINARY_OP/BINARY_OP_TYPE.
+    // The activation macros (PREPROCESS, PROCESS_POST_ACTIVATIONS) still apply in the
+    // legacy path below; this path is only taken when no activations are present.
+#if defined(BINARY_FPU_ADD) && not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+    {
+        using namespace compute_kernel_lib;
+        auto chain = sfpu_chain(FpuAdd<cb_post_lhs, cb_post_rhs, Dst::D0>{});
+        eltwise_op<cb_out>(chain, EltwiseTileShape::flat(num_tiles));
+        return;
+    }
+#elif defined(BINARY_FPU_SUB) && not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+    {
+        using namespace compute_kernel_lib;
+        auto chain = sfpu_chain(FpuSub<cb_post_lhs, cb_post_rhs, Dst::D0>{});
+        eltwise_op<cb_out>(chain, EltwiseTileShape::flat(num_tiles));
+        return;
+    }
+#elif defined(BINARY_FPU_MUL) && not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+    {
+        using namespace compute_kernel_lib;
+        auto chain = sfpu_chain(FpuMul<cb_post_lhs, cb_post_rhs, Dst::D0>{});
+        eltwise_op<cb_out>(chain, EltwiseTileShape::flat(num_tiles));
+        return;
+    }
+#endif
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
