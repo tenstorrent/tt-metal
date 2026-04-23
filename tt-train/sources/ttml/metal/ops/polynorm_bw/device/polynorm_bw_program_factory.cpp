@@ -138,7 +138,7 @@ void assign_per_core_runtime_args(
 namespace ttml::metal::ops::polynorm3_bw::device {
 
 PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const PolyNorm3BWAttributes& args, const PolyNorm3BWTensorArgs& tensor_args, PolyNorm3BWTensorReturn& output) {
     const auto& input = tensor_args.input;
     const auto& dL_dout = tensor_args.dL_dout;
     auto* device = input.device();
@@ -325,9 +325,9 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
 
 void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PolyNorm3BWAttributes& operation_attributes,
+    const PolyNorm3BWTensorArgs& tensor_args,
+    PolyNorm3BWTensorReturn& tensor_return_value) {
     auto& shared = cached_program.shared_variables;
     auto& program = cached_program.program;
 

@@ -11,16 +11,16 @@
 namespace ttml::metal::ops::polynorm3_bw::device {
 
 struct PolyNorm3BackwardDeviceOperation {
-    using operation_attributes_t = ttml::metal::ops::polynorm3_bw::device::operation_attributes_t;
-    using tensor_args_t = ttml::metal::ops::polynorm3_bw::device::tensor_args_t;
-    using spec_return_value_t = ttml::metal::ops::polynorm3_bw::device::spec_return_value_t;
-    using tensor_return_value_t = ttml::metal::ops::polynorm3_bw::device::tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::ops::polynorm3_bw::device::PolyNorm3BWAttributes;
+    using tensor_args_t = ttml::metal::ops::polynorm3_bw::device::PolyNorm3BWTensorArgs;
+    using spec_return_value_t = ttml::metal::ops::polynorm3_bw::device::PolyNorm3BWSpecReturn;
+    using tensor_return_value_t = ttml::metal::ops::polynorm3_bw::device::PolyNorm3BWTensorReturn;
     using program_factory_t = std::variant<PolyNorm3BackwardProgramFactory>;
 
-    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
+    static PolyNorm3BWSpecReturn compute_output_specs(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
+    static PolyNorm3BWTensorReturn create_output_tensors(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
+    static ttsl::hash::hash_t compute_program_hash(const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs&);
 };
 
 }  // namespace ttml::metal::ops::polynorm3_bw::device
