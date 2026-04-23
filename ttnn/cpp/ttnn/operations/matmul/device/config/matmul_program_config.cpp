@@ -174,23 +174,53 @@ ttnn::DeviceComputeKernelConfig deref_compute_kernel_config_or_default(
     return ttnn::DeviceComputeKernelConfig{};
 }
 
-// Returns true iff the estimated CB footprint for this (per_core_M, per_core_N,
-// in0_block_w) fits in the available L1 space, with margin to absorb secondary
-// CBs not covered by get_estimated_size_of_cbs (sync / sparsity / sharded-in0 /
-// in0-intermediate, depending on factory path). Measured margin needed: 128 KB
-// on Wormhole 2D mcast for a 2048^3 DRAM matmul — get_estimated_size_of_cbs
-// missed ~80 KB of secondary CBs, and the output tensor's eventual L1
-// allocation further tightens the budget since lowest_occupied_compute_l1_address
-// does not reflect tensors allocated after config time. Budgeting 128 KB keeps
-// auto-config conservative.
+// Adaptive L1 safety margin for auto-config L1-fit checks. Scales with the actual
+// output-tensor footprint the factory will allocate at kernel launch, which is the
+// thing get_max_l1_space cannot see yet at config time:
+//   - DRAM output:           zero L1 pressure from the tensor → small floor only.
+//   - Sharded L1 output:     per_core_M * per_core_N * output_tile_size per core.
+//   - Interleaved L1 output: output tensor striped across L1 banks, so per-bank
+//                            footprint is div_up(Mt * Nt, num_banks) * tile_size.
+// A small 4 KB floor absorbs factory-internal secondary CBs (sync, metadata, per-CB
+// page-alignment padding) that get_estimated_size_of_cbs does not count.
 //
-// The matmul mcast factories share out_cb and interm0_cb L1 regions by default
-// (so real use is max(out, interm) per core), but when the auto-config emits
-// row_major_output=true the Bug 3 fix forces them to separate regions — real
-// use becomes out + interm. get_estimated_size_of_cbs already sums both, so its
-// return value is the correct upper bound for the row_major_output=true path.
-// Call this BEFORE enabling row_major_output so L1-tight shapes fall back to
-// the legacy shared-CB layout automatically instead of failing at compile time.
+// Inputs are the ingredients each call site already has on hand; callers don't need
+// to know the exact CB layout. Keeping this derivation in one place lets any future
+// factory-side change (new secondary CB, new sharding scheme, different per-bank
+// allocation) update the margin in a single spot.
+uint32_t compute_l1_safety_margin(
+    bool output_is_l1,
+    bool output_is_sharded,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t output_tile_size_bytes,
+    uint32_t num_l1_banks) {
+    constexpr uint32_t kSecondaryCbFloor = 4096;
+    if (!output_is_l1) {
+        return kSecondaryCbFloor;
+    }
+    uint32_t output_per_core_bytes = 0;
+    if (output_is_sharded) {
+        output_per_core_bytes = per_core_M * per_core_N * output_tile_size_bytes;
+    } else if (num_l1_banks > 0) {
+        output_per_core_bytes = tt::div_up(Mt * Nt, num_l1_banks) * output_tile_size_bytes;
+    } else {
+        // Defensive fallback: treat as sharded.
+        output_per_core_bytes = per_core_M * per_core_N * output_tile_size_bytes;
+    }
+    return output_per_core_bytes + kSecondaryCbFloor;
+}
+
+// Returns true iff the estimated CB footprint fits in available L1 with the given
+// adaptive margin. The matmul mcast factories share out_cb and interm0_cb L1 regions
+// by default (real use is max(out, interm) per core), but when the auto-config emits
+// row_major_output=true the Bug 3 fix forces them to separate regions - real use
+// becomes out + interm. get_estimated_size_of_cbs already sums both, so its return
+// value is the correct upper bound for the row_major_output=true path. Call this
+// BEFORE enabling row_major_output so L1-tight shapes fall back to the legacy
+// shared-CB layout automatically instead of failing at program.compile() time.
 bool row_major_output_fits_in_l1(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -200,11 +230,11 @@ bool row_major_output_fits_in_l1(
     uint32_t per_core_M,
     uint32_t per_core_N,
     uint32_t in0_block_w,
+    uint32_t l1_safety_margin_bytes,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
-    constexpr uint32_t kL1Margin = 128 * 1024;  // 128 KB safety margin, see comment.
     const uint32_t max_l1_space = utilities::get_max_l1_space(input_tensor_a);
-    if (max_l1_space <= kL1Margin) {
+    if (max_l1_space <= l1_safety_margin_bytes) {
         return false;
     }
     const uint32_t estimated_size = utilities::get_estimated_size_of_cbs(
@@ -217,7 +247,7 @@ bool row_major_output_fits_in_l1(
         transpose_b,
         utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype),
         bias_single_tile_size);
-    return estimated_size + kL1Margin < max_l1_space;
+    return estimated_size + l1_safety_margin_bytes < max_l1_space;
 }
 
 // Delegates to the auto-tuner with fast-path preference and no layout constraints —
@@ -276,7 +306,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     [[maybe_unused]] const bool fp32_dest_acc_en,
     const TensorMemoryLayout input_layout_a,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    uint32_t l1_safety_margin_bytes) {
     using namespace tt;
     const auto& a_padded_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_padded_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
@@ -346,6 +377,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         batch_and_m_tiles_per_core,
         n_tiles_per_core,
         k_tiles_per_core,
+        l1_safety_margin_bytes,
         compute_kernel_config,
         output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs_systolic{
@@ -385,6 +417,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype,
     const bool /*all_dram_interleaved*/,
+    uint32_t l1_safety_margin_bytes,
     const std::optional<tt::tt_metal::ShardSpec>& user_shard_spec = std::nullopt) {
     using namespace tt;
     auto* device = input_tensor_a.device();
@@ -463,9 +496,11 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     ibw_inputs.out_single_tile_size = in0_tile_size;  // conservative, matches get_estimated_size_of_cbs
     ibw_inputs.interm_single_tile_size = utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype);
     ibw_inputs.fuse_bias = bias_single_tile_size > 0;
-    // Budget with the same 128 KB safety margin used by the row_major_output L1 check.
+    // Budget with the same adaptive safety margin the caller computed for the
+    // row_major_output check - keeps the K-iteration tuner consistent with the rest
+    // of auto-config's L1 bookkeeping.
     const uint32_t max_l1 = utilities::get_max_l1_space(input_tensor_a);
-    ibw_inputs.l1_budget_bytes = max_l1 > (128u * 1024u) ? (max_l1 - 128u * 1024u) : 0;
+    ibw_inputs.l1_budget_bytes = max_l1 > l1_safety_margin_bytes ? (max_l1 - l1_safety_margin_bytes) : 0;
     ibw_inputs.max_in0_block_w = std::min(Kt, kMaxAutoTunedInBlockW);
     const uint32_t tuned_ibw = auto_tune::determine_largest_in0_block_w(ibw_inputs);
     const uint32_t pre_refactor_seed = (Kt % 2 == 0) ? 2u : 1u;
@@ -500,6 +535,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         per_core_M,
         per_core_N,
         in0_block_w,
+        l1_safety_margin_bytes,
         compute_kernel_config,
         output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs{
@@ -647,6 +683,26 @@ MatmulProgramConfig create_matmul_program_config(
     bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
     if (is_narrow_shape(height, width, false) || any_size_within_tile) {
         if (!a_is_block_sharded) {
+            // Narrow-shape systolic path: the output matches the 1D-mcast per-core
+            // distribution the factory uses, so we approximate margin with the tile
+            // size and grid split. Using M/Nt directly keeps the caller-independent
+            // compute_l1_safety_margin honest.
+            const uint32_t output_tile_size_bytes_sys =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t Mt_sys = (batch_size_a * m_size) / ttnn::TILE_SIZE;
+            const uint32_t Nt_sys = n_size / ttnn::TILE_SIZE;
+            const uint32_t num_l1_banks_sys =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t num_cores_sys = core_coord.x * core_coord.y;
+            const uint32_t l1_margin_sys = compute_l1_safety_margin(
+                mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                mem_config.is_sharded(),
+                /*per_core_M=*/tt::div_up(Mt_sys, num_cores_sys),
+                /*per_core_N=*/tt::div_up(Nt_sys, num_cores_sys),
+                Mt_sys,
+                Nt_sys,
+                output_tile_size_bytes_sys,
+                num_l1_banks_sys);
             return create_matmul_1d_systolic_array_program_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -658,7 +714,8 @@ MatmulProgramConfig create_matmul_program_config(
                 fp32_dest_acc_en,
                 a_layout,
                 compute_kernel_config,
-                output_dtype);
+                output_dtype,
+                l1_margin_sys);
         }
     }
     if (!a_is_sharded) {
@@ -670,6 +727,26 @@ MatmulProgramConfig create_matmul_program_config(
         }
     } else {
         if (!a_is_block_sharded) {
+            // Narrow-shape systolic path: the output matches the 1D-mcast per-core
+            // distribution the factory uses, so we approximate margin with the tile
+            // size and grid split. Using M/Nt directly keeps the caller-independent
+            // compute_l1_safety_margin honest.
+            const uint32_t output_tile_size_bytes_sys =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t Mt_sys = (batch_size_a * m_size) / ttnn::TILE_SIZE;
+            const uint32_t Nt_sys = n_size / ttnn::TILE_SIZE;
+            const uint32_t num_l1_banks_sys =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t num_cores_sys = core_coord.x * core_coord.y;
+            const uint32_t l1_margin_sys = compute_l1_safety_margin(
+                mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                mem_config.is_sharded(),
+                /*per_core_M=*/tt::div_up(Mt_sys, num_cores_sys),
+                /*per_core_N=*/tt::div_up(Nt_sys, num_cores_sys),
+                Mt_sys,
+                Nt_sys,
+                output_tile_size_bytes_sys,
+                num_l1_banks_sys);
             return create_matmul_1d_systolic_array_program_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -681,7 +758,8 @@ MatmulProgramConfig create_matmul_program_config(
                 fp32_dest_acc_en,
                 a_layout,
                 compute_kernel_config,
-                output_dtype);
+                output_dtype,
+                l1_margin_sys);
         }
         uint32_t k = a_padded_shape[-1] / ttnn::TILE_SIZE;
         uint32_t n = b_padded_shape[-1] / ttnn::TILE_SIZE;
@@ -707,6 +785,19 @@ MatmulProgramConfig create_matmul_program_config(
     uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
+    const uint32_t output_tile_size_bytes_2dmcast =
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+    const uint32_t num_l1_banks_2dmcast =
+        input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint32_t l1_margin_2dmcast = compute_l1_safety_margin(
+        mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+        mem_config.is_sharded(),
+        m_tiles_per_core,
+        n_tiles_per_core,
+        (batch_size_a * m_size) / ttnn::TILE_SIZE,
+        n_size / ttnn::TILE_SIZE,
+        output_tile_size_bytes_2dmcast,
+        num_l1_banks_2dmcast);
     const bool rmo_fits = row_major_output_fits_in_l1(
         input_tensor_a,
         input_tensor_b,
@@ -716,6 +807,7 @@ MatmulProgramConfig create_matmul_program_config(
         m_tiles_per_core,
         n_tiles_per_core,
         k_tiles_per_core,
+        l1_margin_2dmcast,
         compute_kernel_config,
         output_dtype);
     auto_tune::SubblockTuneInputs subblock_inputs{
@@ -844,6 +936,19 @@ MatmulProgramConfig get_matmul_program_config(
             uint32_t out_block_h = mutlti_dim_per_core_factor[0];
             uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
+            const uint32_t output_tile_size_bytes_1dmc =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t num_l1_banks_1dmc =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t l1_margin_1dmc = compute_l1_safety_margin(
+                output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                output_mem_config.is_sharded(),
+                per_core_M,
+                per_core_N,
+                M,
+                N,
+                output_tile_size_bytes_1dmc,
+                num_l1_banks_1dmc);
             const bool rmo_fits = row_major_output_fits_in_l1(
                 input_tensor_a,
                 input_tensor_b,
@@ -853,6 +958,7 @@ MatmulProgramConfig get_matmul_program_config(
                 per_core_M,
                 per_core_N,
                 in0_block_w,
+                l1_margin_1dmc,
                 compute_kernel_config,
                 output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
@@ -938,6 +1044,19 @@ MatmulProgramConfig get_matmul_program_config(
             uint32_t out_block_h = mutlti_dim_per_core_factor[0];
             uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
+            const uint32_t output_tile_size_bytes_2dmc =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t num_l1_banks_2dmc =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t l1_margin_2dmc = compute_l1_safety_margin(
+                output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                output_mem_config.is_sharded(),
+                per_core_M,
+                per_core_N,
+                M,
+                N,
+                output_tile_size_bytes_2dmc,
+                num_l1_banks_2dmc);
             const bool rmo_fits = row_major_output_fits_in_l1(
                 input_tensor_a,
                 input_tensor_b,
@@ -947,6 +1066,7 @@ MatmulProgramConfig get_matmul_program_config(
                 per_core_M,
                 per_core_N,
                 in0_block_w,
+                l1_margin_2dmc,
                 compute_kernel_config,
                 output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
@@ -1367,6 +1487,19 @@ MatmulProgramConfig create_simple_matmul_program_config(
             const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
             bool b_is_unbatched = (get_batch_size(b_shape) == 1);
             bool fuse_batch_for_sharding = user_shard_spec.has_value() && b_is_unbatched;
+            const uint32_t output_tile_size_bytes_1din0 =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t num_l1_banks_1din0 =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t l1_margin_1din0 = compute_l1_safety_margin(
+                mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                mem_config.is_sharded(),
+                per_core_M,
+                per_core_N,
+                Mt,
+                Nt,
+                output_tile_size_bytes_1din0,
+                num_l1_banks_1din0);
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -1381,6 +1514,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved,
+                l1_margin_1din0,
                 user_shard_spec);
         }
         if (core_range.x == 1 or use_mcast_1d_in1_config) {
@@ -1393,6 +1527,19 @@ MatmulProgramConfig create_simple_matmul_program_config(
             const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
             bool b_is_unbatched = (get_batch_size(b_shape) == 1);
             bool fuse_batch_for_sharding = user_shard_spec.has_value() && b_is_unbatched;
+            const uint32_t output_tile_size_bytes_1din1 =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t num_l1_banks_1din1 =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t l1_margin_1din1 = compute_l1_safety_margin(
+                mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                mem_config.is_sharded(),
+                per_core_M,
+                per_core_N,
+                Mt,
+                Nt,
+                output_tile_size_bytes_1din1,
+                num_l1_banks_1din1);
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -1407,6 +1554,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 compute_kernel_config,
                 output_dtype,
                 all_dram_interleaved,
+                l1_margin_1din1,
                 user_shard_spec);
         }
         if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
@@ -1445,6 +1593,19 @@ MatmulProgramConfig create_simple_matmul_program_config(
             // Gate row_major_output on the L1-fit check: the flag triggers separate
             // out_cb / interm0_cb regions (Bug 3 fix), which doubles the output-space
             // footprint. For large per_core_M/per_core_N, that can push CBs past L1.
+            const uint32_t output_tile_size_bytes_simple =
+                tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            const uint32_t num_l1_banks_simple =
+                input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+            const uint32_t l1_margin_simple = compute_l1_safety_margin(
+                mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+                mem_config.is_sharded(),
+                per_core_M,
+                per_core_N,
+                Mt,
+                Nt,
+                output_tile_size_bytes_simple,
+                num_l1_banks_simple);
             const bool rmo_fits = row_major_output_fits_in_l1(
                 input_tensor_a,
                 input_tensor_b,
@@ -1454,6 +1615,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 per_core_M,
                 per_core_N,
                 in0_block_w,
+                l1_margin_simple,
                 compute_kernel_config,
                 output_dtype);
             auto_tune::SubblockTuneInputs subblock_inputs{
