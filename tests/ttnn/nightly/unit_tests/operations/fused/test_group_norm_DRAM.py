@@ -41,8 +41,22 @@ import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
     ],
 )
 @pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
-    base.test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode)
+@pytest.mark.parametrize("specify_grid", [True, False])
+def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid):
+    base.run_group_norm_DRAM(
+        device,
+        N,
+        C,
+        H,
+        W,
+        num_groups,
+        num_out_blocks,
+        cores_y,
+        cores_x,
+        welford_mode,
+        use_input_mask=True,
+        specify_grid=specify_grid,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
