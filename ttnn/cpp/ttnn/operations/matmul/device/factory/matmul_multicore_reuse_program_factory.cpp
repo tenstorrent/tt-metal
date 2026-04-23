@@ -104,13 +104,20 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-        {output_cb_index, out_cb_data_format}, {interm0_cb_index, out_cb_data_format}};
+    // This factory's compute kernel (bmm_large_block_zm.cpp) always compiles with
+    // ROW_MAJOR_OUTPUT=1 (line 144 below). The helper then reserves/pushes out_cb per
+    // M-row-group on the last K-block — smaller than the full out_block — so a shared
+    // out/interm0 L1 region lets the partial non-last interm data at L1 positions
+    // 0..row_group-1 be overwritten by out_cb writes before the reload has consumed
+    // every partial subblock. Keep the regions separate.
     tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-            .set_page_size(output_cb_index, out_single_tile_size)
-            .set_page_size(interm0_cb_index, out_single_tile_size);
+        tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_cb_data_format}})
+            .set_page_size(output_cb_index, out_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    tt_metal::CircularBufferConfig interm0_cb_config =
+        tt_metal::CircularBufferConfig(out_CB_size, {{interm0_cb_index, out_cb_data_format}})
+            .set_page_size(interm0_cb_index, out_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
