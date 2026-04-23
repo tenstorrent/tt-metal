@@ -169,7 +169,7 @@ class MoE(AbstractModuleBase):
             # Build group mask [B, 1, S, num_experts]
             group_mask_parts = []
             for g in range(self.n_groups):
-                match = ttnn.eq(top_group_indices, float(g))
+                match = ttnn.eq(top_group_indices_u32, float(g))
                 match_f = ttnn.typecast(match, ttnn.DataType.BFLOAT16)
                 match_any = ttnn.sum(match_f, dim=-1, keepdim=True)
                 group_selected = ttnn.gt(match_any, 0.0)
@@ -224,7 +224,6 @@ class MoE(AbstractModuleBase):
             routing_weights = None  # softmax path uses score_i directly below
 
         # Accumulate token counts on device (unchanged):
-
         # Stack all expert mask sums into [1, 1, 1, num_experts]
         expert_count_scalars = []
         for expert_idx in range(self.num_experts):
