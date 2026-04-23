@@ -479,6 +479,87 @@ def test_conv3d_float32(device):
     )
 
 
+@skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking",
+    [
+        # Full-spatial convolution: 2×16×16 -> 1×1×1 with 1152 output channels
+        # Similar to vision transformer patch embedding
+        # Using C_in_block=16, C_out_block=32 to fit large kernel in L1 memory
+        # Without blocking, L1 overflows: 39MB required vs 1.5MB available
+        [(16, 32, 2, 16, 16), 1152, (2, 16, 16), (2, 16, 16), 1, (0, 0, 0), "zeros", (16, 32, 1, 1, 1)],
+    ],
+    ids=["vit_patch_embed"],
+)
+def test_conv3d_vit_patch_embed(
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    groups,
+    padding,
+    padding_mode,
+    blocking,
+):
+    """Test Conv3d with vision transformer patch embedding parameters.
+
+    This is a full-spatial convolution that reduces 2×16×16 input to 1×1×1 output
+    with 1152 output channels, commonly used in video vision transformers.
+    Uses custom blocking (C_in_block=16, C_out_block=32) to fit the large
+    kernel=(2, 16, 16) in L1 memory.
+    """
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+
+    # Prepare weights with specified C_in_block
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=groups,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d torch vs ttnn (vit_patch_embed): {pcc_message}")
+    assert pcc_passed, pcc_message
+
+
 @pytest.mark.parametrize(
     "C_in_block",
     [32, 64],
