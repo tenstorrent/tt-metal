@@ -451,7 +451,7 @@ inline void _llk_math_eltwise_unary_datacopy_uninit_()
 // ============================================================================
 
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t unit_dim)
+inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unpack_dst_format)
 {
     // DEST remap (remap_addrs + swizzle_32b) is enabled here to mirror
     // pack_untilize_dest_init's BH workaround (see tt-metal#17132 / tt-llk#989).
@@ -490,27 +490,25 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
     tmp.program();
 }
 
+// One call = one row-chunk (one MOP run). num_units loop removed; block
+// height is always 1 and chunk iteration is in the caller.
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_fast_tilize_block_(
     const std::uint32_t dst_index,
     [[maybe_unused]] const std::uint32_t unpack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    const std::uint32_t num_units,
     [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
-    for (std::uint32_t u = 0; u < num_units; u++)
-    {
-        // Use SrcRegs (not DestReg) — DestReg sends a hardware mailbox to the unpack
-        // thread, but fast-tilize unpack uses counter-based addressing and never reads
-        // the mailbox. After ~4 unread writes the mailbox FIFO fills and math RISC-V
-        // deadlocks. SrcRegs uses TT_SETC16 to set DEST offset directly.
-        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    // Use SrcRegs (not DestReg) — DestReg sends a hardware mailbox to the unpack
+    // thread, but fast-tilize unpack uses counter-based addressing and never reads
+    // the mailbox. After ~4 unread writes the mailbox FIFO fills and math RISC-V
+    // deadlocks. SrcRegs uses TT_SETC16 to set DEST offset directly.
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-        // 1 MOP = 4 dvalids × 8 MOVA2D + 4 SETRWC(CLR_A)
-        ckernel_template::run();
+    // 1 MOP = 4 dvalids × 8 MOVA2D + 4 SETRWC(CLR_A)
+    ckernel_template::run();
 
-        math::clear_dst_reg_addr();
-    }
+    math::clear_dst_reg_addr();
 }
 
 template <bool is_fp32_dest_acc_en>

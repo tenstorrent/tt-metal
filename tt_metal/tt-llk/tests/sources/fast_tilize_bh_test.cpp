@@ -69,9 +69,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
-    const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
     const Operand& buffer_A          = params.buffer_A;
+#endif
+    // Row-only contract: one row of tiles per call. Multi-row iteration belongs
+    // in the caller. See fast_tilize_metal_api_test.cpp for the reference pattern.
+#ifdef SPEED_OF_LIGHT
+    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
@@ -92,11 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
-                    {
-                        _llk_unpack_tilize_(
-                            L1_ADDRESS(buffer_A[0]), row * BLOCK_CT_DIM * TILE_R_DIM, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
-                    }
+                    _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
                 }
             }
         }
@@ -109,13 +109,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Use the inferred unpack_A_dst directly so test_fast_tilize_full covers the
-        // Float32-input path end-to-end (including the Tf32-SrcA case that production
-        // conv2d hits). Earlier this was forced to Float16_b as a workaround; now the
-        // LLK is expected to handle fp32 input correctly.
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-        _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, unit_dims[0]);
+        // Fast-tilize uses compat 16-bit DEST. When dest_acc=Yes, format inference
+        // may derive a 32-bit unpack_A_dst (e.g. Tf32). Override to Float16_b so the
+        // unpack produces 16-bit SrcA data and CH1_Z stride is correct.
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            const std::uint32_t compat_dst = ckernel::to_underlying(DataFormat::Float16_b);
+            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+                formats.unpack_A_src, formats.unpack_B_src, compat_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+            _llk_unpack_fast_tilize_init_(compat_dst, BLOCK_CT_DIM);
+        }
+        else
+        {
+            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+            _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM);
+        }
         // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
         // via _llk_unpack_configure_single_address_ (respects current cfg context).
     }
@@ -128,39 +137,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
-            std::uint32_t total_units = BLOCK_RT_DIM * units_per_row;
-            return _perf_unpack_loop_set_valid<true, false>(total_units * 4 * LOOP_FACTOR);
+            return _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
-            // Per-row per-chunk block calls (mirrors tt-metal API compute/tilize.h
-            // fast_tilize_block which iterates chunks of a single row). Each call
-            // processes one chunk at col_offset of one row; row base advances via L1.
-            std::uint32_t prev_chunk = unit_dims[0];
+            // One block call per chunk per row. init configures X for unit_dim=4;
+            // reinit_xdim adjusts before any chunk that uses a smaller unit_dim.
+            std::uint32_t prev_chunk = 4;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
+                std::uint32_t col_offset = 0;
+                for (std::uint32_t u = 0; u < units_per_row; u++)
                 {
-                    std::uint32_t col_offset = 0;
-                    for (std::uint32_t u = 0; u < units_per_row; u++)
+                    std::uint32_t chunk = unit_dims[u];
+                    if (chunk != prev_chunk)
                     {
-                        std::uint32_t chunk = unit_dims[u];
-                        if (chunk != prev_chunk)
-                        {
-                            _llk_unpack_fast_tilize_reinit_xdim_(chunk);
-                            prev_chunk = chunk;
-                        }
-                        _llk_unpack_fast_tilize_block_(
-                            L1_ADDRESS(buffer_A[row * BLOCK_CT_DIM]),
-                            0 /*tile_index unused*/,
-                            formats.unpack_A_src,
-                            chunk /*unit_dim*/,
-                            1 /*num_units: one chunk*/,
-                            chunk /*ct_dim: units_per_row=1, num_rows=1*/,
-                            4,
-                            col_offset);
-                        col_offset += chunk;
+                        _llk_unpack_fast_tilize_reinit_xdim_(chunk);
+                        prev_chunk = chunk;
                     }
+                    _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), 0 /*tile_index unused*/, formats.unpack_A_src, chunk /*unit_dim*/, 4, col_offset);
+                    col_offset += chunk;
                 }
             }
         }
@@ -182,8 +178,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
-    const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
+#endif
+#ifdef SPEED_OF_LIGHT
+    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
 #endif
     constexpr std::uint32_t unit_dim = 4;
 
@@ -203,12 +201,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
-                {
-                    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    _llk_math_eltwise_unary_datacopy_<A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.math, formats.math, 4);
-                    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                }
+                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                _llk_math_eltwise_unary_datacopy_<A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.math, formats.math, 4);
+                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
         {
@@ -217,20 +212,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         return;
     }
 
-    std::uint32_t num_units_total = BLOCK_RT_DIM * units_per_row;
-
     {
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math, unit_dim);
+        _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math);
     }
     {
         ZONE_SCOPED("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // Release one section_done per unit so pack can run all units
-            for (std::uint32_t i = 0; i < num_units_total; i++)
+            for (std::uint32_t i = 0; i < units_per_row * LOOP_FACTOR; i++)
             {
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
@@ -238,7 +231,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            return _perf_math_loop_clear_valid<true, false>(num_units_total * 4 * LOOP_FACTOR);
+            return _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
         else
         {
@@ -246,10 +239,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Each unit consumes 4 dvalids and fills a full DEST half-bank.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t u = 0; u < num_units_total; u++)
+                for (std::uint32_t u = 0; u < units_per_row; u++)
                 {
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, unit_dim, 1, 4);
+                    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, unit_dim);
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
@@ -272,15 +265,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
-    const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
     const Operand& buffer_Res        = params.buffer_Res;
+#endif
+#ifdef SPEED_OF_LIGHT
+    static_assert(BLOCK_RT_DIM == 1, "fast_tilize_bh_test: row-only — set BLOCK_RT_DIM=1");
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
-    const std::uint32_t total_tiles = BLOCK_CT_DIM * BLOCK_RT_DIM;
+    const std::uint32_t total_tiles = BLOCK_CT_DIM;
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;
 
     // Guard tile sentinel: gated by NUM_GUARD_TILES runtime param.
@@ -315,12 +310,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
-                {
-                    _llk_packer_wait_for_math_done_();
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Res[row * BLOCK_CT_DIM]));
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                }
+                _llk_packer_wait_for_math_done_();
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Res[0]));
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
         {
@@ -330,8 +322,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        std::uint32_t num_units_total = BLOCK_RT_DIM * units_per_row;
-
         {
             ZONE_SCOPED("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -346,7 +336,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
-                for (std::uint32_t i = 0; i < num_units_total * LOOP_FACTOR; i++)
+                for (std::uint32_t i = 0; i < units_per_row * LOOP_FACTOR; i++)
                 {
                     _llk_packer_wait_for_math_done_();
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -355,31 +345,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
+                // init configures MOP for unit_dims[0]; reinit_unit_dim switches
+                // before any chunk with a different unit_dim.
                 std::uint32_t prev_udim = unit_dims[0];
 
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
+                    std::uint32_t col_offset = 0;
+
+                    for (std::uint32_t u = 0; u < units_per_row; u++)
                     {
-                        std::uint32_t col_offset = 0;
+                        std::uint32_t udim = unit_dims[u];
 
-                        for (std::uint32_t u = 0; u < units_per_row; u++)
+                        if (udim != prev_udim)
                         {
-                            std::uint32_t udim = unit_dims[u];
-
-                            if (udim != prev_udim)
-                            {
-                                _llk_pack_fast_tilize_reinit_unit_dim_(formats.pack_dst, udim);
-                                prev_udim = udim;
-                            }
-
-                            _llk_packer_wait_for_math_done_();
-                            std::uint32_t tile_offset = row * BLOCK_CT_DIM + col_offset;
-                            _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_offset]), udim, 1, 4);
-                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-
-                            col_offset += udim;
+                            _llk_pack_fast_tilize_reinit_unit_dim_(formats.pack_dst, udim);
+                            prev_udim = udim;
                         }
+
+                        _llk_packer_wait_for_math_done_();
+                        _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[col_offset]), udim, 4);
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+
+                        col_offset += udim;
                     }
                 }
             }

@@ -262,7 +262,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 #ifdef ARCH_BLACKHOLE
     uint32_t init_udim = (full_dim <= 1) ? 1 : 4;
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
-    MATH((llk_math_fast_tilize_init(icb, 4)));
+    MATH((llk_math_fast_tilize_init(icb)));
     PACK((llk_pack_fast_tilize_init(icb, ocb, init_udim)));
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
@@ -311,9 +311,9 @@ ALWI void fast_tilize_block(
                 PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
                 prev_chunk = chunk;
             }
-            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, 1, chunk, tiles_done)));
-            MATH((llk_math_fast_tilize_block_(0, icb, 4, 1)));
-            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk, 1)));
+            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+            MATH((llk_math_fast_tilize_block_(0, icb, 4)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk)));
 
             MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
             PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));

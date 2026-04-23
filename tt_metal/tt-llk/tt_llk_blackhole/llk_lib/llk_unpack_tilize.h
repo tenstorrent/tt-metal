@@ -478,7 +478,10 @@ inline void _llk_unpack_fast_tilize_mop_config_()
     tmp.program();
 }
 
-inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim, const std::uint32_t init_unit_dim = 4)
+// BH fast-tilize: block height is always 1 (one row of tiles per call).
+// Multiple rows are handled by the caller, looping over rows and calling
+// the block function once per chunk per row.
+inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim)
 {
     // Context-safe writes only: Tile_x_dim (WRCFG below writes the full 32-bit word,
     // covering cntx0 low-16 and cntx1 high-16), TileDescriptor (shared across contexts),
@@ -525,10 +528,11 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     // tracked as unpacker resources. Explicit stall ensures the write completes.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
-    // X counter end = unit_dim tile widths per read.
+    // X counter end = 4 tile widths (maximum unit_dim). reinit_xdim adjusts this
+    // before any chunk that uses a smaller unit_dim (2 or 3).
     // CH1_Z stride stays at 4-wide (8 SrcA rows) regardless of unit_dim.
     // This creates natural gaps in SrcA for unit_dim < 4, preserving the DEST layout.
-    TT_SETADCXX(p_setadc::UNP_A, init_unit_dim * TILE_C_DIM - 1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_A, 4 * TILE_C_DIM - 1, 0x0);
 
     // CH1 Z stride: controls SrcA dest address gap between reads.
     // Uses effective_dst_format because Float32/Tf32 are downgraded to bf16 above.
@@ -549,13 +553,13 @@ inline void _llk_unpack_fast_tilize_reinit_xdim_(const std::uint32_t unit_dim)
     TT_SETADCXX(p_setadc::UNP_A, unit_dim * TILE_C_DIM - 1, 0x0);
 }
 
+// One call = one row-chunk (one unit_dim, one MOP run).
+// Block height is always 1; multiple rows and chunks are loops in the caller.
 inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t base_address,
     [[maybe_unused]] const std::uint32_t tile_index,
     [[maybe_unused]] const std::uint32_t unpack_src_format,
-    const std::uint32_t unit_dim,
-    const std::uint32_t num_units,
-    const std::uint32_t ct_dim,
+    [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
     const std::uint32_t col_start                  = 0)
 {
@@ -569,13 +573,12 @@ inline void _llk_unpack_fast_tilize_block_(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // L1 addressing via CH0 counters:
-    //   Y selects tile within row (Y+=unit_dim per unit)
-    //   Z selects tensor row (0..31 per unit)
-    //   W selects tile-row (W+=2 per row, stride = ct_dim*1024 datums)
+    //   Y selects tile within row (Y+=col_start to reach this chunk's start column)
+    //   Z selects tensor row (0..31)
     TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011); // reset CH0_X=0, CH0_Y=0
     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111); // reset all Z,W = 0
 
-    // Position at col_start (for tail units after prefix).
+    // Position at col_start (for chunks after the first in a row).
     // INCADCXY Ch0_Y field is 3 bits (max 7), so loop for larger offsets.
     {
         std::uint32_t remaining = col_start;
@@ -590,38 +593,7 @@ inline void _llk_unpack_fast_tilize_block_(
     // Hoist zmask high 16 bits — they persist in mop_zmask_hi16 until changed.
     constexpr std::uint32_t ZMASK = 0x80808080;
     TT_MOP_CFG(ZMASK >> 16);
-
-    const std::uint32_t units_per_row = ct_dim / unit_dim;
-    const std::uint32_t num_rows      = num_units / units_per_row;
-
-    for (std::uint32_t row = 0; row < num_rows; row++)
-    {
-        if (row > 0)
-        {
-            // New row: reset Y via CR, advance W by 2, reset Z via CR.
-            TTI_ADDRCRXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0010);
-            TTI_ADDRCRZW(p_setadc::UNP_A, 0, 0, 2, 0, 0b0111);
-        }
-
-        for (std::uint32_t col = 0; col < units_per_row; col++)
-        {
-            if (col > 0)
-            {
-                // Same row, next unit: reset Z, advance Y by unit_dim.
-                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101);
-                std::uint32_t y_remaining = unit_dim;
-                while (y_remaining > 0)
-                {
-                    std::uint32_t inc = (y_remaining > 7) ? 7 : y_remaining;
-                    TT_INCADCXY(p_setadc::UNP_A, 0, 0, inc, 0);
-                    y_remaining -= inc;
-                }
-            }
-
-            // TT_MOP only — zmask hi16 already set above.
-            TT_MOP(0, 32 - 1, ZMASK & 0xFFFF);
-        }
-    }
+    TT_MOP(0, 32 - 1, ZMASK & 0xFFFF);
 
     // Release the unpacker context acquired above and advance the software
     // tracker so the next call targets the other cfg context slot.

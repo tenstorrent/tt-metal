@@ -56,15 +56,6 @@ TILE_C = 32
         (1, 7),
         (1, 8),
         (1, 9),
-        (2, 2),
-        (2, 3),
-        (2, 4),
-        (2, 5),
-        (2, 8),
-        (3, 4),
-        (3, 8),
-        (4, 4),
-        (4, 8),
     ],
 )
 def test_fast_tilize_full(formats, dest_acc, dimensions):
@@ -199,19 +190,15 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
     dest_acc=[DestAccumulation.No],
     dimensions=[
-        # ct_dim=4: 40 rows passed before, find boundary
-        (4, 1),
-        (8, 1),
-        (20, 1),
-        (40, 1),
-        (4, 2),
-        (8, 2),
-        (20, 2),
-        (40, 2),
-        (4, 4),
-        (20, 4),
-        (40, 4),
-        (50, 4),
+        (1, 1),
+        (1, 2),
+        (1, 4),
+        (1, 8),
+        (1, 16),
+        (1, 20),
+        (1, 32),
+        (1, 40),
+        (1, 50),
     ],
 )
 def test_fast_tilize_large(formats, dest_acc, dimensions):
@@ -286,9 +273,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
         (1, 2),
         (1, 3),
         (1, 4),
-        (2, 2),
-        (2, 4),
-        (4, 4),
+        (1, 8),
     ],
 )
 def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):

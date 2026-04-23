@@ -27,12 +27,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
 
-    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM, KT_DIM <= 1 ? 1 : 4);
+    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM);
 
     // Base address is programmed inside _llk_unpack_fast_tilize_block_ via
     // _llk_unpack_configure_single_address_ (respects current cfg context).
     _llk_unpack_fast_tilize_reinit_xdim_(KT_DIM);
-    _llk_unpack_fast_tilize_block_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, KT_DIM, 1, KT_DIM, 4, 0);
+    _llk_unpack_fast_tilize_block_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, KT_DIM, 4, 0);
 
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 }
@@ -49,10 +49,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math, 4);
+    _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4, 1, 4);
+    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, KT_DIM, 4);
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_fast_tilize_block_(0, L1_ADDRESS(params.buffer_Res[0]), KT_DIM, 1, 4);
+    _llk_pack_fast_tilize_block_(0, L1_ADDRESS(params.buffer_Res[0]), KT_DIM, 4);
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4);

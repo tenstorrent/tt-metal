@@ -202,23 +202,20 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::u
     _llk_pack_fast_tilize_mop_config_(new_unit_dim);
 }
 
+// One call = one row-chunk (one MOP run). num_units loop removed; block
+// height is always 1 and chunk iteration is in the caller.
 inline void _llk_pack_fast_tilize_block_(
     [[maybe_unused]] const std::uint32_t tile_index,
     const std::uint32_t address,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    const std::uint32_t num_units,
     [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
     TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
     program_packer_destination(address);
-
-    for (std::uint32_t u = 0; u < num_units; u++)
-    {
-        // Reset Z/W counters at unit start. MOP start_op restores from CR shadows.
-        // W_Cr accumulates across tiles within the unit via ADDRCRZW in loop_op1.
-        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
-        ckernel::ckernel_template::run();
-    }
+    // Reset Z/W counters. MOP start_op restores from CR shadows.
+    // W_Cr accumulates across tiles within the unit via ADDRCRZW in loop_op1.
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    ckernel::ckernel_template::run();
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en>

@@ -5,6 +5,10 @@
 // Replicates the exact ttnn tilize compute kernel flow:
 //   compute_kernel_hw_startup → fast_tilize_init → fast_tilize_block × N → fast_tilize_uninit
 // Validates that BH fast-tilize LLK works after compute_kernel_hw_startup.
+//
+// Row-looping reference: block height is 1; the outer row loop is the caller's
+// responsibility. This source exercises BLOCK_RT_DIM > 1 via that outer loop,
+// serving as the multi-row composition integration test.
 
 #include <cstdint>
 
@@ -64,15 +68,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
 
-    // fast_tilize_init
-    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, BLOCK_CT_DIM <= 1 ? 1 : 4);
-    volatile std::uint32_t tt_reg_ptr* cfg   = get_cfg_pointer();
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = L1_ADDRESS(buffer_A[0]);
+    // fast_tilize_init — init configures X for unit_dim=4 (max); reinit_xdim
+    // adjusts before any chunk that uses a smaller unit_dim.
+    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM);
 
-    // fast_tilize_block × rows
     std::uint32_t unit_dims[MAX_UNITS];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
+    // fast_tilize_block × rows: caller loops rows, one block call per chunk per row.
+    std::uint32_t prev_chunk = 4;
     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
     {
         for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
@@ -80,9 +84,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t col_offset = 0;
             for (std::uint32_t u = 0; u < units_per_row; u++)
             {
-                _llk_unpack_fast_tilize_block_(
-                    L1_ADDRESS(buffer_A[0]), row * BLOCK_CT_DIM * TILE_R_DIM + col_offset, formats.unpack_A_src, unit_dims[u], 1, BLOCK_CT_DIM, 4);
-                col_offset += unit_dims[u];
+                std::uint32_t chunk = unit_dims[u];
+                if (chunk != prev_chunk)
+                {
+                    _llk_unpack_fast_tilize_reinit_xdim_(chunk);
+                    prev_chunk = chunk;
+                }
+                _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[row * BLOCK_CT_DIM]), 0, formats.unpack_A_src, chunk, 4, col_offset);
+                col_offset += chunk;
             }
         }
     }
@@ -107,24 +116,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     std::uint32_t unit_dims[MAX_UNITS];
-    std::uint32_t units_per_row   = decompose_row(BLOCK_CT_DIM, unit_dims);
-    std::uint32_t num_units_total = BLOCK_RT_DIM * units_per_row;
+    std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
     // compute_kernel_hw_startup: sync_init + hw_configure
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    // fast_tilize_init (remap handled internally)
-    _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math, 4);
+    // fast_tilize_init
+    _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(formats.math);
 
-    // fast_tilize_block × rows (one section_done per unit)
+    // fast_tilize_block × rows (one section_done per chunk)
     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
     {
-        for (std::uint32_t u = 0; u < num_units_total; u++)
+        for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
         {
-            _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-            _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4, 1, 4);
-            _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            for (std::uint32_t u = 0; u < units_per_row; u++)
+            {
+                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, 4);
+                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            }
         }
     }
 
@@ -155,10 +166,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
 
-    // fast_tilize_init (no second hw_configure — matches WH pattern)
+    // fast_tilize_init
     _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4);
 
-    // fast_tilize_block × rows
+    // fast_tilize_block × rows: caller loops rows, one block call per chunk per row.
     std::uint32_t prev_udim = unit_dims[0];
     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
     {
@@ -174,7 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     prev_udim = udim;
                 }
                 _llk_packer_wait_for_math_done_();
-                _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[row * BLOCK_CT_DIM + col_offset]), udim, 1, 4);
+                _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[row * BLOCK_CT_DIM + col_offset]), udim, 4);
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 col_offset += udim;
             }

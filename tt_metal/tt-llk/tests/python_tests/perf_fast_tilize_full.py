@@ -33,18 +33,12 @@ def _skip_non_bh():
 # ---------------------------------------------------------------------------
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
-    ),
-    rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    rt_dim=[1],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
     _skip_non_bh()
-
-    # BFP / Float32 input not supported for tilize
-    if formats.input_format in (DataFormat.Bfp8_b,):
-        pytest.skip("Bfp8_b input not supported for fast tilize")
 
     # Width 1 uses standard tilize fallback — not representative of fast path
     if ct_dim < 2:
@@ -54,17 +48,18 @@ def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
 
 
 # ---------------------------------------------------------------------------
-# Cross-format BFP output: Float16_b / Float32 → Bfp8_b / Bfp4_b
+# Cross-format output: mirrors test_fast_tilize_full.py format matrix
 # ---------------------------------------------------------------------------
 @pytest.mark.perf
 @parametrize(
     formats=[
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
     ],
-    rt_dim=[1, 2, 4, 8],
+    rt_dim=[1],
     ct_dim=[2, 4, 8],
 )
 def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim):
@@ -85,6 +80,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
         run_types=[
             PerfRunType.L1_TO_L1,
             PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
