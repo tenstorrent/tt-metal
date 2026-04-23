@@ -2,10 +2,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import ttnn
 
 from .weights import AttentionWeights
+
+
+def _strided_sweep_override():
+    """Read GPT_OSS_STRIDED_SWEEP_OVERRIDE if set.
+
+    Format: "grid_y,M_block,K_block,N_block,chunk_w,num_workers,sbh,sbw"
+    Returns None when unset so the normal config dict is used.
+    """
+    v = os.environ.get("GPT_OSS_STRIDED_SWEEP_OVERRIDE", "").strip()
+    if not v:
+        return None
+    parts = v.split(",")
+    return (
+        int(parts[0]),
+        int(parts[1]),
+        int(parts[2]),
+        int(parts[3]),
+        int(parts[4]),
+        int(parts[5]),
+        int(parts[6]),
+        int(parts[7]),
+    )
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights):
@@ -119,29 +142,40 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
 
 
 # Per-shape tuned params for the fused attention o_proj matmul + reduce-scatter.
-# Values came from a 180-config (S=128) / 504-config (S=1024) sweep on TG 4x8
-# with 5 warmup + 10 measured iters per config. The kernel is
-# ttnn.experimental.minimal_matmul_strided_reduce_scatter_async and the shape
-# is [M=seq_len, K=512, N=3072] per device (after TP=8 sharding of hidden_size).
 #
-# Sweep covered:
-#     mm_grid.y ∈ {2,3,4,5,6,7}           (MM/RS core split on the 8×8 grid)
-#     M_block   ∈ divisors of M_tiles/grid.y
-#     K_block   ∈ {2,4,8}  (divisors of K_tiles=16)
-#     N_block   ∈ {2,3,4,6} (≤ N_tiles_per_core=12)
-#     chunk_width_in_mm_blocks ∈ {1,2,4}
-#     subblock_h/w with subblock_h*subblock_w ≤ 4 (fp32_dest_acc_en=True)
+# Shape per device (TG 4×8, TP=8): M=seq_len tiles, K=16 tiles (512/TP),
+# N=96 tiles (3072 padded). Measurements on Tracy device_kernel_duration,
+# 3 warmup + 8 measured iters, isolated fused-op timing.
 #
-# Winners below beat the non-fused MM+RS chain by:
-#   - S=128:  attention-block total 3714.83 us → 3693.54 us (−21 us/layer)
-#   - S=1024: fused-op kernel 279 us vs non-fused ~450-500 us equivalent
+# S=1024 sweep (2026-04-23, 56 valid configs out of 540 requested):
+#   Phase 1 — 56 configs across grid_y×M_block×K_block×N_block×chunk_w×num_workers,
+#             subblock fixed (2,1); Tracy device times.
+#   Phase 2 — subblock sweep (6 combos) on Phase-1 winner geometry.
+#   Invalid configs pruned: M_block∤Mt_per_core (grid_y∈{3,5,7} prime),
+#   N_block=8∤Nt_per_core=12, num_workers>max for grid_y=6.
+#
+# Key finding: num_workers_per_link=3 (vs prior default 1) saves ~21 µs (−7.5%).
+#
+# Top-5 Phase-1 configs (subblock=(2,1), device min µs):
+#   y4_mb4_kb4_nb6_cw2_w3  258.0 µs ← base of Phase-2 winner
+#   y4_mb4_kb8_nb6_cw2_w3  263.2 µs
+#   y4_mb8_kb8_nb6_cw1_w3  266.8 µs
+#   y4_mb8_kb8_nb6_cw2_w3  270.0 µs
+#   y4_mb8_kb4_nb6_cw2_w3  270.9 µs
+#
+# Subblock sweep on y4_mb4_kb4_nb6_cw2_w3 (Tracy, all 6 valid combos):
+#   (2,2) → avg=260.1 µs  min=256.1 µs  ← WINNER
+#   (1,3) → avg=260.9 µs
+#   (4,1) → avg=261.6 µs
+#   (2,1) → avg=263.6 µs  (prior fixed value)
+#
+# Tuple layout: (grid_y, M_block, K_block, N_block, chunk_w, sbh, sbw, num_workers)
 _FUSED_MM_RS_CONFIGS = {
-    # M_tiles  : (grid.y, M_block, K_block, N_block, chunk_w, subblock_h, subblock_w)
-    4: (2, 2, 8, 6, 2, 1, 1),  # S=128:  winner y2_mb2_kb8_nb6_cw2 (sbh×sbw not swept separately; 1×1 safe)
-    32: (4, 8, 8, 6, 2, 1, 2),  # S=1024: winner y4_mb8_kb8_nb6_cw2, subblock sweep picked sbw=2 (−3.6%)
+    4: (2, 2, 8, 6, 2, 1, 1, 1),  # S=128,  y2_mb2_kb8_nb6_cw2, unswept workers (safe default)
+    32: (4, 4, 4, 6, 2, 2, 2, 3),  # S=1024, y4_mb4_kb4_nb6_cw2_w3_sb2x2, avg=260.1 µs
 }
-# Fallback for unswept shapes — conservative: favour RS workers, small blocks.
-_FUSED_MM_RS_FALLBACK = (2, 2, 8, 6, 2, 1, 1)
+# Fallback for unswept shapes — conservative: small blocks, 1 RS worker.
+_FUSED_MM_RS_FALLBACK = (2, 2, 8, 6, 2, 1, 1, 1)
 
 
 def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_config, ccl_manager):
@@ -177,19 +211,23 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     K_tiles = K // TILE
     N_tiles = N // TILE
 
-    grid_y, m_block, k_block, n_block, chunk_width, subblock_h, subblock_w = _FUSED_MM_RS_CONFIGS.get(
-        M_tiles, _FUSED_MM_RS_FALLBACK
-    )
+    override = _strided_sweep_override()
+    if override is not None:
+        grid_y, m_block, k_block, n_block, chunk_width, num_workers, subblock_h, subblock_w = override
+    else:
+        grid_y, m_block, k_block, n_block, chunk_width, subblock_h, subblock_w, num_workers = _FUSED_MM_RS_CONFIGS.get(
+            M_tiles, _FUSED_MM_RS_FALLBACK
+        )
 
     mm_core_grid = ttnn.CoreCoord(8, grid_y)
     Nt_per_core = N_tiles // mm_core_grid.x
     Mt_per_core = max(1, math.ceil(M_tiles / grid_y))
 
-    # Clamp blocks to what the current shape actually supports — defensive in
-    # case _FUSED_MM_RS_CONFIGS is extended for a shape where these don't fit.
-    m_block = min(m_block, Mt_per_core)
-    k_block = min(k_block, K_tiles)
-    n_block = min(n_block, Nt_per_core)
+    # Clamp blocks when not using sweep override (sweep values are pre-validated).
+    if override is None:
+        m_block = min(m_block, Mt_per_core)
+        k_block = min(k_block, K_tiles)
+        n_block = min(n_block, Nt_per_core)
 
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
 
@@ -226,6 +264,7 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
         config=mm_config,
         barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         chunk_width_in_mm_blocks=chunk_width,
+        num_workers_per_link=num_workers,
     )
 
     tensor.deallocate(True)
