@@ -643,6 +643,7 @@ def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch)
     # Allocate I/O first so lockstep places them at top of L1 (no per-core ranges to avoid yet).
     io_tensors = _make_io_tensors(mesh_device, same_grid)
     _per_core_tensor = _alloc_large_per_core_tensor(mesh_device, same_grid, use_from_torch=use_from_torch)
+    assert _per_core_tensor is not None  # keep alive until CB validation runs
 
     # Huge CB on the SAME cores as the per-core tensor: should trip validate_circular_buffer_region.
     with pytest.raises(RuntimeError, match=r"clash|circular buffer|L1"):
@@ -705,11 +706,19 @@ def _try_compressed_per_core_collision(mesh_device, per_core_grid, cb_grid):
     the next test's gc.collect."""
     io_tensors = _make_io_tensors(mesh_device, cb_grid)
     _ct = _alloc_large_per_core_compressed_tensor(mesh_device, per_core_grid)
-    # Multi-format CompressedTensor's per-core size depends on which format the assigner chose
-    # per tile (bfp4 = 576 B/tile, bfp8 = 1088 B/tile). Use a CB big enough that even the smallest
-    # per-core allocation still collides.
+    assert _ct is not None  # keep alive until CB validation runs
+    # CB sized as a fraction of the device's reported worker L1, so collision detection scales
+    # with architecture instead of relying on a hardcoded ~1.4 MB bank assumption. ~70% of L1
+    # leaves the CB alone fitting on disjoint cores, while per-core (sized at ~80% of L1 in
+    # _alloc_large_per_core_compressed_tensor) + this CB > 100% → guaranteed collision when
+    # they share cores, regardless of which format multi-format CompressedTensor's assigner
+    # chose per tile (bfp4 = 576 B/tile, bfp8 = 1088 B/tile).
+    worker_l1 = ttnn._ttnn.reports.get_device_info(mesh_device).worker_l1_size
+    # CB total_size must be divisible by page_size (bfloat16 tile = 32*32*2 = 2048 B).
+    page_size = ttnn.Tile((32, 32)).get_tile_size(ttnn.bfloat16)
+    cb_bytes = (worker_l1 * 70 // 100) // page_size * page_size
     try:
-        _run_cb_heavy_noop_program(io_tensors, cb_grid, cb_total_size_bytes=1024 * 1024)
+        _run_cb_heavy_noop_program(io_tensors, cb_grid, cb_total_size_bytes=cb_bytes)
         return None
     except RuntimeError as e:
         return str(e)

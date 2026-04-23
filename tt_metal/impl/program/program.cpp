@@ -1322,7 +1322,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     // allocator). Collect the physical allocators we must consult so we can see per-core state.
     std::vector<AllocatorImpl*> physical_allocators;
     if (hybrid_mode) {
-        if (auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
             for (IDevice* dev : mesh->get_devices()) {
                 physical_allocators.push_back(dev->allocator_impl().get());
             }
@@ -1352,11 +1352,8 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
             lowest_address = std::nullopt;
             for (const auto& core : cb_allocator.core_range) {
                 for (auto* phys_alloc : physical_allocators) {
-                    const auto& bank_ids = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core);
-                    if (bank_ids.empty()) {
-                        continue;
-                    }
-                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_ids[0]);
+                    auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
                     if (addr.has_value()) {
                         lowest_address =
                             lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
