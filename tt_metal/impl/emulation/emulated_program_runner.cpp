@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
+#include <bit>
 #include <atomic>
 #include <cassert>
 #include <tt_stl/assert.hpp>
@@ -1286,17 +1287,8 @@ static void launch_cores(
                                 iface.wr_entry_idx = 0;
 
                                 if (is_producer) {
-                                    uint8_t p = 0;
-                                    for (uint16_t b = 0; b < 16; ++b) {
-                                        uint16_t bit = static_cast<uint16_t>(1u << b);
-                                        if (!(alloc.producer_risc_mask & bit)) {
-                                            continue;
-                                        }
-                                        if (bit == proc_bit) {
-                                            break;
-                                        }
-                                        ++p;
-                                    }
+                                    uint8_t p = static_cast<uint8_t>(
+                                        std::popcount(alloc.producer_risc_mask & (proc_bit - 1u)));
                                     if (is_blocked) {
                                         // BLOCKED DM-DM: producer broadcasts to all consumer TCs.
                                         iface.broadcast_tc = true;
@@ -1329,17 +1321,8 @@ static void launch_cores(
                                         }
                                     }
                                 } else {
-                                    uint8_t c = 0;
-                                    for (uint16_t b = 0; b < 16; ++b) {
-                                        uint16_t bit = static_cast<uint16_t>(1u << b);
-                                        if (!(alloc.consumer_risc_mask & bit)) {
-                                            continue;
-                                        }
-                                        if (bit == proc_bit) {
-                                            break;
-                                        }
-                                        ++c;
-                                    }
+                                    uint8_t c = static_cast<uint8_t>(
+                                        std::popcount(alloc.consumer_risc_mask & (proc_bit - 1u)));
                                     if (is_blocked) {
                                         // BLOCKED DM-DM consumer: drain each producer's TC block fully.
                                         iface.num_tcs_to_rr = static_cast<uint8_t>(alloc.num_producers);
