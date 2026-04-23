@@ -11,4 +11,5 @@ enum class KernelActivation : uint32_t {
     GELU,
     TANH,
     SILU,
+    RELU6,
 };

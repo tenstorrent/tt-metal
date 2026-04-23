@@ -189,6 +189,7 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
         case UnaryOpType::GELU: return KernelActivation::GELU;
         case UnaryOpType::TANH: return KernelActivation::TANH;
         case UnaryOpType::SILU: return KernelActivation::SILU;
+        case UnaryOpType::RELU6: return KernelActivation::RELU6;
         default: TT_THROW("Unsupported UnaryOpType for fused activation: {}", opType);
     };
 }

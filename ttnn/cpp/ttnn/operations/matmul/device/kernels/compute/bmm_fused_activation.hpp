@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/relu.h"
 #include "internal/risc_attribs.h"
 
 template <KernelActivation ACT>
@@ -15,6 +16,8 @@ FORCE_INLINE void init_sfpu_activation_pack() {
         return tanh_tile_init_pack();
     } else if (ACT == KernelActivation::GELU) {
         return gelu_tile_init_pack();
+    } else if (ACT == KernelActivation::RELU6) {
+        return relu_max_tile_init_pack();
     }
 }
 
@@ -26,5 +29,9 @@ FORCE_INLINE void sfpu_activation_pack(uint32_t tile_index) {
         return tanh_tile_pack(tile_index);
     } else if (ACT == KernelActivation::GELU) {
         return gelu_tile_pack(tile_index);
+    } else if (ACT == KernelActivation::RELU6) {
+        // constexpr uint32_t max = std::bit_cast<uint32_t>(6.0f);
+        constexpr uint32_t max = 0x40c00000u;
+        return relu_max_tile_pack(tile_index, max);
     }
 }
