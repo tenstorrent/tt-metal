@@ -40,11 +40,11 @@ protected:
 namespace {
 constexpr float kForwardRtol = 2.5e-2F;
 constexpr float kForwardAtol = 2.5e-2F;
-// Backward tolerance must accommodate the bf16 intermediate introduced by the PolyNorm BW
+// Backward tolerance accommodates the bf16 intermediate introduced by the PolyNorm BW
 // preweighting optimization (cb_weighted_inv_rms_* stores w*inv_rms as a bf16 tile,
 // costing one extra bf16 rounding vs the original fused-into-DEST path). Worst-case
-// absolute error stays under ~0.08 on very narrow shapes; 8e-2 fits without headroom.
-// See kernel comment in polynorm_bw/device/kernels/compute/polynorm_bw_kernel.cpp for details.
+// absolute error stays under ~0.08 on very narrow shapes ({1,1,1,32}).
+// See PRECISION NOTE in polynorm_bw/device/kernels/compute/polynorm_bw_kernel.cpp.
 constexpr float kBackwardRtol = 8.0e-2F;
 constexpr float kBackwardAtol = 8.0e-2F;
 

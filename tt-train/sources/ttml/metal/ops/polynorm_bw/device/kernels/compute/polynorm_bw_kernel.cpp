@@ -176,8 +176,8 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
 
     sqrt_tile_init();
     sqrt_tile(reg_acc);
-    recip_tile_init();
-    recip_tile(reg_acc);
+    recip_tile_init<false>();
+    recip_tile<false>(reg_acc);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);
