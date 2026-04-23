@@ -66,7 +66,8 @@ jobs:
             {"model":"retinanet"},
             {"model":"ufld_v2"},
             {"model":"stable_diffusion_xl_base","timeout": 120},
-            {"model":"stable_diffusion","timeout":45}
+            {"model":"stable_diffusion","timeout":45},
+            {"model":"speecht5_tts"}
           ]'
 
           # Stable set (CIv2)
@@ -76,7 +77,8 @@ jobs:
 
           # Stable set for Blackhole (CIv2)
           STABLE_BH_CIv2='[
-            {"model":"stable_diffusion_xl_base","timeout":120}
+            {"model":"stable_diffusion_xl_base","timeout":120},
+            {"model":"speecht5_tts"}
           ]'
 
           SEL='${{ inputs.models-to-run }}'
@@ -168,7 +170,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
