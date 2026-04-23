@@ -37,6 +37,28 @@ constexpr int kRenderHz = 4;
 constexpr int kCorePanelWidth = 40;  // "(xx,yy)  [bar] pct%"
 constexpr int kStaleThresholdMs = 2000;
 
+// ANSI color escapes. Kept inline — no curses dep.
+constexpr const char* kAnsiReset = "\x1b[0m";
+constexpr const char* kAnsiDim = "\x1b[2m";
+constexpr const char* kAnsiGreen = "\x1b[38;5;34m";    // 1..33%
+constexpr const char* kAnsiYellow = "\x1b[38;5;220m";  // 34..66%
+constexpr const char* kAnsiRed = "\x1b[38;5;196m";     // 67..100%
+constexpr const char* kAnsiGray = "\x1b[38;5;240m";    //  0%
+constexpr const char* kAnsiBold = "\x1b[1m";
+
+const char* color_for_pct(uint32_t pct) {
+    if (pct == 0) {
+        return kAnsiGray;
+    }
+    if (pct < 34) {
+        return kAnsiGreen;
+    }
+    if (pct < 67) {
+        return kAnsiYellow;
+    }
+    return kAnsiRed;
+}
+
 struct MappedShm {
     int fd = -1;
     void* map = nullptr;
@@ -132,32 +154,71 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, handle_sigint);
     std::signal(SIGTERM, handle_sigint);
 
-    auto entries = ttnvtop::list_shm_files();
-    if (entries.empty()) {
-        std::cerr << "ttnvtop: no collector SHM files found in /dev/shm.\n"
-                  << "        Start ttnvtop-collector first.\n";
-        return 1;
-    }
-    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.asic_id < b.asic_id; });
-
     std::vector<MappedShm> maps;
-    maps.reserve(entries.size());
-    for (const auto& e : entries) {
-        MappedShm m;
-        if (map_shm(e.path, m)) {
-            maps.push_back(std::move(m));
-        } else {
-            std::cerr << "ttnvtop: skipping " << e.path << " (bad header / version mismatch)\n";
+
+    // Refresh the set of SHM files: add any new ones, drop any that vanished or
+    // whose collector PID is no longer alive.
+    auto refresh_maps = [&]() {
+        auto entries = ttnvtop::list_shm_files();
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.asic_id < b.asic_id; });
+
+        // Drop maps whose path no longer exists.
+        maps.erase(
+            std::remove_if(
+                maps.begin(),
+                maps.end(),
+                [&](MappedShm& m) {
+                    bool still_there = false;
+                    for (const auto& e : entries) {
+                        if (e.path == m.path) {
+                            still_there = true;
+                            break;
+                        }
+                    }
+                    if (!still_there) {
+                        unmap_shm(m);
+                    }
+                    return !still_there;
+                }),
+            maps.end());
+
+        // Add entries we don't have yet.
+        for (const auto& e : entries) {
+            bool already = false;
+            for (const auto& m : maps) {
+                if (m.path == e.path) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already) {
+                continue;
+            }
+            MappedShm m;
+            if (map_shm(e.path, m)) {
+                maps.push_back(std::move(m));
+            }
         }
-    }
-    if (maps.empty()) {
-        std::cerr << "ttnvtop: no readable collector SHM files found.\n";
-        return 1;
-    }
+        std::sort(maps.begin(), maps.end(), [](const MappedShm& a, const MappedShm& b) {
+            return a.header->asic_id < b.header->asic_id;
+        });
+    };
 
     const auto render_period = std::chrono::milliseconds(1000 / kRenderHz);
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(render_period);
+        refresh_maps();
+
+        if (maps.empty()) {
+            std::cout << "\x1b[H\x1b[2J" << kAnsiBold << "ttnvtop" << kAnsiReset
+                      << "  |  waiting for ttnvtop-collector ...\n\n"
+                      << kAnsiDim << "  No /dev/shm/tt_device_*_util files published yet.\n"
+                      << "  Start the collector in another terminal:\n"
+                      << "    ttnvtop-collector\n"
+                      << kAnsiReset << "\n[Ctrl-C to exit]\n";
+            std::cout.flush();
+            continue;
+        }
 
         std::ostringstream out;
         out << "\x1b[H\x1b[2J";
@@ -213,9 +274,10 @@ int main(int argc, char* argv[]) {
             max_rows = std::max(max_rows, static_cast<size_t>(m.header->num_cores));
         }
         std::vector<uint64_t> chip_sum(maps.size(), 0);
+        // Visible width of a populated row cell:
+        //   "(xx,yy)  [22-char bar] xxx%"  = 7 + 2 + 24 + 1 + 4 = 38 chars, then 2 trailing spaces.
         for (size_t row = 0; row < max_rows; ++row) {
             for (size_t c = 0; c < maps.size(); ++c) {
-                std::string cell;
                 if (row < maps[c].header->num_cores) {
                     const auto& v = maps[c].cores[row];
                     // Phase 1: show dispatch-occupancy. When SIGNAL_SRC_COMPUTE is
@@ -225,16 +287,13 @@ int main(int argc, char* argv[]) {
                                                     : v.dispatch_busy_p1000;
                     const uint32_t pct = busy_p1000 / 10u;
                     chip_sum[c] += busy_p1000;
-                    std::ostringstream line;
-                    line << "(" << std::setw(2) << static_cast<int>(v.noc_x) << "," << std::setw(2)
-                         << static_cast<int>(v.noc_y) << ")  " << make_bar(pct, 22) << " " << std::setw(3) << pct
-                         << "%";
-                    cell = line.str();
+                    const char* color = color_for_pct(pct);
+                    out << "(" << std::setw(2) << static_cast<int>(v.noc_x) << "," << std::setw(2)
+                        << static_cast<int>(v.noc_y) << ")  " << color << make_bar(pct, 22) << " " << std::setw(3)
+                        << pct << "%" << kAnsiReset << "  ";
+                } else {
+                    out << std::string(kCorePanelWidth, ' ');
                 }
-                if (static_cast<int>(cell.size()) < kCorePanelWidth) {
-                    cell.append(kCorePanelWidth - cell.size(), ' ');
-                }
-                out << cell;
                 if (c + 1 < maps.size()) {
                     out << " | ";
                 }

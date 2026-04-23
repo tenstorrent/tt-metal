@@ -18,6 +18,9 @@
 //   bypassing it we can coexist with any running tt-metal workload. Reads
 //   are plain PCIe TLB reads via TTDevice::read_from_device — non-destructive.
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -25,11 +28,15 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -61,9 +68,108 @@ using tt::umd::TTDevice;
 
 namespace {
 
-constexpr int kSampleHz = 100;
-constexpr int kWindowSamples = 100;  // rolling window for dispatch occupancy
-constexpr int kPublishHz = 10;       // how often we write SHM
+constexpr int kDefaultSampleHz = 100;
+constexpr int kWindowSamples = 100;  // rolling window for dispatch occupancy (~1s at 100Hz)
+constexpr int kDefaultPublishHz = 10;
+
+struct CliOptions {
+    int sample_hz = kDefaultSampleHz;
+    int publish_hz = kDefaultPublishHz;
+    std::set<int> device_filter;  // empty = all chips
+    std::string log_file;         // non-empty = redirect stderr there
+    bool show_help = false;
+};
+
+void print_help(const char* argv0) {
+    std::cout << "ttnvtop-collector — live per-core utilization sampler\n"
+                 "\n"
+                 "Publishes /dev/shm/tt_device_<asic>_util files that ttnvtop (and other\n"
+                 "viewers) read. Coexists with running tt-metal workloads — does not\n"
+                 "take the UMD CHIP_IN_USE lock.\n"
+                 "\n"
+                 "Usage: "
+              << argv0
+              << " [options]\n"
+                 "\n"
+                 "Options:\n"
+                 "  -h, --help              Show this help and exit.\n"
+                 "  --sample-hz N           PCIe sampling rate per core (default "
+              << kDefaultSampleHz
+              << ").\n"
+                 "  --publish-hz N          SHM write rate (default "
+              << kDefaultPublishHz
+              << ").\n"
+                 "  --device N              Only monitor chip N. Repeat to select several.\n"
+                 "  --log-file PATH         Redirect collector stderr (incl. UMD logs) to PATH.\n"
+                 "\n"
+                 "Examples:\n"
+                 "  "
+              << argv0
+              << "                        # monitor every chip in the system\n"
+                 "  "
+              << argv0
+              << " --device 0             # just the local mmio chip\n"
+                 "  "
+              << argv0 << " --log-file /tmp/ttnvtop.log   # silence UMD eth warnings\n";
+}
+
+bool parse_int(const char* s, int& out) {
+    if (s == nullptr || *s == '\0') {
+        return false;
+    }
+    char* end = nullptr;
+    long v = std::strtol(s, &end, 10);
+    if (end == s || (end != nullptr && *end != '\0')) {
+        return false;
+    }
+    out = static_cast<int>(v);
+    return true;
+}
+
+bool parse_cli(int argc, char* argv[], CliOptions& out) {
+    for (int i = 1; i < argc; ++i) {
+        std::string_view a = argv[i];
+        auto need_arg = [&](const char* flag) -> const char* {
+            if (i + 1 >= argc) {
+                std::cerr << "ttnvtop-collector: " << flag << " requires a value\n";
+                return nullptr;
+            }
+            return argv[++i];
+        };
+        if (a == "-h" || a == "--help") {
+            out.show_help = true;
+            return true;
+        } else if (a == "--sample-hz") {
+            const char* v = need_arg("--sample-hz");
+            if (v == nullptr || !parse_int(v, out.sample_hz) || out.sample_hz <= 0) {
+                return false;
+            }
+        } else if (a == "--publish-hz") {
+            const char* v = need_arg("--publish-hz");
+            if (v == nullptr || !parse_int(v, out.publish_hz) || out.publish_hz <= 0) {
+                return false;
+            }
+        } else if (a == "--device") {
+            const char* v = need_arg("--device");
+            int d = -1;
+            if (v == nullptr || !parse_int(v, d) || d < 0) {
+                std::cerr << "ttnvtop-collector: --device expects a non-negative int\n";
+                return false;
+            }
+            out.device_filter.insert(d);
+        } else if (a == "--log-file") {
+            const char* v = need_arg("--log-file");
+            if (v == nullptr) {
+                return false;
+            }
+            out.log_file = v;
+        } else {
+            std::cerr << "ttnvtop-collector: unknown argument: " << a << "\n";
+            return false;
+        }
+    }
+    return true;
+}
 
 struct CoreState {
     uint32_t noc_x = 0;
@@ -105,8 +211,30 @@ const char* arch_name(tt::ARCH a) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    (void)argc;
-    (void)argv;
+    CliOptions cli;
+    if (!parse_cli(argc, argv, cli)) {
+        print_help(argv[0]);
+        return 2;
+    }
+    if (cli.show_help) {
+        print_help(argv[0]);
+        return 0;
+    }
+    if (!cli.log_file.empty()) {
+        // Redirect fd 1 and fd 2 at the kernel level so UMD/spdlog — which
+        // caches its own FILE* at library load — also routes into the file.
+        int lfd = ::open(cli.log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (lfd < 0) {
+            std::cerr << "ttnvtop-collector: cannot open " << cli.log_file << " for writing\n";
+            return 1;
+        }
+        ::dup2(lfd, STDOUT_FILENO);
+        ::dup2(lfd, STDERR_FILENO);
+        ::close(lfd);
+        std::fprintf(stderr, "--- ttnvtop-collector log start ---\n");
+        std::fflush(stderr);
+    }
+
     std::signal(SIGINT, handle_sigint);
     std::signal(SIGTERM, handle_sigint);
 
@@ -139,6 +267,10 @@ int main(int argc, char* argv[]) {
     std::vector<ChipState> chips;
     chips.reserve(devices.size());
     for (auto& [chip_id, dev_up] : devices) {
+        if (!cli.device_filter.empty() &&
+            cli.device_filter.find(static_cast<int>(chip_id)) == cli.device_filter.end()) {
+            continue;
+        }
         TTDevice* dev = dev_up.get();
         const tt::ARCH arch = dev->get_arch();
         if (arch != tt::ARCH::WORMHOLE_B0) {
@@ -207,7 +339,7 @@ int main(int argc, char* argv[]) {
     // thread for simplicity; per-chip threads are a Phase 3 optimization.
     auto sampler = [&]() {
         std::vector<uint8_t> buf(kReadSize);
-        const auto period = std::chrono::microseconds(1'000'000 / kSampleHz);
+        const auto period = std::chrono::microseconds(1'000'000 / cli.sample_hz);
         auto next = std::chrono::steady_clock::now();
         while (!g_stop.load(std::memory_order_relaxed)) {
             for (auto& chip : chips) {
@@ -248,8 +380,8 @@ int main(int argc, char* argv[]) {
     };
     std::thread sampler_thread(sampler);
 
-    // Publisher: copy rolling stats into SHM at kPublishHz.
-    const auto publish_period = std::chrono::milliseconds(1000 / kPublishHz);
+    // Publisher: copy rolling stats into SHM at the configured rate.
+    const auto publish_period = std::chrono::milliseconds(1000 / cli.publish_hz);
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(publish_period);
         for (auto& chip : chips) {
