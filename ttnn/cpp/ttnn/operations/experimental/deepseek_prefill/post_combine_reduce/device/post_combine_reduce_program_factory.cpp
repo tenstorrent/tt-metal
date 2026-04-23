@@ -64,10 +64,10 @@ CreatedProgram create_at(
 
     TT_FATAL(
         emb_dim % TILE_WIDTH == 0,
-        "Embedding dimension {} must be divisible by tile width ({}), got {}",
+        "Embedding dimension {} must be divisible by tile width ({}); remainder is {}",
         emb_dim,
         TILE_WIDTH,
-        emb_dim);
+        emb_dim % TILE_WIDTH);
     TT_FATAL(
         emb_dim_cb_tiles <= 8,
         "Embedding dimension tiles {} must fit in 8 DST registers for batching",

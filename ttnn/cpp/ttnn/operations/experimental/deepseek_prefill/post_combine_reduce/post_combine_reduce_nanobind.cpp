@@ -46,8 +46,6 @@ void bind_post_combine_reduce(nb::module_& mod) {
                     Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok]
                     Example: [1, 1, 3200, 8]
 
-                expert_dim (int, optional): Dimension to reduce over. Defaults to 3.
-
                 indices (ttnn.Tensor, optional): Global expert IDs per token/slot, INT32.
                     Shape: [batch, dispatch_group_size, seq_len, num_experts_per_tok].
                     Required together with expert_dispatch_table for the DeepSeek path.
@@ -56,6 +54,8 @@ void bind_post_combine_reduce(nb::module_& mod) {
                     expert ID to chip ID within dispatch group, INT32. -1 means non-local.
                     Shape: [num_routed_experts] (sharded per dispatch group).
                     Required together with indices for the DeepSeek path.
+
+                expert_dim (int, keyword-only): Dimension to reduce over. Defaults to 3.
 
                 output_memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                     Defaults to L1_MEMORY_CONFIG.
@@ -70,6 +70,7 @@ void bind_post_combine_reduce(nb::module_& mod) {
         nb::arg("weights").noconvert(),
         nb::arg("indices") = nb::none(),
         nb::arg("expert_dispatch_table") = nb::none(),
+        nb::kw_only(),
         nb::arg("expert_dim") = 3,
         nb::arg("output_memory_config") = nb::none());
 }
