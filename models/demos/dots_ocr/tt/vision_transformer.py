@@ -196,9 +196,14 @@ class VisionTransformerTT(LightweightModule):
         head_dim = int(self.model_args.vision_head_dim)
         if head_dim % 2 != 0:
             raise ValueError(f"vision_head_dim must be even for RoPE, got {head_dim}")
-        inv_freq = 1.0 / (10000.0 ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        # Match HF remote-code VisionRotaryEmbedding:
+        # rotary_dim = head_dim//2, inv_freq length = rotary_dim//2 = head_dim//4
+        rotary_dim = head_dim // 2
+        if rotary_dim % 2 != 0:
+            raise ValueError(f"vision rotary_dim must be even, got {rotary_dim} (head_dim={head_dim})")
+        inv_freq = 1.0 / (10000.0 ** (torch.arange(0, rotary_dim, 2, dtype=torch.float32) / rotary_dim))
         inv = ttnn.from_torch(
-            inv_freq.to(torch.float32).reshape(1, 1, 1, head_dim // 2),
+            inv_freq.to(torch.float32).reshape(1, 1, 1, rotary_dim // 2),
             device=self.mesh_device,
             dtype=rope_dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -274,8 +279,13 @@ class VisionTransformerTT(LightweightModule):
         cos_w = ttnn.cos(freqs_w, memory_config=mem)
         sin_w = ttnn.sin(freqs_w, memory_config=mem)
 
-        cos = ttnn.typecast(ttnn.concat([cos_h, cos_w], dim=-1), dtype=ttnn.bfloat16)
-        sin = ttnn.typecast(ttnn.concat([sin_h, sin_w], dim=-1), dtype=ttnn.bfloat16)
+        # HF builds freqs for (h,w) and flattens -> [S, head_dim//2], then repeats to [S, head_dim].
+        cos_half = ttnn.concat([cos_h, cos_w], dim=-1)  # [1,1,S,head_dim//2]
+        sin_half = ttnn.concat([sin_h, sin_w], dim=-1)  # [1,1,S,head_dim//2]
+        cos_full = ttnn.concat([cos_half, cos_half], dim=-1)
+        sin_full = ttnn.concat([sin_half, sin_half], dim=-1)
+        cos = ttnn.typecast(cos_full, dtype=ttnn.bfloat16)
+        sin = ttnn.typecast(sin_full, dtype=ttnn.bfloat16)
         rot_mats = (ttnn.to_layout(cos, ttnn.TILE_LAYOUT), ttnn.to_layout(sin, ttnn.TILE_LAYOUT))
 
         cu_t = ttnn.from_torch(
