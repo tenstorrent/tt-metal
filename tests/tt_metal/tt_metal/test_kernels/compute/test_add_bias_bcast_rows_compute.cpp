@@ -71,8 +71,12 @@ void kernel_main() {
 #endif
 
 #ifdef HELPER_POST_BIAS_RELU
-        compute_kernel_lib::add_bias_bcast_rows<partials_cb, bias_cb, out_cb, ReluPostBias>(
-            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, ReluPostBias{});
+        compute_kernel_lib::add_bias_bcast_rows<
+            partials_cb,
+            bias_cb,
+            out_cb,
+            /*row_major_output=*/false,
+            ReluPostBias>(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, ReluPostBias{});
 #else
         compute_kernel_lib::add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(
             in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w);

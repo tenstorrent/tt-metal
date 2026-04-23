@@ -18,13 +18,15 @@ template <
     uint32_t partials_cb,
     uint32_t bias_cb,
     uint32_t out_cb,
+    bool row_major_output,
     typename PostBiasFn>
 ALWI void add_bias_bcast_rows(
     uint32_t in0_num_subblocks,
     uint32_t in1_num_subblocks,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    PostBiasFn post_bias) {
+    PostBiasFn post_bias,
+    uint32_t out_row_width) {
 
     // Compile-time validation
     static_assert(partials_cb < 32, "add_bias_bcast_rows: partials_cb must be less than 32");
@@ -47,37 +49,101 @@ ALWI void add_bias_bcast_rows(
     pack_reconfig_data_format(out_cb);
     add_bcast_rows_init_short(partials_cb, bias_cb);
 
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-        int in1_index_subblock_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-            cb_wait_front(partials_cb, out_num_tiles);
-            tile_regs_acquire();
+    if constexpr (row_major_output) {
+        // Row-major layout: upstream matmul_block pushes one M-row-group
+        // (out_subblock_h × out_row_width tiles) per in0_subblock. Tile at row r, column
+        // sbw*out_subblock_w + c sits at front+r*out_row_width + sbw*out_subblock_w + c.
+        // Bias reads at those absolute positions, computes DST for one N-subblock at a
+        // time, and packs back to the output CB at the same row-major positions.
+        if (out_row_width == 0) {
+            out_row_width = out_subblock_w * in1_num_subblocks;
+        }
+        const uint32_t row_group_tiles = out_subblock_h * out_row_width;
 
-            // Row-broadcast bias addition
-            for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                uint32_t bcast_tile_idx = in1_index_subblock_offset;
-                for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                    add_tiles_bcast_rows(partials_cb, bias_cb, i, bcast_tile_idx, i);
-                    bcast_tile_idx++;
+        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+            cb_wait_front(partials_cb, row_group_tiles);
+            cb_reserve_back(out_cb, row_group_tiles);
+
+            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                const uint32_t col_base = in1_subblock * out_subblock_w;
+
+                tile_regs_acquire();
+                {
+                    uint32_t dst_idx = 0;
+                    for (uint32_t r = 0; r < out_subblock_h; r++) {
+                        const uint32_t partial_row_pos = r * out_row_width + col_base;
+                        for (uint32_t c = 0; c < out_subblock_w; c++) {
+                            add_tiles_bcast_rows(
+                                partials_cb,
+                                bias_cb,
+                                partial_row_pos + c,
+                                col_base + c,
+                                dst_idx);
+                            dst_idx++;
+                        }
+                    }
                 }
+
+                post_bias(out_num_tiles);
+                tile_regs_commit();
+                tile_regs_wait();
+
+                // Pack DST back to out_cb at the same row-major positions. For h=1 the
+                // absolute-offset form collapses to a sequential column run within the
+                // row-group.
+                if (out_subblock_h == 1) {
+                    for (uint32_t c = 0; c < out_subblock_w; c++) {
+                        pack_tile<true>(c, out_cb, col_base + c);
+                    }
+                } else {
+                    uint32_t dst_idx = 0;
+                    for (uint32_t r = 0; r < out_subblock_h; r++) {
+                        const uint32_t pack_row_pos = r * out_row_width + col_base;
+                        for (uint32_t c = 0; c < out_subblock_w; c++) {
+                            pack_tile<true>(dst_idx, out_cb, pack_row_pos + c);
+                            dst_idx++;
+                        }
+                    }
+                }
+                tile_regs_release();
             }
 
-            // PostBiasFn fires BEFORE commit (matches production kernel's SFPU placement)
-            post_bias(out_num_tiles);
+            cb_pop_front(partials_cb, row_group_tiles);
+            cb_push_back(out_cb, row_group_tiles);
+        }
+    } else {
+        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+            int in1_index_subblock_offset = 0;
+            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                cb_wait_front(partials_cb, out_num_tiles);
+                tile_regs_acquire();
 
-            tile_regs_commit();
-            cb_pop_front(partials_cb, out_num_tiles);
+                // Row-broadcast bias addition
+                for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+                    uint32_t bcast_tile_idx = in1_index_subblock_offset;
+                    for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                        add_tiles_bcast_rows(partials_cb, bias_cb, i, bcast_tile_idx, i);
+                        bcast_tile_idx++;
+                    }
+                }
 
-            // Pack out to output buffer
-            cb_reserve_back(out_cb, out_num_tiles);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < out_num_tiles; i++) {
-                pack_tile(i, out_cb);
+                // PostBiasFn fires BEFORE commit (matches production kernel's SFPU placement)
+                post_bias(out_num_tiles);
+
+                tile_regs_commit();
+                cb_pop_front(partials_cb, out_num_tiles);
+
+                // Pack out to output buffer
+                cb_reserve_back(out_cb, out_num_tiles);
+                tile_regs_wait();
+                for (uint32_t i = 0; i < out_num_tiles; i++) {
+                    pack_tile(i, out_cb);
+                }
+                tile_regs_release();
+                cb_push_back(out_cb, out_num_tiles);
+
+                in1_index_subblock_offset += out_subblock_w;
             }
-            tile_regs_release();
-            cb_push_back(out_cb, out_num_tiles);
-
-            in1_index_subblock_offset += out_subblock_w;
         }
     }
 
