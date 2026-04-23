@@ -35,6 +35,8 @@ constexpr auto kBiasCbIndex = tt::CBIndex::c_7;
 // CBs with intermediate computations
 constexpr auto kSumPowsCbIndex = tt::CBIndex::c_8;
 constexpr auto kInvRmsCbIndex = tt::CBIndex::c_9;
+// Preweighted inv_rms coefficients: [w2*inv_rms(x), w1*inv_rms(x^2), w0*inv_rms(x^3)]
+constexpr auto kWeightedCoeffCbIndex = tt::CBIndex::c_11;
 // CBs with output data
 constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
@@ -146,6 +148,8 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         program, all_cores, kSumPowsCbIndex, tt::DataFormat::Float32, float32_tile_size, /*num_tiles=*/3U);
     [[maybe_unused]] auto cb_inv_rms =
         create_circular_buffer(program, all_cores, kInvRmsCbIndex, data_format, bfloat16_tile_size, /*num_tiles=*/3U);
+    [[maybe_unused]] auto cb_weighted_coeffs = create_circular_buffer(
+        program, all_cores, kWeightedCoeffCbIndex, data_format, bfloat16_tile_size, /*num_tiles=*/3U);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
     auto* input_buffer = input.buffer();
