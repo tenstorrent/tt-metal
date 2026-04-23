@@ -35,3 +35,6 @@ ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_
 ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp :: tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp :: tests/ttnn/nightly/unit_tests/operations/experimental/test_rotary_embedding_llama.py
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp :: tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_dit_layernorm.py
+ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg.cpp :: tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
+ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw_neg.cpp :: tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
+ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h_neg.cpp :: tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py

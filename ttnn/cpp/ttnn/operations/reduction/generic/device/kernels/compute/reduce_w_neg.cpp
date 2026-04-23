@@ -44,12 +44,14 @@ void kernel_main() {
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                // Negate input tile: cb_input -> -x -> cb_ineg
-                // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
-                compute_kernel_lib::sfpu_op < cb_DisabledFIXME, compute_kernel_lib::SfpuOutputPolicy::PerTile,
-                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT,
+                // Negate input tile: cb_input -> -x -> cb_ineg.
+                // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce.
+                compute_kernel_lib::sfpu_op<
+                    cb_input,
+                    compute_kernel_lib::SfpuOutputPolicy::PerTile,
+                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT>(cb_ineg, onetile, compute_kernel_lib::Neg<>{});
 
-                    tile_regs_acquire();
+                tile_regs_acquire();
                 if (wt > 0) {
                     cb_acc_obj.wait_front(onetile);
                     copy_tile_init(cb_acc);
