@@ -513,10 +513,11 @@ class TTNNGatedDeltaNet(TTNNModule):
             hs_torch = ttnn.to_torch(hs_for_torch).to(torch.bfloat16)
         torch_dev = next(self._fallback_torch_layer.parameters()).device
         hs_torch = hs_torch.to(torch_dev)
+        # HF Qwen3NextGatedDeltaNet.forward does not take cache_position (or other decoder **kwargs);
+        # passing them breaks with newer transformers that thread cache_position into all submodules.
         out = self._fallback_torch_layer(
             hidden_states=hs_torch,
             cache_params=cache_params,
-            cache_position=kwargs.get("cache_position"),
             attention_mask=attention_mask,
         )
         return TorchTTNNTensor(out)

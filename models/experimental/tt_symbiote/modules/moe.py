@@ -663,6 +663,8 @@ class TTNNGlm4MoeMLP(TTNNModule):
 
 class TTNNBailingMoeV2MLP(TTNNGlm4MoeMLP):
     pass
+
+
 class TTNNQwen3SharedExpertMLP(TTNNModule):
     """MLP for Qwen3 shared expert: non-sharded linears for full hidden input."""
 
@@ -1230,6 +1232,7 @@ class TTNNExperts(TTNNModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
     def deallocate_weights_impl(self):
         """Deallocate expert weights from device (for lazy mode, clears device tensors)."""
         if self.tt_w1_proj is not None:
@@ -1851,8 +1854,9 @@ class TTNNQwen3MoE(TTNNMoE):
         routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
 
         # 4. Reduce-scatter
+        routed_ttnn = routed_output.to_ttnn if hasattr(routed_output, "to_ttnn") else routed_output
         routed_output = ttnn.experimental.reduce_scatter_minimal_async(
-            routed_output.to_ttnn,
+            routed_ttnn,
             persistent_output_buffers=None,
             dim=3,
             multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
