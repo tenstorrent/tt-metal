@@ -1,4 +1,6 @@
 set(IMPL_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
