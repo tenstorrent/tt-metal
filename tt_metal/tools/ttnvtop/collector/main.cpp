@@ -581,6 +581,18 @@ int main(int argc, char* argv[]) {
             if (views == nullptr) {
                 continue;
             }
+            // Refresh AICLK from ARC telemetry. get_clock() is non-blocking
+            // (telemetry read on BH, legacy ARC message on WH). Failure -> 0.
+            if (auto* header = chip.publisher.header(); header != nullptr) {
+                uint32_t aiclk_mhz = 0;
+                if (chip.cores.empty() == false) {
+                    try {
+                        aiclk_mhz = chip.cores.front().device->get_clock();
+                    } catch (const std::exception&) {
+                    }
+                }
+                header->aiclk_mhz = aiclk_mhz;
+            }
             std::lock_guard<std::mutex> lk(state_mx);
             for (size_t i = 0; i < chip.cores.size(); ++i) {
                 const auto& c = chip.cores[i];

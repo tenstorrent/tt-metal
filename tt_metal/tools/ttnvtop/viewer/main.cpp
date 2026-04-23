@@ -233,16 +233,18 @@ int main(int argc, char* argv[]) {
             << "Hz  (SHM viewer)\n";
         out << "\n";
         out << "Signals shown per Tensix (EWMA ~1s):\n";
-        out << "  " << kAnsiBold << "C" << kAnsiReset << " = FPU compute busy%   "
-            << "delta(FPU_OUT_H) / delta(WALL_CLOCK). Fraction of wall-clock cycles\n";
-        out << "     the FPU pipeline had a request in flight. NOT peak-FLOPS%; a\n";
-        out << "     stall on unpack/pack still reads 0 even though the core is working.\n";
-        out << "  " << kAnsiBold << "D" << kAnsiReset << " = dispatch occupancy%  "
-            << "fraction of the last 1s a kernel was dispatched to\n";
-        out << "     this core (go_msg.signal == RUN_MSG_GO). Not the same as compute%:\n";
-        out << "     a dispatched kernel stalled on NOC/CB still reads 100%.\n";
-        out << "  Use together: high D + low C = data movement / stalls; both high = real\n";
-        out << "  compute; both low = core genuinely idle.\n";
+        out << "  " << kAnsiBold << "C" << kAnsiReset << " = FPU peak-request density%    "
+            << "delta(FPU_OUT_H) / delta(WALL_CLOCK).\n";
+        out << "     Fraction of AICLK cycles the FPU issued a request. Tensix is\n";
+        out << "     single-issue, so C=100% means the FPU issued every cycle (true\n";
+        out << "     peak). C does NOT count SIMD-lane occupancy — a partial-width op\n";
+        out << "     shows the same C as a full-width one. Not peak-FLOPS%.\n";
+        out << "  " << kAnsiBold << "D" << kAnsiReset << " = dispatch occupancy%          "
+            << "fraction of last ~1s a kernel was\n";
+        out << "     dispatched to this core (go_msg.signal == RUN_MSG_GO). A kernel\n";
+        out << "     stalled on NOC/CB still reads 100%.\n";
+        out << "  Interpretation: high D + low C = data movement / stalls; both high =\n";
+        out << "  real compute; both low = core genuinely idle.\n";
         out << "  Color: " << kAnsiGray << "idle" << kAnsiReset << " / " << kAnsiGreen << "low" << kAnsiReset << " / "
             << kAnsiYellow << "mid" << kAnsiReset << " / " << kAnsiRed << "high" << kAnsiReset << ".\n";
         out << "\n";
@@ -252,10 +254,12 @@ int main(int argc, char* argv[]) {
             const auto* h = maps[c].header;
             const bool stale = (monotonic_us() - h->last_update_us) > static_cast<uint64_t>(kStaleThresholdMs) * 1000;
             std::ostringstream t;
-            t << "chip asic 0x" << std::hex << h->asic_id << std::dec << "  " << arch_label(h->arch_id);
-            // is_remote is per-core, not per-chip, in the schema; peek at first core.
+            t << "chip asic 0x" << std::hex << h->asic_id << std::dec << " " << arch_label(h->arch_id);
             if (h->num_cores > 0) {
-                t << "  [" << (maps[c].cores[0].is_remote ? "remote" : " mmio ") << "]";
+                t << " [" << (maps[c].cores[0].is_remote ? "remote" : " mmio ") << "]";
+            }
+            if (h->aiclk_mhz > 0) {
+                t << " @ " << h->aiclk_mhz << " MHz";
             }
             if (stale) {
                 t << " (STALE)";
@@ -263,6 +267,8 @@ int main(int argc, char* argv[]) {
             std::string s = t.str();
             if (static_cast<int>(s.size()) < kCorePanelWidth) {
                 s.append(kCorePanelWidth - s.size(), ' ');
+            } else if (static_cast<int>(s.size()) > kCorePanelWidth) {
+                s.resize(kCorePanelWidth);  // truncate rather than break alignment
             }
             out << s;
             if (c + 1 < maps.size()) {
@@ -339,6 +345,33 @@ int main(int argc, char* argv[]) {
             std::string s = t.str();
             if (static_cast<int>(s.size()) < kCorePanelWidth) {
                 s.append(kCorePanelWidth - s.size(), ' ');
+            }
+            out << s;
+            if (c + 1 < maps.size()) {
+                out << " | ";
+            }
+        }
+        out << "\n";
+        // Second footer row: absolute FPU-request throughput when AICLK known.
+        //   peak = num_cores × AICLK (1 req/cycle × cores at clock rate)
+        //   achieved = peak × c_avg%
+        for (size_t c = 0; c < maps.size(); ++c) {
+            const uint32_t n = maps[c].header->num_cores;
+            const uint32_t aiclk = maps[c].header->aiclk_mhz;
+            std::ostringstream t;
+            if (aiclk > 0 && n > 0) {
+                const double peak_gops = static_cast<double>(n) * static_cast<double>(aiclk) / 1000.0;  // Gops/s
+                const double c_avg = static_cast<double>(compute_sum[c]) / (static_cast<double>(n) * 1000.0);
+                const double achieved_gops = peak_gops * c_avg;
+                t << "FPU " << std::fixed << std::setprecision(1) << achieved_gops << " / " << peak_gops << " Gops/s";
+            } else {
+                t << "FPU throughput: unknown (no AICLK)";
+            }
+            std::string s = t.str();
+            if (static_cast<int>(s.size()) < kCorePanelWidth) {
+                s.append(kCorePanelWidth - s.size(), ' ');
+            } else if (static_cast<int>(s.size()) > kCorePanelWidth) {
+                s.resize(kCorePanelWidth);
             }
             out << s;
             if (c + 1 < maps.size()) {

@@ -45,7 +45,11 @@ struct UtilShmHeader {
     uint32_t num_cores;         // number of PerCoreView entries that follow
     uint32_t host_assigned_id;  // current program id, 0 if unknown
     uint32_t collector_pid;
-    uint32_t reserved[5];
+    // Live AICLK frequency in MHz, refreshed by the collector on every
+    // publish tick via TTDevice::get_clock(). 0 means unknown — viewer
+    // should then omit throughput rendering.
+    uint32_t aiclk_mhz;
+    uint32_t reserved[4];
 };
 static_assert(sizeof(UtilShmHeader) == 72, "UtilShmHeader must be 72 bytes");
 
