@@ -473,7 +473,6 @@ PERF_COUNTER_CSV_HEADERS = [
     "PACK Instrn Avail Rate T2 Median (%)",
     "PACK Instrn Avail Rate T2 Max (%)",
     "PACK Instrn Avail Rate T2 Avg (%)",
-    # === Stall breakdown ===
     # === Write port blocking ===
     "SrcB Write Port Blocked Rate Min (%)",
     "SrcB Write Port Blocked Rate Median (%)",
@@ -732,7 +731,7 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         # L1 Bank 1
         "NOC Ring 1 Outgoing Util",
         "NOC Ring 1 Incoming Util",
-        # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
+        # L1 Port 1 (arch-specific)
         "L1 Packer Port Util",
         # L1 back-pressure
         "NOC Ring 0 Outgoing Backpressure",
@@ -993,7 +992,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
     unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
 
-    # Packer Efficiency: falls back to dest-read grant rate when packer unused.
+    # Falls back to dest-read grant rate when packer unused.
     if packer_busy is not None and packer_busy.sum() > 0:
         pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif has_counter("DEST_READ_GRANTED_0"):
@@ -1007,7 +1006,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     else:
         math_pipe_util = pd.Series(dtype=float)
 
-    # Math-to-Pack Handoff Ratio: falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
     if packer_busy is not None and packer_busy.sum() > 0:
         math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
     elif available_math is not None:
@@ -1104,7 +1103,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
             "L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1"
         )
 
-    # L1 Port 1 (arch-specific: BH unified packer or WH unpacker#1/ECC/pack1)
+    # L1 Port 1 (arch-specific)
     if has_counter("L1_0_UNIFIED_PACKER"):
         per_op_stats["L1 Packer Port Util"] = compute_util_metric("L1_0_UNIFIED_PACKER")
     elif has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
@@ -1159,7 +1158,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
         per_op_stats["Math Scoreboard Stall Rate"] = _group_to_stat_dict(ratio)
 
-    # Per-thread total instruction issue rates.
+    # Per-thread total instruction issue rates (per cycle, not %).
     if has_counter("THREAD_INSTRUCTIONS_0"):
         per_op_stats["T0 Instrn Issue Rate"] = compute_util_metric("THREAD_INSTRUCTIONS_0", scale=1)
     if has_counter("THREAD_INSTRUCTIONS_1"):
@@ -1330,8 +1329,7 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         per_op_stats["Unpacker L1 Efficiency"] = compute_ratio_metric("L1_0_UNPACKER_0_GRANT", "UNPACK0_BUSY_THREAD0")
 
     if has_counter("L1_0_PORT1_GRANT") and has_counter("PACKER_BUSY"):
-        # Packer port is shared with other clients, so grant/busy can exceed 100%.
-        # Don't cap — values >100% indicate the L1 port has headroom.
+        # Shared port; ratio can exceed 100%.
         grant = get_counter_series("L1_0_PORT1_GRANT")
         busy = get_counter_series("PACKER_BUSY")
         ratio = (grant / busy * 100).replace([float("inf"), -float("inf")], nan)
@@ -1465,7 +1463,7 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
-    # Unpacker Write Efficiency: actual srcA/srcB writes vs unpacker busy cycles.
+    # Uses _ACTUAL counters, not _AVAILABLE.
     if "value_SRCA_WRITE_ACTUAL" in eff_pivot.columns:
         eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
             lambda x: safe_div(x.get("value_SRCA_WRITE_ACTUAL", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)),
@@ -1476,7 +1474,7 @@ def compute_device_only_metrics(
             lambda x: safe_div(x.get("value_SRCB_WRITE_ACTUAL", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)),
             axis=1,
         )
-    # Packer Efficiency: falls back to dest-read grant rate when packer unused.
+    # Falls back to dest-read grant rate when packer unused.
     has_packer_busy = "value_PACKER_BUSY" in eff_pivot.columns and eff_pivot["value_PACKER_BUSY"].sum() > 0
     if has_packer_busy:
         eff_pivot["Packer Efficiency"] = eff_pivot.apply(
@@ -1496,7 +1494,7 @@ def compute_device_only_metrics(
             axis=1,
         )
 
-    # Math-to-Pack Handoff: falls back to AVAILABLE_MATH / ref_cnt when packer unused.
+    # Falls back to AVAILABLE_MATH / ref_cnt when packer unused.
     if has_packer_busy:
         eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
             lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)),
@@ -1639,7 +1637,7 @@ def compute_device_only_metrics(
         ),
         axis=1,
     )
-    # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
+    # L1 Port 1 (arch-specific)
     eff_pivot["L1 Packer Port Util"] = eff_pivot.apply(
         lambda x: safe_div(
             x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)),
@@ -1830,7 +1828,7 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Per-thread total instruction issue rates (per cycle, not %)
+    # Per-thread total instruction issue rates (per cycle, not %).
     eff_pivot["T0 Instrn Issue Rate"] = eff_pivot.apply(
         lambda x: (
             x.get("value_THREAD_INSTRUCTIONS_0", 0) / x.get("ref_cnt_THREAD_INSTRUCTIONS_0", 1)
@@ -1856,7 +1854,7 @@ def compute_device_only_metrics(
         axis=1,
     )
 
-    # Packer engine granularity (WH only — BH has PACK_COUNT=1, counters not collected)
+    # Packer engine granularity (WH only)
     if "value_PACKER_BUSY_0" in eff_pivot.columns:
         eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(
             safe_util("value_PACKER_BUSY_0", "ref_cnt_PACKER_BUSY_0"), axis=1

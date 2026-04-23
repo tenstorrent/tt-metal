@@ -91,7 +91,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
-// Tensix L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
+// L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): NOC Ring 2 ports 16-23
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
     {{PerfCounterType::L1_2_NOC_RING2_PORT_0, 0},
      {PerfCounterType::L1_2_NOC_RING2_PORT_1, 1},
@@ -111,7 +111,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_2_counters = {
      {PerfCounterType::L1_2_NOC_RING2_PORT_7_GRANT, 263}}};
 constexpr size_t NUM_L1_2_COUNTERS = 16;
 
-// Tensix L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
+// L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): NOC Ring 3 ports 24-31
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
     {{PerfCounterType::L1_3_NOC_RING3_PORT_0, 0},
      {PerfCounterType::L1_3_NOC_RING3_PORT_1, 1},
@@ -131,7 +131,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_3_counters = {
      {PerfCounterType::L1_3_NOC_RING3_PORT_7_GRANT, 263}}};
 constexpr size_t NUM_L1_3_COUNTERS = 16;
 
-// L1 bank 4 counters (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
+// L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
     {{PerfCounterType::L1_4_MISC_PORT_0, 0},
      {PerfCounterType::L1_4_MISC_PORT_1, 1},

@@ -1548,10 +1548,8 @@ void DeviceProfiler::readRiscProfilerResults(
 
             std::set<tracy::TTDeviceMarker>& device_markers_for_core_risc = device_markers_for_core[riscType];
 
-            // perf_counter_flush writes TS_DATA markers before the header sentinel. Buffer
-            // them here and attach once the run is established. Parsing in this loop also
-            // advances past TS_DATA's 4-slot layout to avoid reading into the next RISC's
-            // region.
+            // perf_counter_flush emits TS_DATA before the header sentinel; buffer and attach
+            // once the run starts. The 4-slot TS_DATA stride is also skipped here.
             struct PreSentinelMarker {
                 uint32_t timer_id;
                 uint64_t timestamp;
@@ -2037,8 +2035,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
                 if (start_marker_stack.empty()) {
-                    // With dropped markers, a ZONE_START can be lost while its ZONE_END survives.
-                    // Skip rather than fatal — the marker will still appear in the raw device log.
+                    // Orphan ZONE_END from a dropped-marker run; skip instead of fatal.
                     if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
                         TT_FATAL(
                             false,

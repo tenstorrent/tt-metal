@@ -9,7 +9,7 @@ constexpr uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4 };
 enum PerfCounterType : uint16_t {
     UNDEF = 0,
-    // FPU Group (3 counters)
+    // FPU Group
     FPU_COUNTER,
     SFPU_COUNTER,
     MATH_COUNTER,
@@ -28,7 +28,7 @@ enum PerfCounterType : uint16_t {
     MATH_INSTRN_HF_1_CYCLE,
     MATH_INSTRN_HF_2_CYCLE,
     MATH_INSTRN_HF_4_CYCLE,
-    // TDMA_PACK Group (3 counters)
+    // TDMA_PACK Group
     PACKER_DEST_READ_AVAILABLE,
     PACKER_BUSY,
     AVAILABLE_MATH,
@@ -249,36 +249,6 @@ namespace kernel_profiler {
 #define PROFILE_PERF_COUNTERS_L1_3 (1 << 7)
 #define PROFILE_PERF_COUNTERS_L1_4 (1 << 8)
 
-/*
-Performance Counter registers (to understand programming sequence in start_perf_counter/stop_perf_counter)
-
-Control Registers:
-
-The control registers are RISCV_DEBUG_REG_PERF_CNT_<X>0/1/2 (where X is FPU/TDMA_PACK/TDMA_UNPACK/L1/INSTRN_THREAD)
-- RISCV_DEBUG_REG_PERF_CNT_<X>0: Reference period (in cycles)
-- RISCV_DEBUG_REG_PERF_CNT_<X>1: Mode register
-    - Bits [7:0]: Mode (0=manual, 1=auto-stop, 2=wrap)
-        0 = Continuous
-        1 = Count until refclk count number of cycles have been hit
-        2 = Continuous and don’t maintain refclk count (pretty much same as 0)
-    - Bits [12:8]: Bank select (i.e. which counter to read; see PerfCounterType enum for available counters and their
-bank select values)
-    - Bit [16]: Selects whether to output req or grant count onto RISCV_DEBUG_REG_PERF_CNT_OUT_H_<X>
-        Format (0=req_cnt, 1=grant_cnt)
-- RISCV_DEBUG_REG_PERF_CNT_<X>2: Control (bit[0]=start, bit[1]=stop)
-    - note that these take effect on rising edge only
-    - also transitioning the start bit from 0 to 1 clears the counters
-
-Data registers:
-
-- RISCV_DEBUG_REG_PERF_CNT_OUT_L_<X>: contains ref_cnt (i.e. cycles between start and stop)
-- RISCV_DEBUG_REG_PERF_CNT_OUT_H_<X>: contains req count if RISCV_DEBUG_REG_PERF_CNT_<X>1[16] is 0
-    and grant count if it is 1
-
-Note: Currently only support for obtaining FPU counters (and deriving util metrics from them) is present
-but this can be extended easily
-*/
-
 #define PERF_CNT_CONTINUOUS_MODE 0
 #define PERF_CNT_BANK_SELECT_SHIFT 8
 #define PERF_CNT_START_VALUE 1
@@ -471,9 +441,7 @@ void start_perf_counter() {
     }
 }
 
-// stop_perf_counter: stops all enabled counter groups (freezes hardware counters).
-// Called from TRISC1 at the end of the compute kernel scope.
-// Does NOT read counter values — that happens on BRISC which has NOC access for DRAM push.
+// Called from TRISC1 at compute kernel end. Readout happens later on BRISC (NOC access).
 void stop_perf_counter() {
     for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
         if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
@@ -534,10 +502,8 @@ __attribute__((noinline)) void perf_counter_flush() {
 #endif
 }
 
-// read_perf_counters: reads all enabled counter groups and writes markers to the profiler buffer.
-// Called from BRISC after wait_ncrisc_trisc() — BRISC has NOC access so it can push the L1
-// profiler buffer to DRAM (via perf_counter_flush) between groups when the buffer fills up.
-// Flush BEFORE each group (starting from 2nd) to ensure the buffer has room.
+// Called from BRISC after wait_ncrisc_trisc(). Flushes L1 to DRAM before each group (from 2nd
+// onward) so the buffer has room.
 void read_perf_counters() {
     bool first_group = true;
     for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
