@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Auto-tuning perf script: 1024^3 matmul with NO program_config.
+"""Auto-tuning perf script: 2048^3 DRAM-in DRAM-out matmul, no program_config.
 
-Same shape as mcast_2d_fuse_bias.py (sans bias), so the auto-tuner picks
-per_core_M = per_core_N = 4 on an 8x8 grid. With in0_block_w driven by
-the shard geometry (4 for this shape) and subblock (1, 4) via the
-fast-path tuner, this should land close to the hand-tuned Phase 3 win
-(-41% on fuse_bias).
+With all-DRAM inputs+output, the auto-config's all_dram_interleaved path
+recomputes per_core_M = per_core_N = div_up(Mt, grid_y) = 8 (all 64
+cores active) and in0_block_w = Kt / grid_x = 8 (max K-iteration
+reduction). Subblock tuner picks (1, 8) via fast-path preference.
+row_major_output fits L1 at this per_core size, so the flag stays on.
 
 Run:
 
@@ -33,7 +33,7 @@ from _perf_harness import (  # noqa: E402
 )
 
 
-SCRIPT_LABEL = "autotune_2d_matmul_1024"
+SCRIPT_LABEL = "autotune_2d_matmul_2048"
 
 
 def build_inputs(device):
@@ -43,12 +43,9 @@ def build_inputs(device):
     grid_x = min(grid.x, 8)
     grid_y = min(grid.y, 8)
 
-    per_core_M = 4
-    per_core_N = 4
-
-    m_size = per_core_M * grid_y * 32
-    n_size = per_core_N * grid_x * 32
-    k_size = 1024
+    m_size = 8 * grid_y * 32  # 2048
+    n_size = 8 * grid_x * 32  # 2048
+    k_size = 2048
 
     torch_a = torch.randn([1, 1, m_size, k_size]).to(torch.bfloat16)
     torch_b = torch.randn([1, 1, k_size, n_size]).to(torch.bfloat16)
@@ -67,10 +64,11 @@ def main():
 
         def run_once():
             # No program_config — auto-tuner picks subblocks + row_major_output.
+            # DRAM output triggers the all_dram_interleaved reset that gives full-grid per_core.
             return ttnn.matmul(
                 a,
                 b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=compute_config,
             )
 
