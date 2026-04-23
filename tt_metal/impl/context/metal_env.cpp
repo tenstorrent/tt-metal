@@ -344,10 +344,12 @@ void MetalEnvImpl::teardown_fabric_config() {
                 const auto start = std::chrono::steady_clock::now();
                 constexpr uint32_t kSpinsBetweenSleeps = 64;
                 uint32_t spin_counter = 0;
+                bool terminated_cleanly = false;
                 while (true) {
                     auto status =
                         cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
                     if (!status.empty() && status[0] == terminated_val) {
+                        terminated_cleanly = true;
                         break;
                     }
                     const auto elapsed =
@@ -378,6 +380,33 @@ void MetalEnvImpl::teardown_fabric_config() {
                         std::this_thread::sleep_for(std::chrono::microseconds(100));
                     } else {
                         ttsl::pause();
+                    }
+                }
+                // Restore ERISC0 to base UMD firmware after clean termination.
+                // When fabric firmware halts BRISC (writes TERMINATED then stops), the ETH heartbeat
+                // stops updating.  If the next process's topology discovery runs before ERISC0 is
+                // restarted, eth_heartbeat_running() times out, chip_locations stays incomplete, and
+                // get_physical_chip_id_from_eth_coord() crashes (TT_FATAL @ tt_cluster.cpp:536).
+                // A brief assert+deassert of ERISC0 reset restarts BRISC into base UMD firmware,
+                // which resumes the heartbeat.  This is safe post-TERMINATED: ERISC has already
+                // halted cleanly, no in-flight NOC writes remain, and resetting only ERISC0 (not the
+                // subordinate ERISC/NCRISC) keeps the ETH PHY link alive per the F5a analysis.
+                // Note: we deliberately skip this for timed-out channels (terminated_cleanly=false)
+                // to preserve the F5a finding that force-resetting mid-teardown ERISC corrupts state.
+                if (terminated_cleanly) {
+                    try {
+                        auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, static_cast<int>(chan_id));
+                        tt_cxy_pair core_loc(chip_id, virtual_core);
+                        cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                        cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[teardown_fabric_config] ERISC0 restore reset failed on chip {} chan {}: {}. "
+                            "Next topology discovery may see stale ETH heartbeat.",
+                            chip_id,
+                            chan_id,
+                            e.what());
                     }
                 }
             }
