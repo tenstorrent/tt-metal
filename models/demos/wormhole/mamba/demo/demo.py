@@ -213,7 +213,7 @@ class DemoResult:
 
 def run_mamba_demo(
     prompts: List[str],
-    device: ttnn.Device,
+    device: ttnn.MeshDevice,
     model_version: MambaPretrainedModelName = "state-spaces/mamba-2.8b-slimpj",
     batch_size: int = 32,
     generated_sequence_length: int = 50,
