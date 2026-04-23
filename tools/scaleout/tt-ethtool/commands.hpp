@@ -27,4 +27,7 @@ int run_link_up(LinkRef link);
 // Bring a single ethernet link down. Returns process exit code.
 int run_link_down(LinkRef link);
 
+// Query and print the status of a single ethernet link. Returns process exit code.
+int run_link_status(LinkRef link);
+
 }  // namespace tt_ethtool

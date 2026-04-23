@@ -19,13 +19,14 @@ void print_usage() {
                  "Commands:\n"
                  "  help                          Show this help message\n"
                  "  list                          List all Ethernet ports visible on the local system\n"
-                 "  link up   <chip>:<channel>    Bring the specified ethernet link up\n"
-                 "  link down <chip>:<channel>    Bring the specified ethernet link down\n";
+                 "  link up     <chip>:<channel>  Bring the specified ethernet link up\n"
+                 "  link down   <chip>:<channel>  Bring the specified ethernet link down\n"
+                 "  link status <chip>:<channel>  Show status of the specified ethernet link\n";
 }
 
 int dispatch_link(int argc, char** argv) {
     if (argc < 4) {
-        std::cerr << "link subcommand requires: link <up|down> <chip>:<channel>\n\n";
+        std::cerr << "link subcommand requires: link <up|down|status> <chip>:<channel>\n\n";
         print_usage();
         return EXIT_FAILURE;
     }
@@ -38,7 +39,10 @@ int dispatch_link(int argc, char** argv) {
     if (action == "down") {
         return tt_ethtool::run_link_down(link);
     }
-    std::cerr << fmt::format("Unknown link action: '{}' (expected 'up' or 'down')\n\n", action);
+    if (action == "status") {
+        return tt_ethtool::run_link_status(link);
+    }
+    std::cerr << fmt::format("Unknown link action: '{}' (expected 'up', 'down', or 'status')\n\n", action);
     print_usage();
     return EXIT_FAILURE;
 }
