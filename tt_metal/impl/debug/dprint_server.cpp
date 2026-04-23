@@ -50,7 +50,6 @@
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -431,9 +430,11 @@ void DevicePrintImpl::print_buffer_data(
 
             // Find elf path from inspector using kernel id
             auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
-            auto risc_name = GetRiscName(cluster, hal, device_id, logical_core, header->risc_id);
-            std::transform(
-                risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
+            auto [processor_class, processor_type_idx] =
+                hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
+            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
+            const auto& risc_name = build_state.get_target_name();
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
             risc_data.kernel_elf_path = elf_path.string();
             risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
@@ -594,7 +595,7 @@ bool DevicePrintImpl::poll_one_core(
     uint32_t risc_state_bytes = ((num_processors + 3) / 4) * 4;  // Round up to nearest word
     auto from_dev = cluster.read_core(device_id, virtual_core, buffer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
-    uint32_t print_buffer_address =
+    uint64_t print_buffer_address =
         buffer_address + eightbytes + risc_state_bytes + sizeof(uint32_t);  // Skip wpos, rpos, risc state, and lock
     uint32_t print_buffer_size = buffer_size - eightbytes - risc_state_bytes - sizeof(uint32_t);
 
@@ -602,25 +603,50 @@ bool DevicePrintImpl::poll_one_core(
         return false;
     }
 
-    if (rpos > wpos) {
-        // Read until end of buffer and then from beginning until wpos
-        auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
+    while (true) {
+        bool stall = (wpos & DEVICE_PRINT_WRITE_STALL_FLAG) != 0;
 
-        // Process buffer data
-        print_buffer_data(device_id, logical_core, data);
+        // Clear stall bit to get actual wpos value
+        wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
-        // Update rpos, so that device knows it can use rest of the buffer
-        rpos = 0;
-    }
-    if (rpos < wpos) {
-        // Read until wpos
-        auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+        if (rpos > wpos) {
+            // Read until end of buffer and then from beginning until wpos
+            auto data =
+                cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
 
-        // Process buffer data
-        print_buffer_data(device_id, logical_core, data);
+            // Process buffer data
+            print_buffer_data(device_id, logical_core, data);
 
-        // Update rpos, so that device knows it can use rest of the buffer
-        rpos = wpos;
+            // Update rpos, so that device knows it can use rest of the buffer
+            rpos = 0;
+        }
+        if (rpos < wpos) {
+            // Read until wpos
+            auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+
+            // Process buffer data
+            print_buffer_data(device_id, logical_core, data);
+
+            // Update rpos, so that device knows it can use rest of the buffer
+            rpos = wpos;
+        }
+
+        // Check if writer is in stall waiting for reader and send clear buffer.
+        if (stall) {
+            // Write clear buffer.
+            rpos = DEVICE_PRINT_RESET_BUFFER_MAGIC;
+            cluster.write_core(device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
+
+            // We should probably drain while core is in stall state.
+            // Read wpos and rpos again and repeat
+            from_dev = cluster.read_core(device_id, virtual_core, buffer_address, eightbytes);
+            wpos = from_dev[0];
+            rpos = from_dev[1];
+            continue;
+        }
+
+        // We have caught up to the writer, break out of the loop and wait for more data to arrive
+        break;
     }
     cluster.write_core(device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     return true;
@@ -806,7 +832,12 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
-    for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+    const auto& hal = env_.get_hal();
+    std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        core_types_to_check.push_back(CoreType::DRAM);
+    }
+    for (CoreType core_type : core_types_to_check) {
         if (rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
@@ -1034,7 +1065,7 @@ bool DPrintImpl::peek_one_risc_non_blocking(
     }
 
     // compute the buffer address for the requested risc
-    uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
+    uint64_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
     ChipId chip_id = device_id;
     RiscKey risc_key{chip_id, logical_core, risc_id};
 

@@ -16,9 +16,12 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    MAX_PAYLOAD_SIZE_BH,
+    MAX_PAYLOAD_SIZE_WH,
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
@@ -27,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
+    get_max_payload_size,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -41,9 +45,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
-        (128, 7 * 1024, 16, 4, 2),
+        pytest.param(128, 7 * 1024, 16, 4, 2, True, id="pcc"),
+        pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -53,7 +58,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -64,7 +69,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -75,7 +80,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -86,7 +91,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -97,7 +102,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Ring,
@@ -108,7 +113,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Ring,
@@ -119,7 +124,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -130,7 +135,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Linear,
@@ -141,7 +146,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Ring,
@@ -152,7 +157,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             2,
             ttnn.Topology.Ring,
@@ -163,7 +168,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -174,7 +179,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
@@ -185,12 +190,112 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
             id="mesh-2x4",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="perf-linear-8-1link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="perf-linear-8-2link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-linear-8-1link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-linear-8-2link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="perf-ring-8-1link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="perf-ring-8-2link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-ring-8-1link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-ring-8-2link-14k",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -206,6 +311,7 @@ def test_ttnn_combine(
     num_links,
     topology,
     use_predictable_data,
+    run_pcc_check,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     torch.manual_seed(42)
@@ -356,6 +462,11 @@ def test_ttnn_combine(
         tt_dispatched_metadata,
         tt_expert_token_counts,
     )
+
+    if not run_pcc_check:
+        ttnn.synchronize_device(mesh_device)
+        logger.debug("Skipping PCC validation (run_pcc_check=False)")
+        return
 
     # Step 6: Convert ttnn output to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)

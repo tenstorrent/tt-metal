@@ -364,7 +364,7 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
-          CONFIRMATION="✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @$COMMENT_AUTHOR (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked."
+          CONFIRMATION=$'✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @'"$COMMENT_AUTHOR"$' (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked.'
 
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$CONFIRMATION" '{"body": $body}' > "$TEMP_JSON_FILE"
@@ -389,7 +389,7 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
-          UNAUTHORIZED_MSG="❌ **Access Denied**: The \`/codeowners bypass\` command can only be used by members of the \`@tenstorrent/metalium-developers-infra\` team.\n\nUser @$COMMENT_AUTHOR is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team."
+          UNAUTHORIZED_MSG=$'❌ **Access Denied**: The `/codeowners bypass` command can only be used by members of the `@tenstorrent/metalium-developers-infra` team.\n\nUser @'"$COMMENT_AUTHOR"$' is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team.'
 
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$UNAUTHORIZED_MSG" '{"body": $body}' > "$TEMP_JSON_FILE"
@@ -2156,10 +2156,36 @@ jobs:
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
 
-              # Check combined approval for this file set
-              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
-              if [ "$has_approval" = "true" ]; then
-                echo "Team $team already approved (combined check), skipping"
+              # Per-file approval check (matches comment/summary logic):
+              # For each file this team owns, gather ALL owners of that file
+              # (from any team/individual) and check if any approved.
+              # Only skip the team if ALL its files are individually covered.
+              all_team_files_approved=true
+              IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
+              for tfile in "${TEAM_FILES_ARRAY[@]}"; do
+                [ -z "$tfile" ] && continue
+                file_approved=false
+                # Check all file sets in FILES_TO_MEMBERS for this individual file
+                for fset in "${!FILES_TO_MEMBERS[@]}"; do
+                  if echo "$fset" | tr ',' '\n' | grep -Fqx -- "$tfile"; then
+                    # This file set contains our file — check its members
+                    IFS=',' read -ra FSET_MEMBERS <<< "${FILES_TO_MEMBERS[$fset]}"
+                    for member in "${FSET_MEMBERS[@]}"; do
+                      [ -z "$member" ] && continue
+                      if echo "$APPROVED_REVIEWERS" | tr ',' '\n' | grep -qx "$member"; then
+                        file_approved=true
+                        break 2
+                      fi
+                    done
+                  fi
+                done
+                if [ "$file_approved" = false ]; then
+                  all_team_files_approved=false
+                  break
+                fi
+              done
+              if [ "$all_team_files_approved" = true ]; then
+                echo "Team $team: all files have at least one approved owner, skipping"
                 continue
               fi
 

@@ -43,6 +43,63 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     uint32_t t_idx = t % TokensPerDevice;
     return k * TokensPerDevice + t_idx;
 }
+
+template <bool Enable = false>
+struct DoubleBuffer {
+private:
+    uint32_t idx;
+
+public:
+    DoubleBuffer(
+        const uint32_t /*compute_cores_per_combine_core*/,
+        const uint32_t /*sync_semaphore_addr*/,
+        size_t& /*rt_arg_count*/) :
+        idx(0) {};
+
+    auto& operator++() {
+        ++idx;
+        return *this;
+    }
+
+    auto operator*() { return idx; }
+};
+
+template <>
+struct DoubleBuffer<true> {
+private:
+    const uint32_t compute_cores_per_combine_core;
+    const uint32_t sync_semaphore_addr;
+    volatile tt_l1_ptr uint32_t* core_coords_ptr;
+
+    bool idx;
+
+public:
+    DoubleBuffer(
+        const uint32_t compute_cores_per_combine_core, const uint32_t sync_semaphore_addr, size_t& rt_arg_count) :
+        compute_cores_per_combine_core(compute_cores_per_combine_core),
+        sync_semaphore_addr(sync_semaphore_addr),
+        core_coords_ptr(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(rt_arg_count))),
+        idx(false) {
+        rt_arg_count += 2 * compute_cores_per_combine_core;
+    };
+
+    DoubleBuffer& operator++() {
+        noc_async_writes_flushed(/*noc=*/1);
+
+        for (uint32_t c = 0; c < compute_cores_per_combine_core; ++c) {
+            const uint64_t sem_noc_addr = safe_get_noc_addr(
+                core_coords_ptr[2 * c],
+                core_coords_ptr[2 * c + 1],
+                sync_semaphore_addr,
+                /*noc_id=*/1);
+            noc_semaphore_inc</*posted=*/true>(sem_noc_addr, 1, /*noc_id=*/1);
+        }
+        idx = !idx;
+        return *this;
+    }
+
+    auto operator*() { return idx; }
+};
 }  // namespace detail
 
 void kernel_main() {
@@ -61,13 +118,11 @@ void kernel_main() {
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
     constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
     constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
-    constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");  // global token size
     constexpr uint32_t source_token_segment_buffer_size_bytes =
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
-    constexpr uint32_t source_expert_block_size_bytes =
-        get_named_compile_time_arg_val("source_expert_block_size_bytes");
-    constexpr uint32_t token_size_bytes = get_named_compile_time_arg_val("token_size_bytes");
+    constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
@@ -81,6 +136,7 @@ void kernel_main() {
     constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
     constexpr uint32_t compute_cores_per_combine_core =
         get_named_compile_time_arg_val("compute_cores_per_combine_core");
+    constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
@@ -95,8 +151,6 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t num_local_experts = experts / num_devices;
-    constexpr uint32_t num_cluster_experts = experts / replicate_factor;
     constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
 
     constexpr uint8_t Num_Directions = 4;
@@ -114,6 +168,10 @@ void kernel_main() {
 
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
 
+    // rt_arg_count is incremented
+    detail::DoubleBuffer<double_buffer_source> db(
+        compute_cores_per_combine_core, compute_sync_semaphore_addr, rt_arg_count);
+
     // rt_arg_count does not get incremented
     MuxSyncCoreArgs sync_args(rt_arg_count);
 
@@ -126,12 +184,12 @@ void kernel_main() {
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
 
-    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr, token_size_bytes);
+    const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
         cb_reserve_back(packet_header_cb_id, 1);
-        const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
+        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id, 1);
     }
@@ -166,7 +224,7 @@ void kernel_main() {
     cb_pop_front(token_counts_cb_id, 1);
 
     cb_reserve_back(data_cb_id, 1);
-    const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
+    const uint32_t src_data_l1_base_addr = get_write_ptr(data_cb_id);
 
     cb_wait_front(dense_token_maps_cb_id, num_local_experts);
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
@@ -203,6 +261,7 @@ void kernel_main() {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
 
+        noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
@@ -216,8 +275,8 @@ void kernel_main() {
             // figure out output page index, noc address.
             const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(st, k);
 
-            const uint32_t src_data_l1_addr = src_data_l1_base_addr + e * source_expert_block_size_bytes +
-                                              dt * source_token_segment_buffer_size_bytes;
+            const uint32_t src_data_l1_addr =
+                src_data_l1_base_addr + *db * source_block_size_bytes + dt * source_token_segment_buffer_size_bytes;
 
             // figure out which device to send data to and routing
             const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
@@ -226,8 +285,6 @@ void kernel_main() {
                 mesh_rows,
                 mesh_cols,
                 replicate_axis>(st);
-
-            noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
 
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =
@@ -253,6 +310,7 @@ void kernel_main() {
             }
         }
         compute_sync_semaphore_val += compute_cores_per_combine_core;
+        ++db;
     }
 
     noc_semaphore_set(compute_sync_semaphore_ptr, 0);

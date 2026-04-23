@@ -38,7 +38,7 @@ constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
 constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
-constexpr auto kQKResultCbIndex = tt::CBIndex::c_7;      // used for accumulating results
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
 
 constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
 constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
@@ -52,11 +52,11 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumAttnMaskTiles = 1U;
-constexpr uint32_t kQKResultTiles = 1U;
+constexpr uint32_t kAttentionWeightsTiles = 1U;
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
-constexpr uint32_t kIntermediateTiles = 2U;  // max_val at col 0, recip_sum_exp at col 32
+constexpr uint32_t kIntermediateTiles = 1U;  // logsumexp = max + log(sum_exp), single FP32 tile
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
@@ -323,7 +323,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    const uint32_t block_size = get_block_size(qWt, 4U);
+    // With fp32_dest_acc_en=true, DST has only 4 registers (indices 0-3).
+    // update_cur_mm_out and final normalization use DST[0..block_size-1] for data tiles
+    // plus DST[block_size] for the unary_bcast operand, so we need block_size + 1 <= 4.
+    const uint32_t block_size = get_block_size(qWt, 3U);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -349,10 +352,15 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
 
     // create intermediate buffer only if we need to return intermediates
-    // Intermediate shape: (B, H, S, 64) = 2 tiles wide (max_val at col 0, recip_sum_exp at col 32)
+    // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp))
     if (args.return_intermediates) {
         [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
-            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kIntermediateTiles);
+            program,
+            all_cores,
+            kIntermediateCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kIntermediateTiles);
     }
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
@@ -361,8 +369,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    [[maybe_unused]] auto cb_qk_result = create_circular_buffer(
-        program, all_cores, kQKResultCbIndex, data_format, bfloat16_single_tile_size_bytes, kQKResultTiles);
+    // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
+    // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
+    // through this CB for the softmax critical path (~20 ms regression).
+    [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
+        program,
+        all_cores,
+        kAttentionWeightsCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kAttentionWeightsTiles);
 
     [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
         program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
@@ -381,10 +397,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_cur_mm_out =
-        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
+        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
@@ -494,6 +510,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
+    // UnpackToDestFp32 for mm_out accum buffers and broadcast scratch:
+    // copy_tile from these CBs bypasses SrcA and DMAs directly to DST at full FP32.
+    // Only SFPU operations (mul_binary_tile, etc.) may be used on data loaded this way.
+    auto create_unpack_to_dest_mode = []() {
+        std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        mode[kPrevMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        mode[kCurMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        return mode;
+    };
+
     if (use_balanced_parallelism) {
         // For balanced parallelism, all cores are in one group with uniform work
         // num_pairs is passed as compile-time arg (max pairs per core)
@@ -509,8 +535,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
         };
 
-        kernels.compute_group_1 = create_compute_kernel(
-            program, all_cores, compute_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            all_cores,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+                .math_approx_mode = false,
+                .compile_args = compute_args,
+                .defines = defines});
     } else {
         // Standard mode: two potential core groups with different row counts
 
@@ -525,8 +560,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
         };
 
-        kernels.compute_group_1 = create_compute_kernel(
-            program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            core_group_1,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+                .math_approx_mode = false,
+                .compile_args = compute_group_1_args,
+                .defines = defines});
 
         // Group 2 (if present) compile-time arguments
         if (!core_group_2.ranges().empty()) {
@@ -540,8 +584,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
             };
 
-            kernels.compute_group_2 = create_compute_kernel(
-                program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+            kernels.compute_group_2 = tt::tt_metal::CreateKernel(
+                program,
+                kComputeKernelPath,
+                core_group_2,
+                tt::tt_metal::ComputeConfig{
+                    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .fp32_dest_acc_en = true,
+                    .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+                    .math_approx_mode = false,
+                    .compile_args = compute_group_2_args,
+                    .defines = defines});
         }
     }
 

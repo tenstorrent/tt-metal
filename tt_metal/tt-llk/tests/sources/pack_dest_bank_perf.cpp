@@ -118,8 +118,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t block_tile = 0; block_tile < TILE_CNT; block_tile++)
         {
+#ifdef ARCH_BLACKHOLE
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 block_tile, formats.math, formats.math, 4);
+#else
+            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                block_tile, formats.math, formats.math);
+#endif
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
@@ -197,9 +202,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const int num_faces          = params.num_faces;
-    const std::uint32_t TILE_CNT = params.TILE_CNT;
-    const int L1_ACC             = params.L1_ACC;
+    const int num_faces                    = params.num_faces;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const int L1_ACC                       = params.L1_ACC;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+#endif
+#ifndef ARCH_BLACKHOLE
+    (void)num_faces;
+    (void)L1_ACC;
 #endif
     {
         ZONE_SCOPED("INIT")
@@ -209,7 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         reconfigure_packer_l1_acc(L1_ACC);
 #else
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, 4);
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, 4);
+        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, 4, false, false, NUM_TILES_IN_BLOCK);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
 #endif
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -226,11 +237,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    // Left in a loop here since perf measurements are dividing with this TILE_CNT also
-
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, PERF_ADDRESS(PERF_OUTPUT, block * NUM_TILES_IN_BLOCK));
                 }
             }
         }
@@ -240,13 +249,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-
                     _llk_packer_wait_for_math_done_();
-                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
-                    {
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
-                    }
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, PERF_ADDRESS(PERF_OUTPUT, block_start));
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }

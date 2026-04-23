@@ -8,6 +8,7 @@ import time
 
 from loguru import logger
 from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from models.common.utility_functions import ulp as compute_ulp
 from typing import Tuple, Union
 
 import ttnn
@@ -251,6 +252,129 @@ def assert_with_ulp(
     ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
     assert ulp_passed, ulp_message
     return ulp_passed, ulp_message
+
+
+def measure_ulp_with_near_zero_atol(
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    ulp_threshold: float,
+    near_zero_atol_fraction: float,
+    near_zero_relative_fraction: float = 1e-2,
+):
+    """
+    Measure ULP distribution while handling near-zero expected values with scaled absolute tolerance.
+
+    This helper is intended for reductions and normalization-style tests where
+    cancellation commonly produces outputs near zero. Raw ULP becomes unstable in
+    that regime because ``ULP(expected)`` can be extremely small, so a tiny
+    absolute difference may inflate to a misleadingly large ULP count.
+
+    Policy:
+    - For elements with ``|expected| >= near_zero_relative_fraction * max(|expected|)``,
+      measure ULP using ``compute_ulp`` on the expected values and report the full
+      distribution (mean, P95, P99, max) plus worst-case element details.
+    - For smaller-magnitude elements, skip ULP and require absolute error
+      ``<= near_zero_atol_fraction * max(|expected|)``.
+
+    The default ``near_zero_relative_fraction=1e-2`` is intentionally simple and
+    scale-relative: values below 1% of the tensor's dynamic range are treated as
+    near zero. This is not meant as a universal elementwise helper; it is for
+    characterization tests where reduction ordering can create tiny residuals.
+
+    Returns:
+        tuple: ``(passed, max_ulp, max_atol_err, scaled_atol, msg, ulp_stats)``
+
+        ``ulp_stats`` is a dict with keys ``mean``, ``p95``, ``p99`` computed over
+        the normal (non-near-zero) elements, and ``worst`` with the formula string
+        ``|actual - golden| / ulp(golden) = max_ulp`` for the worst element.
+        All values are 0.0 / empty string when there are no normal elements.
+
+        ``p95`` and ``p99`` are computed via ``torch.quantile`` only when there are
+        enough normal elements to make the percentile meaningful: p95 requires
+        ``n >= 20``, p99 requires ``n >= 100``.  Below those counts both fall back
+        to ``max_ulp``.  Callers should not interpret p95/p99 as true percentiles
+        for very small tensors.
+    """
+    expected_result = _normalize_tensor(expected_result)
+    actual_result = _normalize_tensor(actual_result)
+
+    assert list(expected_result.shape) == list(
+        actual_result.shape
+    ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
+
+    if expected_result.dtype != actual_result.dtype:
+        actual_result = actual_result.to(expected_result.dtype)
+
+    abs_expected = torch.abs(expected_result.float())
+    expected_max = abs_expected.max().item()
+    _empty_stats = {"mean": 0.0, "p95": 0.0, "p99": 0.0, "worst": ""}
+    if expected_max == 0:
+        abs_err = torch.abs(actual_result.float()).max().item()
+        return abs_err == 0, 0.0, abs_err, 0.0, f"All-zero golden; max |actual|={abs_err:.6e}", _empty_stats
+
+    dynamic_threshold = near_zero_relative_fraction * expected_max
+    normal_mask = abs_expected >= dynamic_threshold
+    near_zero_mask = ~normal_mask
+    n_near_zero = near_zero_mask.sum().item()
+
+    scaled_atol = near_zero_atol_fraction * expected_max
+
+    max_ulp = 0.0
+    ulp_msg = ""
+    ulp_stats = _empty_stats.copy()
+    if normal_mask.any():
+        g = expected_result[normal_mask]
+        a = actual_result[normal_mask]
+        ulp_values = compute_ulp(g)
+        ulp_diffs = torch.abs(a.float() - g.float()) / ulp_values.float()
+        max_ulp = torch.max(ulp_diffs).item()
+        # Distribution statistics over all normal elements
+        n = ulp_diffs.numel()
+        ulp_stats["mean"] = ulp_diffs.mean().item()
+        ulp_stats["p95"] = ulp_diffs.quantile(0.95).item() if n >= 20 else max_ulp
+        ulp_stats["p99"] = ulp_diffs.quantile(0.99).item() if n >= 100 else max_ulp
+        worst = torch.argmax(ulp_diffs)
+        ulp_stats[
+            "worst"
+        ] = f"|{a[worst].item():.6e} - {g[worst].item():.6e}| / {ulp_values[worst].item():.6e} = {max_ulp:.4g}"
+        if max_ulp > ulp_threshold:
+            ulp_msg = (
+                f"Max ULP: {max_ulp:.1f} "
+                f"(golden={g[worst].item()}, actual={a[worst].item()}, "
+                f"ulp@golden={ulp_values[worst].item()})"
+            )
+
+    max_atol_err = 0.0
+    atol_msg = ""
+    if n_near_zero > 0:
+        g_nz = expected_result[near_zero_mask].float()
+        a_nz = actual_result[near_zero_mask].float()
+        abs_diffs = torch.abs(a_nz - g_nz)
+        max_atol_err = torch.max(abs_diffs).item()
+        if max_atol_err > scaled_atol:
+            worst = torch.argmax(abs_diffs)
+            atol_msg = (
+                f"Max atol err: {max_atol_err:.6e} > {scaled_atol:.6e} "
+                f"(golden={g_nz[worst].item()}, actual={a_nz[worst].item()}) "
+                f"[{n_near_zero} near-zero elems]"
+            )
+
+    ulp_ok = max_ulp <= ulp_threshold
+    atol_ok = max_atol_err <= scaled_atol
+
+    parts = [f"ULP: max={max_ulp:.1f} (threshold={ulp_threshold})"]
+    if n_near_zero > 0:
+        parts.append(
+            f"Near-zero atol: max={max_atol_err:.6e} "
+            f"(threshold={scaled_atol:.6e}, count={n_near_zero}/{expected_result.numel()})"
+        )
+    msg = "; ".join(parts)
+    if not ulp_ok:
+        msg += f" | FAIL ULP: {ulp_msg}"
+    if not atol_ok:
+        msg += f" | FAIL atol: {atol_msg}"
+
+    return ulp_ok and atol_ok, max_ulp, max_atol_err, scaled_atol, msg, ulp_stats
 
 
 def assert_equal(expected_pytorch_result, actual_pytorch_result):
@@ -590,7 +714,7 @@ def assert_numeric_metrics(
     # PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
     if check_pcc and torch.numel(expected_result) != 1:
         passing_pcc, pcc_message = comp_pcc(expected_result, actual_result, pcc_threshold)
-        assert passing_pcc, pcc_message
+        assert passing_pcc, f"pcc={pcc_message}"
 
     # ULP-based comparison is stricter for floating-point representation differences.
     if check_ulp:

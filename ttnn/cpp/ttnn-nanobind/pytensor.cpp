@@ -206,7 +206,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tensor_impl::convert_layout_tile_to_row_major(
+                auto row_major_data = tensor_impl::to_row_major_layout(
                     tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
@@ -1351,6 +1351,30 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "is_per_core_allocated",
+            [](const Tensor& self) -> bool {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return false;
+                }
+                return experimental::per_core_allocation::is_per_core_allocation(
+                    self.mesh_buffer().device_local_config().sharding_args);
+            },
+            R"doc(
+            Returns True if this tensor was allocated with experimental per-core L1 allocation.
+
+            Per-core allocated tensors have a different physical address per core, so they
+            cannot be queried with ``buffer_address()``. Use this property to branch between
+            ``buffer_address()`` and ``experimental_per_core_buffer_address(core)``.
+
+            .. code-block:: python
+
+                if tensor.is_per_core_allocated():
+                    addr = tensor.experimental_per_core_buffer_address(core)
+                else:
+                    addr = tensor.buffer_address()
+
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
@@ -1496,6 +1520,17 @@ void pytensor_module(nb::module_& mod) {
 
                     topology = tt_tensor.tensor_topology()
             )doc")
+        .def(
+            "update_tensor_topology",
+            [](Tensor& self, const tt::tt_metal::TensorTopology& topology) { self.update_tensor_topology(topology); },
+            nb::arg("topology"),
+            R"doc(
+                Update the topology of the tensor.
+
+                .. code-block:: python
+
+                    tt_tensor.update_tensor_topology(new_topology)
+            )doc")
         .def_prop_rw(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
@@ -1549,12 +1584,12 @@ void pytensor_module(nb::module_& mod) {
 
             mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, {transfer}, /*blocking=*/true);
 
-            DeviceStorage device_storage(std::move(mesh_buffer), {coord});
             TensorTopology topology(
                 tt::tt_metal::distributed::MeshShape(1, 1),
                 {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
                 {coord});
-            return Tensor(std::move(device_storage), tensor_spec, std::move(topology));
+            DeviceStorage device_storage(MeshTensor(std::move(mesh_buffer), tensor_spec, std::move(topology)), {coord});
+            return Tensor(std::move(device_storage));
         },
         nb::arg("host_tensor"),
         nb::arg("mesh_device"),

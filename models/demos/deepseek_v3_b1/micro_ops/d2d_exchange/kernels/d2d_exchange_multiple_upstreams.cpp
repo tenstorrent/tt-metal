@@ -31,12 +31,14 @@ constexpr uint32_t partial_packet_size = get_compile_time_arg_val(7);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(8);
 constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(9);
 constexpr bool use_fabric_on_sender = get_compile_time_arg_val(10);
-constexpr uint32_t page_ready_sem_id = get_compile_time_arg_val(11);
-constexpr uint32_t ncrisc_done_sem_id = get_compile_time_arg_val(12);
-constexpr uint32_t socket_start_idx = get_compile_time_arg_val(13);
-constexpr uint32_t packet_header_slot_start = get_compile_time_arg_val(14);
+constexpr uint32_t forward_metadata_size_bytes = get_compile_time_arg_val(11);
 
-constexpr uint32_t receiver_socket_addrs_start_idx = 15;
+constexpr uint32_t page_ready_sem_id = get_compile_time_arg_val(12);
+constexpr uint32_t ncrisc_done_sem_id = get_compile_time_arg_val(13);
+constexpr uint32_t socket_start_idx = get_compile_time_arg_val(14);
+constexpr uint32_t packet_header_slot_start = get_compile_time_arg_val(15);
+
+constexpr uint32_t receiver_socket_addrs_start_idx = 16;
 
 template <size_t START_IDX, size_t COUNT, size_t I = 0>
 struct CTAArrayFiller {
@@ -92,28 +94,20 @@ FORCE_INLINE void send_worker_data_over_fabric(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
     uint32_t l1_read_addr,
     uint64_t dst_addr,
-    uint64_t downstream_bytes_sent_noc_addr) {
+    uint64_t downstream_bytes_sent_noc_addr,
+    uint32_t total_size) {
     uint32_t src = l1_read_addr;
     uint64_t dst = dst_addr;
-    if constexpr (partial_packet_size > 0) {
-        for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
-            write_data_to_remote_core_with_ack<false>(
-                fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
-            src += whole_packet_size;
-            dst += whole_packet_size;
-        }
-        write_data_to_remote_core_with_ack(
-            fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, partial_packet_size);
-    } else if constexpr (num_whole_fabric_packets_per_link > 0) {
-        for (uint32_t i = 0; i < num_whole_fabric_packets_per_link - 1; ++i) {
-            write_data_to_remote_core_with_ack<false>(
-                fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
-            src += whole_packet_size;
-            dst += whole_packet_size;
-        }
+    uint32_t remaining = total_size;
+    while (remaining > whole_packet_size) {
         write_data_to_remote_core_with_ack(
             fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
+        src += whole_packet_size;
+        dst += whole_packet_size;
+        remaining -= whole_packet_size;
     }
+    write_data_to_remote_core_with_ack(
+        fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, remaining);
 }
 
 // Process this RISC's subset of upstream sockets: receive data, forward via
@@ -129,29 +123,31 @@ FORCE_INLINE bool process_upstream_sockets(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_packet_header,
     uint64_t* upstream_bytes_acked_noc_addrs,
     volatile tt_l1_ptr uint32_t* termination_semaphore) {
+    if constexpr (num_sockets_this_risc == 0) {
+        return false;
+    }
     uint32_t remaining = num_sockets_this_risc;
     uint32_t worker_idx = 0;
     uint32_t processed_mask = 0;
-
+    invalidate_l1_cache();
+    if (termination_semaphore[0] == 1) {
+        return true;
+    }
     while (remaining > 0) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == 1) {
-            return true;
-        }
-
-        if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
+        if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1)) {
             uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
             uint64_t dst_addr = dst_addr_base + (socket_start_idx + worker_idx) * upstream_page_size;
-
             if constexpr (use_fabric_on_sender) {
                 send_worker_data_over_fabric(
                     downstream_fabric_connection,
                     downstream_packet_header,
                     l1_read_addr,
                     dst_addr,
-                    downstream_bytes_sent_noc_addr);
+                    downstream_bytes_sent_noc_addr,
+                    receiver_sockets[worker_idx].page_size);
             } else {
-                write_data_to_local_core_with_ack(l1_read_addr, dst_addr, upstream_page_size);
+                write_data_to_local_core_with_ack(
+                    l1_read_addr, dst_addr, receiver_sockets[worker_idx].page_size);
             }
 
             socket_pop_pages(receiver_sockets[worker_idx], 1);
@@ -171,7 +167,9 @@ FORCE_INLINE bool process_upstream_sockets(
             remaining--;
         }
 
-        worker_idx = (worker_idx + 1) % num_sockets_this_risc;
+        if constexpr (num_sockets_this_risc > 1) {
+            worker_idx = (worker_idx + 1) % num_sockets_this_risc;
+        }
     }
     return false;
 }
@@ -191,14 +189,22 @@ void kernel_main() {
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     }
 
-    SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
-    set_sender_socket_page_size(sender_socket, page_size);
-    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+    constexpr uint32_t downstream_page_size = page_size;
 
-    SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
+    SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
+    set_sender_socket_page_size(sender_socket, downstream_page_size);
+    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+    constexpr uint32_t last_upstream_page_size = upstream_page_size + forward_metadata_size_bytes;
+
+    SocketReceiverInterface receiver_sockets[num_sockets_this_risc > 0 ? num_sockets_this_risc : 1];
     for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
-        set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
+#if defined(COMPILE_FOR_NCRISC)
+        const uint32_t rx_page_size = (i == num_sockets_this_risc - 1) ? last_upstream_page_size : upstream_page_size;
+#else
+        const uint32_t rx_page_size = upstream_page_size;
+#endif
+        set_receiver_socket_page_size(receiver_sockets[i], rx_page_size);
     }
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
@@ -208,7 +214,7 @@ void kernel_main() {
     uint64_t downstream_data_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.downstream_fifo_addr);
 
-    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc];
+    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc > 0 ? num_sockets_this_risc : 1];
     if constexpr (use_fabric_on_receiver) {
         for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
             upstream_bytes_acked_noc_addrs[i] = get_noc_addr(
