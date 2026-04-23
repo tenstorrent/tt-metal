@@ -92,19 +92,13 @@ def _device_to_host_post(tt_model, s_sm, d_norm, b, h, w):
 
 
 def _device_to_host_post_with_nms(tt_model, s_pooled, d_norm, b, h, w):
-    """Hot-loop D2H: pull the device-NMS'd map + descriptors.
-
-    Issues both D2Hs via ``ttnn.from_device(blocking=False)`` and syncs once.
-    This lets both DMAs queue together on CQ0 and share a single wait,
-    saving one dispatch of host↔device round-trip overhead compared to two
-    blocking ``ttnn.to_torch`` calls.
+    """Hot-loop D2H: pull the device-NMS'd map (single-channel, row-major)
+    and descriptors. ``sp_eq_mul_mask`` + on-device channel-0 slice make the
+    D2H payload 32× smaller than the 32-padded eq-mul output.
     """
     enc_h, enc_w = h // 8, w // 8
-    d_host = ttnn.from_device(d_norm, blocking=False)
-    s_host = ttnn.from_device(s_pooled, blocking=False)
-    ttnn.synchronize_device(tt_model.device)
-    descriptors_nhwc = ttnn.to_torch(d_host).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
-    nms_scores = ttnn.to_torch(s_host).reshape(b, h, w).float()
+    descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
+    nms_scores = ttnn.to_torch(s_pooled).reshape(b, h, w).float()
     descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
     return nms_scores, descriptors_nchw
 
