@@ -28,7 +28,7 @@ constexpr auto kDbAccCbIndex = tt::CBIndex::c_2;
 
 // Scalar/constant CBs
 constexpr auto kScalerCbIndex = tt::CBIndex::c_3;
-constexpr auto kEpsCbIndex = tt::CBIndex::c_4;
+// c_4 is unused (eps is now passed as a compute runtime arg and applied via add_unary_tile).
 constexpr auto kOneCbIndex = tt::CBIndex::c_5;
 constexpr auto kW0CbIndex = tt::CBIndex::c_6;
 constexpr auto kW1CbIndex = tt::CBIndex::c_7;
@@ -128,7 +128,7 @@ void assign_per_core_runtime_args(
              num_rows_written});
 
         auto compute_kernel = core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2;
-        SetRuntimeArgs(program, compute_kernel, core, {num_inner});
+        SetRuntimeArgs(program, compute_kernel, core, {num_inner, eps_fp32_bits});
         num_rows_written += num_rows_per_core;
     }
 }
@@ -174,8 +174,7 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     // Scalar/constant CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_eps = create_circular_buffer(
-        program, all_cores, kEpsCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    // cb_eps removed: eps is now a compute runtime arg applied via add_unary_tile.
     [[maybe_unused]] auto cb_one = create_circular_buffer(
         program, all_cores, kOneCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w0 =
@@ -358,6 +357,12 @@ void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
         auto& dL_dx_wr = dL_dx_writer_runtime_args[core.x][core.y];
         dL_dx_wr[kWriterOutputBufferIdx] = dL_dx_output_buffer->address();
         dL_dx_wr[1] = packed_partials_output_buffer->address();
+
+        // Update compute kernel eps (runtime arg index 1).
+        auto compute_kernel =
+            shared.core_group_1.contains(core) ? shared.compute_kernel_group_1_id : shared.compute_kernel_group_2_id;
+        auto& cr = GetRuntimeArgs(program, compute_kernel);
+        cr[core.x][core.y][1] = eps_fp32_bits;
     }
 }
 
