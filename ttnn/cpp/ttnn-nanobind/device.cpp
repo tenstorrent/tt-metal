@@ -599,7 +599,7 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "RegisterProgramRealtimeProfilerCallback",
-        [](nb::callable callback) -> uint64_t {
+        [](const nb::callable& callback) -> uint64_t {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 

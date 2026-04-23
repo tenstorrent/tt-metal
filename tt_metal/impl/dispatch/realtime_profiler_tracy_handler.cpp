@@ -66,7 +66,7 @@ void RealtimeProfilerTracyHandler::AddDevice(
     [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    if (tracy_contexts_.count(chip_id)) {
+    if (tracy_contexts_.contains(chip_id)) {
         log_warning(tt::LogMetal, "RealtimeProfilerTracyHandler: device {} already added, skipping", chip_id);
         return;
     }

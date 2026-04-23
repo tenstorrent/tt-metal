@@ -109,7 +109,7 @@ static void RunPrograms(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
             all_cores,
             ComputeConfig{.compile_args = std::vector<uint32_t>{}});
 
-        program.set_runtime_id(static_cast<uint64_t>(i + 1));
+        program.set_runtime_id(static_cast<uint64_t>(i) + 1);
 
         workload.add_program(device_range, std::move(program));
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
