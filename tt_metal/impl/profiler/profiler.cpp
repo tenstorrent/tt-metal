@@ -1530,8 +1530,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
-                // Record that drops occurred so processDeviceMarkerData can tolerate
-                // orphan ZONE_START markers whose ZONE_END was dropped.
+                // Lets processDeviceMarkerData tolerate orphan ZONE_START markers.
                 this->had_dropped_markers.store(true, std::memory_order_relaxed);
             }
 
@@ -1549,14 +1548,10 @@ void DeviceProfiler::readRiscProfilerResults(
 
             std::set<tracy::TTDeviceMarker>& device_markers_for_core_risc = device_markers_for_core[riscType];
 
-            // Pre-sentinel TS_DATA: perf_counter_flush writes custom marker data
-            // to DRAM before the header (which contains the sentinel). These
-            // markers are valid TS_DATA that should be associated with this run.
-            // We buffer their (index, timer_id, timestamp, data) after the run is established.
-            // Parse each marker here so we correctly advance past TS_DATA's 4-slot layout
-            // (header at N/N+1, data payload at N+2/N+3); otherwise the 2-slot main loop
-            // would treat the payload as a new marker and read out-of-range slots
-            // belonging to an adjacent RISC's buffer.
+            // perf_counter_flush writes TS_DATA markers before the header sentinel. Buffer
+            // them here and attach once the run is established. Parsing in this loop also
+            // advances past TS_DATA's 4-slot layout to avoid reading into the next RISC's
+            // region.
             struct PreSentinelMarker {
                 uint32_t timer_id;
                 uint64_t timestamp;
@@ -1572,11 +1567,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     opTime_H = 0;
                     opTime_L = 0;
                 } else if (!oneStartFound) {
-                    // Data before first sentinel — parse marker by packet type and buffer
-                    // for later processing. Only TS_DATA is expected (from perf_counter_flush);
-                    // TS_DATA spans 4 slots, so we advance the loop index by an extra
-                    // PROFILER_L1_MARKER_UINT32_SIZE after capturing the payload. Other
-                    // packet types are skipped (they shouldn't appear pre-sentinel).
+                    // Pre-sentinel data: capture TS_DATA and advance past its 4-slot layout.
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
                     uint32_t time_H = data_buffer.at(index) & 0xFFF;
                     if (timer_id || time_H) {
@@ -1584,8 +1575,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
                             uint32_t time_L = data_buffer.at(index + 1);
                             int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                            // Guard against a truncated TS_DATA marker at the very end of
-                            // the risc's region — skip it rather than reading adjacent data.
+                            // Skip truncated TS_DATA at the end of this risc's region.
                             if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
                                 uint64_t data_H = data_buffer.at(data_index);
                                 uint64_t data_L = data_buffer.at(data_index + 1);
@@ -1593,8 +1583,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 uint64_t timestamp = (static_cast<uint64_t>(time_H) << 32) | time_L;
                                 pre_sentinel_markers.push_back({timer_id, timestamp, data});
                             }
-                            // Consume the data payload slot; loop will advance by
-                            // PROFILER_L1_MARKER_UINT32_SIZE, totalling 4 slots for TS_DATA.
+                            // Skip the data payload slot (4 slots total with the loop step).
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                         }
                     }
@@ -1614,8 +1603,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
-                    // Associate any TS_DATA captured before this sentinel with this run
-                    // (perf_counter_flush writes data before the header gets its sentinel).
+                    // Attach pre-sentinel TS_DATA markers to this run.
                     for (const auto& pre : pre_sentinel_markers) {
                         readDeviceMarkerData(
                             device_markers_for_core_risc,

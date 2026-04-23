@@ -807,10 +807,10 @@ def _enrich_ops_from_device_logs(
                 assign_metric("NOC Ring 1 Outgoing Util", per_op_stats.get("NOC Ring 1 Outgoing Util", {}))
                 assign_metric("NOC Ring 1 Incoming Util", per_op_stats.get("NOC Ring 1 Incoming Util", {}))
 
-                # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
+                # L1 Port 1 (arch-specific)
                 assign_metric("L1 Packer Port Util", per_op_stats.get("L1 Packer Port Util", {}))
 
-                # L1 back-pressure (derived stall metrics: (req - grant) / req * 100)
+                # L1 back-pressure
                 assign_metric(
                     "NOC Ring 0 Outgoing Backpressure", per_op_stats.get("NOC Ring 0 Outgoing Backpressure", {})
                 )
@@ -1136,7 +1136,7 @@ def get_device_data_generate_report(
                             "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"
                         )
                         suffix = "" if is_raw else " (%)"
-                        # Special handling for SFPU/FPU/MATH "Avg on full grid" legacy names
+                        # Legacy "Avg on full grid" column names.
                         if base_name == "SFPU Util":
                             rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
                         elif base_name == "FPU Util":

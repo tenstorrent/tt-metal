@@ -490,13 +490,8 @@ void stop_perf_counter() {
     }
 };
 
-// Flush perf counter data from L1 to DRAM — body only (from CUSTOM_MARKERS..wIndex).
-// Appends the body directly to HOST_BUFFER_END_INDEX without writing a header or
-// sentinel — the BRISC-FW ZONE_END is still a placeholder at this point (destructor
-// has not fired), so a header written now would produce an orphan ZONE_START.
-// The host parses these markers as pre-sentinel TS_DATA and associates them with
-// the run established by the sentinel that finish_profiler writes once the
-// profileScopeGuaranteed destructor has populated the final marker timestamps.
+// Flush perf counter body to DRAM. No header is written — finish_profiler writes
+// the sentinel once the BRISC-FW scope closes; host treats the body as pre-sentinel TS_DATA.
 __attribute__((noinline)) void perf_counter_flush() {
 #if defined(COMPILE_FOR_BRISC)
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
