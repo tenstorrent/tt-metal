@@ -295,8 +295,11 @@ ALWI void fast_tilize_block(
     // Each chunk: wait_for_dest + unpack + math + pack + section_done.
     {
         uint32_t tiles_done = 0;
-        // prev_chunk matches first_chunk from fast_tilize_init — avoids first reinit.
-        uint32_t prev_chunk = (block > 5) ? 4 : (block == 5) ? 2 : block;
+        // prev_chunk = 0 so the first chunk always fires reinit_xdim + reinit_unit_dim.
+        // init may have been called with a different full_dim (e.g. MOE kernels init
+        // with max width, block with per-core width), so we cannot assume the hardware
+        // state matches the first chunk of this block call.
+        uint32_t prev_chunk = 0;
 
         while (tiles_done < block) {
             // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).

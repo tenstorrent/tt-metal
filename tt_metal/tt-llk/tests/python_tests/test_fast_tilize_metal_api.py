@@ -54,7 +54,7 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
     )
 
     cfg = TestConfig(
-        "sources/fast_tilize_bh_test.cpp",
+        "sources/fast_tilize_metal_api_test.cpp",
         formats,
         templates=[],
         runtimes=[
