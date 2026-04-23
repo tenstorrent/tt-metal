@@ -81,103 +81,6 @@ inline void _llk_unpack_tilize_init_(
     _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest);
 }
 
-// Internal function to implement unpacking to source register
-inline void unpack_tilize_impl(
-    const std::uint32_t base_address, std::uint32_t num_loops, std::uint32_t top_face_offset_address, std::uint32_t bot_face_offset_address)
-{
-    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
-
-    for (std::uint32_t n = 0; n < num_loops; n++)
-    {
-        std::uint32_t address = base_address + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
-
-        // Clear z/w start counters
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
-
-        // Wait for free context
-        wait_for_next_context(2);
-
-        // Validate and configure address
-        _llk_unpack_configure_single_address_(address, cfg);
-
-        // Trisc::SEMPOST for context acquire
-        semaphore_post(semaphore::UNPACK_SYNC);
-
-        // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
-        // Run MOP
-        ckernel::ckernel_template::run();
-
-        // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-        // Switch unpacker config context
-        switch_config_context(unp_cfg_context);
-    }
-}
-
-// Internal function to implement unpacking to destination register
-inline void unpack_tilize_to_dest_impl(
-    const std::uint32_t base_address,
-    std::uint32_t unpack_src_format,
-    std::uint32_t num_loops,
-    std::uint32_t top_face_offset_address,
-    std::uint32_t bot_face_offset_address)
-{
-    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
-
-    // Unpack to dest register
-    set_dst_write_addr(unp_cfg_context, unpack_src_format);
-    wait_for_dest_available();
-
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-    std::uint32_t address = base_address + top_face_offset_address;
-
-    // Clear z/w start counters
-    TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
-
-    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-    // Get tile address
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
-
-    // Stall unpacker until pending CFG writes from Trisc have completed
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
-    // Unpack top faces
-    ckernel::ckernel_template::run();
-
-    // Unpack bottom faces if needed
-    if (num_loops > 1)
-    {
-        // Needed to stall counter reconfiguration until unpacker finishes previous instruction
-        TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::UNPACK);
-
-        // Don't clear the CH1 W counter - needed for multiple tiles
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1011);
-
-        // Increment address to point to bottom faces in L1
-        address += bot_face_offset_address;
-        LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-
-        // Get tile address
-        TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_unpack::TMP0));
-        TT_SETDMAREG(0, UPPER_HALFWORD(address), 0, HI_16(p_gpr_unpack::TMP0));
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-
-        // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::THCON);
-
-        // Unpack bottom faces
-        ckernel::ckernel_template::run();
-    }
-
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-    unpack_to_dest_tile_done(unp_cfg_context);
-}
-
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
@@ -203,18 +106,89 @@ inline void _llk_unpack_tilize_(
     const std::uint32_t block_c_dim_16B   = block_ct_dim * (narrow_tile ? FACE_C_DIM / 16 : TILE_C_DIM / 16);
     std::uint32_t bot_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, face_r_dim * block_c_dim_16B); //*N rows / 16 to get 16B word aligned address
 
-    // Program srcA and srcB base addresses
     std::uint32_t num_loops = narrow_tile ? 2 : num_faces / 2;
 
-    if (!unpack_to_dest)
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+
+    // --- Top faces (common path) ---
+
+    TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+
+    wait_for_next_context(2);
+
+    std::uint32_t address = base_address + top_face_offset_address;
+    _llk_unpack_configure_single_address_(address, cfg);
+
+    if (unpack_to_dest)
     {
-        unpack_tilize_impl(base_address, num_loops, top_face_offset_address, bot_face_offset_address);
+        set_dst_write_addr(unp_cfg_context, unpack_src_format);
+        wait_for_dest_available();
     }
-    else
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    ckernel::ckernel_template::run();
+
+    // --- Bottom faces, dest path: stay in same context ---
+
+    if (unpack_to_dest && num_loops > 1)
     {
-        // Unpack tilize to DEST works with only one config context, hence it needs to be reset before calling the function.
-        reset_config_context();
-        unpack_tilize_to_dest_impl(base_address, unpack_src_format, num_loops, top_face_offset_address, bot_face_offset_address);
+        TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::UNPACK);
+
+        // Don't clear the CH1 W counter - needed for multiple tiles
+        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1011);
+
+        address += bot_face_offset_address;
+        LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+
+        TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_unpack::TMP0));
+        TT_SETDMAREG(0, UPPER_HALFWORD(address), 0, HI_16(p_gpr_unpack::TMP0));
+        if (0 == unp_cfg_context)
+        {
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+        }
+        else
+        {
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+        }
+
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::THCON);
+
+        ckernel::ckernel_template::run();
+    }
+
+    // --- Release context (common path) ---
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    if (unpack_to_dest)
+    {
+        unpack_to_dest_tile_done(unp_cfg_context);
+    }
+
+    switch_config_context(unp_cfg_context);
+
+    // --- Bottom faces, normal path: uses a new context ---
+
+    if (!unpack_to_dest && num_loops > 1)
+    {
+        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+
+        wait_for_next_context(2);
+
+        _llk_unpack_configure_single_address_(base_address + top_face_offset_address + bot_face_offset_address, cfg);
+
+        semaphore_post(semaphore::UNPACK_SYNC);
+
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+        ckernel::ckernel_template::run();
+
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+        switch_config_context(unp_cfg_context);
     }
 }
 
