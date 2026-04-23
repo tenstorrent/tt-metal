@@ -319,30 +319,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
-        const auto& out_shape = output_tensor_spec.logical_shape();
-        const auto& bias_shape = bias.logical_shape();
-        const int rank_out = static_cast<int>(out_shape.rank());
-        const int rank_bias = static_cast<int>(bias_shape.rank());
-        const int largest_rank = std::max(rank_out, rank_bias);
-        for (int i = -1; i >= -largest_rank; --i) {
-            const uint32_t dim_out = (i >= -rank_out) ? out_shape[i] : 1;
-            const uint32_t dim_bias = (i >= -rank_bias) ? bias_shape[i] : 1;
-            TT_FATAL(
-                dim_bias == 1 || dim_bias == dim_out,
-                "Fused matmul bias is not broadcastable to matmul output at aligned dimension index {} "
-                "(output logical dim {}, bias logical dim {}). output_shape={}, bias_shape={}",
-                i,
-                dim_out,
-                dim_bias,
-                out_shape,
-                bias_shape);
-        }
         auto bias_tile_shape = bias.tensor_spec().tile().get_tile_shape();
         TT_FATAL(
             (bias_tile_shape[0] == in0_tile.get_height() && bias_tile_shape[1] == in1_tile.get_width()),
             "Input tile dims must have inner dim equal to 32 due to llk "
             "constraints");
         TT_FATAL(bias.layout() == Layout::TILE, "Unsupported input layout");
+        const auto& bias_shape = bias.logical_shape();
         const auto& bias_shape_padded = bias.padded_shape();
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
