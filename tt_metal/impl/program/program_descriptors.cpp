@@ -196,6 +196,50 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
     }
 }
 
+void KernelDescriptor::emplace_runtime_args(
+    const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    CoreRuntimeArgs values;
+    values.reserve(args.size());
+    for (const auto& arg : args) {
+        if (const auto* buf = std::get_if<Buffer*>(&arg)) {
+            buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
+            values.push_back((*buf)->address());
+        } else {
+            values.push_back(std::get<uint32_t>(arg));
+        }
+    }
+    runtime_args.emplace_back(core, std::move(values));
+}
+
+ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& desc) {
+    ResolvedBindings result;
+
+    for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
+        for (const auto& b : desc.kernels[k].buffer_bindings) {
+            auto& data = GetRuntimeArgs(program, k, b.core);
+            result.rt_args.push_back({&data, b.arg_idx, b.buffer});
+        }
+    }
+
+    auto program_cbs = program.circular_buffers();
+    for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
+        if (desc.cbs[ci].buffer) {
+            result.cbs.push_back({static_cast<uint32_t>(program_cbs[ci]->id()), desc.cbs[ci].buffer});
+        }
+    }
+
+    return result;
+}
+
+void apply_resolved_bindings(Program& program, const ResolvedBindings& bindings) {
+    for (const auto& b : bindings.rt_args) {
+        (*b.data)[b.arg_idx] = b.buffer->address();
+    }
+    for (const auto& cb : bindings.cbs) {
+        UpdateDynamicCircularBufferAddress(program, cb.cb_id, *cb.buffer);
+    }
+}
+
 }  // namespace tt::tt_metal
 
 std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
