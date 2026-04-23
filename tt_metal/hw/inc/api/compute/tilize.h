@@ -290,7 +290,10 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
 
 // Exact-width variants: safe to use only when fast_tilize_init and fast_tilize_block
 // are always called with the same width (full_dim == block on every call).
-// On BH this avoids one reinit_xdim + reinit_unit_dim on the first chunk per block call.
+// On BH the block function still uses prev_chunk = 0 (conservative), because on the
+// second and later calls the hardware state is whatever the previous call's last
+// chunk left it in (not necessarily first_chunk(block)). The naming signals the
+// caller contract, not a behavioral difference from the generic path.
 // Do NOT use for callers that initialize with a max width and run blocks with smaller widths
 // (e.g. MOE kernels with per-core variable tile counts).
 ALWI void fast_tilize_init_exact_width(
@@ -303,9 +306,12 @@ ALWI void fast_tilize_block_exact_width(
 #ifdef ARCH_BLACKHOLE
     {
         uint32_t tiles_done = 0;
-        // Exact-width contract: block == full_dim used at init, so first_chunk(block)
-        // matches the hardware state already programmed. Skip the first reinit.
-        uint32_t prev_chunk = (block > 5) ? 4 : (block == 5) ? 2 : block;
+        // prev_chunk = 0: always fires reinit on the first chunk.
+        // Cannot use first_chunk(block) here because on the 2nd+ block call
+        // the hardware state reflects the last chunk of the previous call, not init.
+        // (A mixed-decomposition block, e.g. [2,3] for width=5, leaves X for unit=3
+        //  but the next block needs to start at unit=2 — skipping the reinit is wrong.)
+        uint32_t prev_chunk = 0;
 
         while (tiles_done < block) {
             uint32_t remaining = block - tiles_done;
