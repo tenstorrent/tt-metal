@@ -125,6 +125,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SFPU configuration and execution
     // -------------------------------------------------------------------------
 
+    // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
+    // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.
+    const int in0_base = ckernel::math::SFPU_SRCS_BASE_ADDR;
+    const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
+    const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
+
+    // Load replay buffer
+    const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1; // Divide by 2 since SFSPU operates on 2 rows at a time
+    const std::uint32_t replay_buf_len = num_sfpu_iterations * 4;
+    load_replay_buf(
+        0,
+        replay_buf_len,
+        false,
+        0,
+        0,
+        // Lambda function to load replay buffer
+        [in0_base, in1_base, out_base, sfpmem_mod, num_sfpu_iterations]
+        {
+#pragma GCC unroll 4
+            for (int d = 0; d < num_sfpu_iterations; d++)
+            {
+                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, sfpmem_mod, ADDR_MOD_7, 0, in1_base + (d << 1));
+                // Add LREG0 + LREG1, store result in LREG2
+                TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
+                // Store result back to output slice
+                TT_SFPSTORE(p_sfpu::LREG2, sfpmem_mod, ADDR_MOD_7, 0, out_base + (d << 1));
+            }
+        });
+
     // Binary: 2 instructions per auto-loop iteration (one per operand)
     if (PARAM_SRCS_32BIT_MODE)
     {
@@ -136,36 +166,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     _llk_math_eltwise_unary_sfpu_init_();
 
-    // SrcS slice layout: slice 0 = in0, slice 1 = in1, slice 2 = out.
-    // Each slice is PARAM_SRCS_YDIM rows apart in the SFPU address space.
-    const int in0_base            = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int in1_base            = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
-    const int out_base            = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-    const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
-        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
-
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
 
-        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
+        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+
+        // No auto-loops for unpacker due to HW bug for binary unpacking. Issue #1635: https://github.com/tenstorrent/tt-llk/issues/1635
+        // Preload the unpacker pipeline so that SFPU is not starved
+        constexpr int preload_count = 3;
+#pragma GCC unroll preload_count
+        for (std::uint32_t i = 0; i < preload_count; i++)
         {
-            // No auto-loops due to HW bug for binary unpacking. Issue #1635: https://github.com/tenstorrent/tt-llk/issues/1635
             TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
             TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+        }
 
-            // SFPU add inlined for sfpmem_mod control
-#pragma GCC unroll 8
-            for (int d = 0; d < num_sfpu_iterations; d++)
-            {
-                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, in0_base + (d << 1));
-                TT_SFPLOAD(p_sfpu::LREG1, sfpmem_mod, ADDR_MOD_7, 0, in1_base + (d << 1));
-                // Add LREG0 + LREG1, store result in LREG2
-                TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
-                // Store result back to output slice
-                TT_SFPSTORE(p_sfpu::LREG2, sfpmem_mod, ADDR_MOD_7, 0, out_base + (d << 1));
-            }
+        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT - preload_count; slice++)
+        {
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+            TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+            _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
+        }
 
+        // Remaining SFPU iterations with no unpacker instructions (since they are preloaded)
+#pragma GCC unroll preload_count
+        for (std::uint32_t i = 0; i < preload_count; i++)
+        {
+            TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
             _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write
         }
     }
