@@ -175,6 +175,11 @@ ALWI void reduce(
     static_assert(
         is_post_reduce_op_v<PostReduceOp>,
         "PostReduceOp must be callable with a uint32_t argument");
+    static_assert(
+        !is_accumulate_v<AccumulateT> || reduce_type != PoolType::MAX || reduce_dim == ReduceDim::REDUCE_COL,
+        "Accumulate::at with PoolType::MAX only works for REDUCE_COL. For REDUCE_ROW / REDUCE_SCALAR "
+        "the pack reduce edge mask drops the face-row-0 spread that GMPOOL needs as its running "
+        "accumulator on the reload pass, so the previous MAX is lost.");
 
     // =============================================================================
     // Runtime Assertions (parameter validation)

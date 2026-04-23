@@ -35,20 +35,53 @@ void kernel_main() {
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
                 cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
-            // Phase 1: Reduce Wt-1 tiles
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
+            // Phase 1: bulk reduce of Wt-1 full tiles into cb_max, popping tiles as we go.
+            cb_reserve_back(cb_max, onetile);
 
+            tile_regs_acquire();
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_in0, cb_max_scaler);
+#endif
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in0, cb_max_scaler, cb_max);
+            for (uint32_t w = 0; w < Wt - 1; ++w) {
+                cb_wait_front(cb_in0, onetile);
+                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in0, cb_max_scaler, 0, 0, dst0);
+                cb_pop_front(cb_in0, onetile);
+            }
+            reduce_uninit();
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_max);
+            tile_regs_release();
+
+            cb_push_back(cb_max, onetile);
+
+            // Phase 2: merge the masked last tile into cb_max.
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            // Phase 2: Reduce final masked tile with accumulation
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_tmp,
-                cb_max_scaler,
-                cb_max,
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+            cb_wait_front(cb_max, 1);
+            cb_wait_front(cb_tmp, 1);
+
+            tile_regs_acquire();
+            copy_tile_init_with_dt(cb_max);
+            copy_tile(cb_max, 0, dst0);
+
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_tmp, cb_max_scaler);
+#endif
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tmp, cb_max_scaler, cb_max);
+            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tmp, cb_max_scaler, 0, 0, dst0);
+            reduce_uninit();
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_max);
+            tile_regs_release();
+
+            cb_pop_front(cb_max, 1);
+            cb_pop_front(cb_tmp, 1);
+            cb_push_back(cb_max, 1);
         }
 
         // step 1
