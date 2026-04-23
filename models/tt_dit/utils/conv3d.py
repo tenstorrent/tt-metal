@@ -305,7 +305,7 @@ def register_conv3d_configs(configs: dict) -> None:
             (384, 768, (3, 1, 1)): (384, 384, 1, 16, 4),
         })
     """
-    _DEFAULT_BLOCKINGS.update(configs)
+    _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
 
 
 def get_conv3d_config(
