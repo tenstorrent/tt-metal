@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstring>
+#include <type_traits>
 #include <utility>
 
 #include "ckernel_common_ops.h"
@@ -367,14 +368,14 @@ inline volatile std::uint32_t *tt_reg_ptr get_cfg_pointer()
     return reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
 }
 
-inline volatile std::uint32_t short *tt_reg_ptr get_cfg16_pointer()
+inline volatile std::uint16_t *tt_reg_ptr get_cfg16_pointer()
 {
     if (cfg_state_id == 0)
     {
-        return reinterpret_cast<volatile std::uint32_t short tt_reg_ptr *>(TENSIX_CFG_BASE);
+        return reinterpret_cast<volatile std::uint16_t tt_reg_ptr *>(TENSIX_CFG_BASE);
     }
 
-    return reinterpret_cast<volatile std::uint32_t short tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
+    return reinterpret_cast<volatile std::uint16_t tt_reg_ptr *>(TENSIX_CFG_BASE + CFG_STATE_SIZE * 16);
 }
 
 inline void flip_cfg_state_id()
@@ -626,7 +627,7 @@ constexpr std::uint32_t DstTileSizeLog2[3] = {
 };
 
 /**
- * @brief Calculates the maximum number of destination tiles that can fit in the destination register.
+ * @brief Calculates the maximum number of tiles that can fit in the math's destination region.
  *
  * @tparam SYNC_MODE   Destination synchronization mode (SyncHalf or SyncFull)
  * @tparam ACCUM_MODE Accumulation mode: true for 32-bit (FP32), false for 16-bit
@@ -647,6 +648,100 @@ constexpr std::uint32_t get_dest_max_tiles()
                                                                                 : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
     return DEST_REGISTER_SIZE >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
+/**
+ * @brief Returns the maximum number of tiles that fit in the packer's dest region
+ *        based on the currently configured W-stride (read from the hardware config register).
+ *
+ * Unlike get_dest_max_tiles<..., DstTileShape>, this does not assume a fixed tile shape.
+ * It reads the actual W-stride that the packer is configured with, so it works correctly
+ * even when kernels reconfigure the stride for non-standard tile dimensions (e.g. 8x32).
+ *
+ * Byte capacity of the dest sync region (DEST_REGISTER_{HALF,FULL}_SIZE_BYTES) is constant
+ * regardless of ACCUM_MODE because FP32 halves the row count but doubles the datum size,
+ * which cancels out against the doubled x_stride already baked into the configured W-stride.
+ * W-stride from the packer config is in the same byte-oriented addressing units.
+ */
+template <DstSync SYNC_MODE, bool ACCUM_MODE>
+__attribute__((noinline)) std::uint32_t get_pack_dest_max_tiles()
+{
+    constexpr std::uint32_t dest_sync_region_size_bytes = SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE_BYTES : DEST_REGISTER_FULL_SIZE_BYTES;
+
+    const std::uint32_t w_stride =
+        (cfg_read(PCK0_ADDR_CTRL_ZW_REG_0_Wstride_ADDR32) & PCK0_ADDR_CTRL_ZW_REG_0_Wstride_MASK) >> PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT;
+
+    // Reject invalid stride: __builtin_ctz(0) is undefined. Reject non-power-of-two strides because
+    // dest_sync_region_size_bytes >> __builtin_ctz(w_stride) is only equivalent to dividing by w_stride when w_stride is a power of two.
+    if ((w_stride == 0U) || ((w_stride & (w_stride - 1U)) != 0U))
+    {
+        return 0U;
+    }
+
+    return dest_sync_region_size_bytes >> __builtin_ctz(w_stride);
+}
+
+/**
+ * @brief Forces the compiler to load @p ref from memory.
+ *
+ * @note Does NOT enforce ordering in code or memory.
+ * @note Guarantees that a load will be performed.
+ *
+ * @tparam T type of the referenced object
+ * @param ref to load from memory
+ * @return loaded value
+ *
+ * @par Example
+ * Consumer waits for producer to create entries in a ringbuffer.
+ * @code
+ * // Producer updates write_idx, so we need to invalidate when polling
+ * while ((ckernel::load_force(write_idx) - read_idx + BUFFER_SIZE) % BUFFER_SIZE == 0);
+ * @endcode
+ */
+template <typename T>
+[[nodiscard]] inline T load_force(T &ref)
+{
+    // "=m" output constraint: tells the compiler that ref may have been modified by external code
+    // Effect: prevents the compiler from reusing a stale register-cached value.
+    asm volatile("" : "=m"(ref));
+    return ref;
+}
+
+/**
+ * @brief Assigns @p val to @p ref and prevents the compiler from eliminating or deferring the store.
+ *
+ * @note Does NOT enforce ordering in code or memory.
+ * @note Guarantees that a store will be performed.
+ *
+ * @tparam T type of the referenced object
+ * @tparam U type of the value to store
+ * @param ref reference to the object to store into
+ * @param val value to assign to @p ref
+ *
+ * @par Example
+ * Producer signals entries have been written to a ringbuffer.
+ * @code
+ * // Consumer polls write_idx, so we need to ensure the store is committed
+ * ckernel::store_force(write_idx, (write_idx + chunk) % BUFFER_SIZE);
+ * @endcode
+ */
+template <typename T, typename U>
+inline void store_force(T &ref, U &&val)
+{
+    ref = std::forward<U>(val);
+
+    // "m" input constraint: tells compiler this asm reads from ref
+    // Effect: compiler must flush any pending write to ref before this point
+    asm volatile("" : : "m"(ref));
+}
+
+/**
+ * @brief Compiler-only barrier: prevents reordering of memory accesses across this point.
+ * @note Does not enforce CPU or system memory ordering by itself.
+ */
+inline void fence_compiler()
+{
+    asm volatile("" ::: "memory");
 }
 
 /**

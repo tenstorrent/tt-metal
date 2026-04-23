@@ -46,17 +46,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
-        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
+        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false);
 
-        std::uint32_t read_offset = 0;
-
-        for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+        for (std::uint32_t i = 0; i < params.BLOCK_RT_DIM; i++)
         {
-            for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+            const std::uint32_t read_offset = i * params.BLOCK_RT_DIM;
+            for (std::uint32_t j = 0; j < params.BLOCK_CT_DIM; j++)
             {
                 _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, 0, FACE_R_DIM, 4, false);
             }
-            read_offset += BLOCK_RT_DIM;
         }
     }
 }
@@ -138,25 +136,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, params.num_faces);
+    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, params.num_faces, false, false, num_tiles_in_block);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
+    reconfigure_packer_l1_acc(params.L1_ACC);
 #endif
 
     for (int block = 0; block < num_blocks; block++)
     {
         _llk_packer_wait_for_math_done_();
-
-#ifdef ARCH_BLACKHOLE
-        // Pack all tiles at once - MOP handles everything
         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(params.DST_INDEX, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]));
-#else
-        // Fallback to traditional packing for non-Blackhole architectures
-        for (int tile = 0; tile < num_tiles_in_block; ++tile)
-        {
-            int res_tile_idx = (block * num_tiles_in_block) + tile;
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
-        }
-#endif
 
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

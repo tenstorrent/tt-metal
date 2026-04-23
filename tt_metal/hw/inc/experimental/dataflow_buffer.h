@@ -28,6 +28,27 @@
 
 namespace experimental {
 
+// Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
+// The user will never directly interact with this type.
+//
+// The user's host code declares a local_accessor_name when binding a DFB endpoint to a kernel.
+// The user then uses that local_accessor_name to construct a DataflowBuffer in the kernel code.
+//
+// Usage example:
+//   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
+//   // In the kernel code:
+//   DataflowBuffer my_dfb(dfb::my_dfb_name);
+//
+// Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
+//
+// Currently, DFBAccessor is backed by a compile-time ID, baked into the kernel binary.
+// If we want to switch to using an implicit CRTA mechanism, the implementation of
+// DFBAccessor can be transparently modified (kernel-side syntax stays unchanged).
+struct DFBAccessor {
+    explicit constexpr DFBAccessor(uint16_t id) noexcept : id(id) {}
+    uint16_t id;
+};
+
 class DataflowBuffer {
 public:
 #ifdef ARCH_QUASAR
@@ -36,6 +57,12 @@ public:
     using DFBInterface = LocalCBInterface;
 #endif
 
+    // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
+    // Pass the named binding constant from kernel_bindings_generated.h:
+    //   DataflowBuffer dfb(my_dfb_name);
+    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.id) {}
+
+    // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }
@@ -50,17 +77,7 @@ public:
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
     // Explicit sync APIs end
 
-#ifdef ARCH_QUASAR
-#ifndef COMPILE_FOR_TRISC
-    // Implicit sync APIs
-    template <typename Src>
-    void read_in(const Noc& noc, const Src& src, const typename noc_traits_t<Src>::src_args_type& src_args);
-
-    template <typename Dst>
-    void write_out(const Noc& noc, const Dst& dst, const typename noc_traits_t<Dst>::dst_args_type& dst_args);
-    // Implicit sync APIs end
-#endif
-#else  // tt-1xx
+#ifndef ARCH_QUASAR
 #ifndef COMPILE_FOR_TRISC
     bool pages_reservable_at_back(int32_t num_pages) const;
     bool pages_available_at_front(int32_t num_pages) const;
@@ -76,6 +93,12 @@ public:
 #endif
 
     void finish() { finish_impl(); }
+
+#ifndef COMPILE_FOR_TRISC
+    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
+    // Instead, use noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid)
+    void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
+#endif
 
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
     uint32_t get_read_ptr()  const { return get_read_ptr_impl(); }
@@ -93,11 +116,24 @@ private:
     void finish_impl();
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
+#ifndef COMPILE_FOR_TRISC
+    void write_barrier_impl(const Noc &noc) const;
+#endif
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
     void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
-#endif
+
+#ifndef COMPILE_FOR_TRISC
+    friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_* implicit-sync helpers
+
+    uint32_t prepare_implicit_read();
+    void commit_implicit_read();
+
+    uint32_t prepare_implicit_write();
+    void commit_implicit_write();
+#endif // !COMPILE_FOR_TRISC
+#endif // ARCH_QUASAR
 
     void release_scoped_lock() {
         // TODO: Unregister with the debugger
@@ -122,12 +158,12 @@ private:
 
 template <>
 struct noc_traits_t<DataflowBuffer> {
-    struct src_args_type {
-        uint32_t offset_bytes{};
-    };
-    struct dst_args_type {
-        uint32_t offset_bytes{};
-    };
+
+    // Alias the struct defined in noc.h so that noc_traits_t<DataflowBuffer>::src/dst_args_type
+    // stays consistent with the DFB-specific Noc overload signatures.
+    using src_args_type = DataflowBufferArgs;
+    using dst_args_type = DataflowBufferArgs;
+
     struct dst_args_mcast_type {
         uint32_t noc_x_start{};
         uint32_t noc_y_start{};

@@ -127,6 +127,7 @@ struct FlashMLADecode {
     struct ReaderArgs {
         uint32_t k_addr;
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_mcast_sender;
@@ -153,6 +154,7 @@ struct FlashMLADecode {
 
     struct WriterArgs {
         uint32_t local_cur_pos;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_output_core;
@@ -194,6 +196,7 @@ struct FlashMLADecode {
         uint32_t local_cur_pos;
         uint32_t do_reduce;
         uint32_t do_output;
+        uint32_t slot_id;
         uint32_t cur_batch;
         uint32_t core_num_in_reduce;
         uint32_t is_sender_after_reduce;
@@ -217,7 +220,10 @@ struct FlashMLADecode {
             }
         }
 
-        void set_local_cur_pos(RTArgs& args, uint32_t local_cur_pos) { args.local_cur_pos = local_cur_pos; }
+        void set_pos_and_slot(RTArgs& args, uint32_t local_cur_pos, uint32_t slot_id) {
+            args.local_cur_pos = local_cur_pos;
+            args.slot_id = slot_id;
+        }
 
         /**
          * Push dummy tiles into the hand-off CBs (cb_out_o, cb_out_ms) so that
@@ -272,9 +278,8 @@ struct FlashMLADecode {
             }
 
             const uint32_t k_chunk_tiles = args.Sk_chunk_t * args.DHt;
-            const uint32_t k_tile_bytes = get_tile_size(args.cb_k_in);
 
-            const auto k_reader = TensorAccessor(k_tensor_args, args.k_addr, k_tile_bytes);
+            const auto k_reader = TensorAccessor(k_tensor_args, args.k_addr);
 
             const uint32_t num_chunks_per_batch = args.St / args.Sk_chunk_t;
 
@@ -297,8 +302,6 @@ struct FlashMLADecode {
             const uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
                 args.mcast_start_x, args.mcast_start_y, args.receiver_ready_semaphore_addr, ATOMIC_NOC_INDEX);
 
-            constexpr uint32_t kv_batch = 0;
-
             const uint64_t brisc_mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
                 args.mcast_start_x, args.mcast_start_y, args.mcast_end_x, args.mcast_end_y, 0);
             const uint64_t brisc_mcast_sem_addr = brisc_mcast_noc_addr | args.mcast_semaphore_addr;
@@ -316,7 +319,7 @@ struct FlashMLADecode {
 
                     if (is_mcast_sender && loop_iter < BRISC_MCAST_LOOPS) {
                         DeviceZoneScopedN("mcast-sender-serialized-read-and-mcast");
-                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
@@ -356,7 +359,7 @@ struct FlashMLADecode {
                         }
                     } else if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
-                        const uint32_t shard_id = kv_batch * num_chunks_per_batch + k_chunk;
+                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
                         uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (loop_iter == BRISC_MCAST_LOOPS) {
@@ -673,7 +676,7 @@ struct FlashMLADecode {
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-            PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, true, scale_fp32, true));
+            PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
 
             uint32_t cur_pos = args.local_cur_pos;
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
@@ -781,7 +784,7 @@ struct FlashMLADecode {
 
             if (do_reduce && num_cores_to_wait > 0) {
                 reconfig_data_format_srca<false, true>(cb_ms_in);
-                exp_tile_init<exp_approx_mode, false, scale_fp32>();
+                exp_tile_init<exp_approx_mode, scale_fp32>();
                 for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
                     sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                         cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);

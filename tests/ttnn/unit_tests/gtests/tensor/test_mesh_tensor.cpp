@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include "ttnn/tensor/tensor_ops.hpp"
 #include <gmock/gmock.h>
+
+#include <numeric>
+
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -15,6 +18,8 @@
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
+
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 
 namespace ttnn::distributed::test {
 namespace {
@@ -549,6 +554,282 @@ auto get_mesh_tensor_write_test_params() {
 
 INSTANTIATE_TEST_SUITE_P(
     MeshTensorWriteTest, MeshTensorWriteTest, ::testing::ValuesIn(get_mesh_tensor_write_test_params()));
+
+// ======================================================================================
+//                    Data Movement Tests (2x2 mesh, Runtime Tensor)
+// ======================================================================================
+
+class MeshDevice2x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 2}}) {}
+};
+
+using MeshTensorDataMovementTest = MeshDevice2x2Fixture;
+
+using tt::tt_metal::DistributedHostBuffer;
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::HostTensor;
+using tt::tt_metal::MeshTensor;
+using tt::tt_metal::TensorTopology;
+namespace tensor_impl = tt::tt_metal::tensor_impl;
+
+// Helper: create a HostTensor with a single shard at [0,0].
+HostTensor make_single_shard_host_tensor(const ttnn::Shape& shape, uint32_t fill) {
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    return HostTensor(HostBuffer(std::vector<uint32_t>(shape.volume(), fill)), spec, TensorTopology{});
+}
+
+// Helper: create a HostTensor with one shard per coordinate in a mesh.
+// Each shard is filled with `volume` copies of `shard_fills[i]`.
+HostTensor make_full_coverage_host_tensor(
+    const ttnn::Shape& shape, const distributed::MeshShape& mesh_shape, const std::vector<uint32_t>& shard_fills) {
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto dhb = DistributedHostBuffer::create(mesh_shape);
+    distributed::MeshCoordinateRange range(mesh_shape);
+    std::vector<distributed::MeshCoordinate> coords(range.begin(), range.end());
+    dhb.emplace_shards(coords, [&, idx = size_t{0}](const distributed::MeshCoordinate&) mutable {
+        return HostBuffer(std::vector<uint32_t>(shape.volume(), shard_fills.at(idx++)));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_shape);
+    return HostTensor(std::move(dhb), spec, topology);
+}
+
+// Helper: create a HostTensor with shards at only a subset of mesh coordinates.
+// Each shard is filled with `volume` copies of `shard_fills[i]`.
+HostTensor make_partial_coverage_host_tensor(
+    const ttnn::Shape& shape,
+    const distributed::MeshShape& mesh_shape,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const std::vector<uint32_t>& shard_fills) {
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto dhb = DistributedHostBuffer::create(mesh_shape);
+    dhb.emplace_shards(coords, [&, idx = size_t{0}](const distributed::MeshCoordinate&) mutable {
+        return HostBuffer(std::vector<uint32_t>(shape.volume(), shard_fills.at(idx++)));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(coords.size()));
+    return HostTensor(std::move(dhb), spec, topology);
+}
+
+// Helper: assert that two HostTensors have the same populated coords and identical shard contents.
+void expect_host_tensors_eq(const HostTensor& expected, const HostTensor& actual) {
+    const auto& exp_coords = expected.buffer().shard_coords();
+    const auto& act_coords = actual.buffer().shard_coords();
+    ASSERT_EQ(exp_coords, act_coords);
+    for (const auto& coord : exp_coords) {
+        auto exp_shard = expected.buffer().get_shard(coord);
+        auto act_shard = actual.buffer().get_shard(coord);
+        ASSERT_TRUE(exp_shard.has_value());
+        ASSERT_TRUE(act_shard.has_value());
+        auto exp_span = exp_shard->view_as<uint32_t>();
+        auto act_span = act_shard->view_as<uint32_t>();
+        EXPECT_THAT(
+            std::vector<uint32_t>(act_span.begin(), act_span.end()),
+            Pointwise(Eq(), std::vector<uint32_t>(exp_span.begin(), exp_span.end())));
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  is_uniform_write
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, IsUniformWrite_FullCoverage) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
+    EXPECT_TRUE(is_uniform_write(host_tensor, *mesh_device_));
+    auto& cq = mesh_device_->mesh_command_queue();
+    EXPECT_NO_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
+}
+
+TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SingleShard) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto host_tensor = make_single_shard_host_tensor(shape, 1);
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
+    auto& cq = mesh_device_->mesh_command_queue();
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
+}
+
+TEST_F(MeshTensorDataMovementTest, IsUniformWrite_PartialCoverage) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<distributed::MeshCoordinate> coords = {{0, 0}, {0, 1}};
+    auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, {0, 0});
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
+    auto& cq = mesh_device_->mesh_command_queue();
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
+}
+
+TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SmallerMeshShape) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    distributed::MeshShape smaller_mesh{1, 2};
+    auto host_tensor = make_full_coverage_host_tensor(shape, smaller_mesh, {0, 0});
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
+    auto& cq = mesh_device_->mesh_command_queue();
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
+}
+
+TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    HostTensor host_tensor(std::move(dhb), spec, TensorTopology{});
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
+    auto& cq = mesh_device_->mesh_command_queue();
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
+}
+
+// ---------------------------------------------------------------------------
+//  Uniform to_device / to_host roundtrip
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, UniformToDevice_ToHost_Roundtrip) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills = {10, 20, 30, 40};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+
+    expect_host_tensors_eq(host_tensor, result);
+}
+
+// ---------------------------------------------------------------------------
+//  Uniform copy_to_device / copy_to_host roundtrip
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills = {100, 200, 300, 400};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+    enqueue_write_tensor(cq, host_tensor, device_tensor);
+
+    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
+    }
+    HostTensor result(std::move(result_dhb), spec, TensorTopology{});
+    enqueue_read_tensor(cq, device_tensor, result);
+
+    expect_host_tensors_eq(host_tensor, result);
+}
+
+// ---------------------------------------------------------------------------
+//  Uniform copy_to_device rejects non-uniform host tensor
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_RejectsPartialCoverage) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<distributed::MeshCoordinate> coords = {{0, 0}, {1, 1}};
+    auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, {0, 0});
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, device_tensor));
+}
+
+// ---------------------------------------------------------------------------
+//  Non-uniform to_device / to_host roundtrip
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, NonUniformToDevice_ToHost_Roundtrip) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<distributed::MeshCoordinate> coords = {{0, 0}, {1, 0}};
+    std::vector<uint32_t> shard_fills = {7, 13};
+    auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto [device_tensor, written_coords] =
+        non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    ASSERT_EQ(written_coords.size(), coords.size());
+
+    HostTensor result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, written_coords);
+    expect_host_tensors_eq(host_tensor, result);
+}
+
+// ---------------------------------------------------------------------------
+//  Non-uniform copy_to_device / copy_to_host roundtrip
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<distributed::MeshCoordinate> coords = {{0, 1}, {1, 1}};
+    std::vector<uint32_t> shard_fills = {42, 99};
+    auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
+
+    auto written_coords = non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, device_tensor);
+    ASSERT_EQ(written_coords.size(), coords.size());
+
+    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    for (const auto& coord : written_coords) {
+        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
+    }
+    HostTensor result(std::move(result_dhb), spec, TensorTopology{});
+    non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, result, written_coords);
+    expect_host_tensors_eq(host_tensor, result);
+}
+
+// ---------------------------------------------------------------------------
+//  Non-uniform to_device with single shard (replicate)
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, NonUniformToDevice_SingleShard_Roundtrip) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto host_tensor = make_single_shard_host_tensor(shape, 55);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto [device_tensor, written_coords] =
+        non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, written_coords);
+    auto expected = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {55, 55, 55, 55});
+    expect_host_tensors_eq(expected, result);
+}
+
+// ---------------------------------------------------------------------------
+//  Non-uniform D2H sheds extra shards from the host tensor
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorDataMovementTest, NonUniformToHost_ShedsExtraShards) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills = {10, 20, 30, 40};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+
+    std::vector<distributed::MeshCoordinate> subset = {{0, 1}, {1, 0}};
+    HostTensor result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, subset);
+
+    ASSERT_EQ(result.buffer().shard_coords().size(), subset.size());
+    auto expected = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), subset, {20, 30});
+    expect_host_tensors_eq(expected, result);
+}
+
+TEST_F(MeshTensorDataMovementTest, NonUniformCopyToHost_ShedsExtraShards) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    std::vector<uint32_t> shard_fills = {5, 15, 25, 35};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+
+    // Pass a full-coverage host tensor as the destination, but only read back a subset of coords.
+    std::vector<distributed::MeshCoordinate> subset = {{1, 1}};
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto dest = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
+    non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, dest, subset);
+
+    ASSERT_EQ(dest.buffer().shard_coords().size(), subset.size());
+    auto expected = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), subset, {35});
+    expect_host_tensors_eq(expected, dest);
+}
 
 }  // namespace
 }  // namespace ttnn::distributed::test

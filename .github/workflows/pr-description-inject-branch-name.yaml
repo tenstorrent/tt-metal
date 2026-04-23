@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   update-description:
+    # Skip for PRs from forks — the GITHUB_TOKEN lacks write access to the
+    # base repo's pull requests in that context, causing a 403 on pulls.update.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Update PR Description
@@ -31,67 +34,31 @@ jobs:
             // optional: true  → shown as opt-in, "no run" is expected
             // optional: false → required, "no run" is a signal something's missing
             const pipelines = [
-              { name: "Sanity tests",           workflow: "sanity-tests.yaml",               optional: false },
-              { name: "Blackhole post-commit",   workflow: "blackhole-post-commit.yaml",      optional: false },
-              { name: "cpp-unit-tests",          workflow: "tt-metal-l2-nightly.yaml",        optional: false },
-              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",      optional: true  },
-              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",  optional: true  },
-              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml", optional: true },
+              { name: "Sanity tests",                  workflow: "sanity-tests.yaml",               optional: false },
+              { name: "Blackhole post-commit",          workflow: "blackhole-post-commit.yaml",      optional: false },
+              { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
+              { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
+              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },
+              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",        optional: true  },
+              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },
             ];
 
-            const rows = [];
+            const badges = [];
             for (const p of pipelines) {
-              const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}`;
-              const optionalTag = p.optional ? " *(opt-in)*" : "";
+              // Include branch filter so the link lands on runs for this PR's branch
+              const dispatchUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}?query=branch:${branchName}`;
+              const badgeUrl = `https://github.com/${owner}/${repo}/actions/workflows/${p.workflow}/badge.svg?branch=${branchName}`;
 
-              let statusEmoji, runLink;
-              try {
-                const runsResp = await github.rest.actions.listWorkflowRuns({
-                  owner,
-                  repo,
-                  workflow_id: p.workflow,
-                  branch: branchName,
-                  per_page: 1,
-                });
-
-                if (runsResp.data.total_count === 0) {
-                  statusEmoji = "➖";
-                  runLink = `[Launch ↗](${dispatchUrl})`;
-                } else {
-                  const run = runsResp.data.workflow_runs[0];
-                  const status = run.status;
-                  const conclusion = run.conclusion;
-
-                  if (status === "in_progress" || status === "queued" || status === "waiting" || status === "requested") {
-                    statusEmoji = "⏳";
-                  } else if (conclusion === "success") {
-                    statusEmoji = "✅";
-                  } else if (conclusion === "failure") {
-                    statusEmoji = "❌";
-                  } else if (conclusion === "cancelled") {
-                    statusEmoji = "🚫";
-                  } else if (conclusion === "skipped") {
-                    statusEmoji = "⏭️";
-                  } else {
-                    statusEmoji = "❓";
-                  }
-                  runLink = `[#${run.run_number}](${run.html_url})`;
-                }
-              } catch (e) {
-                statusEmoji = "❓";
-                runLink = `[Launch ↗](${dispatchUrl})`;
-              }
-
-              rows.push(`| [${p.name}](${dispatchUrl})${optionalTag} | ${statusEmoji} | ${runLink} |`);
+              // Badge is live (re-rendered on every page load) and includes the pipeline name.
+              // Clicking it filters to runs for this branch.
+              badges.push(`- [![](${badgeUrl})](${dispatchUrl})`);
             }
 
             const statusSection = [
               "### CI Status",
-              "_Auto-generated on every push. Click a pipeline name to open the workflow dispatch page._",
+              "_Auto-generated on every push. Badges update live. Click a badge to filter runs by this branch._",
               "",
-              "| Pipeline | Status | Latest Run |",
-              "|---|:---:|---|",
-              ...rows,
+              badges.join("\n"),
             ].join("\n");
 
             // Replace existing CI Status section if present, otherwise append

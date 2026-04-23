@@ -17,6 +17,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
     test_gelu_bw_ulp.cpp
+    test_gelu_bw_main_ulp.cpp
     test_generic_op.cpp
     test_graph_add.cpp
     test_graph_basic.cpp
@@ -26,6 +27,10 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
+    test_matmul.cpp
+    test_matmul_multicore.cpp
+    test_matmul_sweep.cpp
+    test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
     test_sub_int.cpp

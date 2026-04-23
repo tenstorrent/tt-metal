@@ -5,12 +5,16 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <unordered_map>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
 #include "api/tt-metalium/experimental/host_api.hpp"
+#include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -82,6 +86,10 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
+
+// Metal 2.0: local DFB accessor names -> logical DFB ids
+using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
@@ -138,6 +146,8 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    void process_dataflow_buffer_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -172,13 +182,18 @@ public:
     // Binary management (moved from KernelImpl)
     const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
     void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
-    bool binaries_exist_on_disk(const IDevice* device) const;
+    bool binaries_exist_on_disk(const IDevice* device, const std::string& binary_root) const;
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
-    virtual void read_binaries(IDevice* device) = 0;
+    virtual void read_binaries(IDevice* device, const std::string& binary_root) = 0;
 
-    void register_kernel_elf_paths_with_watcher(IDevice& device) const;
+    void register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const;
+
+    void set_precompiled_config(experimental::PrecompiledKernelConfig config);
+    const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
+        return precompiled_config_;
+    }
 
 protected:
     Kernel(
@@ -188,7 +203,8 @@ protected:
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
-        const std::unordered_map<std::string, uint32_t>& named_compile_args);
+        const std::unordered_map<std::string, uint32_t>& named_compile_args,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -199,6 +215,7 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -215,10 +232,11 @@ protected:
 
     // Build key -> binaries (moved from KernelImpl)
     std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
+    std::optional<experimental::PrecompiledKernelConfig> precompiled_config_;
 
     virtual std::string config_hash() const = 0;
 
-    std::vector<std::string> file_paths(IDevice& device) const;
+    std::vector<std::string> file_paths(IDevice& device, const std::string& binary_root) const;
 
 private:
     void register_kernel_with_watcher();
@@ -226,7 +244,11 @@ private:
 
 class DataMovementKernel : public Kernel {
 public:
-    DataMovementKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const DataMovementConfig& config) :
+    DataMovementKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const DataMovementConfig& config,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -234,7 +256,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -245,7 +268,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -283,7 +306,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -321,7 +344,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -344,7 +367,11 @@ private:
 
 class ComputeKernel : public Kernel {
 public:
-    ComputeKernel(const KernelSource& kernel_src, const CoreRangeSet& cr_set, const ComputeConfig& config) :
+    ComputeKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const ComputeConfig& config,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -352,7 +379,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -364,7 +392,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -414,7 +442,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        const std::set<DataMovementProcessor>& dm_processors) :
+        const std::set<DataMovementProcessor>& dm_processors,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -422,7 +451,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -440,7 +470,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -470,7 +500,8 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
-        const std::set<QuasarComputeProcessor>& compute_processors) :
+        const std::set<QuasarComputeProcessor>& compute_processors,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -478,7 +509,8 @@ public:
             cr_set,
             config.compile_args,
             config.defines,
-            config.named_compile_args),
+            config.named_compile_args,
+            dataflow_buffer_local_accessor_handles),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(
@@ -497,7 +529,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
