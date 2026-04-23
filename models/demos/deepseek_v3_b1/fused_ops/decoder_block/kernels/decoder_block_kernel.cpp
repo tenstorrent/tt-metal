@@ -692,6 +692,7 @@ void kernel_main() {
         allgather_gather_args.recv_sem_addr = get_named_compile_time_arg_val("allgather_recv_sem_addr");
         allgather_gather_args.r2_src_slot_index = get_named_compile_time_arg_val("allgather_r2_src_slot_index");
     }
+    using AllGatherController = deepseek_b1_ops::AllGather::GatherController<AllGatherGatherCT>;
 
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
@@ -2186,6 +2187,7 @@ void kernel_main() {
     uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(8);
 #endif
 
+    deepseek_b1_ops::AllGather::GatherCompletionState all_gather_completion_state{};
     // ====================================================================
     // Mcast: Initialize persistent mcast
     // ====================================================================
@@ -2574,8 +2576,9 @@ void kernel_main() {
         if constexpr (Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+            PacketHeaderPool::reset();
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
-            ccl_writer.open_connections(ccl_sender_args);
+            ccl_writer.open_connections(ccl_sender_args, false);
             deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
@@ -2646,19 +2649,11 @@ void kernel_main() {
                 constexpr uint32_t out_num_tiles = get_named_compile_time_arg_val("output_num_tiles");
                 cb_wait_front(out_cb, out_num_tiles);
                 allgather_gather_args.local_input_addr = get_read_ptr(out_cb);
-
-                deepseek_b1_ops::AllGather::GatherController<AllGatherGatherCT> allgather_controller;
-                allgather_controller(allgather_gather_args);
-                cb_pop_front(out_cb, out_num_tiles);
+                all_gather_completion_state = AllGatherController::start(allgather_gather_args);
             }
 #elif defined(COMPILE_FOR_TRISC)
             deepseek_b1_ops::AllReduce::Compute<AllReduceComputeCTArgs> ccl_compute;
             ccl_compute(ccl_compute_args);
-#elif defined(COMPILE_FOR_BRISC)
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
-            noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("num_ccl_sender_cores"));
-            noc_semaphore_set(ccl_sync_sem, 0);
 #endif
         }
     };
@@ -2998,7 +2993,11 @@ void kernel_main() {
     constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     uint32_t iteration = 0;
     while (true) {
-        // DPRINT << "ITERATION: " << iteration << ENDL();
+        {
+            DeviceZoneScopedN("MLA_CB_RECONFIG");
+            unified_kernels::reconfig_cb_interfaces(mla_cb_config);
+            setup_mla_sharded_buffers();
+        }
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (persistent_mode) {
             constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
@@ -3010,17 +3009,24 @@ void kernel_main() {
         }
 #endif
         {
-            DeviceZoneScopedN("MLA_CB_RECONFIG");
-            unified_kernels::reconfig_cb_interfaces(mla_cb_config);
-            setup_mla_sharded_buffers();
-        }
-        {
             DeviceZoneScopedN("MLA");
             mla_body();
         }
         {
             DeviceZoneScopedN("MOE_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(moe_cb_config);
+            // NCRISC is what pushes the input into MOE, and is the receiver of the All-Gather.
+            // BRISC waits for previous fabric connections to finish, and is the mcaster broadcasting the sync signal.
+            if constexpr (Core::is_allreduce_receiver_core) {
+#if defined(COMPILE_FOR_NCRISC)
+                AllGatherController::wait_for_completion(all_gather_completion_state);
+#elif defined(COMPILE_FOR_BRISC)
+                volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
+                noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("num_ccl_sender_cores"));
+                noc_semaphore_set(ccl_sync_sem, 0);
+#endif
+            }
             setup_moe_sharded_buffers();
         }
         {
