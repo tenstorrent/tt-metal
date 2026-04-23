@@ -360,6 +360,11 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         if os.environ.get(var):
             env[var] = os.environ[var]
 
+    # Quad Galaxy scripts (e.g. run_quad_galaxy_tests.sh) set USE_TORUS_MODE for ring fabric;
+    # all MPI ranks must see the same value or fabric config diverges (FABRIC_1D vs FABRIC_1D_RING).
+    if "USE_TORUS_MODE" in os.environ:
+        env["USE_TORUS_MODE"] = os.environ["USE_TORUS_MODE"]
+
     # PYTHONHOME: Only pass through if explicitly set. Do NOT default to ORIGINAL_CWD.
     # Setting PYTHONHOME incorrectly causes Python to look for its standard library
     # in the wrong location, resulting in "ModuleNotFoundError: No module named 'encodings'".

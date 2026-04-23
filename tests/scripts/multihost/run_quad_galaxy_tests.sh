@@ -1,11 +1,85 @@
 #!/bin/bash
 set -eo pipefail
 
-# Exit immediately if ARCH_NAME is not set or empty
-if [ -z "${ARCH_NAME}" ]; then
-  echo "Error: ARCH_NAME is not set. Exiting." >&2
-  exit 1
-fi
+# Default ARCH_NAME for local runs when not set by CI.
+export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
+
+# Prefer tt-run on PATH; otherwise run ttrun.py directly.
+tt_run() {
+    if command -v tt-run >/dev/null 2>&1; then
+        command tt-run "$@"
+        return
+    fi
+    if [[ -z "${TT_METAL_HOME:-}" ]]; then
+        echo "tt_run: tt-run not on PATH and TT_METAL_HOME is unset; cannot locate ttrun.py" >&2
+        return 1
+    fi
+    local ttrun_py="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    if [[ ! -f "${ttrun_py}" ]]; then
+        echo "tt_run: expected launcher at ${ttrun_py} (missing); install ttnn or set TT_METAL_HOME" >&2
+        return 1
+    fi
+    local runner_python="${PYTHON:-}"
+    if [[ -z "${runner_python}" ]] && [[ -x "${TT_METAL_HOME}/python_env/bin/python" ]]; then
+        runner_python="${TT_METAL_HOME}/python_env/bin/python"
+    fi
+    runner_python="${runner_python:-python3}"
+    "${runner_python}" "${ttrun_py}" "$@"
+}
+
+# Pick cnx1 when present, else first up non-virtual NIC.
+default_mpi_tcp_interface() {
+    if [[ -d /sys/class/net/cnx1 ]]; then
+        echo "cnx1"
+        return 0
+    fi
+    local n state
+    for n in /sys/class/net/*; do
+        n="${n##*/}"
+        case "${n}" in
+            lo | docker* | br-* | veth* | tailscale*) continue ;;
+        esac
+        state="$(cat "/sys/class/net/${n}/operstate" 2>/dev/null || true)"
+        if [[ "${state}" == "up" ]]; then
+            echo "${n}"
+            return 0
+        fi
+    done
+    echo "cnx1"
+}
+
+export_tcp_interface_for_multihost() {
+    export TCP_INTERFACE="${TCP_INTERFACE:-$(default_mpi_tcp_interface)}"
+}
+
+extract_hosts_from_hostfile() {
+    local host_count="$1"
+    local hostfile="${2:-/etc/mpirun/hostfile}"
+
+    awk '!/^#/ && NF {print $1}' "$hostfile" | head -n "$host_count" | paste -sd,
+}
+
+resolve_multihost_python() {
+    if [[ -n "${TT_MULTIHOST_PYTHON_BIN:-}" ]]; then
+        return 0
+    fi
+
+    local default_python="${TT_METAL_HOME}/python_env/bin/python"
+    if [[ -x "${default_python}" ]]; then
+        export TT_MULTIHOST_PYTHON_BIN="${default_python}"
+    else
+        export TT_MULTIHOST_PYTHON_BIN="${PYTHON:-python3}"
+    fi
+
+    local pyhome="${TT_METAL_HOME}/python_env"
+    local -a encodings_candidates=()
+    shopt -s nullglob
+    encodings_candidates=("${pyhome}"/lib/python*/encodings/__init__.py)
+    shopt -u nullglob
+    if [[ ${#encodings_candidates[@]} -gt 0 ]] && [[ "${PYTHONHOME:-}" != "${pyhome}" ]]; then
+        export PYTHONHOME="${pyhome}"
+    fi
+}
 
 ###############################################################################
 # Infrastructure unit tests (quad galaxy only)
@@ -16,11 +90,12 @@ run_quad_galaxy_unit_tests() {
 
   # tt-run --tcp-interface handles tcp and tag flags
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local tcp_interface="cnx1"
-  local mpi_host="--host g05glx04,g05glx03,g05glx02,g05glx01"
+  local tcp_interface="${TCP_INTERFACE:-$(default_mpi_tcp_interface)}"
+  local hosts="$(extract_hosts_from_hostfile 4)"
+  local mpi_host="--host $hosts"
   local mpi_args="$mpi_host $mpi_args_base"
 
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
@@ -31,12 +106,12 @@ run_quad_galaxy_unit_tests() {
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
+  tt_run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" "${TT_MULTIHOST_PYTHON_BIN}" -m pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
   #tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
+  tt_run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" "${TT_MULTIHOST_PYTHON_BIN}" -m pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -64,12 +139,24 @@ _resolve_deepseekv3_cache() {
     fi
 }
 
+_resolve_deepseekv3_model() {
+    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
+
+    if [[ ! -d "${model_path}" ]]; then
+        echo "Warning: DeepSeek V3 model directory not visible from orchestrator: ${model_path}" >&2
+        echo "  This may be expected in CI containers; model must exist on Galaxy hosts." >&2
+    fi
+
+    export DEEPSEEK_V3_HF_MODEL="${model_path}"
+}
+
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
-    export HOSTS="g02glx01,g02glx02"
+    export HOSTS="$(extract_hosts_from_hostfile 2)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    export TCP_INTERFACE="cnx1"
+    export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -85,17 +172,17 @@ setup_dual_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    _resolve_deepseekv3_model
     _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
 }
 
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
-    export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
+    export HOSTS="$(extract_hosts_from_hostfile 4)"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    export TCP_INTERFACE="cnx1"
+    export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -108,7 +195,7 @@ setup_quad_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    _resolve_deepseekv3_model
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
     export USE_TORUS_MODE=1
@@ -126,9 +213,49 @@ _demo_timeout() {
     fi
 }
 
-# Helper: run a test command via tt-run using the current environment
+resolve_upr_mode() {
+    local upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-all}"
+    upr_mode="${upr_mode,,}"
+    case "${upr_mode}" in
+        ""|all|both)
+            echo "both"
+            ;;
+        32|32upr|upr32)
+            echo "32"
+            ;;
+        8|8upr|upr8)
+            echo "8"
+            ;;
+        *)
+            echo "Unsupported DEEPSEEK_DEMO_UPR_MODE='${DEEPSEEK_DEMO_UPR_MODE:-}'." >&2
+            echo "Supported values: all|both|32|8" >&2
+            exit 1
+            ;;
+    esac
+}
+
+demo_case_selector() {
+    local setup_name="$1"
+    local profile_name="$2"
+    local upr_mode
+    upr_mode="$(resolve_upr_mode)"
+
+    case "${upr_mode}" in
+        both)
+            echo "${setup_name}_${profile_name}_demo_32upr or ${setup_name}_${profile_name}_demo_8upr"
+            ;;
+        32)
+            echo "${setup_name}_${profile_name}_demo_32upr"
+            ;;
+        8)
+            echo "${setup_name}_${profile_name}_demo_8upr"
+            ;;
+    esac
+}
+
+# Helper: run a test command via tt_run using the current environment
 _run_deepseekv3_tt() {
-    tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
+    tt_run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
         "$@"
 }
@@ -141,7 +268,7 @@ run_dual_deepseekv3_unit_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+    _run_deepseekv3_tt "${TT_MULTIHOST_PYTHON_BIN}" -m pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -152,7 +279,7 @@ run_quad_deepseekv3_unit_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+    _run_deepseekv3_tt "${TT_MULTIHOST_PYTHON_BIN}" -m pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -167,7 +294,7 @@ run_dual_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    _run_deepseekv3_tt "${TT_MULTIHOST_PYTHON_BIN}" -m pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -178,7 +305,7 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    _run_deepseekv3_tt "${TT_MULTIHOST_PYTHON_BIN}" -m pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -194,7 +321,7 @@ run_dual_teacher_forced_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
@@ -213,7 +340,7 @@ run_quad_teacher_forced_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/quad_teacher_forced_output.log ]]; then
@@ -234,30 +361,34 @@ run_quad_teacher_forced_test() {
 run_dual_demo_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 2400)
+    local selector
+    selector="$(demo_case_selector "dual" "full")"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_output.log"
 }
 
 run_dual_demo_mtp_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 2400)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
 
 }
 
 run_quad_demo_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
+    local selector
+    selector="$(demo_case_selector "quad" "full")"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_output.log"
 }
 
 run_quad_demo_mtp_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log"
 }
 
 ###############################################################################
@@ -267,15 +398,19 @@ run_quad_demo_mtp_test() {
 run_dual_demo_stress_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 5400)
+    local selector
+    selector="$(demo_case_selector "dual" "stress")"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
 }
 
 run_quad_demo_stress_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 5400)
+    local selector
+    selector="$(demo_case_selector "quad" "stress")"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; ${TT_MULTIHOST_PYTHON_BIN} -m pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log"
 }
 
 ###############################################################################
@@ -320,22 +455,59 @@ main() {
         return 0
     fi
 
-    if [[ -z "$TT_METAL_HOME" ]]; then
-        echo "Must provide TT_METAL_HOME in environment" 1>&2
-        exit 1
+    if [[ -z "${TT_METAL_HOME:-}" ]]; then
+        local script_dir
+        script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+        export TT_METAL_HOME="$(cd -- "${script_dir}/../../.." && pwd -P)"
+        echo "TT_METAL_HOME not set; defaulting to script root: ${TT_METAL_HOME}"
     fi
 
-    if [[ -z "$ARCH_NAME" ]]; then
-        echo "Must provide ARCH_NAME in environment" 1>&2
-        exit 1
-    fi
+    export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
 
     # Run tests
-    cd $TT_METAL_HOME
-    export PYTHONPATH=$TT_METAL_HOME
+    cd "${TT_METAL_HOME}"
+    export PYTHONPATH="${TT_METAL_HOME}"
+    resolve_multihost_python
 
-    # Support running specific test function via argument
-    local test_function="${1:-all}"
+    # Args: [test_function] plus --model-path/--cache-path.
+    local test_function="all"
+    if [[ $# -gt 0 && "${1}" != --* ]]; then
+        test_function="$1"
+        shift
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model-path)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --model-path requires a value." >&2
+                    exit 1
+                fi
+                export DEEPSEEK_V3_HF_MODEL_OVERRIDE="$2"
+                shift 2
+                ;;
+            --cache-path)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --cache-path requires a value." >&2
+                    exit 1
+                fi
+                export DEEPSEEK_V3_CACHE_OVERRIDE="$2"
+                shift 2
+                ;;
+            *)
+                echo "Unknown argument: $1" >&2
+                echo "Usage: $0 [test_function] [--model-path <path>] [--cache-path <path>]" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    if [[ -n "${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-}" ]]; then
+        echo "Using local DeepSeek model override: ${DEEPSEEK_V3_HF_MODEL_OVERRIDE}"
+    fi
+    if [[ -n "${DEEPSEEK_V3_CACHE_OVERRIDE:-}" ]]; then
+        echo "Using local DeepSeek cache override: ${DEEPSEEK_V3_CACHE_OVERRIDE}"
+    fi
 
     case "$test_function" in
         "unit_tests")

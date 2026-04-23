@@ -3,6 +3,7 @@
 
 import json
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -68,6 +69,34 @@ def _token_matching_golden_path(case: dict) -> Path:
     return TOKEN_MATCHING_GOLDEN_DIR / f"{case['case_id']}.json"
 
 
+def mesh_device_from_case_id(case_id: str) -> str | None:
+    prefix = case_id.split("_", 1)[0].upper()
+    if prefix in {"TG", "DUAL", "QUAD"}:
+        return prefix
+    return None
+
+
+def is_mesh_host_rank_zero() -> bool:
+    # Golden file I/O only on rank 0 (avoid races across ranks).
+    global_rank_envs = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK", "WORLD_RANK", "SLURM_PROCID")
+    for env_name in global_rank_envs:
+        rank_value = os.getenv(env_name)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            continue
+
+    host_rank_value = os.getenv("TT_MESH_HOST_RANK")
+    if host_rank_value is not None:
+        try:
+            return int(host_rank_value) == 0
+        except ValueError:
+            pass
+    return True
+
+
 def _build_token_matching_payload(case: dict, prompts: list[str], results: dict) -> dict:
     generations = []
     for i, generation in enumerate(results.get("generations", []), start=1):
@@ -97,14 +126,75 @@ def _build_token_matching_payload(case: dict, prompts: list[str], results: dict)
     }
 
 
-def _write_token_matching_golden(path: Path, payload: dict) -> None:
+def format_json_with_inline_tokens(value, indent: int = 0, parent_key: str | None = None) -> str:
+    indent_str = "  " * indent
+
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        entries = []
+        for key, item in value.items():
+            serialized_key = json.dumps(key, ensure_ascii=False)
+            serialized_value = format_json_with_inline_tokens(item, indent + 1, key)
+            entries.append(f"{indent_str}  {serialized_key}: {serialized_value}")
+        return "{\n" + ",\n".join(entries) + f"\n{indent_str}" + "}"
+
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if parent_key == "tokens" and all(isinstance(token, int) for token in value):
+            return "[" + ", ".join(str(token) for token in value) + "]"
+        entries = [f"{indent_str}  {format_json_with_inline_tokens(item, indent + 1)}" for item in value]
+        return "[\n" + ",\n".join(entries) + f"\n{indent_str}]"
+
+    return json.dumps(value, ensure_ascii=False)
+
+
+def write_json_with_inline_tokens(handle, payload: dict) -> None:
+    handle.write(format_json_with_inline_tokens(payload))
+    handle.write("\n")
+
+
+def write_token_matching_golden(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=False)
+    temp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            write_json_with_inline_tokens(handle, payload)
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
+
+def load_token_matching_golden(path: Path, *, attempts: int = 20, delay_s: float = 0.25) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                raw_payload = handle.read()
+            if not raw_payload.strip():
+                raise ValueError("Golden payload is empty.")
+            return json.loads(raw_payload)
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(delay_s)
+                continue
+
+    pytest.fail(
+        "Unable to read token-matching golden output after retries.\n"
+        f"path={path}\n"
+        f"last_error={last_error}\n"
+        f"If this run intentionally updates goldens, rerun with {TOKEN_MATCHING_UPDATE_ENV}=1."
+    )
 
 
 def _assert_token_matching_against_golden(case: dict, prompts: list[str], results: dict) -> None:
     if not case.get("token_matching_golden", False):
+        return
+    if not is_mesh_host_rank_zero():
         return
 
     golden_path = _token_matching_golden_path(case)
@@ -113,14 +203,13 @@ def _assert_token_matching_against_golden(case: dict, prompts: list[str], result
     should_refresh = _is_env_flag_enabled(TOKEN_MATCHING_UPDATE_ENV)
 
     if should_refresh or not golden_exists:
-        _write_token_matching_golden(golden_path, run_payload)
+        write_token_matching_golden(golden_path, run_payload)
         action = "updated" if (golden_exists and should_refresh) else "created"
         reason = f" ({TOKEN_MATCHING_UPDATE_ENV}=1)" if should_refresh else ""
         print(f"\nToken-matching golden {action}: {golden_path}{reason}")
         return
 
-    with open(golden_path, "r", encoding="utf-8") as handle:
-        golden_payload = json.load(handle)
+    golden_payload = load_token_matching_golden(golden_path)
 
     failures = []
     expected_generations = golden_payload.get("generations", [])
@@ -283,7 +372,7 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=True,
+            sample_on_device=False,
             artifact_name="dual_demo_full_results_32upr",
             profile_decode=False,
             stop_at_eos=None,
@@ -299,7 +388,7 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=True,
+            sample_on_device=False,
             artifact_name="dual_demo_full_results_8upr",
             profile_decode=False,
             stop_at_eos=None,
@@ -345,7 +434,7 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=True,
+            sample_on_device=False,
             artifact_name="quad_demo_full_results_32upr",
             profile_decode=False,
             stop_at_eos=None,
@@ -361,7 +450,7 @@ def _demo_case(
             max_new_tokens=129,
             override_num_layers=None,
             enable_trace=True,
-            sample_on_device=True,
+            sample_on_device=False,
             artifact_name="quad_demo_full_results_8upr",
             profile_decode=False,
             stop_at_eos=None,
@@ -418,6 +507,10 @@ def _demo_case(
     ],
 )
 def test_demo(case: dict, force_recalculate_weight_config: bool, set_deterministic_env):
+    case_mesh_device = mesh_device_from_case_id(case["case_id"])
+    if case_mesh_device is not None:
+        os.environ["MESH_DEVICE"] = case_mesh_device
+
     # Path to the external JSON file containing prompts
     json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
 
@@ -445,6 +538,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool, set_determinist
             sampling_top_k=1,
             sampling_top_p=1.0,
             sampling_seed=TOKEN_MATCHING_SEED,
+            sample_on_device=False,
         )
     if case["override_num_layers"] is not None:
         run_kwargs["override_num_layers"] = case["override_num_layers"]
@@ -469,7 +563,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool, set_determinist
         assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
     # Save results to JSON for artifact upload (QUAD tests only)
-    if case["artifact_name"] is not None:
+    if case["artifact_name"] is not None and is_mesh_host_rank_zero():
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
         output_file = artifact_dir / f"{case['artifact_name']}.json"
@@ -486,13 +580,13 @@ def test_demo(case: dict, force_recalculate_weight_config: bool, set_determinist
                 {
                     "index": i + 1,
                     "prompt": prompt_text,
-                    "tokens": gen_result.get("tokens", []),
+                    "tokens": [int(token) for token in gen_result.get("tokens", [])],
                     "text": gen_result.get("text"),
                 }
             )
 
         with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
+            write_json_with_inline_tokens(f, output_data)
 
         print(f"\nDemo results saved to: {output_file}")
 
