@@ -6,6 +6,8 @@ import math
 
 import ttnn
 
+SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES = 128 * 1024
+
 
 def _infer_hw_from_flattened(sf, expected_h, expected_w):
     if sf <= 0:
@@ -171,19 +173,71 @@ class Yolov11Conv2D:
         return x
 
 
-def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
-    interleaved_inputs = []
-    for tensor in input_tensors:
-        if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-        if tensor.is_sharded():
-            interleaved_inputs.append(ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-        else:
-            interleaved_inputs.append(ttnn.to_memory_config(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-    output = ttnn.concat(tuple(interleaved_inputs), dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    if to_interleaved:
-        output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+def sharded_concat(
+    input_tensors,
+    num_cores=64,
+    dim=3,
+    to_interleaved=True,
+    prefer_l1_concat=False,
+    l1_fallback_threshold_bytes=SHARDED_CONCAT_L1_FALLBACK_THRESHOLD_BYTES,
+):
+    def concat_via_dram_interleaved():
+        interleaved_inputs = []
+        for tensor in input_tensors:
+            if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+            if tensor.is_sharded():
+                interleaved_inputs.append(ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            else:
+                interleaved_inputs.append(ttnn.to_memory_config(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        return ttnn.concat(tuple(interleaved_inputs), dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    if not prefer_l1_concat:
+        output = concat_via_dram_interleaved()
+        if to_interleaved:
+            output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return output
+
+    total_width = sum(tensor.shape[-1] for tensor in input_tensors)
+    height = input_tensors[0].shape[2]
+    shard_height = (height + num_cores - 1) // num_cores
+    memory_per_shard = shard_height * total_width * 2
+    if memory_per_shard > l1_fallback_threshold_bytes:
+        output = concat_via_dram_interleaved()
+        if to_interleaved:
+            output = ttnn.to_memory_config(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return output
+
+    input_sharded_memory_configs = []
+    for tensor in input_tensors:
+        if tensor.is_sharded():
+            input_sharded_memory_configs.append(tensor.memory_config())
+        else:
+            input_sharded_memory_configs.append(
+                ttnn.create_sharded_memory_config(
+                    (shard_height, tensor.shape[-1]),
+                    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            )
+
+    sharded_inputs = [
+        ttnn.to_memory_config(tensor, config) if not tensor.is_sharded() else tensor
+        for tensor, config in zip(input_tensors, input_sharded_memory_configs)
+    ]
+
+    out_sharded_memory_config = ttnn.create_sharded_memory_config(
+        (shard_height, total_width),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    output = ttnn.concat(tuple(sharded_inputs), dim, memory_config=out_sharded_memory_config)
+
+    if to_interleaved:
+        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
     return output
 
 
