@@ -31,7 +31,6 @@ namespace {
 
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
-using tt::umd::CoreCoord;
 
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
 static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
