@@ -123,13 +123,56 @@ Keep the scope surgical:
 
 ### Step 4 — Verify on device
 
-- Build (`./build_metal.sh`) — note this only compiles the host library.
-  Kernels JIT at runtime. A passing build is necessary but insufficient.
-- Run the kernel_lib validation suite to confirm the helpers themselves still
-  work: `scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py`.
-- Run the nightly pytest suite for this operation (e.g. `scripts/tt-test.sh --run-all tests/ttnn/nightly/unit_tests/operations/<op>/*.py`).
+- Build (`./build_metal.sh`) — only compiles the host library. Kernels JIT at
+  runtime; a passing build is necessary but insufficient.
+- Run the kernel_lib validation suite: `scripts/tt-test.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py`.
+- Run the exercising pytest(s) for this operation. Resolve the path via the
+  manifest (see next section) instead of re-searching the tree each session.
 - Confirm both `fp32_dest_acc_en=False` and `fp32_dest_acc_en=True` cases pass when the operation tests FP32 accumulation.
 - If any test fails: diagnose whether it's a helper gap (→ Step 2) or a migration mistake (→ Step 3).
+
+### Pytest Manifest
+
+The migration pipeline maintains a per-operation pytest manifest — a plain
+text file listing, for each migrated kernel, the pytest(s) that exercise it.
+The manifest is the single source of truth for test discovery; agents read
+from it and append to it, never re-grep the repo ad-hoc.
+
+**Where it lives**: `ttnn/cpp/ttnn/kernel_lib/pytest_map.md` (one file,
+repo-wide). Seed rows are created the first time a kernel is touched by a
+pipeline run; later runs append rows as new kernels are encountered.
+
+**Row format** (kept trivially greppable — one kernel per line):
+```
+<repo-relative kernel path> :: <repo-relative pytest path>[; <additional pytest path> ...]
+```
+
+**When each step writes to it**:
+
+| Pipeline step | Write responsibility |
+|---|---|
+| Step 1 (audit) | If the target kernel is missing from the manifest, find its pytest (grep program factories → test imports), verify it runs, then append a row. |
+| Step 4 (verify) | Run every pytest listed for the touched kernel(s). If the manifest row was stale (path moved, test renamed), fix the row before reporting the migration done. |
+| Step 5 (record) | If the migration adds coverage on a *new* kernel that the test file didn't previously exercise, note that in the `*_analysis.md`; the manifest row needs no change (same pytest still covers it). |
+
+**Infrastructure regression set**: a separate section at the top of the
+manifest lists pytests that must run after any change to the shared helpers
+(`binary_op_helpers`, `sfpu_chain`, `reduce_helpers_compute`). Agents
+*read* this set, they don't re-derive it — new rows get appended when a
+pipeline run proves a particular pytest exercises a newly-added surface.
+
+**Discovery procedure** (used once per kernel, then the result lives in the
+manifest):
+
+1. `grep -rn "<kernel relative path>" ttnn/cpp --include="*.cpp"` → finds the
+   program factory that compiles it.
+2. Trace the factory back to the `ttnn.*` op it registers.
+3. `grep -rn "ttnn\.<op_name>" tests/ --include="*.py"` → candidate tests.
+4. Run the shortest candidate with `scripts/tt-test.sh --timeout=60` and
+   confirm it actually JIT-compiles the target kernel (optional paranoid
+   check: temporarily plant `static_assert(false, "sentinel")` in the kernel
+   and confirm the test fails to compile).
+5. Append the row; commit the manifest change alongside the migration.
 
 ### Step 5 — Record the migration
 
