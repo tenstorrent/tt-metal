@@ -21,7 +21,7 @@ from models.tt_transformers.tt.common import (
     nearest_multiple,
 )
 from typing import Tuple
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32, is_blackhole
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_hf_state_dict,
@@ -755,55 +755,51 @@ class TtQwenModelArgs(TtModelArgs):
             #  Only used when seq_len >= 4096
             def prefill_ff2_minimal_matmul_config(seq_len):
                 """
-                Returns the best minimal matmul config for prefill FF2 based on sequence length.
-                Configurations are optimized based on sweep results.
+                Qwen3-32B FF2 fused AG+MM config (Galaxy, 8x4 mesh, cluster_axis=1).
+
+                Tuned via tests/ttnn/unit_tests/operations/ccl/sweep_qwen3_ff2_agmm.py.
+
+                WH Galaxy (3-4 eth links/tray-pair):
+                  grid=(6,8), M=8, K=5, N=5, sub=(1,5)   -> +7.7% 4k, +8.6% 8k TTFT
+                  (num_links=3 auto-derived from grid_x=6, 2 workers/link)
+
+                BH Galaxy (2 eth links/tray-pair cap):
+                  grid=(8,8), M=8, K=5, N=5, sub=(8,1)
+                  - num_links=2 auto-derived (BH tray-pair cap), 4 workers/link
+                    (workers_per_link in {1,2,3} hits the same CCL core-range
+                    overlap bug that WH sees at grid_x in {2,4,8})
+                  - sub=(8,1) beats (1,5)/(4,2)/(2,4) by maximizing M-unroll in
+                    dest regs when M-per-core (16 tiles) >> N-per-core (5 tiles).
+                  - Sweeps over extra Tensix cores, smaller K_block, finer
+                    M_block, larger N_block, and num_buffers_per_channel all
+                    landed within noise or slower than this config.
+                  End-to-end 4k prefill TTFT (ISL=3864, batch=1):
+                    non-fused baseline:       542.5 ms / 7121 t/s
+                    WH-config on BH:          530.1 ms / 7289 t/s (+2.3%)
+                    BH-tuned (this config):   527.8 ms / 7322 t/s (+2.7% total)
+
+                Key constraints (shape-derived, divisibility):
+                  K_block | K_tiles_per_device (= 25)        => K_block in {1, 5, 25}
+                  N_block | N_tiles            (= 40)
+                  sub_h * sub_w <= 8, sub_h | M_block, sub_w | N_block
                 """
-                # Best configurations from sweep results for each M value
-                if seq_len <= 4096:
+                if is_blackhole():
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        K_block_size=5,
+                        N_block_size=5,
+                        subblock_h=8,
+                        subblock_w=1,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
                     )
-                elif seq_len <= 16384:  # Both 8K and 16K share the same config
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 32768:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                elif seq_len <= 65536:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-                else:  # For seq_len >= 131072
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=2,
-                        subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
-                    )
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=5,
+                    N_block_size=5,
+                    subblock_h=1,
+                    subblock_w=5,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
