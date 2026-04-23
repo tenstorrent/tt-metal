@@ -22,7 +22,11 @@ from typing import List, Optional, Tuple
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
-from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
+from models.demos.qwen3_tts.tt.model_config import (
+    code_predictor_decode_linear_output_memory_config,
+    get_device_core_grid,
+    restore_code_predictor_linear_output_to_dram,
+)
 
 
 class CodePredictor(LightweightModule):
@@ -232,6 +236,7 @@ class CodePredictor(LightweightModule):
             - updated_kv_caches: list of (k_cache, v_cache) tuples or None
         """
         hidden_states = inputs_embeds
+        _linear_mem = code_predictor_decode_linear_output_memory_config(mode)
 
         # Input projection if needed (from Talker's 2048 dim to CodePredictor's 1024 dim)
         if self.needs_projection:
@@ -240,9 +245,11 @@ class CodePredictor(LightweightModule):
                 self.input_proj,
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_linear_mem,
                 core_grid=self._matmul_core_grid,
             )
+            if mode == "decode":
+                hidden_states = restore_code_predictor_linear_output_to_dram(hidden_states)
 
         # Apply decoder layers
         updated_kv_caches = [] if kv_caches is not None else None
@@ -275,9 +282,11 @@ class CodePredictor(LightweightModule):
                 hidden_states,
                 self.lm_heads[lm_head_idx],
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_linear_mem,
                 core_grid=self._matmul_core_grid,
             )
+            if mode == "decode":
+                logits = restore_code_predictor_linear_output_to_dram(logits)
         else:
             raise ValueError(f"Invalid generation_step {generation_step}, only have {len(self.lm_heads)} LM heads")
 
@@ -316,6 +325,8 @@ class CodePredictor(LightweightModule):
             - logits_list: List of logits tensors, one per code group [batch, 1, seq_len, vocab_size]
             - updated_kv_caches: list of (k_cache, v_cache) tuples or None
         """
+        _linear_mem_pf = code_predictor_decode_linear_output_memory_config(mode)
+
         # Input projection if needed (from Talker's 2048 dim to CodePredictor's 1024 dim)
         if self.needs_projection:
             hidden_states = ttnn.linear(
@@ -323,9 +334,11 @@ class CodePredictor(LightweightModule):
                 self.input_proj,
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_linear_mem_pf,
                 core_grid=self._matmul_core_grid,
             )
+            if mode == "decode":
+                hidden_states = restore_code_predictor_linear_output_to_dram(hidden_states)
 
         # Apply decoder layers
         updated_kv_caches = [] if kv_caches is not None else None
@@ -351,9 +364,11 @@ class CodePredictor(LightweightModule):
                 hidden_states,
                 lm_head,
                 compute_kernel_config=self.compute_kernel_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_linear_mem_pf,
                 core_grid=self._matmul_core_grid,
             )
+            if mode == "decode":
+                logits = restore_code_predictor_linear_output_to_dram(logits)
             logits_list.append(logits)
 
         return logits_list, updated_kv_caches

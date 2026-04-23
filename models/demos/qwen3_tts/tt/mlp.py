@@ -8,7 +8,11 @@ SwiGLU MLP implementation for Qwen3-TTS.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
+from models.demos.qwen3_tts.tt.model_config import (
+    get_device_core_grid,
+    mlp_decode_linear_output_memory_config,
+    restore_mlp_decode_output_to_interleaved_l1,
+)
 
 
 class MLP(LightweightModule):
@@ -159,8 +163,9 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Use L1 for decode mode (small tensors fit in L1), DRAM for prefill
-        mem_cfg = ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        # Decode: L1 width-sharded linear outputs (not L1 interleaved) for matmul traffic;
+        # restore interleaved L1 before return for residual add. Prefill: DRAM interleaved.
+        mem_cfg = mlp_decode_linear_output_memory_config(mode)
 
         # Reshape for large sequences to fit on device
         if seq_len >= 1024:
@@ -205,6 +210,9 @@ class MLP(LightweightModule):
         )
 
         ttnn.deallocate(hidden)
+
+        if mode == "decode":
+            output = restore_mlp_decode_output_to_interleaved_l1(output)
 
         # Reshape back if needed
         if seq_len >= 1024:

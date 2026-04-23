@@ -17,7 +17,11 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
-from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
+from models.demos.qwen3_tts.tt.model_config import (
+    get_device_core_grid,
+    restore_talker_codec_logits_memory,
+    talker_codec_decode_one_token_linear_output_memory_config,
+)
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
 
@@ -409,14 +413,16 @@ class Talker(LightweightModule):
         if self.codec_head is None:
             raise ValueError("codec_head not loaded. Cannot compute codec logits.")
 
+        seq_len = int(hidden_states.shape[-2])
+        _codec_linear_mem = talker_codec_decode_one_token_linear_output_memory_config(seq_len)
         logits = ttnn.linear(
             hidden_states,
             self.codec_head,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=_codec_linear_mem,
             core_grid=self._matmul_core_grid,
         )
-        return logits
+        return restore_talker_codec_logits_memory(logits, seq_len=seq_len)
 
     def project_text(self, text_embeds: ttnn.Tensor) -> ttnn.Tensor:
         """
