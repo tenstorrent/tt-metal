@@ -31,15 +31,76 @@ For each explicit `MatmulMultiCoreReuseMultiCast{,1D}ProgramConfig` in a model:
 
 ## Results table
 
+### Explicit-config manual migration
+
 | Model | Scope | Baseline | After | Δ | Configs touched | Commit |
 |---|---|---:|---:|---:|---|---|
 | sentence-BERT | total matmul device time (Tracy) | 13,385,817 ns | 10,515,489 ns | **-21.4%** | ff2+qkv reshape (4,2)+rmo; ff1+self_out flag-only | `0a421bb6a56` + threshold `7a89d6a8f55` |
-| **Falcon7b** | prefill seq=1024 device-kernel sps | 3120 | 3742 | **+19.9%** | mm_h_to_4h `(1,8)`, mm_4h_to_h `(1,6)` — both legacy-compatible h=1 | pending |
-| BGE-large | — | — | — | — | — | pending |
-| BGE-m3 | — | — | — | — | — | pending |
-| DistilBERT | — | — | — | — | — | pending |
+| Falcon7b | prefill seq=1024 device-kernel sps | 3120 | 3742 | **+19.9%** | mm_h_to_4h `(1,8)`, mm_4h_to_h `(1,6)` — both legacy-compatible h=1 | `0fbd77527c2` |
+| BGE-large | — | pending | pending | pending | self_out `(1,4)→(2,4)` legacy — only candidate (rest capped by `fp32_dest_acc_en=True` DST=4) | pending; blocked on HF weights |
+| demos/bert | device-kernel sps | 252 (declared) | pending | pending | qkv `(1,6)→(4,2)+rmo`; query_by_key (non-mcast) `(1,6)→(4,2)` | pending |
 
-Additional Falcon7b metric: e2e inference (median of 9 post-edit / 6 baseline runs at seq=1024): **0.368s → 0.307s (-16.6%)**. High run-to-run variance (8-9% std/mean) but effect size > 2× noise. Device-kernel measurement (<1% variance) confirms the win.
+### Skipped (auto-config — benefits automatically from opt_2 auto-tuner, no manual edits)
+
+Per your guidance: these still need a profile A/B to confirm the auto-tuner produced wins without
+regressions, and to bump device/e2e perf thresholds that were set against pre-auto-tuner numbers.
+
+| Model | Status | Next step |
+|---|---|---|
+| BGE-m3 | All mcast configs commented out → `ttnn.linear` auto-config | Profile on opt_3 vs pre-auto-tuner baseline; bump thresholds |
+| DistilBERT | `ttnn.linear` only, no explicit configs | Same |
+| bert_tiny (WH) | — | Survey + profile A/B |
+| Mamba (WH) | — | Survey + profile A/B |
+| Qwen3-embedding-8b (WH) | — | Survey + profile A/B |
+
+### Skipped (no upgrade available — already at max DST volume given shape)
+
+| Model | Reason |
+|---|---|
+| owl-ViT | All 4 configs have `per_core_M=1` → h=1 forced → max DST volume is `per_core_N`; current subblocks already at max. Flag-only no-op per recipe. |
+
+### Blocked / maintainer-declared unsupported on WH
+
+| Model | Reason |
+|---|---|
+| `demos/bert` | `@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")`. 6 configs with 2 upgrade candidates (qkv `(1,6)→(4,2)+rmo`, query_by_key `(1,6)→(4,2)`) that would match sentence-BERT's pattern, but no way to validate from n150. |
+
+### Additional manual-config candidates surveyed (defer decision)
+
+These have explicit configs and WH-feasibility possibility but need weights / targeted follow-up:
+
+| Model | File | Configs | Notes |
+|---|---|---:|---|
+| ViT-WH | `demos/vision/classification/vit/wormhole/tt/ttnn_optimized_sharded_vit_wh.py` | 5 mcast + 2 non-mcast | `per_core_M=7` (prime) caps multi-row rmo to `(7, 1)` volume 7. Upgrades possible but each needs L1 fit check. Weights: `google/vit-base-patch16-224` (~300 MB). |
+| ResNet50 (WH) | `demos/vision/classification/resnet50/ttnn_resnet/tt/ttnn_functional_resnet50.py` | 1 (1D mcast) | Single classifier-like matmul config. Limited surface area. |
+| SDXL (WH) | `demos/vision/generative/stable_diffusion/wormhole/tt/` (4 files) | 4+ | Multiple files. Large weights (~8 GB). |
+| Segformer | `demos/vision/segmentation/segformer/tt/ttnn_segformer_mlp.py` | TBD | Not counted |
+| MobileNetV2 | `demos/vision/classification/mobilenetv2/tt/ttnn_mobilenetv2.py` | TBD | Not counted |
+| SigLip (multimodal) | `demos/multimodal/siglip/tt/attention.py` | TBD | Not counted |
+| Qwen 2.5/3 VL | `demos/qwen25_vl/`, `demos/qwen3_vl/` | TBD | Likely multi-chip, needs check |
+| metal_BERT_large_11 | `demos/metal_BERT_large_11/` | TBD | Legacy BERT implementation |
+| gemma4 | `demos/gemma4/tt/experts/decode.py` | TBD | Likely multi-chip |
+
+### Deferred (weights require ~1.3 GB HF download, below priority)
+
+- **BGE-large** (`models/demos/wormhole/bge_large_en/ttnn/common.py`): 4 explicit configs, one
+  upgrade candidate (`self_out` `(1,4) → (2,4)` legacy-compatible, volume 4 → 8). Other three
+  configs capped at volume 4 by `fp32_dest_acc_en=True` (DST=4). Estimated e2e upside on the
+  self_out edit alone is ~3% — below the 5% bar unless combined with something else. **Revisit
+  if MLPerf cache gets mounted or if full download is cheap.**
+
+### Not attempted (multi-chip, not feasible on WH n150)
+
+DeepSeek-V3 (`demos/deepseek_v3*/`), Llama3-70b-Galaxy (`demos/llama3_70b_galaxy/`), T3000 and TG
+demos, GPT-OSS (`demos/gpt_oss/`, likely multi-chip — needs confirmation). **Blocked on hardware
+access.** Config count surveys:
+- DeepSeek-V3 / V3_d_p: 6+ files with explicit configs
+- GPT-OSS: 22 configs across `attention/config.py`, `experts/config.py`, `experts_throughput/config.py`
+- Llama3-70b-galaxy: 3+ files
+
+### Additional Falcon7b metric
+
+E2E inference (median of 9 post-edit / 6 baseline runs at seq=1024): **0.368s → 0.307s (-16.6%)**. High run-to-run variance (8-9% std/mean) but effect size > 2× noise. Device-kernel measurement (<1% variance) confirms the win.
 
 ---
 
@@ -90,6 +151,40 @@ Additional Falcon7b metric: e2e inference (median of 9 post-edit / 6 baseline ru
 - **Auto-upgrade path for manual configs** (Part 7 item 2 of the opt_2 review): a tuner pass
   that augments user-passed configs (flip rmo to True + reshape subblock if L1 fits) would
   remove the need for manual edits entirely. Designed-but-unbuilt; ~1-2 days of work.
+
+### Cross-cutting — helpers / auto-tuner
+
+- **DST size must be queried, not hard-coded.** DST register-file capacity is not a constant — it
+  varies with data type, whether DST double-buffering is on, whether `fp32_dest_acc_en=True`
+  (halves capacity), half-sync vs full-sync protocol, and potentially across devices/architectures.
+  Today the auto-tuner uses hardcoded `DST=8` (half-sync bf16) or `DST=4` (fp32_dest_acc_en). This
+  works for manual tuning where a human can infer the right cap, but **the helpers / auto-tuner
+  must fully query DST capacity from the device + compute-kernel-config** for correctness under
+  all modes. Concrete trigger: BGE-large's qkv / ff2 configs use `fp32_dest_acc_en=True` →
+  effective DST=4; if the tuner assumed DST=8 for these it would emit an over-sized subblock and
+  the program would fail to compile. Tracked as a follow-up for the helpers work itself, not per
+  model.
+
+- **Auto-config models need a profile A/B across the auto-tuner landing** to confirm the tuner
+  actually delivers wins without regressions, and to bump device/e2e perf thresholds that were
+  set against pre-auto-tuner numbers. Applies to BGE-m3, DistilBERT, and any other model calling
+  `ttnn.linear` / `ttnn.matmul` without an explicit `program_config`. Methodology per model:
+  checkout `main` (or the commit immediately before `8e9f28d664b`), run the model's device-perf
+  test, record. Checkout `wransom/matmul_helpers_opt_2` (or later), rerun, compare. If faster,
+  bump `expected_perf` in the device-perf test to the new measured value and commit.
+
+  **Status on n150 today** (2026-04-23): none of the auto-config models with device-perf tests
+  are directly runnable without weights downloads not currently cached:
+  - `bert_tiny` (`mrm8488/bert-tiny-finetuned-squadv2`): ~50 MB but test is `@pytest.mark.skip`
+    (#26288, "Seems to have changed in perf") — un-skip + download + bump threshold workstream.
+  - `DistilBERT` (`distilbert-base-uncased-distilled-squad`): ~250 MB, also `@pytest.mark.skip`
+    (#26285, same reason).
+  - `Mamba` (`state-spaces/mamba-2.8b`): ~5 GB, test active but weights missing locally.
+  - BGE-m3 and Qwen3-embedding-8b: no device-perf test exists in the tree.
+
+  The skip markers on bert_tiny and DistilBERT are effectively your "thresholds are stale from
+  auto-tuner" signal already present in the tree — those issues (#26288, #26285) are the
+  natural home for the A/B-and-threshold-bump work.
 
 ---
 
