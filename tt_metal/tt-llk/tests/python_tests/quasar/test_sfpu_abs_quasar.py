@@ -6,7 +6,12 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import (
+    MXFP8_E4M3_MAX_NORMAL,
+    MXFP8_E5M2_MAX_NORMAL,
+    DataFormat,
+    FormatConfig,
+)
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
@@ -34,6 +39,43 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
+def _prepare_int8_abs_inputs(src_A: torch.Tensor, src_B: torch.Tensor) -> torch.Tensor:
+    """
+    Int8 stimulus for abs. Range is clamped to [-127, 127] to avoid the
+    unrepresentable -128 (Dest int8 is sign+magnitude — -128 has no sign+mag
+    encoding and is saturated to -127 at unpack, breaking bit-exact compare).
+    Uses src_A magnitude and src_B sign to reuse the shared stimulus seeding.
+    """
+    # Map whatever dtype generate_stimuli produced into a usable integer range.
+    # src_A may be float or int depending on prior conversions; coerce to int32
+    # for arithmetic, then clamp + cast to int8.
+    magnitudes = src_A.to(torch.int32).abs() % 128  # [0, 127]
+    signs = torch.where(src_B.to(torch.int32) % 2 == 0, 1, -1)
+    values = (signs * magnitudes).clamp(-127, 127).to(torch.int8)
+    return values
+
+
+def _prepare_uint8_abs_inputs(src_A: torch.Tensor) -> torch.Tensor:
+    """
+    UInt8 stimulus for abs. Abs is identity for unsigned values, so the full
+    0-255 range is valid; just ensure the tensor is the right dtype.
+    """
+    return src_A.to(torch.int32).abs().clamp(0, 255).to(torch.uint8)
+
+
+def _prepare_int32_abs_inputs(src_A: torch.Tensor, src_B: torch.Tensor) -> torch.Tensor:
+    """
+    Int32 stimulus for abs. Dest int32 is sign+magnitude, so 0x80000000 is
+    unrepresentable (saturated to 0x7FFFFFFF at unpack). Clamp to
+    [-(2^31 - 1), 2^31 - 1] so the torch golden matches HW bit-exact.
+    """
+    int32_max = 2**31 - 1
+    magnitudes = src_A.to(torch.int64).abs() % (int32_max + 1)  # [0, 2^31-1]
+    signs = torch.where(src_B.to(torch.int64) % 2 == 0, 1, -1)
+    values = (signs * magnitudes).clamp(-int32_max, int32_max).to(torch.int32)
+    return values
+
+
 def prepare_abs_inputs(
     src_A: torch.Tensor,
     src_B: torch.Tensor,
@@ -56,14 +98,37 @@ def prepare_abs_inputs(
     Returns:
         Prepared tensor with safe values for abs
     """
+    if input_format == DataFormat.Int8:
+        return _prepare_int8_abs_inputs(src_A, src_B)
+    if input_format == DataFormat.UInt8:
+        return _prepare_uint8_abs_inputs(src_A)
+    if input_format == DataFormat.Int32:
+        return _prepare_int32_abs_inputs(src_A, src_B)
+
     input_torch_format = format_dict[input_format]
     output_torch_format = format_dict[output_format]
     input_finfo = torch.finfo(input_torch_format)
     output_finfo = torch.finfo(output_torch_format)
 
+    def _mx_elem_max(df: DataFormat) -> float:
+        if df == DataFormat.MxFp8R:
+            return MXFP8_E5M2_MAX_NORMAL
+        if df == DataFormat.MxFp8P:
+            return MXFP8_E4M3_MAX_NORMAL
+        raise ValueError(f"not an MX format: {df}")
+
     # For abs, output magnitude equals input magnitude, so we need values that
-    # fit in BOTH input and output formats
-    max_safe_value = min(input_finfo.max, output_finfo.max) * 0.9
+    # fit in BOTH input and output formats. MX formats have their own element
+    # max (not queryable via torch.finfo on bfloat16).
+    cap_from_input = (
+        _mx_elem_max(input_format) if input_format.is_mx_format() else input_finfo.max
+    )
+    cap_from_output = (
+        _mx_elem_max(output_format)
+        if output_format.is_mx_format()
+        else output_finfo.max
+    )
+    max_safe_value = min(cap_from_input, cap_from_output) * 0.9
 
     # Special handling for bfloat16: limit to reasonable bounds to avoid
     # precision issues at extreme values
@@ -146,6 +211,23 @@ def _is_invalid_quasar_combination(
     if in_fmt.is_integer() != out_fmt.is_integer():
         return True
 
+    # Cross-width integer conversions (e.g. Int32 -> Int8, UInt8 -> Int32) aren't
+    # abs-testable: 8->32 requires dest_acc=Yes (invalid for 8-bit SFPU input
+    # path, rejected by format inference) and 32->8 passes through the packer's
+    # Int32 conversion path, which saturates rather than preserving the abs
+    # value. Restrict to same-width integer pairs (Int8<->UInt8, Int32<->Int32).
+    if in_fmt.is_integer() and out_fmt.is_integer() and in_fmt.size != out_fmt.size:
+        return True
+
+    # 8-bit integer data lives in 16-bit Dest (1 datum per row); dest_acc=Yes
+    # uses 32-bit Dest mode intended for Float32/Int32 accumulation and is not
+    # meaningful for 8-bit integer data paths.
+    if (
+        in_fmt in (DataFormat.Int8, DataFormat.UInt8)
+        and dest_acc == DestAccumulation.Yes
+    ):
+        return True
+
     return False
 
 
@@ -164,11 +246,15 @@ def generate_sfpu_abs_combinations(
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
+        if in_fmt.is_32_bit():
+            dest_acc_modes = (DestAccumulation.Yes,)
+        elif in_fmt.is_mx_format():
+            # MX tiles unpack to Float16_b in Dest; 32-bit Dest accumulation is
+            # not the intended path.
+            dest_acc_modes = (DestAccumulation.No,)
+        else:
+            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+
         for dest_acc in dest_acc_modes:
             # Skip invalid format combinations for Quasar
             if _is_invalid_quasar_combination(fmt, dest_acc):
@@ -195,6 +281,11 @@ SFPU_ABS_FORMATS = input_output_formats(
         DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Float16_b,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Int32,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
     ]
 )
 
@@ -234,15 +325,24 @@ def test_sfpu_abs_quasar(formats_dest_acc_implied_math_input_dims):
 
     num_faces = 4
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Abs,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
+    if formats.input_format.is_integer():
+        # UnarySFPUGolden has no integer branch (it casts through Float16_b for
+        # non-MX, non-Float16 inputs at dest_acc=No), which would drop integer
+        # semantics. Abs on the clamped integer stimulus is an exact
+        # element-wise op, so compute the golden directly in the input dtype.
+        golden_tensor = (
+            torch.abs(src_A).flatten().to(format_dict[formats.output_format])
+        )
+    else:
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            MathOperation.Abs,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
