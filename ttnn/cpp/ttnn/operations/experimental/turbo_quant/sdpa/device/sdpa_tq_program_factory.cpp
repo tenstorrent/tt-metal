@@ -156,7 +156,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         CircularBufferConfig(Sk_chunk_t * k_norms_tile_size, {{CBIndex::c_13, k_norms_df}})
             .set_page_size(CBIndex::c_13, k_norms_tile_size));
 
-    // Dequantize temp: holds one chunk's typecasted tiles for centroid gather + norm
+    // Dequantize temp: holds one chunk of centroid-gathered BF16 tiles for norm-multiply pass.
     uint32_t dq_temp_tiles = std::max(k_chunk_tiles, v_chunk_tiles);
     CreateCircularBuffer(
         program,

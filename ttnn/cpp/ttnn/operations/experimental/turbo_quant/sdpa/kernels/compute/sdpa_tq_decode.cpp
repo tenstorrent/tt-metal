@@ -140,7 +140,7 @@ inline void dequant_k_chunk(
     const uint32_t* level_bits) {
     constexpr uint32_t chunk_tiles = Sk_chunk_t * DHt;
 
-    // Pass 1: Typecast BFP4→BF16 into cb_dq_temp (row-major layout).
+    // Pass 1: typecast BFP4→BF16 into cb_dq_temp (row-major layout).
     init_sfpu(cb_k_idx, cb_dq_temp);
     cb_reserve_back(cb_dq_temp, chunk_tiles);
     for (uint32_t t = 0; t < chunk_tiles; t++) {
@@ -157,7 +157,7 @@ inline void dequant_k_chunk(
     }
     cb_push_back(cb_dq_temp, chunk_tiles);
 
-    // Pass 2a: Centroid gather with tile-content transpose, in-place in cb_dq_temp.
+    // Pass 2a: Centroid gather, in-place in cb_dq_temp.
     mm_init(cb_dq_temp, cb_k_norms, cb_k_in);
     cb_wait_front(cb_dq_temp, chunk_tiles);
     cb_wait_front(cb_k_norms, Sk_chunk_t);
@@ -189,6 +189,15 @@ inline void dequant_k_chunk(
     }
 
     // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
+    // Pop the old typecast tiles, re-reserve to get a clean packer state, then do the
+    // final norm multiply + grid-transposed write to cb_k_in. This pop/push dance
+    // between Pass 2a and Pass 2b ensures the in-place centroid tiles written by Pass 2a
+    // are properly synchronized for Pass 2b's unpacker reads.
+    cb_pop_front(cb_dq_temp, chunk_tiles);
+    cb_reserve_back(cb_dq_temp, chunk_tiles);
+    cb_push_back(cb_dq_temp, chunk_tiles);
+    cb_wait_front(cb_dq_temp, chunk_tiles);
+
     cb_reserve_back(cb_k_in, chunk_tiles);
     for (uint32_t row = 0; row < Sk_chunk_t; row++) {
         for (uint32_t col = 0; col < DHt; col++) {
@@ -235,7 +244,7 @@ inline void dequant_v_chunk(
     }
     cb_push_back(cb_dq_temp, chunk_tiles);
 
-    // Pass 2a: Centroid gather with tile-content transpose, in-place in cb_dq_temp.
+    // Pass 2a: Centroid gather, in-place in cb_dq_temp.
     mm_init(cb_dq_temp, cb_v_norms, cb_v_in);
     cb_wait_front(cb_dq_temp, chunk_tiles);
     cb_wait_front(cb_v_norms, Sk_chunk_t);
@@ -267,6 +276,12 @@ inline void dequant_v_chunk(
     }
 
     // Pass 2b: Norm bcast multiply into cb_v_in (no output transpose).
+    // Pop-reserve-push dance re-syncs the CB counters after Pass 2a's in-place writes.
+    cb_pop_front(cb_dq_temp, chunk_tiles);
+    cb_reserve_back(cb_dq_temp, chunk_tiles);
+    cb_push_back(cb_dq_temp, chunk_tiles);
+    cb_wait_front(cb_dq_temp, chunk_tiles);
+
     cb_reserve_back(cb_v_in, chunk_tiles);
     for (uint32_t row = 0; row < Sk_chunk_t; row++) {
         for (uint32_t col = 0; col < vDHt; col++) {
@@ -487,6 +502,10 @@ void kernel_main() {
                     dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
                         cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
 
+                    // Force unpacker to re-fetch from L1 (avoids stale tiles from prior iteration's matmul).
+                    invalidate_l1_cache();
+                    cb_wait_front(cb_k_in, k_chunk_tiles);
+
                     // ── Step 2: QK = Q × K^T ──
                     reconfig_data_format(cb_k_in, cb_q_in);
                     pack_reconfig_data_format(cb_qk_im);
@@ -523,6 +542,9 @@ void kernel_main() {
                     // ── Step 4: Dequantize V chunk → cb_v_in (natural layout) ──
                     dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
                         cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
+
+                    invalidate_l1_cache();
+                    cb_wait_front(cb_v_in, v_chunk_tiles);
 
                     // ── Step 5: OUT_IM = softmax × V ──
                     reconfig_data_format(cb_v_in, cb_qk_im);
