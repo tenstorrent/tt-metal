@@ -63,6 +63,44 @@ codes):
 tt-perf-report --no-stacked <csv>
 ```
 
+### Fallback: read the CSV directly with pandas
+
+`tt-perf-report` 1.2.3 crashes with `Unknown math fidelity` on any row whose
+`MATH FIDELITY` column is `HiFi3`. `--no-stacked` does not help — the crash
+is in the main analysis loop, not the stacked-report section. Also happens
+on other exotic fidelity or op-code combinations.
+
+When the report bails, read the CSV directly — the columns the report uses
+are all present in the raw file:
+
+```python
+import pandas as pd
+csv = "$TT_METAL_HOME/generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv"
+df = pd.read_csv(csv)
+
+# Top ops by device FW duration
+top = (df.groupby("OP CODE")["DEVICE FW DURATION [ns]"]
+         .agg(["sum", "count", "mean"])
+         .sort_values("sum", ascending=False)
+         .head(10))
+
+# Per-matmul slice with everything needed for a bottleneck read
+mm = df[df["OP CODE"].str.contains("Matmul", na=False)][[
+    "OP CODE", "DEVICE FW DURATION [ns]", "CORE COUNT",
+    "MATH FIDELITY", "PARALLELIZATION STRATEGY",
+    "DEVICE BRISC KERNEL DURATION [ns]",
+    "DEVICE NCRISC KERNEL DURATION [ns]",
+    "DEVICE TRISC1 KERNEL DURATION [ns]",
+]]
+```
+
+This is sufficient to produce the same profile note as the report-driven
+path (top ops, per-RISC split, fidelity/cores/strategy). It does **not**
+compute the `DRAM %` / `FLOPs %` utilization columns — those require the
+op's theoretical work volume, which the report knows per op code. For a
+matmul, compute it manually from `M × K × N × 2` FLOPs and the `DEVICE FW
+DURATION [ns]`.
+
 ## Device zones from kernel code
 
 To profile a specific kernel region, add a scoped zone to the kernel source:

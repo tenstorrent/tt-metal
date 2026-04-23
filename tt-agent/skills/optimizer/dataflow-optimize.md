@@ -42,8 +42,14 @@ so they run concurrently. Sequential dispatch forfeits the parallelism.
 ### 1. Orient
 
 Read the baseline profile note. Read the `tt:learn` research note. Read
-the current kernel / op source for the target. Note:
-- Which processor is the bottleneck (from the tag).
+the current kernel / op source for the target. Read `common-wrong-turns.md`
+before proposing the first hypothesis — entries there cost prior sessions
+full iterations to discover. Note:
+- The op-level bound class from the profile (overhead / bandwidth / compute
+  / near-peak — see `skills/profiler/interpretation.md`). **Match
+  hypotheses to the class.** Compute-bound levers applied to an
+  overhead-bound op waste iterations.
+- Which processor is the bottleneck (from the per-RISC tag).
 - Which CB depths and sharding are currently in use.
 - What immediate adjacent patterns (barriers, NOC calls, tile loops) exist.
 
@@ -59,15 +65,22 @@ in the profile evidence:
 > "BRISC is 2.1× TRISC1 on matmul_tile — batching 4 reads before the
 > single barrier should overlap NOC with compute."
 
-Do NOT propose multiple changes at once. One change per iteration. If an
-idea requires two coordinated edits (e.g., CB depth + reader loop
-restructure), treat it as one hypothesis but make both edits in a single
-commit.
+Do NOT propose multiple changes at once. One change per iteration.
+Coordinated pairs are allowed only when the second edit is physically
+required by the first (e.g., raising `in0_block_w` forces a smaller
+`per_core_M` to fit L1, or a CB depth change requires a reader-loop
+restructure to consume the new depth). Note the coordination explicitly
+in the commit message so attribution stays traceable.
 
 ### 3. Implement
 
 Edit the source. Keep the edit tight — only what the hypothesis requires.
 Do not refactor surrounding code. Do not fix unrelated issues.
+
+If a matmul fails with a kernel-level assertion (`num_blocks_x` mismatch,
+CB overflow, dim assertion), add `print(pc)` before the `ttnn.linear` call
+and re-run. The realized `per_core_M/N`, `out_subblock_h/w`,
+`out_block_h/w` values root-cause fast — see `common-wrong-turns.md`.
 
 ### 4. Build
 
@@ -83,8 +96,11 @@ Invoke `tt:profiler` for device timing.
 
 - Commit: `opt(<scope>): <one-line hypothesis> — <metric> (<Δ%> vs best)`.
 - Append row to the shared `trend-<scope>.md` (one file across all
-  workspaces — include the workspace letter in the `WS` column).
-- Emit one-line Claude output including the workspace letter.
+  workspaces — include the workspace letter in the `WS` column) with
+  utilization columns (`DRAM %`, `FLOPs %`, `Bound`, `Cores`) from the
+  profile note.
+- Emit one-line Claude output including the workspace letter and
+  utilization snapshot.
 
 ### 7. Evaluate convergence
 

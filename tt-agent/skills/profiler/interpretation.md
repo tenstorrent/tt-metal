@@ -44,6 +44,53 @@ the bound.
 Use the tag only — do not prescribe the fix in a profile note. Fix selection
 belongs to the caller (developer or `tt:optimizer`).
 
+## Matmul bound classification (op-level, from tt-perf-report)
+
+`tt-perf-report` emits `DRAM %` and `FLOPs %` utilization columns for matmul
+ops and tags suspect rows `SLOW`. These classify the op-level bound — a
+different question from the processor-level tags above (which classify which
+RISC is the blocker within a single kernel).
+
+| DRAM % | FLOPs % | Tag | Bound |
+|---|---|---|---|
+| low (< 40) | low (< 40) | SLOW | **overhead / sync-bound** — dispatch, barriers, under-sized blocks. Default progcfgs commonly land here. |
+| high (≥ 60) | low (< 40) | — | **bandwidth-bound** — memory feed is the ceiling |
+| low (< 40) | high (≥ 60) | — | **compute-bound** — math engine is the ceiling |
+| — | high (≥ 70) | — | **near peak** — little headroom |
+| mid / mid | — | — | mixed; inspect per-RISC |
+
+Lever families per class (for the *caller*, not in the note):
+- **Overhead-bound**: raise `in0_block_w`, reshape M to enable a 2D progcfg
+  with larger `per_core_M`, enlarge `out_subblock_h × w`, lower math
+  fidelity, drop `fp32_dest_acc_en` (frees DST for bigger subblocks).
+- **Bandwidth-bound**: prefer L1-sharded activations matching the matmul
+  grid over DRAM-interleaved, `packer_l1_acc=True`, DRAM-sharded matmul
+  variant, reduced-precision weights (BFP8).
+- **Compute-bound**: fidelity is already the ceiling — remaining levers are
+  a different kernel family (1D vs 2D vs DRAM-sharded) or reducing
+  arithmetic intensity via fusion.
+- **Near peak**: stop tuning this op; pick the next bottleneck.
+
+Misclassifying an overhead-bound matmul as compute-bound and tuning fidelity
+or subblocks in isolation wastes iterations — confirm the class from DRAM%
+and FLOPs% before proposing levers.
+
+## Peak reference figures
+
+For computing FLOPs% and DRAM% against ceilings, and for sanity-checking
+absolute numbers:
+
+| Part | Tensix cores | Peak @ HiFi2 BF16 | Peak @ HiFi4 BF16 | DRAM bandwidth |
+|---|---|---|---|---|
+| Wormhole B0 (per N150 / per N300 device) | 64 | ~128 TFLOPs | ~64 TFLOPs | ~288 GB/s |
+| Blackhole | 140 | ~280 TFLOPs | ~140 TFLOPs | ~512 GB/s |
+
+HiFi2 peak is 2× HiFi4 because math cycles per tile halve; LoFi is another 2×.
+`tt-perf-report`'s FLOPs% is against the *current* fidelity's peak, not the
+max-fidelity peak. Swapping HiFi4 → HiFi2 can show FLOPs% dropping even as
+absolute TFLOPs rise (the denominator doubled). Compare absolute TFLOPs, not
+FLOPs%, across fidelity settings.
+
 ## First-run caveat
 
 The first iteration of any test populates the program cache. Host times on

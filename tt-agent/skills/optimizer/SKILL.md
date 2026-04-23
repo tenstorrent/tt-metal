@@ -54,6 +54,11 @@ See `skills/skill-creator/tt-guidelines.md` Developer-Rule Conflict Protocol.
   - absolute device time in ns (e.g., "under 8ms")
   - relative improvement (e.g., "30% faster than baseline")
   - % of roofline (e.g., "reach 70% of theoretical peak")
+  - **utilization target** (e.g., "≥70% FLOPs% on target matmul with matmul
+    as THE bottleneck") — requires the `DRAM %` / `FLOPs %` columns from
+    `tt-perf-report` (see `skills/profiler/interpretation.md`). Prefer this
+    over relative-improvement when the baseline is already low-utilization;
+    a 30% speedup that leaves the op at 25% FLOPs hasn't actually fixed it.
 - **Mode** (optional): `parameter-search` or `dataflow-optimize`. If omitted,
   the skill picks based on the target: an op with an explicit config struct
   and a well-defined parameter space defaults to parameter search; otherwise
@@ -65,8 +70,8 @@ See `skills/skill-creator/tt-guidelines.md` Developer-Rule Conflict Protocol.
 
 | Phase | Loads / dispatches | Produces |
 |---|---|---|
-| Preflight | Developer-rule check (see above) | Go / no-go |
-| Prepare | `skills/run/workspace-detect.md` (via tt:run), invoke `tt:learn("<target>")` | Workspace context note, target research note |
+| Preflight | Developer-rule check (see above); ask about internal docs (see Prepare §5) | Go / no-go + doc pointers |
+| Prepare | Expanded sub-steps (see "Prepare phase" section below); `skills/run/workspace-detect.md` (via tt:run); invoke `tt:learn("<target>")` (REQUIRED, not optional) | Workspace context note, target research note, dim-validation findings, authoritative-doc pointers |
 | Extract (if no unit test exists) | dispatch `extract.md` subagent | Extracted unit test, saved input tensors, ±10% verification pass |
 | Baseline | invoke `tt:profiler` on the unit test | Baseline profile note, initial row in `trend-<scope>.md` |
 | Spawn workspaces (multi-hypothesis only) | `workspaces.md` | N workspaces, N branches, ccache shared |
@@ -76,6 +81,42 @@ See `skills/skill-creator/tt-guidelines.md` Developer-Rule Conflict Protocol.
 
 After each phase, summarize in 3-5 lines in the trend file and move on. Phase
 inputs are consumed, not carried forward.
+
+## Prepare phase (not optional)
+
+Before the first baseline profile:
+
+1. **Research the target op.** Invoke `tt:learn("<target> — config knobs,
+   valid dim constraints, kernel variants")`. Record the note path in the
+   trend file. Do not skip — the first iteration's hypothesis queue depends
+   on this.
+
+2. **Sibling-implementation scan.** If the target file is "reused from X
+   with changes" (very common in tt-metal — most multimodal and model
+   variants extend a Llama reference), read X and diff it against the
+   target. The original's config patterns may not apply to the new model's
+   dimensions. Note any divergent dims, config lambdas, or cached `args.*`
+   fields.
+
+3. **Actual-vs-derived dim check.** For every `args.<dim>` used in a
+   progcfg, compare to `self.<weight>.shape[-1]` of the loaded tensor.
+   `ModelArgs` fields are computed at config time and can truncate
+   (int-div) or drift from actual weight shape. Prefer the weight-shape
+   value in progcfgs. If a mismatch exists, flag it in the trend file —
+   a standalone fix PR may be warranted.
+
+4. **Authoritative docs sweep.** Ask the developer whether internal guides
+   exist (Confluence pages, `tech_reports/`, PDF exports in the workspace).
+   For matmul the PSE Matmul Configuration Guide governs variant selection,
+   L1 budgeting, and subblock rules — reading it before iterating reshapes
+   the hypothesis queue substantially.
+
+5. **Known anti-patterns.** Skim `common-wrong-turns.md`. Entries there
+   cost other sessions full iterations to discover.
+
+Output: a short Prepare note in `~/.tt-agent/notes/` listing the research
+pointer, sibling diff highlights, dim-validation findings, and doc pointers.
+The Baseline phase reads this.
 
 ## Outputs
 
@@ -98,13 +139,19 @@ Written to the repo (commits):
 One line per iteration, visible to the developer in real time:
 
 ```
-Iter <n> [<workspace-letter>] <commit-sha>: <metric> (baseline <B>, Δbest <X%>, best@iter <m>)
+Iter <n> [<workspace-letter>] <commit-sha>: <metric> (baseline <B>, Δbest <X%>, best@iter <m>) · <FLOPs%>F / <DRAM%>D / <Bound>
 ```
 
 Example:
 ```
-Iter 7 [a] abc1234: 8.2ms (baseline 12.1ms, Δbest -3%, best@iter 5)
+Iter 7 [a] abc1234: 8.2ms (baseline 12.1ms, Δbest -3%, best@iter 5) · 44%F / 18%D / overhead
 ```
+
+**Rule: anything computed for display lands in the trend file in the same
+iteration.** Utilization snapshots, contribution breakdowns, per-op timing
+comparisons — if they're worth showing in chat, they're worth preserving
+in the trend file. Ephemeral tables in chat rot; trend-file tables survive.
+See `convergence.md` for the exact columns.
 
 ## Convergence
 
@@ -124,6 +171,7 @@ file and commits are up to date after every iteration.
 | Sub-task | Load |
 |---|---|
 | Per-iteration rules, trend file format, commit protocol | `convergence.md` |
+| Known anti-patterns and debug techniques (read before iterating) | `common-wrong-turns.md` |
 | Spawn parallel workspaces, ccache setup, cleanup reporting | `workspaces.md` |
 | Model → unit test + tensor capture | `extract.md` |
 | Structured parameter sweep loop | `parameter-search.md` |

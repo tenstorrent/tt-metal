@@ -50,6 +50,12 @@ A session ends successfully when `best` crosses the user-supplied goal:
 - Roofline goal: `best / roofline_ns <= 1 / target_pct` — requires the caller
   to supply `roofline_ns` at session start (see `tt:learn` for how to compute
   it per op).
+- **Utilization goal**: `flops_pct >= target_flops_pct` AND
+  `target_op_fw_ns >= sum(non_target_op_fw_ns)` (i.e., target op is THE
+  bottleneck). `flops_pct` and `dram_pct` come from `tt-perf-report` on the
+  target op (see `skills/profiler/interpretation.md`). Use this goal when
+  the baseline is already at low utilization — a 30% speedup that leaves
+  the op at 25% FLOPs% hasn't actually fixed the op.
 
 On success: write `findings-optimizer-<scope>-<ts>.md`, invoke
 `tt:code-review` on the winning branch, report to the developer.
@@ -105,26 +111,57 @@ When PCC drops below 0.999:
 **Baseline commit:** <short-sha>
 **Target branch(es):** optimizer/<scope>-<date>[-a|-b|...]
 **CCACHE_DIR:** <resolved path>
-**Goal:** <absolute | relative | roofline>
+**Goal:** <absolute | relative | roofline | utilization>
 
 ## Current state
 - Baseline: <ns>
 - Best: <ns> at iter <m> on branch <letter> (commit <sha>)
 - Δ baseline: -<pct>%
+- Utilization (best): <flops%>F / <dram%>D / <bound> / <cores> cores
 - Iterations: <n>
 - Stall counter: <s> / <stall_ask>
 
 ## History
 
-| Iter | WS | Commit | Metric | PCC | Δ best | Hypothesis |
-|---|---|---|---|---|---|---|
-| 0 (baseline) | a | abc1234 | 12.1ms | 1.0000 | — | — |
-| 1 | a | def5678 | 11.5ms | 0.9999 | -5% | batch noc reads |
+| Iter | WS | Commit | Metric | PCC | Δ best | FLOPs% | DRAM% | Bound | Cores | Hypothesis |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 (baseline) | a | abc1234 | 12.1ms | 1.0000 | — | 36% | 11% | overhead | 64 | — |
+| 1 | a | def5678 | 11.5ms | 0.9999 | -5% | 44% | 18% | overhead | 64 | batch noc reads |
 | ... |
+
+## Per-iteration contribution breakdown
+
+Running attribution — one row per productive iteration (forensic/failed
+iterations go in a separate table below).
+
+| # | Change | Saved (μs / ns) | % of baseline | Running total |
+|---|---|---|---|---|
+| 1 | <change> | -<saved> | -<pct>% | <running ns> |
+
+## Forensic failures
+
+| # | Iter | What was tried | Result |
+|---|---|---|---|
+
+## Op-level timing (context, optional)
+
+When optimizing a sub-op inside a larger layer, keep a per-op snapshot of
+the enclosing scope so the developer can see where the work is going
+overall. Update baseline and current columns; add columns for intermediate
+iteration milestones only if they changed substantially.
+
+| Op | Baseline | Current | Δ |
+|---|---|---|---|
 ```
 
-Keep under 100 rows by truncating the oldest iterations once the table
-passes that length — preserve baseline, current best, and the last 50.
+**Rule: anything shown in chat must also land here.** Utilization rows,
+contribution breakdowns, per-op comparisons — if they were worth
+presenting, they're worth persisting. Ephemeral chat tables rot.
+
+Keep under 100 rows on the History table by truncating the oldest
+iterations once the table passes that length — preserve baseline, current
+best, and the last 50. The contribution-breakdown and forensic tables are
+never truncated.
 
 ## Interruption behavior
 
