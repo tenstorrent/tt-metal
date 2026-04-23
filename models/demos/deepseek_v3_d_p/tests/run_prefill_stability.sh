@@ -16,6 +16,19 @@
 # Usage:
 #   ./run_prefill_stability.sh <num_iterations> [log_file]
 #
+# Overridable env vars (exported or one-shot prefixed):
+#   TEST_PATH            pytest file path
+#                        (default: models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py)
+#   TEST_FILTER          pytest -k expression
+#                        (default: 'pretrained and smoke and e256_cf32_device and mesh-8x4 and 61 and longbook_qa_eng and 1024')
+#   PYTEST_TIMEOUT_SEC   per-iteration deadline in seconds (default: 600)
+#   POLL_INTERVAL_SEC    how often to check pytest liveness (default: 5)
+#
+# Example:
+#   TEST_FILTER='random and pcc and mesh-2x4 and 1024' \
+#   PYTEST_TIMEOUT_SEC=900 \
+#     ./run_prefill_stability.sh 20 /tmp/run.log
+#
 # Must be run from the tt-metal repo root (pytest picks up conftest.py).
 #
 # Post-hang inspection (pytest pid is logged before exit):
@@ -31,15 +44,15 @@ set -u
 NUM_ITERATIONS="${1:?usage: $0 <num_iterations> [log_file]}"
 LOG_FILE="${2:-stability_prefill_$(date +%Y%m%d_%H%M%S).log}"
 
-PYTEST_TIMEOUT_SEC=600
-POLL_INTERVAL_SEC=5
+PYTEST_TIMEOUT_SEC="${PYTEST_TIMEOUT_SEC:-600}"
+POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 
 export TT_DS_PREFILL_TTNN_CACHE="/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill"
 export DEEPSEEK_V3_HF_MODEL="/mnt/models/deepseek-ai/DeepSeek-R1-0528"
 export TT_DS_PREFILL_HOST_REF_CACHE="/mnt/models/deepseek-prefill-cache/golden/"
 
-TEST_PATH="models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py"
-TEST_FILTER='pretrained and smoke and e256_cf32_device and mesh-8x4 and 61 and longbook_qa_eng and 1024'
+TEST_PATH="${TEST_PATH:-models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py}"
+TEST_FILTER="${TEST_FILTER:-pretrained and smoke and e256_cf32_device and mesh-8x4 and 61 and longbook_qa_eng and 1024}"
 
 pass_count=0
 fail_count=0
@@ -68,6 +81,7 @@ log "=================================================="
 log "Stability run started at $(date -Is)"
 log "Iterations:             ${NUM_ITERATIONS}"
 log "Pytest deadline (s):    ${PYTEST_TIMEOUT_SEC}"
+log "Poll interval (s):      ${POLL_INTERVAL_SEC}"
 log "TT_DS_PREFILL_TTNN_CACHE=${TT_DS_PREFILL_TTNN_CACHE}"
 log "DEEPSEEK_V3_HF_MODEL=${DEEPSEEK_V3_HF_MODEL}"
 log "TT_DS_PREFILL_HOST_REF_CACHE=${TT_DS_PREFILL_HOST_REF_CACHE}"
