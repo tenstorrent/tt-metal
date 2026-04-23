@@ -212,8 +212,8 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
 
@@ -297,6 +297,8 @@ def test_pipeline_performance(
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
+    vae_encode_times = [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
     denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
     total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
@@ -326,6 +328,9 @@ def test_pipeline_performance(
         )
 
     print_stats("Text Encoding", text_encoder_times)
+    if model_type == "i2v":
+        print_stats("Image Encoding (total)", prepare_latents_times)
+        print_stats("  VAE Encoder only", vae_encode_times)
     print_stats("Denoising", denoising_times)
     print_stats("VAE Decoding", vae_times)
     print_stats("Total Pipeline", total_times)

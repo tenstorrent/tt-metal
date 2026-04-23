@@ -77,8 +77,8 @@ def test_stability(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
 

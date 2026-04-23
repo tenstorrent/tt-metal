@@ -86,8 +86,8 @@ def test_pipeline_inference(
         topology=topology,
         is_fsdp=is_fsdp,
         checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        target_height=height,
-        target_width=width,
+        height=height,
+        width=width,
         num_frames=num_frames,
     )
 

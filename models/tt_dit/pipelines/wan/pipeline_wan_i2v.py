@@ -32,24 +32,38 @@ class WanPipelineI2V(WanPipeline):
             kwargs["scheduler"] = UniPCMultistepScheduler.from_pretrained(
                 kwargs["checkpoint_name"], subfolder="scheduler", trust_remote_code=True
             )
-
+        self._encoder_resolution = None
         super().__init__(*args, model_type="i2v", **kwargs)
 
-        self.tt_encoder = WanEncoder(
-            base_dim=self.vae.config.base_dim,
-            in_channels=self.vae.config.in_channels,
-            z_dim=self.vae.config.z_dim,
-            dim_mult=self.vae.config.dim_mult,
-            num_res_blocks=self.vae.config.num_res_blocks,
-            attn_scales=self.vae.config.attn_scales,
-            temperal_downsample=self.vae.config.temperal_downsample,
-            is_residual=self.vae.config.is_residual,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.vae_ccl_manager,
-            parallel_config=self.vae_parallel_config,
+    def warmup_buffers(self, height, width):
+        encoder_resolution = (height, width)
+        if self._encoder_resolution != encoder_resolution:
+            self.tt_encoder = WanEncoder(
+                base_dim=self.vae.config.base_dim,
+                in_channels=self.vae.config.in_channels,
+                z_dim=self.vae.config.z_dim,
+                dim_mult=self.vae.config.dim_mult,
+                num_res_blocks=self.vae.config.num_res_blocks,
+                attn_scales=self.vae.config.attn_scales,
+                temperal_downsample=self.vae.config.temperal_downsample,
+                is_residual=self.vae.config.is_residual,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.vae_ccl_manager,
+                parallel_config=self.vae_parallel_config,
+                height=height,
+                width=width,
+                encoder_t_chunk_size=None,
+            )
+            self.tt_encoder.load_state_dict(self.vae.state_dict())
+            self._encoder_resolution = encoder_resolution
+        self.run_single_prompt(
+            prompt="warmup",
+            image_prompt=PIL.Image.new("RGB", (width or 1280, height or 720)),
+            height=height,
+            width=width,
+            num_frames=81,
+            num_inference_steps=2,
         )
-
-        self.tt_encoder.load_state_dict(self.vae.state_dict())
 
     @staticmethod
     def create_pipeline(*args, **kwargs):

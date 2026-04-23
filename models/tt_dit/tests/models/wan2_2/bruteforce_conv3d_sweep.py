@@ -978,3 +978,133 @@ def test_bruteforce_sweep_h4w32_480p_full_t(
         # stages (W=3-8) get fewer combos but still avoid hang-triggering shapes.
         hw_product=32,
     )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 720p image encoder — stages 0 and 1
+# ---------------------------------------------------------------------------
+# Stage 0 (full res, H_out=180, W_out=160): conv_in, res_s0, sp_s0
+# Stage 1 (half res, H_out=90, W_out=80): down0, res_s1, sp_s1, tc_s1
+#
+# Padded dims (int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
+#   stage0: H_sweep=182, W_sweep=162
+#   stage1: H_sweep=92, W_sweep=82
+# (3,1,1) kernels: tc_s1 uses H_sweep=45, W_sweep=40 (no spatial pad)
+#
+# T values from compute_encoder_dims(720, 1280, 4, 8, uncached):
+#   stage0: T_res=35, T_spatial=33
+#   stage1: T_res=35, T_spatial=33, T_tconv=33
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W8_ENC_720P_T33_S0S1 = [
+    # (name, C_in, C_out, kernel, stride, padding, T, H, W, h, w)
+    # Ordered most-to-least compute (T × H_sweep × W_sweep)
+    ("conv_in_enc", 32, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 35, 182, 162, 4, 8),  # T=35, H_out=180
+    ("res_s0", 96, 96, (3, 3, 3), (1, 1, 1), (0, 0, 0), 35, 182, 162, 4, 8),  # T=35, H_out=180
+    ("sp_s0", 96, 96, (1, 3, 3), (1, 1, 1), (0, 0, 0), 33, 182, 162, 4, 8),  # T=33, H_out=180
+    ("down0", 96, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 35, 92, 82, 4, 8),  # T=35, H_out=90
+    ("res_s1", 192, 192, (3, 3, 3), (1, 1, 1), (0, 0, 0), 35, 92, 82, 4, 8),  # T=35, H_out=90
+    ("sp_s1", 192, 192, (1, 3, 3), (1, 1, 1), (0, 0, 0), 33, 92, 82, 4, 8),  # T=33, H_out=90
+    ("tc_s1", 192, 192, (3, 1, 1), (1, 1, 1), (0, 0, 0), 33, 45, 40, 4, 8),  # T=33, no spatial pad (PARTIAL re-sweep)
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x8_enc_s0s1_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W8_ENC_720P_T33_S0S1,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_ENC_720P_T33_S0S1],
+)
+def test_bruteforce_sweep_h4w8_enc_720p_t33_s0s1(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w8_enc_t33/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=8,
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH Galaxy 4x8, 720p image encoder — stages 2 and 3 (remaining "est." layers)
+# ---------------------------------------------------------------------------
+# Stages 0 (H_out=180, W_out=160) and 1 (H_out=90, W_out=80) swept 2026-04-21.
+# Stage 2 (quarter res, H_out=45, W_out=40) and Stage 3 (eighth, H_out=22, W_out=20).
+#
+# Padded dims fed to conv3d (add int_pad=(0,1,1) for (3,3,3)/(1,3,3)):
+#   stage2: H_sweep=47, W_sweep=42
+#   stage3: H_sweep=24, W_sweep=22
+# (3,1,1) kernels use no spatial padding: tc_s2(22,20)
+#
+# T values from compute_encoder_dims(720, 1280, 4, 8, uncached):
+#   stage2: T_res=19, T_spatial=17
+#   stage3: T_res=11
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H4W8_ENC_720P_T33_S2S3 = [
+    # (name, C_in, C_out, kernel, stride, padding, T, H, W, h, w)
+    # Ordered most-to-least compute (T × H_sweep × W_sweep)
+    ("down1", 192, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 19, 47, 42, 4, 8),  # T=19, H_out=45
+    ("res_s2", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 19, 47, 42, 4, 8),  # T=19, H_out=45
+    ("sp_s2", 384, 384, (1, 3, 3), (1, 1, 1), (0, 0, 0), 17, 47, 42, 4, 8),  # T=17 (T_spatial)
+    ("tc_s2", 384, 384, (3, 1, 1), (1, 1, 1), (0, 0, 0), 17, 22, 20, 4, 8),  # T=17, no spatial pad
+    ("res_s3", 384, 384, (3, 3, 3), (1, 1, 1), (0, 0, 0), 11, 24, 22, 4, 8),  # T=11, H_out=22
+    ("conv_out_enc", 384, 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), 11, 24, 22, 4, 8),  # T=11, C_out=32
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {}]],
+    ids=["bh_4x8_enc_s2s3_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H4W8_ENC_720P_T33_S2S3,
+    ids=[l[0] for l in _SWEEP_LAYERS_H4W8_ENC_720P_T33_S2S3],
+)
+def test_bruteforce_sweep_h4w8_enc_720p_t33_s2s3(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h4w8_enc_t33/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        # BH 4x8 720p hang mitigations: same as other 720p sweeps.
+        # max_t_block=8: T=9+ causes device hangs for large C_in.
+        # hw_product=32: h*w≠32 triggers device hangs.
+        max_t_block=8,
+        hw_product=32,
+    )
