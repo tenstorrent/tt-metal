@@ -121,6 +121,28 @@ void kernel_main() {
 
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;
+
+    // Shared per-(nb, nq, q_chunk) body. Flat and hierarchical branches below only differ in how
+    // they iterate (nb, nq, q_chunk); the mask + output-write work is identical once those three
+    // are known.
+    auto process_q_chunk = [&](uint32_t nb, uint32_t nq, uint32_t q_chunk) {
+        // Generate mask only when user didn't provide one.
+        // Lightweight path already has a single -inf tile fronted — skip generate_mask.
+        if constexpr (!use_provided_mask && !use_lightweight_mask) {
+            generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
+                Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0, is_causal);
+        }
+
+        // Wait for compute to deliver output chunk. Both start and end rows are capped by valid_Sqt,
+        // since Sq padding is independent of Sk padding.
+        const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+        const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
+        const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
+        const uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+        write_block(
+            out_writer, cb_out, out_chunk_tiles, out_row_tile_count, vDHt, out_tile_id, tile_bytes, barrier_threshold);
+    };
+
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
             chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_1;
@@ -135,65 +157,28 @@ void kernel_main() {
         for (uint32_t gq = 0; gq < global_q_count; ++gq) {
             const auto decoded = decompose_flat_q_index_with_proxy(
                 global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
-            const uint32_t nb = decoded.nb;
-            const uint32_t nq = decoded.nq;
-            {
-                {
-                    uint32_t q_chunk = decoded.q_chunk;
+            process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk);
+        }
 #else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                     uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
-                    uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
+                    const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                     if (q_iter < q_chunk_div_2) {  // bottom half
                         q_chunk = local_q_start + q_iter;
                     } else {
-                        uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
+                        const uint32_t back_q_iter = q_iter - q_chunk_div_2;  // back half starts at 0
                         q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
                     }
 #else
                     q_chunk = local_q_start + q_iter;
 #endif
-#endif
-
-                    // Generate mask only when user didn't provide one.
-                    // Lightweight path already has a single -inf tile fronted — skip generate_mask.
-                    if constexpr (!use_provided_mask && !use_lightweight_mask) {
-                        generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
-                            Sq_chunk_t,
-                            Sk_chunk_t,
-                            q_chunk,
-                            chunk_start_t_in_q_chunks,
-                            true,
-                            false,
-                            unpadded_Sk,
-                            0,
-                            is_causal);
-                    }
-
-                    // Wait for compute to deliver output chunk
-                    /*
-                      Determine how many rows of OUT will be written. Both start and end rows are
-                      capped by valid_Sqt, since Sq padding is independent of Sk padding.
-                    */
-                    const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
-                    const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
-                    const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-                    uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-                    write_block(
-                        out_writer,
-                        cb_out,
-                        out_chunk_tiles,
-                        out_row_tile_count,
-                        vDHt,
-                        out_tile_id,
-                        tile_bytes,
-                        barrier_threshold);
+                    process_q_chunk(nb, nq, q_chunk);
                 }
             }
         }
+#endif
     }
 }
