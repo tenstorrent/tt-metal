@@ -70,7 +70,8 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     LLK_ASSERT(
         cb_wait_front_validate(input, (std::uint32_t)num_tiles),
-        "cb_wait_front: monotonicity or step consistency violated");
+        "cb_wait_front: successive calls must request strictly increasing num_tiles "
+        "with a constant step size between calls (until cb_pop_front resets the sequence)");
 
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;

@@ -114,6 +114,20 @@ __attribute__((noinline)) inline bool cb_access_within_bounds(
     return cb.fifo_rd_ptr + (start_tile_index + num_tiles) * cb.fifo_page_size <= cb.fifo_limit;
 }
 
+// Validates the calling pattern of cb_wait_front for a given circular buffer.
+//
+// Between cb_pop_front calls (which reset the sequence), successive
+// cb_wait_front calls must request a strictly increasing num_tiles with a
+// constant step size.  For example, the sequence 8 -> 16 -> 24 (step = 8) is
+// valid, while 8 -> 16 -> 20 (step changes from 8 to 4) is not.
+//
+// Returns false if any of these conditions are violated:
+//   - num_tiles exceeds UINT16_MAX
+//   - the step between the current and previous num_tiles differs from the
+//     established step size
+//
+// Call with reset=true (done by cb_pop_front / llk_pop_tiles) to clear the
+// tracked state for cb_id and start a new sequence.
 __attribute__((noinline)) inline bool cb_wait_front_validate(uint32_t cb_id, uint32_t num_tiles, bool reset = false) {
     static uint16_t last_count[NUM_CIRCULAR_BUFFERS] = {};
     static uint16_t step_size[NUM_CIRCULAR_BUFFERS] = {};
