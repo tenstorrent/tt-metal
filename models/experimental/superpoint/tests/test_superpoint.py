@@ -99,7 +99,10 @@ def _device_to_host_post_with_nms(tt_model, s_pooled, d_norm, b, h, w):
     enc_h, enc_w = h // 8, w // 8
     descriptors_nhwc = ttnn.to_torch(d_norm).reshape(b, enc_h, enc_w, DESCRIPTOR_DIM)
     nms_scores = ttnn.to_torch(s_pooled).reshape(b, h, w).float()
-    descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).contiguous().float()
+    # .float() on a non-contiguous bf16 tensor produces a contiguous fp32 copy
+    # in one pass — the previous .contiguous().float() was a redundant
+    # intermediate bf16 copy.
+    descriptors_nchw = descriptors_nhwc.permute(0, 3, 1, 2).float()
     return nms_scores, descriptors_nchw
 
 
