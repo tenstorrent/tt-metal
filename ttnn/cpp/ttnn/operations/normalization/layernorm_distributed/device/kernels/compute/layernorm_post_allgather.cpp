@@ -136,9 +136,13 @@ void kernel_main() {
         pack_reconfig_data_format(cb_stats_reduced);
 
         /*
-         * Reduce stats input.
-         * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
-         * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
+         * Reduce stats input — not migrated to reduce<> helper.
+         * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...] — strided layout.
+         * Two interleaved reductions at stride `stats_tile_stride` share one acquire
+         * cycle: tile 0 → DST[0] (sum of squares), tile 1 → DST[1] (sum of x), pack
+         * both separately. The reduce<> helper expects a contiguous input range and
+         * single-slot output — doesn't cover this "strided-pick two channels into
+         * two DST slots in one cycle" pattern.
          */
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
