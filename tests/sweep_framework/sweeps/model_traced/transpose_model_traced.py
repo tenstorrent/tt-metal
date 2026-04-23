@@ -76,10 +76,12 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
-    if output_memory_config is not None and "memory_config" not in op_kwargs:
+    # Only pass memory_config to ttnn.transpose if the master trace actually had it.
+    # The sweep may provide output_memory_config even when the traced config does
+    # not include memory_config — in that case we must not inject it.
+    # The traced memory_config comes through the explicit `memory_config` parameter;
+    # if the trace didn't have it, `memory_config` is None and we should not inject.
+    if memory_config is not None and output_memory_config is not None and "memory_config" not in op_kwargs:
         parsed_mc = parse_dict_value("memory_config", output_memory_config)
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
