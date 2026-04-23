@@ -3,115 +3,95 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/binary_bitwise_sfpu.h"
-#include "api/compute/binary_shift.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/copy_dest_values.h"
-#include "api/compute/eltwise_unary/fill.h"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_grad_out = tt::CBIndex::c_0;
-    constexpr auto cb_input = tt::CBIndex::c_1;
-    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_grad_out = static_cast<uint32_t>(tt::CBIndex::c_0);
+    constexpr uint32_t cb_input = static_cast<uint32_t>(tt::CBIndex::c_1);
+    constexpr uint32_t cb_grad_in = static_cast<uint32_t>(tt::CBIndex::c_2);
 
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
     constexpr float kKappa = 0.044715;
+    constexpr float kKappa3 = kKappa * 3.0f;
+    constexpr float kHalfBeta = kBeta / 2.0f;
 
-    unary_op_init_common(cb_grad_out, cb_grad_in);
-    add_binary_tile_init();
-    mul_binary_tile_init();
-    square_tile_init();
-    tanh_tile_init();
-    sub_binary_tile_init();
+    init_sfpu(cb_grad_out, cb_grad_in);
+
+    // Tanh-approximation GELU backward:
+    //   cdf = 0.5 * (1 + tanh(β * (x + κ·x³)))
+    //   pdf = 0.5·β · (1 + 3κ·x²) · (1 - tanh²(β · (x + κ·x³)))
+    //   grad_in = grad_out * (cdf + x · pdf)
+    //
+    // Original used DEST slot 8 as a backup of x — out of Dst::D7 range and
+    // not needed: CopyDest from D1 preserves x without a second CB load.
+    //
+    // DEST slot map:
+    //   D0 = grad_out (also final result)
+    //   D1 = x, then working register for cdf calc
+    //   D2 = working register for pdf calc (starts as x, gets squared)
+    //   D3 = scratch for FillScalar constants
+    //   D4 = tanh backup, then (1 - tanh²)
+    //   D5 = x backup (saved before D1 is consumed by cdf work)
+    auto chain = sfpu_chain(
+        Load<cb_grad_out, Dst::D0, LoadPolicy::WaitUpfrontPopAtEnd>{},
+        Load<cb_input, Dst::D1, LoadPolicy::WaitUpfrontPopAtEnd>{},
+        CopyDest<Dst::D1, Dst::D2>{},
+        CopyDest<Dst::D1, Dst::D5>{},
+
+        // D1 = β · (x + κ·x³)
+        Square<Dst::D1>{},
+        SfpuMul<Dst::D1, Dst::D2, Dst::D1>{},
+        FillScalar<Dst::D3>{kKappa},
+        SfpuMul<Dst::D1, Dst::D3, Dst::D1>{},
+        SfpuAdd<Dst::D1, Dst::D2, Dst::D1>{},
+        FillScalar<Dst::D3>{kBeta},
+        SfpuMul<Dst::D1, Dst::D3, Dst::D1>{},
+
+        // D1 = tanh(β · (x + κ·x³));  D4 = copy of D1
+        Tanh<Approx::Exact, Dst::D1>{},
+        CopyDest<Dst::D1, Dst::D4>{},
+
+        // D1 = 0.5 · (1 + tanh) = cdf
+        FillScalar<Dst::D3>{1.0f},
+        SfpuAdd<Dst::D1, Dst::D3, Dst::D1>{},
+        FillScalar<Dst::D3>{0.5f},
+        SfpuMul<Dst::D1, Dst::D3, Dst::D1>{},
+
+        // D4 = 1 - tanh²  (via D3 = 1 - D4 then CopyDest back to D4)
+        Square<Dst::D4>{},
+        FillScalar<Dst::D3>{1.0f},
+        SfpuSub<Dst::D3, Dst::D4, Dst::D3>{},
+        CopyDest<Dst::D3, Dst::D4>{},
+
+        // D2 = 1 + 3κ·x²
+        FillScalar<Dst::D3>{kKappa3},
+        Square<Dst::D2>{},
+        SfpuMul<Dst::D2, Dst::D3, Dst::D2>{},
+        FillScalar<Dst::D3>{1.0f},
+        SfpuAdd<Dst::D2, Dst::D3, Dst::D2>{},
+
+        // D2 = pdf = 0.5·β · (1 + 3κ·x²) · (1 - tanh²)
+        SfpuMul<Dst::D2, Dst::D4, Dst::D2>{},
+        FillScalar<Dst::D3>{kHalfBeta},
+        SfpuMul<Dst::D2, Dst::D3, Dst::D2>{},
+
+        // D2 = x · pdf  (x restored from D5 backup)
+        CopyDest<Dst::D5, Dst::D3>{},
+        SfpuMul<Dst::D2, Dst::D3, Dst::D2>{},
+
+        // D0 = grad_out · (cdf + x · pdf)
+        SfpuAdd<Dst::D1, Dst::D2, Dst::D1>{},
+        SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_reserve_back(cb_grad_in, per_core_block_size);
-
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            cb_wait_front(cb_grad_out, per_core_block_size);
-            cb_wait_front(cb_input, per_core_block_size);
-
-            tile_regs_acquire();
-            tile_regs_wait();
-            copy_tile(cb_grad_out, i, 0);
-            copy_tile(cb_input, i, 1);
-            copy_tile(cb_input, i, 2);  // tile[2] = x
-            copy_tile(cb_input, i, 8);  // tile[8] = x
-
-            // tile[1] = x^3
-            square_tile(1);
-            mul_binary_tile(1, 2, 1);
-
-            // tile[1] = 0.044715 * x^3
-            fill_tile(3, kKappa);
-            mul_binary_tile(1, 3, 1);
-
-            // tile[1] = x + 0.044715 * x^3
-            add_binary_tile(1, 2, 1);
-
-            // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
-            fill_tile(3, kBeta);
-            mul_binary_tile(1, 3, 1);
-
-            // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
-            tanh_tile_init();
-            tanh_tile(1);
-            copy_dest_values(1, 4);  // save tanh to tile[4]
-
-            // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
-            fill_tile(3, 1.0f);
-            add_binary_tile(1, 3, 1);
-            fill_tile(3, 0.5f);
-            mul_binary_tile(1, 3, 1);
-
-            // tile[4] = 1 - tanh^2
-            square_tile(4);
-            fill_tile(3, 1.0f);
-            sub_binary_tile(3, 4, 3);
-            copy_dest_values(3, 4);
-
-            // tile[2] = (1 + 0.134145 * x**2)
-            fill_tile(3, kKappa * 3.0f);
-            square_tile(2);         // x^2
-            mul_binary_tile(2, 3, 2);  // 0.134145 * x**2
-            fill_tile(3, 1.0f);
-            add_binary_tile(2, 3, 2);  // 1 + 0.134145 * x**2
-
-            // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
-            mul_binary_tile(2, 4, 2);
-            fill_tile(3, kBeta / 2.0f);
-            mul_binary_tile(2, 3, 2);
-
-            // tile[2] = x * pdf tern
-            copy_dest_values(8, 3);
-            mul_binary_tile(2, 3, 2);
-
-            // result: tile[1] = grad * (cdf_term + x * pdf_term)
-            add_binary_tile(1, 2, 1);  // cdf_term + x * pdf_term
-            // tile[0] = grad * (cdf_term + x * pdf_term)
-            mul_binary_tile(0, 1, 0);
-
-            pack_tile(0, cb_grad_in);
-            tile_regs_commit();
-            tile_regs_release();
-
-            cb_pop_front(cb_grad_out, per_core_block_size);
-            cb_pop_front(cb_input, per_core_block_size);
-        }
-
-        cb_push_back(cb_grad_in, per_core_block_size);
+        sfpu_pipeline<SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE>(chain, cb_grad_in, per_core_block_size);
     }
 }
