@@ -215,6 +215,23 @@ inline void llk_pack_fast_tilize_block(
     _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_faces);
 }
 
+// Row-scoped pack helpers: program destination once per row (row_begin),
+// stream chunks without reprogramming (row_chunk), cleanup (row_end).
+inline void llk_pack_fast_tilize_row_begin(const std::uint32_t output, const std::uint32_t output_tile_index) {
+    const std::uint8_t output_id = get_output_id(output);
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+    _llk_pack_fast_tilize_row_begin_(pack_tile_addr);
+}
+
+inline void llk_pack_fast_tilize_row_chunk(
+    const std::uint32_t tile_index, const std::uint32_t output, const std::uint32_t unit_dim) {
+    const std::uint8_t output_id = get_output_id(output);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    _llk_pack_fast_tilize_row_chunk_(tile_index, unit_dim, num_faces);
+}
+
+inline void llk_pack_fast_tilize_row_end() { _llk_pack_fast_tilize_row_end_(); }
+
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/

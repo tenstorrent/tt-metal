@@ -291,9 +291,9 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
-    // BH fast-tilize: row streaming — acquire unpack context once per block call,
-    // run all chunk MOPs under it, release once. Saves (units_per_row - 1) context-
-    // switch sequences per call vs the previous per-chunk approach.
+    // BH fast-tilize: row streaming on both unpack and pack.
+    // Unpack: acquire context once per call, stream all chunk MOPs, release once.
+    // Pack: program output L1 destination once per call; replay advances per tile.
     {
         uint32_t tiles_done = 0;
         // prev_chunk = 0: MOE callers may init with max width and block with smaller
@@ -301,6 +301,7 @@ ALWI void fast_tilize_block(
         uint32_t prev_chunk = 0;
 
         UNPACK((llk_unpack_fast_tilize_row_begin(icb, input_tile_index)));
+        PACK((llk_pack_fast_tilize_row_begin(ocb, output_tile_index)));
 
         while (tiles_done < block) {
             // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
@@ -319,7 +320,7 @@ ALWI void fast_tilize_block(
             }
             UNPACK((llk_unpack_fast_tilize_row_chunk(tiles_done)));
             MATH((llk_math_fast_tilize_block_(0, icb, 4)));
-            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk)));
+            PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
 
             MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
             PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
@@ -328,6 +329,7 @@ ALWI void fast_tilize_block(
         }
 
         UNPACK((llk_unpack_fast_tilize_row_end()));
+        PACK((llk_pack_fast_tilize_row_end()));
     }
 #else
     uint32_t full_dim = block;

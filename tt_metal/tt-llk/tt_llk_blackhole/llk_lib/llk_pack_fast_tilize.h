@@ -196,6 +196,53 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     _llk_pack_fast_tilize_mop_config_(unit_dim);
 }
 
+// ===========================================================================
+// Row-scoped pack helpers.
+//
+// Hoist program_packer_destination() and the bulk of counter resets out of
+// the per-chunk loop so they are paid once per row instead of once per chunk.
+//
+// The fast-tilize replay already advances OUTPUT_ADDR per tile via end_ops
+// (ADDDMAREG + STALLWAIT + WRCFG + NOP), so after each chunk MOP OUTPUT_ADDR
+// is already at the correct position for the next chunk.
+//
+// Counter state after every complete tile (confirmed via ISA docs + ttsim):
+//   X: wraps to 0 (SETADCXX end=FACE_C_DIM-1, 16 PACRs per tile)
+//   Y: 0 (ADDR_MOD_1 last PACR: y_src={clr:1,cr:1})
+//   Z: 0 (ADDR_MOD_1 last PACR: z_src={clr:1})
+//   W: accumulates (last_inner/last_outer ADDRCRZW W+=1 per tile)
+//
+// row_begin: reset X/Y, program destination — once per row.
+// row_chunk: reset W only (X/Y/Z are naturally 0 at chunk boundaries) + MOP.
+// row_end:   no-op (placeholder for future cleanup hooks).
+// ===========================================================================
+
+inline void _llk_pack_fast_tilize_row_begin_(const std::uint32_t address)
+{
+    // Reset X and Y once for the whole row. After each tile replay:
+    //   X wraps to 0 (SETADCXX end=FACE_C_DIM-1, 16 PACRs per tile → X=0).
+    //   Y=0 (ADDR_MOD_1 fires last PACR of every tile: y_src={clr:1,cr:1}).
+    // So these counters are naturally 0 at every chunk boundary after row_begin.
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+    program_packer_destination(address);
+}
+
+inline void _llk_pack_fast_tilize_row_chunk_(
+    [[maybe_unused]] const std::uint32_t tile_index, [[maybe_unused]] const std::uint32_t unit_dim, [[maybe_unused]] const std::uint32_t num_faces = 4)
+{
+    // Only W needs resetting per chunk — it accumulates via W_Cr across tiles
+    // (last_inner/last_outer each fire ADDRCRZW W+=1, and start_op restores W=W_Cr).
+    // Z=0 naturally after every tile (ADDR_MOD_1: z_src={clr:1}); no reset needed.
+    // X=0 and Y=0 naturally at chunk boundaries (see row_begin comment).
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset W only (mask bit1=W)
+    ckernel::ckernel_template::run();
+}
+
+inline void _llk_pack_fast_tilize_row_end_()
+{
+    // No-op.
+}
+
 // Reprogram MOP outerloop for a different unit_dim.
 inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim)
 {

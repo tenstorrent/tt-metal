@@ -169,13 +169,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // fast_tilize_init
     _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4);
 
-    // fast_tilize_block × rows: caller loops rows, one block call per chunk per row.
+    // Row-scoped pack: destination programmed once per row, chunks streamed through.
     std::uint32_t prev_udim = unit_dims[0];
     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
     {
         for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)
         {
-            std::uint32_t col_offset = 0;
+            _llk_pack_fast_tilize_row_begin_(L1_ADDRESS(buffer_Res[row * BLOCK_CT_DIM]));
+
             for (std::uint32_t u = 0; u < units_per_row; u++)
             {
                 std::uint32_t udim = unit_dims[u];
@@ -185,10 +186,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     prev_udim = udim;
                 }
                 _llk_packer_wait_for_math_done_();
-                _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[row * BLOCK_CT_DIM + col_offset]), udim, 4);
+                _llk_pack_fast_tilize_row_chunk_(0, udim, 4);
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                col_offset += udim;
             }
+
+            _llk_pack_fast_tilize_row_end_();
         }
     }
 

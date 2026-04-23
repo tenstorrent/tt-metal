@@ -349,13 +349,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                // init configures MOP for unit_dims[0]; reinit_unit_dim switches
-                // before any chunk with a different unit_dim.
+                // Row-scoped pack: program destination once per row, stream chunks.
                 std::uint32_t prev_udim = unit_dims[0];
 
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    std::uint32_t col_offset = 0;
+                    _llk_pack_fast_tilize_row_begin_(L1_ADDRESS(buffer_Res[0]));
 
                     for (std::uint32_t u = 0; u < units_per_row; u++)
                     {
@@ -368,11 +367,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
 
                         _llk_packer_wait_for_math_done_();
-                        _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[col_offset]), udim, 4);
+                        _llk_pack_fast_tilize_row_chunk_(0, udim, 4);
                         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-
-                        col_offset += udim;
                     }
+
+                    _llk_pack_fast_tilize_row_end_();
                 }
             }
         }
