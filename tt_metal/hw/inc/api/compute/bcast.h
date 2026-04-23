@@ -388,11 +388,8 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line =
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
 #else
-    if constexpr (tBcastOp == EltwiseBinaryType::ELWMUL) {
-        MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
-    } else {
-        MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MathFidelity::LoFi>()));
-    }
+    constexpr auto MATH_FID_MODE = (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi;
+    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FID_MODE>()));
 
     UNPACK((llk_unpack_hw_configure(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
