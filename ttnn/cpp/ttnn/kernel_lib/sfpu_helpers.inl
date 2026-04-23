@@ -31,6 +31,7 @@
 #include "api/compute/eltwise_unary/activations.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_unary/rpow.h"
 #include "api/compute/eltwise_unary/log1p.h"
 #include "api/compute/eltwise_unary/xielu.h"
@@ -475,6 +476,16 @@ template <Dst In0, Dst In1, Dst Out>
 ALWI void Logsigmoid<In0, In1, Out>::call(uint32_t d0, uint32_t d1, uint32_t d_out) const {
     logsigmoid_tile(d0, d1, d_out);
 }
+
+template <bool FastAndApprox, Dst Slot>
+ALWI void TanhDerivative<FastAndApprox, Slot>::init() const { tanh_derivative_tile_init<FastAndApprox>(); }
+template <bool FastAndApprox, Dst Slot>
+ALWI void TanhDerivative<FastAndApprox, Slot>::call(uint32_t d0) const { tanh_derivative_tile<FastAndApprox>(d0); }
+
+template <bool FastAndApprox, Dst Slot>
+ALWI void GeluDerivative<FastAndApprox, Slot>::init() const { gelu_derivative_tile_init<FastAndApprox>(); }
+template <bool FastAndApprox, Dst Slot>
+ALWI void GeluDerivative<FastAndApprox, Slot>::call(uint32_t d0) const { gelu_derivative_tile<FastAndApprox>(d0); }
 
 // =============================================================================
 // Op Method Definitions — Ternary SFPU (4 ops)

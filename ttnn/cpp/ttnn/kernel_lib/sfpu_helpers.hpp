@@ -19,6 +19,7 @@
 #include "api/compute/eltwise_unary/activations.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/gelu.h"
+#include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_unary/rpow.h"
 #include "api/compute/eltwise_unary/log1p.h"
 #include "api/compute/eltwise_unary/xielu.h"
@@ -1093,6 +1094,18 @@ template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
     ALWI void init() const;
     ALWI void call(uint32_t d0, uint32_t d1, uint32_t d_out) const;
+};
+
+template <bool FastAndApprox = false, Dst Slot = Dst::D0>
+struct TanhDerivative : UnaryOp<TanhDerivative<FastAndApprox, Slot>, Slot> {
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
+};
+
+template <bool FastAndApprox = false, Dst Slot = Dst::D0>
+struct GeluDerivative : UnaryOp<GeluDerivative<FastAndApprox, Slot>, Slot> {
+    ALWI void init() const;
+    ALWI void call(uint32_t d0) const;
 };
 
 // --- Ternary SFPU Ops ---
