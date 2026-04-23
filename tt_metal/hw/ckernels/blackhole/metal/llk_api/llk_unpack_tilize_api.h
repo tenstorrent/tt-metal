@@ -86,14 +86,18 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t unit_dim,
     const std::uint32_t col_start = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+    const std::uint32_t num_faces  = get_operand_num_faces(operand_id);
+    const std::uint32_t src_format = unpack_src_format[operand_id];
 
-    // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
-    // via the standard context-switch dance (_llk_unpack_configure_single_address_).
-    _llk_unpack_fast_tilize_block_(
-        base_address, tile_index, unpack_src_format[operand_id],
-        unit_dim, num_faces, col_start);
+    // Fold tile_index + col_start into the base address so the block function
+    // always runs with Y=0 and no INCADCXY positioning loop.
+    // Offset in source datums: (tile_index + col_start) * TILE_C_DIM columns.
+    // SCALE_DATUM_SIZE converts datum count to bytes; >>4 to 16-byte L1 units.
+    const std::uint32_t col_datum_offset = (tile_index + col_start) * TILE_C_DIM;
+    const std::uint32_t base_address     = (get_local_cb_interface(operand_id).fifo_rd_ptr - 1) +
+                                       (SCALE_DATUM_SIZE(src_format, col_datum_offset) >> 4);
+
+    _llk_unpack_fast_tilize_block_(base_address, tile_index, src_format, unit_dim, num_faces, 0);
 }
 
 /*************************************************************************
