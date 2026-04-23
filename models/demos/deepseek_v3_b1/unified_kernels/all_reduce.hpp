@@ -167,8 +167,8 @@ private:
         }
 
         size_t arg_idx = size_t(args.per_core_rta_start_idx);
-        [[maybe_unused]] const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        [[maybe_unused]] const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t link_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
 
         uint64_t local_ready_noc_addr = 0;
@@ -216,7 +216,7 @@ private:
         uint64_t dst_noc_base =
             safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
         uint64_t remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
-        const auto connection_direction = connection.get_connection_direction();
+        const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
 
         std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
         for (uint32_t i = 0; i < header_ring_size; ++i) {

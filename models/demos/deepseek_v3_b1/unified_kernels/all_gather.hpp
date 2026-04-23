@@ -155,8 +155,8 @@ private:
         static_assert(CTArgs::num_links == 1, "All-gather TransportSender is single-link only");
 
         size_t arg_idx = size_t(args.per_core_rta_start_idx);
-        [[maybe_unused]] const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        [[maybe_unused]] const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
 
         constexpr bool use_posted_transport_writes = true;
 
@@ -168,7 +168,7 @@ private:
         const uint64_t dest_recv_sem_noc =
             safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.dest_recv_sem_addr, 0);
 
-        const auto connection_direction = connection.get_connection_direction();
+        const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
         std::array<volatile PACKET_HEADER_TYPE*, header_ring_size> headers = {};
         connection.open_start();
         PacketHeaderPool::reset();
