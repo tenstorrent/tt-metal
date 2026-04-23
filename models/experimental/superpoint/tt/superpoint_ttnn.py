@@ -360,6 +360,12 @@ class TtSuperPoint:
         ttnn.deallocate(encoded)
 
         if _os.environ.get("SP_TRACE_NMS", "0") == "1":
+            # Halve the descriptor D2H payload via bf8 cast — L2-normalized
+            # descriptors have values in [-0.5, 0.5] so the shared-exponent
+            # block-float format preserves plenty of PCC.
+            d_norm_bf8 = ttnn.typecast(d_norm, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(d_norm)
+            d_norm = d_norm_bf8
             s_pooled = self._device_fold_and_nms(s_sm, b, enc_h, enc_w)
             return s_sm, s_pooled, d_norm
         return s_sm, d_norm
