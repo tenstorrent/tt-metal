@@ -57,6 +57,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.99
+MAX_PAYLOAD_SIZE = 4096
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
@@ -96,7 +97,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
             },
             1,
             ttnn.Topology.Linear,
@@ -107,7 +108,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE),
             },
             2,
             ttnn.Topology.Linear,
