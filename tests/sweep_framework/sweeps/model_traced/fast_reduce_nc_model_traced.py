@@ -126,7 +126,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, output=None, **op_kwargs)
+    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)
