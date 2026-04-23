@@ -87,10 +87,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 # LogicalCoord is coordinate in withing a2a dispatch group
 
 
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (32, 7168, 16, 4, 2),
+        (32, 7168, 16, 4, 8),
     ],
 )
 @pytest.mark.parametrize(
@@ -250,7 +252,7 @@ def test_ttnn_dispatch(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
@@ -269,13 +271,25 @@ def test_ttnn_dispatch(
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
-    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank
@@ -344,6 +358,7 @@ def test_ttnn_dispatch(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -358,6 +373,7 @@ def test_ttnn_dispatch(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         cluster_axis=sp_axis,

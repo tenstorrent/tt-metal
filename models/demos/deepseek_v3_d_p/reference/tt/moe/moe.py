@@ -91,6 +91,7 @@ class TorchMoe(nn.Module):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         emb_dim: int,
         hidden_dim: int,
@@ -113,7 +114,10 @@ class TorchMoe(nn.Module):
             num_routed_experts: Total number of routed experts
             num_experts_per_tok: Number of experts each token routes to
             metadata_len: Length of metadata per token
-            max_dispatched_tokens_per_expert: Max tokens per expert buffer
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the
+                number of tokens any single expert may receive (full sequence length).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
+                buffer per chip (shared across all local experts).
             seq_len_per_chip: Sequence length per chip
             emb_dim: Embedding dimension (input/output dimension)
             hidden_dim: FFN intermediate dimension
@@ -167,6 +171,7 @@ class TorchMoe(nn.Module):
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             num_dispatch_groups=num_dispatch_groups,
@@ -217,6 +222,7 @@ class TorchMoe(nn.Module):
         indices: torch.Tensor = None,
         expert_offsets: torch.Tensor = None,
         expert_token_counts: torch.Tensor = None,
+        expert_region_offsets: torch.Tensor = None,
         return_intermediates: bool = False,
     ) -> tuple[torch.Tensor, Optional[MoEIntermediates]]:
         """
@@ -271,6 +277,7 @@ class TorchMoe(nn.Module):
         else:
             assert weights is not None and indices is not None
             assert expert_offsets is not None and expert_token_counts is not None
+            assert expert_region_offsets is not None
 
         # Step 1: Run shared expert on original input
         with torch.no_grad():
@@ -281,7 +288,7 @@ class TorchMoe(nn.Module):
 
         # Step 3: Run routed experts on dispatch buffer slices.
         # dispatched_buffer is 4D: (num_dispatch_groups, dispatch_group_size,
-        # experts_per_chip * max_dispatched_tokens_per_expert, emb_dim). Each expert's
+        # max_dispatch_buffer_token_size, emb_dim). Each expert's
         # token region lives at expert_region_offsets[group, chip, global_expert] within
         # the flat token dim (TILE_SIZE-aligned), matching the real dispatch kernel layout.
         expert_outputs = torch.zeros_like(dispatched_buffer)

@@ -57,7 +57,8 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     hidden_dim = 512
     num_routed_experts = 64
     num_experts_per_tok = 2
-    capacity_factor = 2
+    # Most conservative factor such that dgs*seq*factor >= theoretical worst-case buffer.
+    dispatch_buffer_capacity_factor = 3
 
     num_devices = mesh_device.get_num_devices()
     mesh_config = extract_mesh_config(mesh_device)
@@ -65,8 +66,18 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
     # Compute constants (same as PCC test)
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
     total_experts = num_devices * experts_per_chip
 
@@ -83,18 +94,18 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
 
     # Create input with proper sharding (follows PCC test pattern).
     # Flat 4D layout: (num_dispatch_groups, dispatch_group_size,
-    # experts_per_chip * max_dispatched_tokens_per_expert, emb_dim) — each chip's experts
+    # max_dispatch_buffer_token_size, emb_dim) — each chip's experts
     # are concatenated along the token dim, matching the real dispatch kernel layout.
     dispatched_buffer_torch = torch.randn(
         num_dispatch_groups,
         dispatch_group_size,
-        experts_per_chip * max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size,
         emb_dim,
         dtype=torch.float32,
     )
 
     # Shard across devices and reshape per-device to 2D (what extract/insert require).
-    per_device_shape = (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim)
+    per_device_shape = (max_dispatch_buffer_token_size, emb_dim)
     mesh_mapper = get_ep_mesh_mapper(mesh_device)
     dispatched_buffer_tt = ttnn.from_torch(
         dispatched_buffer_torch,
@@ -158,7 +169,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
 
     def to_torch_expert(tt_tensor):
         """Convert expert output back to torch with proper mesh composer."""
-        # Output shape per device: (experts_per_chip * max_tokens, emb_dim) — 2D.
+        # Output shape per device: (max_dispatch_buffer_token_size, emb_dim) — 2D.
         # Unsqueeze to 4D and compose back across the EP mesh.
         tt_expanded = ttnn.unsqueeze(ttnn.unsqueeze(tt_tensor, dim=0), dim=0)
         return ttnn.to_torch(tt_expanded, mesh_composer=mesh_composer)

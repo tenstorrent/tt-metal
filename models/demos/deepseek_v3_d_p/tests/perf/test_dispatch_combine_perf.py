@@ -63,7 +63,8 @@ SEQ_LEN_PER_CHIP = 3200
 EMB_DIM = 7168
 NUM_ROUTED_EXPERTS = 64
 NUM_EXPERTS_PER_TOK = 2
-CAPACITY_FACTOR = 2
+# Most conservative factor such that dgs*seq*factor >= theoretical worst-case buffer.
+DISPATCH_BUFFER_CAPACITY_FACTOR = 3
 
 # Key analysis names from the device profiler (see cpp_device_analyses.json).
 DEVICE_KERNEL_DURATION = "DEVICE KERNEL DURATION [ns]"
@@ -296,8 +297,18 @@ def test_dispatch_combine_perf(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        SEQ_LEN_PER_CHIP, NUM_ROUTED_EXPERTS, NUM_EXPERTS_PER_TOK, num_devices, dispatch_group_size, CAPACITY_FACTOR
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        SEQ_LEN_PER_CHIP,
+        NUM_ROUTED_EXPERTS,
+        NUM_EXPERTS_PER_TOK,
+        num_devices,
+        dispatch_group_size,
+        DISPATCH_BUFFER_CAPACITY_FACTOR,
     )
 
     topo_name = "Ring" if topology == ttnn.Topology.Ring else "Linear"
@@ -388,6 +399,7 @@ def test_dispatch_combine_perf(
         num_experts_per_tok=NUM_EXPERTS_PER_TOK,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=SEQ_LEN_PER_CHIP,
         emb_dim=EMB_DIM,
         cluster_axis=sp_axis,

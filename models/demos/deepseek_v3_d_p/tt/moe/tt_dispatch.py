@@ -24,11 +24,11 @@ For each token and each of its top-k experts, the dispatch kernel:
        [4] weight                 — router weight for this (token, expert) pair
 
 Each destination device accumulates an expert-centric dispatch buffer from all source
-devices. The buffer is flat: all experts_per_chip experts are packed contiguously in
-a single token dimension, with each expert's region starting at a TILE_HEIGHT-aligned
-offset. The per-device shape is:
-  dispatched_buffer: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, emb_dim)
-  metadata:          (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, metadata_len=5)
+devices. The buffer is flat: all experts_per_chip experts share a single token
+dimension of total capacity max_dispatch_buffer_token_size, packed dynamically with
+each expert's region starting at a TILE_HEIGHT-aligned offset. The per-device shape is:
+  dispatched_buffer: (1, 1, max_dispatch_buffer_token_size, emb_dim)
+  metadata:          (1, 1, max_dispatch_buffer_token_size, metadata_len=5)
 
 TtCombineModule reads from these buffers using the same offsets to reconstruct the
 original token ordering after expert processing.
@@ -59,6 +59,7 @@ class TtDispatchModule(LightweightModule):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
@@ -76,8 +77,12 @@ class TtDispatchModule(LightweightModule):
             num_experts_per_tok: Number of experts each token is routed to (top-k).
             metadata_len: Number of fields in per-token metadata (5: chip, token, topk_idx,
                 routed_expert, weight).
-            max_dispatched_tokens_per_expert: Maximum token slots reserved per expert in the
-                flat dispatch buffer. Tokens exceeding this limit are silently dropped.
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the
+                number of tokens any single expert may receive (full sequence length of
+                the dispatch group).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
+                buffer per chip. Tokens that would push the total past this cap are
+                silently dropped by the kernel (prevents out-of-bounds DRAM writes).
             seq_len_per_chip: Number of tokens on each source device.
             emb_dim: Embedding dimension of each token.
             cluster_axis: Mesh axis along which dispatch communicates (0 = SP/dispatch axis).
@@ -92,6 +97,7 @@ class TtDispatchModule(LightweightModule):
         self.num_experts_per_tok = num_experts_per_tok
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
         self.seq_len_per_chip = seq_len_per_chip
         self.cluster_axis = cluster_axis
         self.num_links = num_links
@@ -216,11 +222,11 @@ class TtDispatchModule(LightweightModule):
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
-                Shape per device: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, emb_dim)
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim)
                 Token at index i belongs to the expert whose region covers index i; regions are
                 TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
             metadata: Per-token metadata written alongside dispatched_buffer.
-                Shape per device: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, metadata_len=5),
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
                 int32, ROW_MAJOR.
                 Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
                 Used by TtCombineModule to route processed tokens back to their origin.
@@ -235,7 +241,8 @@ class TtDispatchModule(LightweightModule):
         logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
         logger.debug(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
         logger.debug(
-            f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}"
+            f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}, "
+            f"max_dispatch_buffer_token_size={self.max_dispatch_buffer_token_size}"
         )
         logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
@@ -254,6 +261,7 @@ class TtDispatchModule(LightweightModule):
             num_experts_per_tok=self.num_experts_per_tok,
             metadata_len=self.metadata_len,
             max_dispatched_tokens_per_expert=self.max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=self.max_dispatch_buffer_token_size,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,

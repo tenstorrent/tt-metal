@@ -133,6 +133,7 @@ class TtMoe(LightweightModule):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         gate_weights: dict,
         emb_dim: int = DeepSeekV3Config.EMB_SIZE,
@@ -160,7 +161,10 @@ class TtMoe(LightweightModule):
             num_routed_experts: Total number of routed experts
             num_experts_per_tok: Number of experts each token routes to
             metadata_len: Length of metadata per token
-            max_dispatched_tokens_per_expert: Max tokens per expert buffer
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the
+                number of tokens any single expert may receive (full sequence length).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
+                buffer per chip (shared across all local experts).
             seq_len_per_chip: Sequence length per chip
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
@@ -254,6 +258,7 @@ class TtMoe(LightweightModule):
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             cluster_axis=0,
@@ -523,18 +528,22 @@ class TtMoe(LightweightModule):
         # Build intermediates if requested
         intermediates = None
         if return_intermediates:
-            # Check for buffer overflow (dispatch kernel silently drops overflow tokens)
+            # Check for buffer overflow (dispatch kernel silently drops overflow tokens).
+            # The kernel bounds-check is against max_dispatch_buffer_token_size (total per-chip
+            # buffer capacity). Any single per-expert count exceeding that cap is a guaranteed
+            # overflow; if the per-expert counts fit individually but their sum-per-chip would
+            # exceed the cap, overflow is still possible (not detected here).
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
             _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
             _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
             max_token_count = int(_counts_host.to(torch.int64).max().item())
-            max_capacity = self.dispatch_module.max_dispatched_tokens_per_expert
+            max_capacity = self.dispatch_module.max_dispatch_buffer_token_size
             if max_token_count > max_capacity:
                 logger.error(
                     f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
-                    f"max_dispatched_tokens_per_expert ({max_capacity}). "
+                    f"max_dispatch_buffer_token_size ({max_capacity}). "
                     f"Overflow tokens were dropped - output data is corrupted. "
-                    f"Increase capacity_factor or reduce sequence length."
+                    f"Reduce sequence length."
                 )
                 logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 

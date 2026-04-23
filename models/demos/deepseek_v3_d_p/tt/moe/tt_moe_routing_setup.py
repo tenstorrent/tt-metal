@@ -35,7 +35,7 @@ This is a TTNN wrapper around two device operations executed in sequence:
      each expert.
 
      Each device in the dispatch group has its own local dispatch buffer with shape
-     (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim). Source devices write
+     (max_dispatch_buffer_token_size, emb_dim). Source devices write
      tokens into the expert's designated region of the destination device's dispatch buffer:
      either locally via NOC (if the expert is hosted on the same device) or remotely via
      fabric (if the expert is on a different device in the dispatch group). Multiple source
@@ -76,7 +76,7 @@ This is a TTNN wrapper around two device operations executed in sequence:
                Each source device k holds a unique offset per expert: global_offset_k[e]
                = local_offset_k[e] + expert_region_offset[e]. This is the starting token
                index into the destination device's local dispatch buffer
-               (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim) where source
+               (max_dispatch_buffer_token_size, emb_dim) where source
                device k writes its tokens for expert e. Different source devices obtain
                distinct starting token indices for the same expert (via local_offset), and
                different experts hosted on the same destination device start at
@@ -174,7 +174,7 @@ class TtMoERoutingSetup(LightweightModule):
                 Shape per device: (1, num_routed_experts), uint32
                 For expert e: global_offset_k[e] = local_offset_k[e] + expert_region_offset[e].
                 Indexes into the destination device's flat dispatch buffer
-                (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim).
+                (max_dispatch_buffer_token_size, emb_dim).
                 See module docstring for full offset semantics.
             total_counts_per_expert: Total token count per expert across all devices in the dispatch group.
                 Shape per device: (1, num_routed_experts), uint32

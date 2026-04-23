@@ -60,7 +60,7 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
     // Validate tensor shapes are compatible
-    // Dispatch outputs are 4D: (per_device_batch, 1, experts_per_chip * max_dispatched_tokens, hidden_dim/metadata_len)
+    // Dispatch outputs are 4D: (per_device_batch, 1, max_dispatch_buffer_token_size, hidden_dim/metadata_len)
     // Counter is 3D: (num_dispatch_groups, per_device_batch, num_routed_experts)
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
     auto metadata_shape = tensor_args.dispatched_metadata.tensor_spec().logical_shape();

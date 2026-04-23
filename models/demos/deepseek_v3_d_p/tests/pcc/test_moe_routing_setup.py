@@ -38,10 +38,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        (3200, 7168, 64, 2, 3),
     ],
 )
 @pytest.mark.parametrize(
@@ -101,7 +103,7 @@ def test_prep_dispatch_combine(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
@@ -117,7 +119,7 @@ def test_prep_dispatch_combine(
         expert_offsets (shape: num_dispatch_groups, dispatch_group_size, num_routed_experts):
             The global dispatch offset for each source device and each expert. Each entry
             is the starting token index in the destination device's flat dispatch buffer
-            (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim) where that
+            (max_dispatch_buffer_token_size, emb_dim) where that
             source device begins writing its tokens for that expert.
 
         expert_token_counts (shape: num_dispatch_groups, dispatch_group_size, num_routed_experts):
@@ -143,14 +145,26 @@ def test_prep_dispatch_combine(
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"prep dispatch/combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"prep dispatch/combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
 
-    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank

@@ -36,10 +36,10 @@ void bind_combine(nb::module_& mod) {
 
         Args:
             dispatched_buffer (ttnn.Tensor): Expert-processed token embeddings produced by TtRoutedExpert.
-                Shape per device: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, hidden_dim).
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
                 BFLOAT16 ROW_MAJOR.
             dispatched_metadata (ttnn.Tensor): Per-token routing metadata produced by the dispatch op.
-                Shape per device: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, metadata_len=5).
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
                 INT32 ROW_MAJOR. Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
             expert_token_counts (ttnn.Tensor): Number of tokens dispatched to each expert, used to bound
                 the valid range of token slots read per expert in dispatched_buffer.

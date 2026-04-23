@@ -37,13 +37,15 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 
 
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor, use_gate, model_id, layer_idx",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor, use_gate, model_id, layer_idx",
     [
         # fmt: off
-        pytest.param(32, 64, 128, 24, 4, 4, 2, False, None, None, id="random-weights"),
-        pytest.param(32, 224, 64, 256, 8, 4, 4, True, None, None, id="random-weights-gate"),
-        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,4,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
+        pytest.param(32, 64, 128, 24, 4, 4, 3, False, None, None, id="random-weights"),
+        pytest.param(32, 224, 64, 256, 8, 4, 16, True, None, None, id="random-weights-gate"),
+        pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,16,False,"deepseek-ai/DeepSeek-V3",3,id="hf-weights",marks=pytest.mark.slow,
         ),
         # fmt: on
     ],
@@ -55,7 +57,7 @@ def test_moe(
     num_routed_experts,
     num_experts_per_tok,
     dispatch_group_size,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     use_gate,
     model_id,
     layer_idx,
@@ -78,13 +80,18 @@ def test_moe(
     logger.debug(f"{'='*60}\n")
 
     # Compute derived constants
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
         num_experts_per_tok,
-        num_devices=dispatch_group_size,
-        dispatch_group_size=dispatch_group_size,
-        capacity_factor=capacity_factor,
+        dispatch_group_size,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
 
     # Create expert dispatch table
@@ -139,6 +146,7 @@ def test_moe(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
@@ -160,7 +168,7 @@ def test_moe(
     if not use_hf_weights and not use_gate:
         logger.debug("Testing forward pass without intermediates...")
         final_output, intermediates = moe(
-            x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=False
+            x, weights, indices, expert_offsets, expert_token_counts, expert_region_offsets, return_intermediates=False
         )
         assert intermediates is None, "Expected no intermediates when return_intermediates=False"
         assert final_output.shape == x.shape, f"Expected output shape {x.shape}, got {final_output.shape}"
@@ -173,7 +181,7 @@ def test_moe(
         final_output_2, intermediates = moe(x, return_intermediates=True)
     else:
         final_output_2, intermediates = moe(
-            x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=True
+            x, weights, indices, expert_offsets, expert_token_counts, expert_region_offsets, return_intermediates=True
         )
     assert intermediates is not None, "Expected intermediates when return_intermediates=True"
 
@@ -189,8 +197,7 @@ def test_moe(
     assert intermediates.dispatched_buffer.shape == (
         1,
         dispatch_group_size,
-        experts_per_chip,
-        max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size,
         emb_dim,
     )
     assert intermediates.shared_output.shape == (dispatch_group_size, seq_len_per_chip, emb_dim)

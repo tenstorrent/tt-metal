@@ -58,8 +58,12 @@ void bind_dispatch(nb::module_& mod) {
             num_experts_per_tok (int): Number of experts each token is routed to (top-k).
             metadata_len (int): Number of fields per token in the metadata buffer (5:
                 linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
-            max_dispatched_tokens_per_expert (int): Maximum token slots reserved per expert
-                in the flat dispatch buffer.
+            max_dispatched_tokens_per_expert (int): Per-expert theoretical upper bound on the
+                number of tokens any single expert may receive (full sequence length of the
+                dispatch group).
+            max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
+                buffer per chip (shared across all local experts via dynamic offsets).
+                Used as the in-kernel bounds check ceiling.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation.
             cluster_axis (int, optional): Mesh axis along which dispatch communicates
@@ -72,9 +76,9 @@ void bind_dispatch(nb::module_& mod) {
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
                 dispatched_buffer: Flat expert-centric token buffer on each destination device.
-                    Shape per device: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, hidden_dim).
+                    Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
                 metadata: Per-token metadata written alongside dispatched_buffer.
-                    Shape per device: (1, 1, experts_per_chip * max_dispatched_tokens_per_expert, metadata_len=5).
+                    Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
                     Fields: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
                     Used by the combine op to route processed tokens back to their origin.
         )doc",
@@ -91,6 +95,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_experts_per_tok"),
         nb::arg("metadata_len"),
         nb::arg("max_dispatched_tokens_per_expert"),
+        nb::arg("max_dispatch_buffer_token_size"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),

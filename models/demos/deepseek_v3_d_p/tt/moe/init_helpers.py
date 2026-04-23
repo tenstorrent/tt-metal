@@ -419,7 +419,12 @@ def get_gate_outputs(
 
 
 def compute_constants(
-    seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    seq_len_per_chip,
+    num_routed_experts,
+    num_experts_per_tok,
+    num_devices,
+    dispatch_group_size,
+    dispatch_buffer_capacity_factor,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -430,21 +435,30 @@ def compute_constants(
         num_experts_per_tok: Number of experts each token is routed to
         num_devices: Number of devices across which experts are distributed
         dispatch_group_size: Number of devices in each dispatch group
-        capacity_factor: Capacity factor for load balancing
+        dispatch_buffer_capacity_factor: Multiplier for the flat dispatch
+            buffer; callers must pick the smallest integer such that
+            dgs*seq*factor is not smaller than the theoretical worst-case
+            required buffer size.
 
     Returns:
         experts_per_chip: Number of experts per chip
         metadata_len: Length of metadata per token
+        max_dispatch_buffer_token_size: Total token capacity of the dispatch buffer
         max_dispatched_tokens_per_expert: Maximum tokens per expert
     """
+    assert (
+        seq_len_per_chip % ttnn.TILE_SIZE == 0
+    ), f"seq_len_per_chip ({seq_len_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
+
     experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
-    # total number of tokens in group times x distribution ratio (8/256 == 2/64)
-    balanced_load = (dispatch_group_size * seq_len_per_chip) * num_experts_per_tok // num_routed_experts
-    max_dispatched_tokens_per_expert = (
-        (int(balanced_load * capacity_factor) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    ) * ttnn.TILE_SIZE  # Round up to nearest TILE_SIZE
-    return experts_per_chip, metadata_len, max_dispatched_tokens_per_expert
+
+    # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
+    # we support replicated experts
+    max_dispatched_tokens_per_expert = dispatch_group_size * seq_len_per_chip
+    max_dispatch_buffer_token_size = max_dispatched_tokens_per_expert * dispatch_buffer_capacity_factor
+
+    return experts_per_chip, metadata_len, max_dispatch_buffer_token_size, max_dispatched_tokens_per_expert
 
 
 def initialize_test_inputs(

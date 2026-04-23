@@ -58,7 +58,7 @@ class TorchCombineModule(torch.nn.Module):
         Combine expert outputs back to original token positions.
 
         Args:
-            dispatched_buffer: Dispatched tokens of shape (num_dispatch_groups, dispatch_group_size, max_dispatched_tokens_per_expert * experts_per_chip, emb_dim)
+            dispatched_buffer: Dispatched tokens of shape (num_dispatch_groups, dispatch_group_size, max_dispatch_buffer_token_size, emb_dim)
             metadata: Metadata tensor containing token positions, same flat layout
             expert_token_counts: Counter tracking tokens per expert
             expert_region_offsets: Expert region offsets (shared across source devices in a

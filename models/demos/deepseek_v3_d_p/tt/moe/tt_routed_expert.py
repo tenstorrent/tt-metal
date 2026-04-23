@@ -447,7 +447,7 @@ class TtRoutedExpert(LightweightModule):
 
         Args:
             dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip * max_dispatched_tokens_per_expert, emb_dim)
+                shape: (max_dispatch_buffer_token_size, emb_dim)
             expert_token_counts: Token counts per expert per chip
                 If provided, only processes tokens up to the count (currently unused,
                 all tokens are processed for simplicity)
