@@ -484,10 +484,11 @@ def create_json_with_github_benchmark_environment(
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
 
-    device_info = {"card_type": device_type, "dram_size": device_memory_size}
-
     with open(github_partial_benchmark_data_filename, "rb") as f:
         partial_benchmark_data = pickle.load(f)
+
+    existing_device_info = partial_benchmark_data.device_info or {}
+    device_info = existing_device_info | {"card_type": device_type, "dram_size": device_memory_size}
 
     partial_benchmark_data = partial_benchmark_data.model_copy(
         update={
