@@ -82,9 +82,7 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // EXPERIMENT: drop STALL_MATH,WAIT_SFPU + STALL_CFG,MATH before enable.
-        // tensix_sync() inside _llk_math_dbg_feature_enable_() drains tensix from
-        // the RISCV side, which should cover both SFPU drain and CFG ordering.
+        // _llk_math_dbg_feature_enable_ does tensix_sync insternally. If this changes, need to add proper stalls here to ensure correct ordering.
         _llk_math_dbg_feature_enable_(); // dst_32bit_addr_en = 0
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
