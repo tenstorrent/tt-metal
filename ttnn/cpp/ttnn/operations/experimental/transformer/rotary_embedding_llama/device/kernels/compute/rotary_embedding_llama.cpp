@@ -62,11 +62,9 @@ void kernel_main() {
 #endif
 
                 cb_reserve_back(rotated_in_interm_cb, Wt);
-                cb_reserve_back(sin_interm_cb, Wt);
-                cb_reserve_back(cos_interm_cb, Wt);
                 cb_reserve_back(out_cb, Wt);
 
-                // // rotated = x @ trans_mat
+                // rotated = x @ trans_mat (matmul — not covered by binary_op helpers)
                 mm_init_short(in_cb, trans_mat_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
@@ -77,25 +75,39 @@ void kernel_main() {
                 cb_push_back(rotated_in_interm_cb, Wt);
                 cb_wait_front(rotated_in_interm_cb, Wt);
 
-                mul_tiles_init(rotated_in_interm_cb, sin_cb);
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // sin_interim = rotated * sin
-                    mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, sin_interm_cb, j);
-                }
-                REL();
-                cb_push_back(sin_interm_cb, Wt);
+                // sin_interim = rotated * sin  — caller pre-waited both CBs.
+                // B's absolute index is j + (sin_cos_row_cnt * Wt) — exactly what
+                // BinaryInputExtras::base expresses. Bulk output manages cb_reserve/push.
+                // First mul call does init+reconfig (switching out of matmul state).
+                compute_kernel_lib::mul<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::BinaryOutputPolicy::Bulk>(
+                    rotated_in_interm_cb,
+                    sin_cb,
+                    sin_interm_cb,
+                    compute_kernel_lib::BinaryInputBlockShape::of(1, Wt),
+                    compute_kernel_lib::BinaryInputExtras{.base = 0},
+                    compute_kernel_lib::BinaryInputExtras{.base = sin_cos_row_cnt * Wt});
                 cb_pop_front(rotated_in_interm_cb, Wt);
 
-                ACQ();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    // cos_interim = x * cos
-                    mul_tiles(in_cb, cos_cb, j, j + (sin_cos_row_cnt * Wt), j);
-                    pack_tile(j, cos_interm_cb, j);
-                }
-                REL();
-                cb_push_back(cos_interm_cb, Wt);
+                // cos_interim = x * cos  — same shape as sin_interim.
+                // Second mul call: skip reconfig + init (matches the pre-migration
+                // single mul_tiles_init across both loops).
+                compute_kernel_lib::mul<
+                    compute_kernel_lib::BroadcastDim::NONE,
+                    compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+                    compute_kernel_lib::BinaryOutputPolicy::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::NONE,
+                    /*init=*/false>(
+                    in_cb,
+                    cos_cb,
+                    cos_interm_cb,
+                    compute_kernel_lib::BinaryInputBlockShape::of(1, Wt),
+                    compute_kernel_lib::BinaryInputExtras{.base = 0},
+                    compute_kernel_lib::BinaryInputExtras{.base = sin_cos_row_cnt * Wt});
                 cb_pop_front(in_cb, Wt);  // Done with input
 #if RELOAD_IMPL == 1
                 cb_pop_front(sin_cb, Wt);

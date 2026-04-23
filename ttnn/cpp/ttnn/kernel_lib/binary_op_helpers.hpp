@@ -167,9 +167,11 @@ enum class BinaryInputPolicy {
     WaitUpfrontPopAtEnd,  // Wait for all tiles upfront, pop at end (consume)
     NoWaitNoPop,          // Caller manages wait/pop (preloaded)
     NoWaitPopAtEnd,       // Caller manages wait, pop at end (preloaded, consume)
-    CumulativeWaitNoPop   // GAP-2: helper waits for extras.wait_total tiles visible; no pop
-                          // (caller pops externally after all consumers). Use with extras.base to
-                          // read tiles [base, base + Wt) on this side.
+    CumulativeWaitNoPop   // GAP-2: helper's internal chunk loop does cumulative waits
+                          // (cb_wait_front grows by extras.wait_step per chunk). No pop —
+                          // caller pops externally after all consumers. shape.cols = full
+                          // block size; wait_step = per-chunk granularity (must be <=
+                          // DEST_AUTO_LIMIT). Absorbs the hand-rolled outer loop.
 };
 
 /**
@@ -206,20 +208,24 @@ struct BinaryInputBlockShape {
 };
 
 /**
- * @brief Per-operand runtime extras: tile-index base + cumulative wait target.
+ * @brief Per-operand runtime extras: tile-index base + cumulative wait step.
  *
  * `base` — added to the per-iter tile index for this operand (enables absolute
  * indexing like `mul_tiles(cb, cb, wt+wtr, wt+wtr, wtr)` without a hand-written
  * tile loop). Default 0 (sequential from CB front).
  *
- * `wait_total` — only used under BinaryInputPolicy::CumulativeWaitNoPop. The
- * helper issues `cb_wait_front(cb, wait_total)` once before processing, so the
- * caller can pre-wait a growing total across outer iterations without popping
- * tiles until all consumers are done. Ignored for any other policy.
+ * `wait_step` — only used under BinaryInputPolicy::CumulativeWaitNoPop. The
+ * helper's internal chunk loop processes tiles in `wait_step`-sized groups;
+ * at the start of each group it issues `cb_wait_front(cb, group_end)` where
+ * group_end grows cumulatively. This matches the layernorm pattern
+ * `cb_wait_front(cb_inp, wt + blk)` without a hand-rolled outer loop — caller
+ * passes shape.cols = full block size and wait_step = blk, and the helper
+ * absorbs the outer loop (one init/reconfig per binary_op call). Must be
+ * <= DEST_AUTO_LIMIT. Ignored for any non-cumulative policy.
  */
 struct BinaryInputExtras {
     uint32_t base = 0;
-    uint32_t wait_total = 0;
+    uint32_t wait_step = 0;
 };
 
 struct BinaryAccumulate {

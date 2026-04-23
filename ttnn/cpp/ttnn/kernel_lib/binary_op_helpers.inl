@@ -338,10 +338,8 @@ ALWI void binary_op(
     // Upfront waits
     if constexpr (waits_upfront(input_a_policy)) {
         cb_wait_front(icb_a, total_tiles_a);
-    } else if constexpr (waits_cumulative(input_a_policy)) {
-        // GAP-2: caller-supplied running total across outer iterations.
-        cb_wait_front(icb_a, a_extras.wait_total);
     }
+    // CumulativeWaitNoPop waits are issued per internal chunk below — no upfront here.
 
     // B policy: ROW and SCALAR always wait upfront
     if constexpr (!is_square) {
@@ -351,9 +349,8 @@ ALWI void binary_op(
             }
         } else if constexpr (waits_upfront(input_b_policy)) {
             if (!same_cb) cb_wait_front(icb_b, b_tile_count);
-        } else if constexpr (waits_cumulative(input_b_policy)) {
-            if (!same_cb) cb_wait_front(icb_b, b_extras.wait_total);
         }
+        // CumulativeWaitNoPop on B is handled per-chunk (same as A).
     }
 
     // Upfront output reserve
@@ -363,15 +360,33 @@ ALWI void binary_op(
 
     const uint32_t base_dst = get_binary_dst_index(accum);
     const uint32_t effective_dest_limit = dest_limit - base_dst;
+    // For CumulativeWaitNoPop the caller's wait_step caps chunk size so the
+    // helper walks the full block in wait_step-sized groups (matching the
+    // hand-rolled outer loop that wait_step replaces). Pick the min of A/B's
+    // wait_step when both are cumulative; else use the one that is.
+    const uint32_t cumulative_step_a =
+        waits_cumulative(input_a_policy) && a_extras.wait_step > 0 ? a_extras.wait_step : 0;
+    const uint32_t cumulative_step_b =
+        !is_square && waits_cumulative(input_b_policy) && b_extras.wait_step > 0 ? b_extras.wait_step : 0;
+    const uint32_t cumulative_step =
+        (cumulative_step_a && cumulative_step_b) ? ((cumulative_step_a < cumulative_step_b) ? cumulative_step_a
+                                                                                            : cumulative_step_b)
+                                                 : (cumulative_step_a ? cumulative_step_a : cumulative_step_b);
+    const uint32_t chunk_cap = cumulative_step > 0 && cumulative_step < effective_dest_limit
+                                   ? cumulative_step
+                                   : effective_dest_limit;
     uint32_t tiles_processed = 0;
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {
-        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += effective_dest_limit) {
-            const uint32_t chunk_size = (wt_base + effective_dest_limit <= Wt) ? effective_dest_limit : (Wt - wt_base);
+        for (uint32_t wt_base = 0; wt_base < Wt; wt_base += chunk_cap) {
+            const uint32_t chunk_size = (wt_base + chunk_cap <= Wt) ? chunk_cap : (Wt - wt_base);
 
             // Per-chunk waits
             if constexpr (waits_per_chunk(input_a_policy)) {
                 cb_wait_front(icb_a, chunk_size);
+            }
+            if constexpr (waits_cumulative(input_a_policy)) {
+                cb_wait_front(icb_a, a_extras.base + wt_base + chunk_size);
             }
             if constexpr (!is_square && waits_per_chunk(input_b_policy)) {
                 if constexpr (bcast_dim == BroadcastDim::NONE) {
@@ -379,6 +394,9 @@ ALWI void binary_op(
                 } else if constexpr (bcast_dim == BroadcastDim::COL) {
                     if (!same_cb) cb_wait_front(icb_b, onetile);
                 }
+            }
+            if constexpr (!is_square && waits_cumulative(input_b_policy)) {
+                if (!same_cb) cb_wait_front(icb_b, b_extras.base + wt_base + chunk_size);
             }
 
             if constexpr (output_per_chunk(output_policy)) {

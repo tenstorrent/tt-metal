@@ -36,17 +36,15 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
-         * x**2 — cumulative wait on cb_inp (grows to wt+blk each outer iter),
-         * no pop (both later reductions still need cb_inp's tiles). Absolute
-         * index `wt + wtr` on A and B; bulk output reserve/push of blk tiles.
+         * x**2 — helper absorbs the hand-rolled chunked-cumulative outer loop.
+         * shape.cols = Wt (full block), wait_step = blk (per-chunk granularity).
+         * Helper's internal chunk loop issues cb_wait_front(cb_inp, group_end)
+         * with group_end growing by blk per chunk, matching the pre-migration
+         * `cb_wait_front(cb_inp, wt + blk)` pattern. One init+reconfig per call.
+         * No pop — the later reductions consume cb_inp's tiles.
          */
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            square<BinaryInputPolicy::CumulativeWaitNoPop, BinaryOutputPolicy::Bulk>(
-                cb_inp,
-                cb_x2,
-                BinaryInputBlockShape::of(1, blk),
-                BinaryInputExtras{.base = wt, .wait_total = wt + blk});
-        }
+        square<BinaryInputPolicy::CumulativeWaitNoPop, BinaryOutputPolicy::Bulk>(
+            cb_inp, cb_x2, BinaryInputBlockShape::of(1, Wt), BinaryInputExtras{.wait_step = blk});
         /*
          * sum(x**2)
          */
