@@ -114,13 +114,19 @@ def _merge_heads(ctx, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
 
 
 def _decoder_block(x, context, p: Dict[str, Any]):
-    # --- self-attention via SDPA ---
+    # --- "self-attention": with N=1 query the softmax(q·kᵀ) is a scalar 1
+    # and Attn(q,k,v) = v, so the only thing self-attn contributes is
+    # ``sa_out(v)``.  We compute V directly from QKV and drop Q, K, the
+    # scaled-dot-product, the softmax, and the @V matmul (≈ 4 ops).
     h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"])
-    qkv = h @ p["sa_qkv_w"]
-    q, k, v = _split_qkv_sdpa(qkv)
-    sa = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=HEAD_DIM ** -0.5)
-    sa = _merge_heads(sa)
-    sa = sa @ p["sa_out_w"]
+    qkv = h @ p["sa_qkv_w"]                                  # (B, 1, 3·512)
+    B = qkv.shape[0]
+    qkv = ttnn.reshape(qkv, (B, 1, 3, NUM_HEADS, HEAD_DIM))
+    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))                 # (3, B, h, 1, d)
+    v = qkv[2]
+    v = ttnn.permute(v, (0, 2, 1, 3))                        # (B, 1, h, d)
+    v = ttnn.reshape(v, (B, 1, NUM_HEADS * HEAD_DIM))
+    sa = v @ p["sa_out_w"]
     sa = sa + p["sa_out_b"]
     x = x + sa
 
