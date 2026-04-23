@@ -22,6 +22,7 @@ from typing import List, Optional, Tuple
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
+from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
 
 
 class CodePredictor(LightweightModule):
@@ -166,6 +167,7 @@ class CodePredictor(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._matmul_core_grid = get_device_core_grid(device)
 
     def get_codec_embedding(self, code_idx: int, token_ids_tt: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -239,6 +241,7 @@ class CodePredictor(LightweightModule):
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self._matmul_core_grid,
             )
 
         # Apply decoder layers
@@ -273,6 +276,7 @@ class CodePredictor(LightweightModule):
                 self.lm_heads[lm_head_idx],
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self._matmul_core_grid,
             )
         else:
             raise ValueError(f"Invalid generation_step {generation_step}, only have {len(self.lm_heads)} LM heads")
@@ -320,6 +324,7 @@ class CodePredictor(LightweightModule):
                 bias=self.input_proj_bias if hasattr(self, "input_proj_bias") else None,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self._matmul_core_grid,
             )
 
         # Apply decoder layers
@@ -347,6 +352,7 @@ class CodePredictor(LightweightModule):
                 lm_head,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self._matmul_core_grid,
             )
             logits_list.append(logits)
 

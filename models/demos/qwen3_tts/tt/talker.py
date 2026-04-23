@@ -17,6 +17,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
+from models.demos.qwen3_tts.tt.model_config import get_device_core_grid
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
 
@@ -221,6 +222,7 @@ class Talker(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._matmul_core_grid = get_device_core_grid(device)
 
     def forward(
         self,
@@ -412,6 +414,7 @@ class Talker(LightweightModule):
             self.codec_head,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
         return logits
 
@@ -440,6 +443,7 @@ class Talker(LightweightModule):
             bias=self.text_proj_fc1_bias,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
 
         # SiLU activation
@@ -452,6 +456,7 @@ class Talker(LightweightModule):
             bias=self.text_proj_fc2_bias,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
 
         return output
