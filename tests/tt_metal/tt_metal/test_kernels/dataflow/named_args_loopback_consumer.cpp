@@ -21,10 +21,11 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    // Explicit type forms; see producer for deduced type forms
     uint32_t dst_addr = get_arg(args::dst_addr);
-    uint32_t num_entries = get_arg(args::num_entries);
+    const uint32_t num_entries = get_arg(args::num_entries);
     constexpr uint32_t bank_id = get_arg(args::bank_id);
-    constexpr uint32_t entry_size = get_arg(args::entry_size);
+    uint32_t entry_size = get_arg(args::entry_size);
 
     // Vararg sum: exercises get_vararg(0), get_vararg(1), get_common_vararg(0). Host arranges
     // for this to equal the producer's sum; the two XORs cancel and the first word of each

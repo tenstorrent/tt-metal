@@ -86,6 +86,9 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+// METAL 2.0 only:
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_bindings_generated.h.
 void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
     const string path = out_dir + "kernel_bindings_generated.h";
     vector<pair<string, uint16_t>> entries;
@@ -112,6 +115,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     write_file(path, content.str());
 }
 
+// METAL 2.0 only:
 // Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the user-configurable
 // args namespace. Also emits get_vararg() / get_common_vararg() helpers with the named-args
 // offset baked in — so that vararg indices in kernel code are stable across schema changes.
@@ -120,6 +124,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 // Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
 // So we don't need to massage the generation order for hash stability — we just emit what
 // we're given.
+//
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_args_generated.h.
 void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
     const fs::path path = out_dir / "kernel_args_generated.h";
 
@@ -141,10 +148,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const string& ns = settings.get_args_namespace();
 
     ostringstream content;
-    content << "// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n"
-               "//\n"
-               "// SPDX-License-Identifier: Apache-2.0\n\n"
-               "// AUTO-GENERATED — do not edit.\n\n"
+    content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
                "#include \"experimental/kernel_args.h\"\n\n";
 
@@ -210,7 +214,7 @@ void jit_build_genfiles_kernel_include(
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
         kernel_header_content =
-            string("#include \"kernel_bindings_generated.h\"\n") + string("#include \"kernel_args_generated.h\"\n");
+            string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
     kernel_header_content += get_kernel_source_to_include(kernel_src);
 

@@ -48,9 +48,11 @@ struct ProgramRunParams {
 
         // Unnamed runtime argument "varargs"
         // (these are specified per-node; length can vary per-node)
-        using NodeVarargs = std::vector<uint32_t>;
-        using Varargs = std::vector<std::pair<NodeCoord, NodeVarargs>>;
-        Varargs runtime_varargs;
+        struct NodeVarargs {
+            NodeCoord node;
+            std::vector<uint32_t> args;
+        };
+        std::vector<NodeVarargs> runtime_varargs;
 
         // Unnamed common runtime argument "varargs"
         // (common to all nodes on which the kernel runs)

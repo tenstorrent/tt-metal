@@ -27,10 +27,15 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg(producer_args::src_addr);
-    uint32_t num_entries = get_arg(producer_args::num_entries);
-    constexpr uint32_t bank_id = get_arg(producer_args::bank_id);
-    constexpr uint32_t entry_size = get_arg(producer_args::entry_size);
+    // Exercise all three type-deduction forms for get_arg on HW:
+    //   - plain `auto`: RTA, deduced to uint32_t (today)
+    //   - `const auto`: CRTA, non-constexpr runtime value
+    //   - `constexpr auto`: CTAs only — the RTA/CRTA overloads aren't constexpr because
+    //     their values aren't known until dispatch time
+    auto src_addr = get_arg(producer_args::src_addr);
+    const auto num_entries = get_arg(producer_args::num_entries);
+    constexpr auto bank_id = get_arg(producer_args::bank_id);
+    auto entry_size = get_arg(producer_args::entry_size);
 
     // Vararg sum: exercises get_vararg(0), get_vararg(1), get_vararg(2), get_common_vararg(0).
     // If any offset is wrong, this XOR won't cancel against the consumer's and the first
