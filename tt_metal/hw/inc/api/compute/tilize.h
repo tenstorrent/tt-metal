@@ -288,6 +288,52 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
 }
 
+// Exact-width variants: safe to use only when fast_tilize_init and fast_tilize_block
+// are always called with the same width (full_dim == block on every call).
+// On BH this avoids one reinit_xdim + reinit_unit_dim on the first chunk per block call.
+// Do NOT use for callers that initialize with a max width and run blocks with smaller widths
+// (e.g. MOE kernels with per-core variable tile counts).
+ALWI void fast_tilize_init_exact_width(
+    uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    fast_tilize_init(icb, full_dim, ocb, call_line);
+}
+
+ALWI void fast_tilize_block_exact_width(
+    uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+#ifdef ARCH_BLACKHOLE
+    {
+        uint32_t tiles_done = 0;
+        // Exact-width contract: block == full_dim used at init, so first_chunk(block)
+        // matches the hardware state already programmed. Skip the first reinit.
+        uint32_t prev_chunk = (block > 5) ? 4 : (block == 5) ? 2 : block;
+
+        while (tiles_done < block) {
+            uint32_t remaining = block - tiles_done;
+            uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+
+            MATH((llk_math_wait_for_dest_available()));
+            PACK((llk_packer_wait_for_math_done()));
+
+            if (chunk != prev_chunk) {
+                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
+                prev_chunk = chunk;
+            }
+            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+            MATH((llk_math_fast_tilize_block_(0, icb, 4)));
+            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk)));
+
+            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+
+            tiles_done += chunk;
+        }
+    }
+#else
+    fast_tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+#endif
+}
+
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE

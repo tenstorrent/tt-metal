@@ -196,8 +196,8 @@ void kernel_main() {
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
                     pack_reconfig_data_format(out_cb_id);
 
-                    fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                    fast_tilize_init_exact_width(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                    fast_tilize_block_exact_width(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                     fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                     out_cb.push_back(in_ntiles_c);
