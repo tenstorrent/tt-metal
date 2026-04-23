@@ -24,7 +24,7 @@
     tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_pc_with_different_shapes_in_sequence
     tests/ttnn/unit_tests/operations/data_movement/test_embedding.py::test_base_case
     tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
-    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_multirow
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_general
     tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
     tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
     tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
