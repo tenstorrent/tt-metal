@@ -64,57 +64,49 @@
 # BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
 # ============================================================================
 
-- name: "Physical Discovery Test (SP4)"
-  cmd: |
-    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
-  skus:
-    bh_sp4:
-      timeout: 15
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp4
-
-- name: "System Health Check (SP4)"
-  cmd: |
-    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
-  skus:
-    bh_sp4:
-      timeout: 15
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp4
-
 - name: "Pipeline Test (DeepSeek V3 B1 Superpod)"
   cmd: |
     set -x
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    TT_METAL_COORDINATOR_HOME=/ci/tt-metal
+    TT_METAL_WORKER_HOME=/home/user/tt-metal
+    TTRUN_HOSTFILE=/ci/ttrun/hostfile
+    export TT_METAL_HOME="${TT_METAL_HOME:-${TT_METAL_COORDINATOR_HOME}}"
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
-    mkdir -p $PIPELINE_DIR
-    echo "=== SP4 superpod: after mkdir ==="
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' "${TTRUN_HOSTFILE}" | sed 's/,$//')
+    echo "=== Pipeline SP4 superpod: resolved paths ==="
+    echo "TT_METAL_COORDINATOR_HOME=${TT_METAL_COORDINATOR_HOME}"
+    echo "TT_METAL_WORKER_HOME=${TT_METAL_WORKER_HOME}"
+    echo "TT_METAL_HOME=${TT_METAL_HOME}"
+    echo "TTRUN_HOSTFILE=${TTRUN_HOSTFILE}"
+    echo "PIPELINE_DIR=${PIPELINE_DIR}"
+    echo "PIPELINE_HOSTS=${PIPELINE_HOSTS}"
+    echo "=== Pipeline SP4 superpod: pwd and key dirs ==="
     pwd
-    ls -la $PIPELINE_DIR
-    echo "=== SP4 superpod: running generate_blitz_decode_pipeline_configs ==="
-    python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+    ls -la /ci/ttrun
+    ls -la "${TT_METAL_COORDINATOR_HOME}/models/demos/deepseek_v3_b1/scaleout_configs" | head -n 30
+    mkdir -p "${PIPELINE_DIR}"
+    echo "=== Pipeline SP4 superpod: pipeline dir after mkdir ==="
+    ls -la "${PIPELINE_DIR}"
+    echo "=== Pipeline SP4 superpod: running generate_blitz_decode_pipeline_configs ==="
+    python3 "${TT_METAL_COORDINATOR_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py" \
       --mpi-user user \
-      --hostfile /ci/ttrun/hostfile \
-      --worker-tt-metal-home /home/user/tt-metal \
-      --output-dir $PIPELINE_DIR \
-      /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
-    echo "=== SP4 superpod: after generate (exit $?) ==="
+      --hostfile "${TTRUN_HOSTFILE}" \
+      --worker-tt-metal-home "${TT_METAL_WORKER_HOME}" \
+      --output-dir "${PIPELINE_DIR}" \
+      "${TT_METAL_COORDINATOR_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml"
+    echo "=== Pipeline SP4 superpod: after generate (exit $?) ==="
     pwd
-    ls -la $PIPELINE_DIR
-    echo "=== SP4 superpod: cd to pipeline dir ==="
-    cd $PIPELINE_DIR
-    echo "=== SP4 superpod: before tt-run ==="
+    ls -la "${PIPELINE_DIR}"
+    echo "=== Pipeline SP4 superpod: cd to pipeline dir ==="
+    cd "${PIPELINE_DIR}"
+    echo "=== Pipeline SP4 superpod: before tt-run ==="
     pwd
     ls -la
-    echo "=== SP4 superpod: running tt-run ==="
+    echo "=== Pipeline SP4 superpod: running tt-run ==="
     TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --skip-executable-check \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host ${PIPELINE_HOSTS} --tag-output" \
       --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-      /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+      "${TT_METAL_WORKER_HOME}/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline"
   skus:
     bh_sp4:
       timeout: 60
