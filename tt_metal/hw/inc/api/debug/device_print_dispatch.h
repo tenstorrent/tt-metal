@@ -343,12 +343,14 @@ private:
                 (volatile tt_l1_ptr uint32_t*)(rw_pointer_address_in_l1 + alignment);
             uint64_t w_noc_addr;
             if constexpr (EnableNocLocationCache) {
-                w_noc_addr = rw_noc_addresses[index] + 4;  // +4 to update read pointer which is after write pointer
+                w_noc_addr = rw_noc_addresses[index];
             } else {
-                w_noc_addr = get_noc_addr(noc_locations[index].x, noc_locations[index].y, remote_l1_address + 4);
+                w_noc_addr = get_noc_addr(noc_locations[index].x, noc_locations[index].y, remote_l1_address);
                 w_noc_addr |= (uint64_t)noc_locations[index].high_address_bits << 32;
             }
-            noc_async_write(rw_pointer_address_in_l1 + alignment + 4, w_noc_addr, 4);
+
+            // +4 is to update read pointer which is after write pointer.
+            noc_async_write(rw_pointer_address_in_l1 + alignment + 4, w_noc_addr + 4, 4);
         }
     }
 
