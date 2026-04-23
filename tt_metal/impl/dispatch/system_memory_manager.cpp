@@ -247,8 +247,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
 }
 
 bool SystemMemoryManager::is_mock_device() const {
-    return tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().get_target_device_type() ==
-           tt::TargetDevice::Mock;
+    return tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().is_mock_or_emulated();
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {

@@ -78,6 +78,9 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
+#ifdef GENERATE_HASH_LOG
+#include <fstream>
+#endif
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -150,19 +153,6 @@ using detail::ProgramImpl;
 
 namespace {
 
-void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    // ZoneScoped;
-    // const std::string tracyPrefix = "GenerateBinaries_";
-    // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
-    try {
-        jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        kernel->generate_binaries(device, build_options);
-    } catch (std::runtime_error& ex) {
-        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-    }
-}
-
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
@@ -194,7 +184,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.gpp = build_env.build_env.get_gpp();
     static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
     desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
-    desc.output_dir = build_options.path;
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
@@ -228,6 +217,40 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     }
 #endif
     return compile_hash;
+}
+
+std::string ensure_kernel_binaries(
+    const std::shared_ptr<Kernel>& kernel,
+    IDevice* device,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env,
+    size_t kernel_hash) {
+    if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
+        if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
+                kernel->name(),
+                kernel_hash,
+                precompiled_config->precompiled_dir);
+            return precompiled_config->precompiled_dir;
+        }
+
+        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::FallbackPolicy::Error) {
+            throw experimental::PrecompiledKernelNotFoundError(
+                kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
+        }
+    }
+
+    jit_build_once(kernel_hash, [&] {
+        try {
+            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            kernel->generate_binaries(device, build_options);
+        } catch (std::runtime_error& ex) {
+            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+        }
+    });
+    return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
 
@@ -1485,9 +1508,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1841,11 +1863,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    std::vector<std::shared_future<void>> events;
-
-    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
-                   tt::TargetDevice::Mock;
+    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().is_mock_or_emulated();
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled() && !is_mock;
+    std::vector<std::shared_future<void>> events;
 
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
         JitBuildOptions build_options(build_env.build_env);
@@ -1870,6 +1890,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
+        // TODO: precompiled kernel is not supported in remote mode
         auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
         TT_FATAL(
             !endpoints.empty(),
@@ -1883,8 +1904,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                kernel->register_kernel_elf_paths_with_watcher(*device);
-
                 generate_kernel_source_files(device, build_options, kernel);
                 auto desc = build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                 coordinator.submit(std::move(desc));
@@ -1894,7 +1913,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         coordinator.finish();
 
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
+            kernel->read_binaries(device, binary_root);
+            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
         }
     } else {
@@ -1907,8 +1929,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
 
                         if (!is_mock) {
-                            kernel->register_kernel_elf_paths_with_watcher(*device);
-                            jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
+                            const std::string binary_root =
+                                ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                            kernel->read_binaries(device, binary_root);
+                            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         } else {
                             // Create empty stub binaries for mock devices
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
@@ -1917,17 +1941,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                     },
                     events);
-            }
-        }
-        sync_build_steps(events);
-    }
-
-    // Mock devices don't have binaries to read
-    if (!is_mock) {
-        for (const auto& kernels : kernels_) {
-            for (const auto& pair : kernels) {
-                const auto& kernel = pair.second;
-                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
             }
         }
         sync_build_steps(events);
