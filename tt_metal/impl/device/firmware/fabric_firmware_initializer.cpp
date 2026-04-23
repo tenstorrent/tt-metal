@@ -890,6 +890,11 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 // Live relay firmware — touch nothing.  configure_fabric_cores() handles the
                 // firmware transition via write_launch_msg_to_core (no soft reset needed).
                 // FIX M: record this channel so configure_fabric_cores() can skip the soft reset.
+                // NOTE: do NOT add to probe_dead_channels — base-UMD state is the expected
+                // fresh-boot / post-reset condition (all ERISC channels start here).  Adding
+                // base-UMD channels to probe_dead_channels falsely marks every device as
+                // dead-relay on a clean machine, which prevents dispatch kernel initialization
+                // and causes fetch_queue_reserve_back timeouts on the very first run.
                 base_umd_channels.insert(eth_chan_id);
                 log_info(
                     tt::LogMetal,
@@ -928,17 +933,19 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 } catch (...) {
                     // write failed — best effort; the channel may truly be unreachable
                 }
+                // FIX O (#42429): Add truly-corrupt channels to probe_dead_channels.
+                //
+                // While the probe L1 read SUCCEEDED (relay functional), deassert_risc_reset requires
+                // an operational NOC — which may be dead if a previous session left this channel in
+                // assert_risc_reset state (the FIX M crash pattern, status 0x49705180).
+                // Marking it pre-known dead lets configure_fabric run in degraded mode (skip those
+                // channels with a warning) rather than throwing "newly-dead ETH channel(s)".
+                // The zero-write above ensures the NEXT session sees a clean 0.
+                // NOTE: base-UMD channels (is_base_umd == true) are intentionally excluded here —
+                // they are normal fresh-boot state and must NOT be treated as dead-relay.
+                probe_dead_channels.insert(eth_chan_id);
+                corrupt_count++;
             }
-            // FIX O (#42429): Add corrupt channels to probe_dead_channels.
-            //
-            // While the probe L1 read SUCCEEDED (relay functional), deassert_risc_reset requires an
-            // operational NOC — which may be dead if a previous session left this channel in
-            // assert_risc_reset state (the FIX M crash pattern, status 0x49705180).
-            // Marking it pre-known dead lets configure_fabric run in degraded mode (skip those
-            // channels with a warning) rather than throwing "newly-dead ETH channel(s)".
-            // The zero-write above ensures the NEXT session sees a clean 0.
-            probe_dead_channels.insert(eth_chan_id);
-            corrupt_count++;
             continue;
         }
 
