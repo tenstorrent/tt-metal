@@ -354,7 +354,12 @@ void kernel_main() {
             }  // block_size loop
             cb_push_back(cb_gamma_beta_or_out, block_size);
 
-            // * gamma
+            // * gamma — not migrated. Three runtime-gated variants (SCALAR bcast for
+            // groupnorm, ROW bcast for layernorm-lastdim, plain NONE) inside a runtime
+            // `if (gamma_has_value)`. The SCALAR variant in particular uses multiple
+            // scalar-carrying B tiles (one per A tile) which binary_op's
+            // BroadcastDim::SCALAR (b_tile_count == 1) doesn't model; would need an
+            // extended SCALAR policy or a new per-tile-scalar broadcast mode.
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
                 cb_wait_front(cb_gamma_beta_or_out, block_size);
@@ -385,7 +390,7 @@ void kernel_main() {
                 cb_push_back(cb_outg, block_size);
             }  // if (gamma_has_value)
 
-            // + beta
+            // + beta — same unmigrated rationale as the gamma block above.
             if (beta_has_value) {
                 cb_wait_front(cb_gamma_beta, block_size);
                 cb_wait_front(cb_beta, block_size);
