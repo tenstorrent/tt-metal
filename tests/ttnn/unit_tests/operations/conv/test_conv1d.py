@@ -523,3 +523,140 @@ def test_conv1d_dilation(
     passing, pcc_msg = check_with_pcc_without_tensor_printout(tt_output, golden, pcc=0.999)
     print(pcc_msg)
     assert passing
+
+
+def run_conv1d_replicate_pad(
+    device,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_length,
+    kernel_size,
+    stride,
+    padding,
+    groups=1,
+    dilation=1,
+    has_bias=True,
+    weights_dtype=ttnn.bfloat16,
+    output_dtype=ttnn.bfloat16,
+):
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_length]
+    conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
+    torch_input_tensor_ncl = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+
+    # Set edge values to large numbers so replicate padding has a measurable effect on output.
+    # Without this, random values near 0 make replicate vs zero padding hard to distinguish via PCC.
+    torch_input_tensor_ncl[:, :, 0] = 10.0
+    torch_input_tensor_ncl[:, :, -1] = -10.0
+
+    torch_input_tensor = torch.permute(torch_input_tensor_ncl, (0, 2, 1))
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_bias_tensor = torch.randn([output_channels], dtype=torch.bfloat16).float() if has_bias else None
+
+    # Golden: explicit replicate pad + conv1d with no padding
+    if isinstance(padding, (list, tuple)) and len(padding) == 2:
+        pad_left, pad_right = padding[0], padding[1]
+    else:
+        pad_left = pad_right = padding
+
+    torch_padded_input = torch.nn.functional.pad(
+        torch_input_tensor_ncl,
+        (pad_left, pad_right),
+        mode="replicate",
+    )
+    torch_out_golden = torch.nn.functional.conv1d(
+        torch_padded_input,
+        torch_weight_tensor,
+        bias=torch_bias_tensor,
+        stride=stride,
+        padding=0,
+        dilation=dilation,
+        groups=groups,
+    )
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    )
+    tt_bias_tensor = None
+    if has_bias:
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor.reshape(1, 1, 1, -1), weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=True,
+        padding_mode=ttnn.PaddingMode.Replicate,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
+
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_length=input_length,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=groups,
+        dtype=output_dtype,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_length, output_channels)
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 1))
+
+    pcc = 0.995
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden, pcc=pcc)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, dilation, groups",
+    (
+        (1, 64, 32, 1024, 3, 1, 1, 1, 1),
+        (1, 64, 32, 1024, 5, 1, 2, 1, 1),
+        (1, 128, 64, 512, 3, 1, 1, 1, 1),
+        (1, 64, 32, 1024, 3, 2, 1, 1, 1),
+        (1, 64, 32, 512, 5, 1, 4, 1, 1),
+        (2, 64, 32, 512, 3, 1, 1, 1, 1),
+        (1, 64, 32, 512, 3, 1, (1, 2), 1, 1),
+        # dilation > 1: padding = dilation for 3x3 kernel keeps output length equal.
+        (1, 64, 32, 512, 3, 1, 2, 2, 1),
+        # depthwise (groups == in_channels == out_channels) with replicate pad.
+        (1, 32, 32, 512, 3, 1, 1, 1, 32),
+    ),
+)
+def test_conv1d_replicate_pad(
+    device, batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, dilation, groups
+):
+    run_conv1d_replicate_pad(
+        device,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_length=input_length,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+    )

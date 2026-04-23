@@ -141,8 +141,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
-    // Mock devices don't have actual completion queues, skip validation
-    bool is_mock = this->get_target_device_type() == tt::TargetDevice::Mock;
+    // Mock/emulated devices don't have actual completion queues, skip validation
+    auto target_type = this->get_target_device_type();
+    bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
 
     if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire)) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
@@ -202,7 +203,8 @@ void FDMeshCommandQueue::populate_read_descriptor_queue() {
 }
 
 void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         this->dispatch_core_ = CoreCoord{0, 0};
         return;
     }
@@ -225,7 +227,8 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
 
@@ -500,7 +503,8 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     ZoneScoped;
     auto lock = lock_api_function_();
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
 
@@ -539,7 +543,8 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
 
@@ -588,8 +593,10 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
+    const tt::tt_metal::CoreRangeSet* logical_core_filter) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         return false;
     }
     if (!mesh_device_->impl().is_local(device_coord)) {
@@ -614,7 +621,8 @@ bool FDMeshCommandQueue::write_shard_to_device(
         expected_num_workers_completed_,
         this->dispatch_core_type(),
         sub_device_ids,
-        pinned_memory);
+        pinned_memory,
+        logical_core_filter);
 }
 
 void FDMeshCommandQueue::read_shard_from_device(
@@ -720,7 +728,8 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         // Return a dummy event for mock devices
         return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
@@ -807,7 +816,8 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
         return;
     }
 

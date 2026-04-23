@@ -466,6 +466,9 @@ ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 ttnn.register_python_operation(
+    name="ttnn.copy_host_to_device_tensor_partial",
+)(ttnn._ttnn.operations.core.copy_host_to_device_tensor_partial)
+ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
 

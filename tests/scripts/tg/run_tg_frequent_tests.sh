@@ -1,39 +1,8 @@
 #!/bin/bash
 
-run_tg_llama3_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_tg_llama3_tests"
-
-  # Llama3.3-70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-
-  # Run all Llama3 tests for 8B, 1B, and 3B weights
-  # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-  for llama_dir in "$llama70b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 models/demos/llama3_70b_galaxy/tests/test_llama_model_nd.py --timeout=1800 ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_llama3_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_tg_tests() {
 
-  if [[ "$1" == "llama3" ]]; then
-    echo "LOG_METAL: running Llama3 run_tg_frequent_tests"
-    run_tg_llama3_tests
-
-  elif [[ "$1" == "resnet50" ]]; then
+  if [[ "$1" == "resnet50" ]]; then
     echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
     pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
 

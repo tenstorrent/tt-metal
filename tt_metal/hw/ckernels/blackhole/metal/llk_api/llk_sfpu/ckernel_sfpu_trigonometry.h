@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpi.h"
 
 using namespace sfpi;
