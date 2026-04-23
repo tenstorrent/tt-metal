@@ -278,7 +278,7 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
         atol=0.25,
         frobenius_threshold=0.001,
     )
-    # test for equivalance
+    # test for equivalence
     assert_numeric_metrics(
         torch_ref,
         ttnn.to_torch(tt_out2),
