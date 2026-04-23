@@ -551,15 +551,29 @@ def test_4d_per_core_shard_dim0_dim2(mesh_device):
 # ---------------------------------------------------------------------------
 
 
-def _make_huge_per_core_tensor(mesh_device, grid, shard_bytes=1_200_000):
-    """Allocate a per-core L1 tensor that consumes ~shard_bytes on each core in `grid`.
-    Uses experimental_to_single_device so the per_core_allocation flag is actually honored
-    (ttnn.from_torch + mesh_mapper silently falls back to lockstep)."""
-    num_cores = grid.num_cores()
+def _per_core_mem_config(grid, shard_bytes):
+    """Build a width-sharded MemoryConfig with experimental per-core allocation enabled."""
     shard_spec = ttnn.ShardSpec(grid, [1, shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     mem_config.experimental_set_per_core_allocation(True)
-    data = torch.zeros(1, shard_bytes * num_cores, dtype=torch.uint8)
+    return mem_config
+
+
+def _alloc_large_per_core_tensor(mesh_device, grid, use_from_torch, shard_bytes=1_200_000):
+    """Allocate a per-core L1 tensor consuming ~shard_bytes per core in `grid`.
+    `use_from_torch=True` → ttnn.from_torch + ReplicateTensorToMesh (allocated on every mesh device).
+    `use_from_torch=False` → experimental_to_single_device (allocated on coord (0,0) only)."""
+    mem_config = _per_core_mem_config(grid, shard_bytes)
+    data = torch.zeros(1, shard_bytes * grid.num_cores(), dtype=torch.uint8)
+    if use_from_torch:
+        return ttnn.from_torch(
+            data,
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
     host_tensor = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT)
     coord = ttnn.MeshCoordinate(0, 0)
     return ttnn._ttnn.tensor.experimental_to_single_device(host_tensor, mesh_device, coord, mem_config)
@@ -616,31 +630,91 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
         config=ttnn.ComputeConfigDescriptor(),
     )
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=[cb_desc])
+    # SPMD: dispatch to the entire mesh. The CB validator iterates all local device allocators,
+    # so it will catch per-core collisions on whichever coord(s) host them.
     return ttnn.generic_op(list(io_tensors), program)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_per_core_cb_collision_errors_on_same_cores(mesh_device):
+@pytest.mark.parametrize("use_from_torch", [False, True], ids=["experimental_to_single_device", "from_torch_replicate"])
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch):
     """CB validation should reject a program whose CBs land on cores already filled by a per-core tensor."""
     same_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     # Allocate I/O first so lockstep places them at top of L1 (no per-core ranges to avoid yet).
     io_tensors = _make_io_tensors(mesh_device, same_grid)
-    _huge = _make_huge_per_core_tensor(mesh_device, same_grid)
+    _per_core_tensor = _alloc_large_per_core_tensor(mesh_device, same_grid, use_from_torch=use_from_torch)
 
     # Huge CB on the SAME cores as the per-core tensor: should trip validate_circular_buffer_region.
     with pytest.raises(RuntimeError, match=r"clash|circular buffer|L1"):
         _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=512 * 1024)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_per_core_cb_no_collision_on_disjoint_cores(mesh_device):
+@pytest.mark.parametrize("use_from_torch", [False, True], ids=["experimental_to_single_device", "from_torch_replicate"])
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+def test_per_core_cb_no_collision_on_disjoint_cores(mesh_device, use_from_torch):
     """Per-core tensor on cores A should not tighten CB budgets for a program on disjoint cores B."""
     a_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     b_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))])
     # Allocate I/O first so lockstep places them at top of L1 (no per-core ranges to avoid yet).
     io_tensors = _make_io_tensors(mesh_device, b_grid)
-    # _huge = _make_huge_per_core_tensor(mesh_device, a_grid)
+    _per_core_tensor = _alloc_large_per_core_tensor(mesh_device, a_grid, use_from_torch=use_from_torch)
 
     # Same-size CB, but on cores B (disjoint from A). Should succeed: per-core tensor on A must
     # not tighten B's budget.
+    _run_cb_heavy_noop_program(io_tensors, b_grid, cb_total_size_bytes=512 * 1024)
+
+
+def _alloc_large_per_core_compressed_tensor(mesh_device, grid):
+    """Allocate a CompressedTensor with per_core_allocation=True consuming ~1.2 MB per core.
+    CompressedTensor allocates the source bfloat16 size (with ~6% overhead), not the compressed
+    bfp8 size, so we size for raw bfloat16 budget."""
+    num_devices = mesh_device.get_num_devices()
+    tile = 32
+    # Target ~1.2 MB per core after width-shard:
+    #   32 rows * shard_w cols * 2 B (bfloat16) ≈ 1.2 MB → shard_w ≈ 18750, tile-aligned to 18752.
+    shard_w = (18752 // tile) * tile
+    total_w = shard_w * grid.num_cores()
+    # Shard data on dim 0 across mesh devices so each device gets `tile` rows.
+    x = torch.randn(tile * num_devices, total_w)
+    # Single format: bfp8 only. Multi-format (e.g. ["bfp8","bfp4"]) creates non-uniform per-bank
+    # sizes which the per-core allocator path doesn't handle (orthogonal bug — segfaults at GC).
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.9, formats=["bfp8"])
+    mem_config = _make_sharded_mem_config(
+        (tile, total_w), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, grid
+    )
+    return CompressedTensor.from_torch(
+        x,
+        assigner,
+        device=mesh_device,
+        memory_config=mem_config,
+        per_core_allocation=True,
+        mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0)]),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+def test_compressed_per_core_cb_collision_errors_on_same_cores(mesh_device):
+    """Same as test_per_core_cb_collision_errors_on_same_cores but using CompressedTensor."""
+    same_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    io_tensors = _make_io_tensors(mesh_device, same_grid)
+    _ct = _alloc_large_per_core_compressed_tensor(mesh_device, same_grid)
+
+    # try/except, NOT pytest.raises: pytest.raises retains the ExceptionInfo (and its traceback,
+    # which pins this frame's locals — io_tensors, _ct — past mesh_device fixture teardown,
+    # crashing later destructors). try/except auto-clears the exception/traceback on block exit.
+    try:
+        _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=512 * 1024)
+        pytest.fail("Expected RuntimeError from CB validator (collision with per-core tensor)")
+    except RuntimeError as e:
+        assert any(s in str(e) for s in ("clash", "circular buffer", "L1")), f"Unexpected error: {e}"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+def test_compressed_per_core_cb_no_collision_on_disjoint_cores(mesh_device):
+    """Same as test_per_core_cb_no_collision_on_disjoint_cores but using CompressedTensor."""
+    a_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    b_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))])
+    io_tensors = _make_io_tensors(mesh_device, b_grid)
+    _ct = _alloc_large_per_core_compressed_tensor(mesh_device, a_grid)
+
     _run_cb_heavy_noop_program(io_tensors, b_grid, cb_total_size_bytes=512 * 1024)
