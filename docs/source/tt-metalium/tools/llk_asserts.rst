@@ -82,7 +82,7 @@ environment is enough.
    cd $TT_METAL_HOME
    source python_env/bin/activate
    source tools/setup_llk_assert_env.sh assert.txt /tmp/tt_dprint.log
-   TT_METAL_LLK_ASSERTS=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py::test_deepseek_moe_gate[42-True-1] > test_output.txt
+   TT_METAL_LLK_ASSERTS=1 pytest [CONCRETE_TEST] > test_output.txt
 
 After the run completes, three artifacts are available for analysis:
 
@@ -95,7 +95,7 @@ After the run completes, three artifacts are available for analysis:
 
 A failing ``LLK_ASSERT`` executes ``ebreak`` on a TRISC, which silently hangs that core. The host
 keeps waiting on a command-queue completion that will never arrive. The script wires up
-five environment variables that turn this otherwise-mysterious hang into a precise,
+six environment variables that turn this otherwise-mysterious hang into a precise,
 self-triaged failure:
 
 .. list-table::

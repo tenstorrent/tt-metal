@@ -6,7 +6,11 @@
 
 #ifdef ENABLE_LLK_ASSERT
 
-#define LLK_ASSERT_BLOCK(block_call) block_call
+#define LLK_ASSERT_BLOCK(block_call) \
+    do                               \
+    {                                \
+        (void)(block_call);          \
+    } while (0)
 
 #if defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY)
 

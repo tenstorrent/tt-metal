@@ -87,11 +87,17 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                     if new_index == -1:
                         break
                     macro_start = _macro_name_start_for_needle(code_line, new_index)
-                    if column is not None and macro_start >= column:
-                        # Must set start_index before break — a bare `break` left start_index -1
-                        # when the macro was indented (e.g. column 1) and triage showed "ASSERT() not found!".
-                        start_index = new_index
-                        break
+                    if column is not None:
+                        if macro_start == column:
+                            start_index = new_index
+                            break
+                        if macro_start > column:
+                            # Preserve the last ASSERT-like macro before the reported column.
+                            # If none was seen yet, fall back to the first later macro so we
+                            # still avoid returning "ASSERT() not found!" for approximate columns.
+                            if start_index == -1:
+                                start_index = new_index
+                            break
                     start_index = new_index
                     search_from = new_index + 1
 

@@ -36,12 +36,15 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
 fi
 
 _triage="${TT_METAL_HOME}/tools/tt-triage.py"
-if [[ ! -x "${_triage}" && ! -f "${_triage}" ]]; then
+if [[ ! -f "${_triage}" ]]; then
     echo "error: tt-triage.py not found at ${_triage}." >&2
     return 1
 fi
 
-export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="${_triage} --run=dump_lightweight_asserts > ${_assert_out} && tt-smi -r"
+# Shell-quote paths so spaces or metacharacters in the inputs don't break the timeout hook.
+printf -v _triage_q '%q' "${_triage}"
+printf -v _assert_out_q '%q' "${_assert_out}"
+export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${_triage_q} --run=dump_lightweight_asserts > ${_assert_out_q} && tt-smi -r"
 export TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0
 export TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1
 export TT_METAL_DPRINT_CORES=all
@@ -57,5 +60,5 @@ echo "  TT_METAL_DEVICE_PRINT=${TT_METAL_DEVICE_PRINT}"
 echo "  TT_METAL_DPRINT_FILE=${TT_METAL_DPRINT_FILE}"
 echo "Now run: TT_METAL_LLK_ASSERTS=1 pytest <test>"
 
-unset _assert_out _dprint_out _triage
+unset _assert_out _dprint_out _triage _triage_q _assert_out_q
 unset -f _usage
