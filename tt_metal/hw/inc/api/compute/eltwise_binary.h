@@ -30,6 +30,14 @@ namespace ckernel {
 // clang-format on
 ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
+    // Drain any pending coprocessor instructions before reconfiguring the packer.
+    // Without this, a stale REG2FLOP left in the coprocessor queue by a prior
+    // operation (e.g. tilize) can be processed by the tensix_sync() inside
+    // llk_pack_dest_init *after* we have already written the correct pack config,
+    // overwriting it with the stale value.  Flushing here ensures stale entries
+    // complete before our correct config writes arrive.
+    tensix_sync();
+
     state_configure(icb0, icb1, ocb, call_line);
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
