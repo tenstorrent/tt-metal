@@ -305,16 +305,11 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             rot_mats = (cos, sin)
             all_rope_deltas.append(rope_deltas)
 
-            # Get page table for this user
-            if page_table is not None:
-                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, decoding_pos)
-            else:
-                page_table_user = None
-
             # Run text prefill for this single user
-            logits = self._prefill_forward_single_user_text(
-                input_prefill,
-                page_table=page_table_user,
+            # Use parent class method which handles page_table slicing internally
+            logits = self.prefill_forward_single_user_text(
+                ttnn.unsqueeze(input_prefill, 0),
+                page_table=page_table,
                 user_id=user_id,
                 last_token_idx=decoding_pos - 1,
                 rot_mats=rot_mats,
