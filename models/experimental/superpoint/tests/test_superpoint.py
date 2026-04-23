@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -215,51 +217,66 @@ def test_superpoint_benchmark(device, height, width, input_kind):
         elapsed = time.perf_counter() - t0
         fps = n_iter / elapsed
 
-        # Second timed loop: end-to-end throughput with dual-CQ pipelining.
-        # CQ1 issues the next frame's H2D while CQ0 runs the current trace;
-        # D2H + host post-processing for the current frame run afterward on
-        # the Python thread. Steady-state per-iter cost becomes
-        # max(H2D, compute) + D2H + post.
-        e2e_phase_times = {"compute": 0.0, "d2h": 0.0, "post": 0.0}
-        t0 = time.perf_counter()
-        write_event = None
-        for _ in range(n_iter):
-            tp0 = time.perf_counter()
-            if write_event is not None:
-                ttnn.wait_for_event(0, write_event)
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-            compute_event = ttnn.record_event(device, 0)
-            ttnn.wait_for_event(1, compute_event)
-            tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
-            write_event = ttnn.record_event(device, 1)
-            # No explicit synchronize — the first ttnn.to_torch in D2H phase
-            # below blocks implicitly on CQ0 until trace outputs are ready;
-            # CQ1's H2D for the NEXT iter runs in background and we wait on
-            # write_event at the top of next iteration.
-            tp2 = time.perf_counter()
-            if trace_nms:
-                nms_scores, desc_host = _device_to_host_post_with_nms(
-                    tt_model, s_pooled, d_norm, b, height, width
-                )
+        # Second timed loop: end-to-end throughput with dual-CQ pipelining
+        # AND host post-processing offloaded to a worker thread so that
+        # post(N) overlaps with compute(N+1) + D2H(N+1). Torch grid_sample
+        # and torch.nonzero release the GIL, so the worker runs in parallel
+        # with the main thread's ttnn.to_torch wait.
+        def _run_post_nms(model_ref, nms_scores_t, desc_t, b_):
+            for i in range(b_):
+                kp, _ = model_ref._extract_keypoints_single(nms_scores_t[i : i + 1])
+                if kp.shape[0] > 0:
+                    _ = model_ref._sample_descriptors(kp[None], desc_t[i : i + 1], scale=8)
+
+        def _run_post_no_nms(model_ref, scores_host_t, desc_t, b_):
+            scores_full = model_ref._decode_keypoints(scores_host_t, apply_nms=True)
+            for i in range(b_):
+                kp, _ = model_ref._extract_keypoints_single(scores_full[i : i + 1])
+                if kp.shape[0] > 0:
+                    _ = model_ref._sample_descriptors(kp[None], desc_t[i : i + 1], scale=8)
+
+        e2e_phase_times = {"compute": 0.0, "d2h": 0.0, "post_submit": 0.0}
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            post_future = None
+            t0 = time.perf_counter()
+            write_event = None
+            for _ in range(n_iter):
+                tp0 = time.perf_counter()
+                if write_event is not None:
+                    ttnn.wait_for_event(0, write_event)
+                ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+                compute_event = ttnn.record_event(device, 0)
+                ttnn.wait_for_event(1, compute_event)
+                tt_model.load_input_prepared(tt_in, host_input, cq_id=1)
+                write_event = ttnn.record_event(device, 1)
+                tp2 = time.perf_counter()
+                if trace_nms:
+                    nms_scores, desc_host = _device_to_host_post_with_nms(
+                        tt_model, s_pooled, d_norm, b, height, width
+                    )
+                else:
+                    scores_host, desc_host = _device_to_host_post(
+                        tt_model, s, d_norm, b, height, width
+                    )
                 tp3 = time.perf_counter()
-                for i in range(b):
-                    kp, sc = tt_model._extract_keypoints_single(nms_scores[i : i + 1])
-                    if kp.shape[0] > 0:
-                        _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
+                # Wait for previous iter's post to finish, then submit current
+                # iter's post to the worker. Waiting here (not before next
+                # iter's compute) ensures serial post ordering without
+                # blocking compute dispatch.
+                if post_future is not None:
+                    post_future.result()
+                if trace_nms:
+                    post_future = pool.submit(_run_post_nms, tt_model, nms_scores, desc_host, b)
+                else:
+                    post_future = pool.submit(_run_post_no_nms, tt_model, scores_host, desc_host, b)
                 tp4 = time.perf_counter()
-            else:
-                scores_host, desc_host = _device_to_host_post(tt_model, s, d_norm, b, height, width)
-                tp3 = time.perf_counter()
-                scores_full = tt_model._decode_keypoints(scores_host, apply_nms=True)
-                for i in range(b):
-                    kp, sc = tt_model._extract_keypoints_single(scores_full[i : i + 1])
-                    if kp.shape[0] > 0:
-                        _ = tt_model._sample_descriptors(kp[None], desc_host[i : i + 1], scale=8)
-                tp4 = time.perf_counter()
-            e2e_phase_times["compute"] += tp2 - tp0  # fused H2D+compute via dual CQ
-            e2e_phase_times["d2h"] += tp3 - tp2
-            e2e_phase_times["post"] += tp4 - tp3
-        elapsed_e2e = time.perf_counter() - t0
+                e2e_phase_times["compute"] += tp2 - tp0
+                e2e_phase_times["d2h"] += tp3 - tp2
+                e2e_phase_times["post_submit"] += tp4 - tp3
+            # Drain: final post must complete before we stop the timer.
+            if post_future is not None:
+                post_future.result()
+            elapsed_e2e = time.perf_counter() - t0
         fps_e2e = n_iter / elapsed_e2e
 
         # Paper-matching slice: forward + D2H + descriptor sampling only (no NMS).
