@@ -27,6 +27,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
+    test_matmul_auto_tuner.cpp
     test_matmul_multicore.cpp
     test_matmul_sweep.cpp
     test_reduction.cpp
