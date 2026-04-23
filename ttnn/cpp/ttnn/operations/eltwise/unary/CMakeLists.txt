@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_unary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Unary ALIAS ttnn_op_eltwise_unary)
 
@@ -17,19 +19,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            common/unary_op_types.hpp
-            common/unary_op_utils.hpp
-            device/unary_composite_op.hpp
-            unary.hpp
-            unary_composite.hpp
+        FILES ${TTNN_OP_ELTWISE_UNARY_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        common/unary_op_utils.cpp
-        device/unary_composite_op.cpp
+        ${TTNN_OP_ELTWISE_UNARY_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})

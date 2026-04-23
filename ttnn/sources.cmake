@@ -1,0 +1,495 @@
+# Source file lists for the ttnn top-level targets.
+# Module owners should update this file when adding/removing/renaming source files.
+# Build logic lives in CMakeLists.txt — keep this file free of logic.
+
+####################################################################################################
+# ttnn_core PRIVATE sources
+####################################################################################################
+
+set(TTNN_CORE_SRCS
+    core/async_runtime.cpp
+    core/cluster.cpp
+    core/config.cpp
+    core/core.cpp
+    core/device.cpp
+    core/device_operation_detail.cpp
+    cpp/tools/profiler/op_profiler_json.cpp
+    core/distributed/api.cpp
+    core/distributed/distributed_tensor.cpp
+    core/distributed/distribution_mode.cpp
+    core/distributed/host_ccl.cpp
+    core/distributed/bidirectional_fabric_socket.cpp
+    core/distributed/create_socket.cpp
+    core/distributed/fabric_socket.cpp
+    core/distributed/mpi_socket.cpp
+    core/events.cpp
+    core/global_circular_buffer.cpp
+    core/global_semaphore.cpp
+    core/operation.cpp
+    core/graph/graph_processor.cpp
+    core/graph/graph_trace_utils.cpp
+    core/graph/levelized_graph.cpp
+    core/reports.cpp
+    core/tensor/flatbuffer/tensor_flatbuffer.cpp
+    core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
+    core/tensor/flatbuffer/overlapped_tensor_flatbuffer.cpp
+    core/tensor/overlapped_serialization.cpp
+    core/tensor/host_buffer/functions.cpp
+    core/tensor/serialization.cpp
+    core/tensor/storage.cpp
+    core/tensor/tensor.cpp
+    core/tensor/tensor_attributes.cpp
+    core/tensor/tensor_impl.cpp
+    core/tensor/tensor_ops.cpp
+    cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
+    core/tensor/tensor_utils.cpp
+    core/tensor/unit_mesh/unit_mesh_utils.cpp
+    core/tensor/xtensor/partition.cpp
+    core/tensor/to_string.cpp
+    core/tensor/py_to_tt_tensor.cpp
+)
+
+####################################################################################################
+# ttnncpp PRIVATE sources
+####################################################################################################
+
+set(TTNNCPP_SRCS
+    # FIXME: Move these out to appropriate sub targets
+    cpp/ttnn/operations/compute_throttle_utils.cpp
+    cpp/ttnn/operations/trace.cpp
+    cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
+    cpp/ttnn/operations/generic/generic_op.cpp
+    cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
+    cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
+    cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
+    cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_program_factory.cpp
+    cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
+    cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
+    cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp
+    cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
+    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
+    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
+    cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
+    cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
+    cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
+    cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
+    cpp/ttnn/operations/copy/typecast/typecast.cpp
+)
+
+####################################################################################################
+# Python binding sources (nanobind)
+####################################################################################################
+
+set(TTNN_SRC_PYBIND
+    core/distributed/distributed_nanobind.cpp
+    core/graph/graph_nanobind.cpp
+    cpp/ttnn/operations/bernoulli/bernoulli_nanobind.cpp
+    cpp/ttnn/operations/conv/conv1d/conv1d_nanobind.cpp
+    cpp/ttnn/operations/conv/conv2d/conv2d_nanobind.cpp
+    cpp/ttnn/operations/conv/conv_nanobind.cpp
+    cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d_nanobind.cpp
+    cpp/ttnn/operations/creation/creation_nanobind.cpp
+    cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
+    cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
+    cpp/ttnn/operations/data_movement/bcast/bcast_nanobind.cpp
+    cpp/ttnn/operations/data_movement/chunk/chunk_nanobind.cpp
+    cpp/ttnn/operations/data_movement/clone/clone_nanobind.cpp
+    cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
+    cpp/ttnn/operations/data_movement/copy/copy_nanobind.cpp
+    cpp/ttnn/operations/data_movement/chunk/chunk_nanobind.cpp
+    cpp/ttnn/operations/data_movement/expand/expand_nanobind.cpp
+    cpp/ttnn/operations/data_movement/fill_pad/fill_pad_nanobind.cpp
+    cpp/ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.cpp
+    cpp/ttnn/operations/data_movement/fold/fold_nanobind.cpp
+    cpp/ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.cpp
+    cpp/ttnn/operations/data_movement/narrow/narrow_nanobind.cpp
+    cpp/ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp
+    cpp/ttnn/operations/data_movement/moe_routing_remap/moe_routing_remap_nanobind.cpp
+    cpp/ttnn/operations/data_movement/move/move_nanobind.cpp
+    cpp/ttnn/operations/data_movement/non_zero_indices/non_zero_indices_nanobind.cpp
+    cpp/ttnn/operations/data_movement/pad/pad_nanobind.cpp
+    cpp/ttnn/operations/data_movement/permute/permute_nanobind.cpp
+    cpp/ttnn/operations/data_movement/repeat/repeat_nanobind.cpp
+    cpp/ttnn/operations/data_movement/repeat_interleave/repeat_interleave_nanobind.cpp
+    cpp/ttnn/operations/data_movement/reshape_view/reshape_nanobind.cpp
+    cpp/ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.cpp
+    cpp/ttnn/operations/data_movement/reshape_view/reshape_nanobind.cpp
+    cpp/ttnn/operations/data_movement/reshape_on_device/reshape_nanobind.cpp
+    cpp/ttnn/operations/data_movement/roll/roll_nanobind.cpp
+    cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
+    cpp/ttnn/operations/data_movement/scatter/scatter_nanobind.cpp
+    cpp/ttnn/operations/data_movement/scatter/tosa_scatter_nanobind.cpp
+    cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
+    cpp/ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.cpp
+    cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
+    cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.cpp
+    cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.cpp
+    cpp/ttnn/operations/data_movement/slice/slice_nanobind.cpp
+    cpp/ttnn/operations/data_movement/split/split_nanobind.cpp
+    cpp/ttnn/operations/data_movement/squeeze/squeeze_nanobind.cpp
+    cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
+    cpp/ttnn/operations/data_movement/tilize/tilize_nanobind.cpp
+    cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
+    cpp/ttnn/operations/data_movement/transpose/transpose_nanobind.cpp
+    cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze_nanobind.cpp
+    cpp/ttnn/operations/data_movement/untilize/untilize_nanobind.cpp
+    cpp/ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
+    cpp/ttnn/operations/data_movement/view/view_nanobind.cpp
+    cpp/ttnn/operations/eltwise/binary/binary_nanobind.cpp
+    cpp/ttnn/operations/eltwise/binary_backward/binary_backward_nanobind.cpp
+    cpp/ttnn/operations/eltwise/complex/complex_nanobind.cpp
+    cpp/ttnn/operations/eltwise/complex_unary/complex_unary_nanobind.cpp
+    cpp/ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_nanobind.cpp
+    cpp/ttnn/operations/eltwise/quantization/quantization_nanobind.cpp
+    cpp/ttnn/operations/eltwise/ternary/ternary_nanobind.cpp
+    cpp/ttnn/operations/eltwise/ternary_backward/ternary_backward_nanobind.cpp
+    cpp/ttnn/operations/eltwise/unary/unary_nanobind.cpp
+    cpp/ttnn/operations/eltwise/unary_backward/unary_backward_nanobind.cpp
+    cpp/ttnn/operations/embedding/embedding_nanobind.cpp
+    cpp/ttnn/operations/embedding_backward/embedding_backward_nanobind.cpp
+    cpp/ttnn/operations/examples/example/example_nanobind.cpp
+    cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
+    cpp/ttnn/operations/examples/examples_nanobind.cpp
+    cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
+    cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
+    cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
+    cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
+    cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
+    cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.cpp
+    cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
+    cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
+    cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
+    cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
+    cpp/ttnn/operations/experimental/experimental_nanobind.cpp
+    cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
+    cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
+    cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
+    cpp/ttnn/operations/experimental/reshape/view_nanobind.cpp
+    cpp/ttnn/operations/experimental/slice_write/slice_write_nanobind.cpp
+    cpp/ttnn/operations/experimental/padded_slice/padded_slice_nanobind.cpp
+    cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.cpp
+    cpp/ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.cpp
+    cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.cpp
+    cpp/ttnn/operations/full/full_nanobind.cpp
+    cpp/ttnn/operations/full_like/full_like_nanobind.cpp
+    cpp/ttnn/operations/generic/generic_op_nanobind.cpp
+    cpp/ttnn/operations/index_fill/index_fill_nanobind.cpp
+    cpp/ttnn/operations/kv_cache/kv_cache_nanobind.cpp
+    cpp/ttnn/operations/loss/loss_nanobind.cpp
+    cpp/ttnn/operations/matmul/matmul_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_adam/moreh_adam_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_adamw/moreh_adamw_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_arange/moreh_arange_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_bmm/moreh_bmm_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_dot/moreh_dot_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_dot/moreh_dot_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_fold/fold_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_getitem/moreh_getitem_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_group_norm_backward/moreh_group_norm_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_mean/moreh_mean_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_norm/moreh_norm_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_norm_backward/moreh_norm_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_sgd/moreh_sgd_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_sum/moreh_sum_nanobind.cpp
+    cpp/ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.cpp
+    cpp/ttnn/operations/normalization/batch_norm/batch_norm_nanobind.cpp
+    cpp/ttnn/operations/normalization/groupnorm/groupnorm_nanobind.cpp
+    cpp/ttnn/operations/normalization/layernorm/layernorm_nanobind.cpp
+    cpp/ttnn/operations/normalization/layernorm_distributed/layernorm_distributed_nanobind.cpp
+    cpp/ttnn/operations/normalization/normalization_nanobind.cpp
+    cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
+    cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
+    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
+    cpp/ttnn/operations/normalization/softmax/softmax_nanobind.cpp
+    cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
+    cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.cpp
+    cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
+    cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
+    cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
+    cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
+    cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
+    cpp/ttnn/operations/reduction/reduction_nanobind.cpp
+    cpp/ttnn/operations/reduction/generic/std_var_reductions_nanobind.cpp
+    cpp/ttnn/operations/reduction/argmax/argmax_nanobind.cpp
+    cpp/ttnn/operations/reduction/accumulation/cumprod/cumprod_nanobind.cpp
+    cpp/ttnn/operations/reduction/accumulation/cumsum/cumsum_nanobind.cpp
+    cpp/ttnn/operations/reduction/accumulation/ema/ema_nanobind.cpp
+    cpp/ttnn/operations/reduction/moe/moe_nanobind.cpp
+    cpp/ttnn/operations/reduction/prod/prod_nanobind.cpp
+    cpp/ttnn/operations/reduction/sampling/sampling_nanobind.cpp
+    cpp/ttnn/operations/reduction/topk/topk_nanobind.cpp
+    cpp/ttnn/operations/reduction/manual_seed/manual_seed_nanobind.cpp
+    cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.cpp
+    cpp/ttnn/operations/sliding_window/sliding_window_nanobind.cpp
+    cpp/ttnn/operations/transformer/attention_softmax/attention_softmax_nanobind.cpp
+    cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
+    cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp
+    cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp
+    cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_nanobind.cpp
+    cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
+    cpp/ttnn/operations/transformer/transformer_nanobind.cpp
+    cpp/ttnn/operations/uniform/uniform_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
+    cpp/ttnn/operations/rand/rand_nanobind.cpp
+    cpp/ttnn/operations/randn/randn_nanobind.cpp
+    cpp/ttnn/operations/data_movement/sort/sort_nanobind.cpp
+    cpp/ttnn/operations/data_movement/gather/gather_nanobind.cpp
+    cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.cpp
+    cpp/ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.cpp
+    # ttnn-nanobind core files (appended in original CMakeLists.txt)
+    cpp/ttnn-nanobind/__init__.cpp
+    cpp/ttnn-nanobind/activation.cpp
+    cpp/ttnn-nanobind/cluster.cpp
+    cpp/ttnn-nanobind/core.cpp
+    cpp/ttnn-nanobind/device.cpp
+    cpp/ttnn-nanobind/events.cpp
+    cpp/ttnn-nanobind/fabric.cpp
+    cpp/ttnn-nanobind/disaggregation.cpp
+    cpp/ttnn-nanobind/global_circular_buffer.cpp
+    cpp/ttnn-nanobind/global_semaphore.cpp
+    cpp/ttnn-nanobind/hd_socket.cpp
+    cpp/ttnn-nanobind/mesh_socket.cpp
+    cpp/ttnn-nanobind/profiler.cpp
+    cpp/ttnn-nanobind/program_descriptors.cpp
+    cpp/ttnn-nanobind/pytensor.cpp
+    cpp/ttnn-nanobind/reports.cpp
+    cpp/ttnn-nanobind/tensor.cpp
+    cpp/ttnn-nanobind/types.cpp
+    cpp/ttnn-nanobind/bfp_utils.cpp
+    cpp/ttnn-nanobind/operations/copy.cpp
+    cpp/ttnn-nanobind/operations/core.cpp
+    cpp/ttnn/operations/creation/creation.hpp
+    cpp/ttnn-nanobind/operations/trace.cpp
+    cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
+)
+
+set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
+    cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/ccl_experimental_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
+)
+
+set(TTNN_P2P_PYBIND cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
+
+set(CCL_TTNN_SRCS_PYBIND
+    cpp/ttnn/operations/ccl/ccl_nanobind.cpp
+    cpp/ttnn/operations/ccl/all_broadcast/all_broadcast_nanobind.cpp
+    cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_nanobind.cpp
+    cpp/ttnn/operations/ccl/reduce_to_root/reduce_to_root_nanobind.cpp
+    cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_nanobind.cpp
+    cpp/ttnn/operations/ccl/broadcast/broadcast_nanobind.cpp
+    cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_nanobind.cpp
+    cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter_nanobind.cpp
+    cpp/ttnn/operations/ccl/all_gather/all_gather_nanobind.cpp
+    cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp
+)
+
+set(DEBUG_TTNN_SRCS_PYBIND
+    cpp/ttnn/operations/debug/debug_nanobind.cpp
+    cpp/ttnn/operations/debug/apply_device_delay_nanobind.cpp
+)
+
+####################################################################################################
+# ttnn_core FILE_SET jit_api headers
+####################################################################################################
+
+set(TTNN_CORE_JIT_API_HEADERS
+    api/ttnn/tensor/layout/layout.hpp
+    cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
+    cpp/ttnn/kernel/compute/eltwise_copy.cpp
+    cpp/ttnn/kernel/compute/moreh_common.hpp
+    cpp/ttnn/kernel/compute/tilize.cpp
+    cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
+    cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp
+    cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
+    cpp/ttnn/kernel/dataflow/moreh_common.hpp
+    cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+    cpp/ttnn/kernel/kernel_common_utils.hpp
+    cpp/ttnn/kernel/kernel_utils.hpp
+    cpp/ttnn/kernel_lib/cb_helpers.hpp
+    cpp/ttnn/kernel_lib/cb_helpers.inl
+    cpp/ttnn/kernel_lib/dest_helpers.hpp
+    cpp/ttnn/kernel_lib/tilize_helpers.hpp
+    cpp/ttnn/kernel_lib/tilize_helpers.inl
+    cpp/ttnn/kernel_lib/untilize_helpers.hpp
+    cpp/ttnn/kernel_lib/untilize_helpers.inl
+)
+
+####################################################################################################
+# ttnncpp FILE_SET api headers
+####################################################################################################
+
+set(TTNNCPP_API_HEADERS
+    api/tools/profiler/op_profiler.hpp
+    api/tools/profiler/op_profiler_serialize.hpp
+    api/ttnn/async_runtime.hpp
+    api/ttnn/cluster.hpp
+    api/ttnn/common/constants.hpp
+    api/ttnn/common/guard.hpp
+    api/ttnn/common/queue_id.hpp
+    api/ttnn/config.hpp
+    api/ttnn/core.hpp
+    api/ttnn/device.hpp
+    api/ttnn/device_operation.hpp
+    api/ttnn/device_operation_detail.hpp
+    api/ttnn/distributed/api.hpp
+    api/ttnn/distributed/bidirectional_fabric_socket.hpp
+    api/ttnn/distributed/create_socket.hpp
+    api/ttnn/distributed/distributed_configs.hpp
+    api/ttnn/distributed/distributed_nanobind.hpp
+    api/ttnn/distributed/distributed_tensor.hpp
+    api/ttnn/distributed/fabric_socket.hpp
+    api/ttnn/distributed/host_ccl.hpp
+    api/ttnn/distributed/isocket.hpp
+    api/ttnn/distributed/mpi_socket.hpp
+    api/ttnn/distributed/tensor_topology.hpp
+    api/ttnn/distributed/types.hpp
+    api/ttnn/events.hpp
+    api/ttnn/global_circular_buffer.hpp
+    api/ttnn/global_semaphore.hpp
+    api/ttnn/graph/graph_consts.hpp
+    api/ttnn/graph/graph_serialization.hpp
+    api/ttnn/graph/graph_operation_queries.hpp
+    api/ttnn/graph/graph_processor.hpp
+    api/ttnn/graph/graph_nanobind.hpp
+    api/ttnn/graph/graph_query_op_constraints.hpp
+    api/ttnn/graph/graph_query_op_runtime.hpp
+    api/ttnn/graph/graph_trace_utils.hpp
+    api/ttnn/graph/levelized_graph.hpp
+    api/ttnn/mesh_device_operation_adapter.hpp
+    api/ttnn/mesh_device_operation_utils.hpp
+    api/ttnn/operation.hpp
+    api/ttnn/operation_concepts.hpp
+    api/ttnn/reports.hpp
+    api/ttnn/tensor/host_buffer/functions.hpp
+    api/ttnn/tensor/layout/alignment.hpp
+    api/ttnn/tensor/layout/layout.hpp
+    api/ttnn/tensor/layout/page_config.hpp
+    api/ttnn/tensor/layout/tensor_layout.hpp
+    api/ttnn/tensor/memory_config/memory_config.hpp
+    api/ttnn/tensor/serialization.hpp
+    api/ttnn/tensor/shape/shape.hpp
+    api/ttnn/tensor/storage.hpp
+    api/ttnn/tensor/tensor.hpp
+    api/ttnn/tensor/tensor_attributes.hpp
+    api/ttnn/tensor/tensor_impl.hpp
+    api/ttnn/tensor/tensor_ops.hpp
+    api/ttnn/tensor/tensor_spec.hpp
+    api/ttnn/tensor/tensor_utils.hpp
+    api/ttnn/tensor/to_string.hpp
+    api/ttnn/tensor/types.hpp
+    api/ttnn/tensor/unit_mesh/unit_mesh_utils.hpp
+    api/ttnn/tensor/xtensor/conversion_utils.hpp
+    api/ttnn/tensor/xtensor/partition.hpp
+    api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
+    api/ttnn/types.hpp
+    api/ttnn/tensor/py_to_tt_tensor.hpp
+    cpp/ttnn/operations/copy/typecast/typecast.hpp
+    cpp/ttnn/operations/creation/creation.hpp
+    cpp/ttnn/operations/functions.hpp
+    cpp/ttnn/operations/compute_throttle_utils.hpp
+    cpp/ttnn/operations/cb_utils.hpp
+    cpp/ttnn/operations/math.hpp
+    cpp/ttnn/operations/trace.hpp
+)

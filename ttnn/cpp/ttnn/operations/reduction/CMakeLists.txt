@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 
@@ -29,55 +31,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES argmax/argmax.hpp generic/generic_reductions.hpp reduction_common/reduction_common.hpp
+        FILES ${TTNN_OP_REDUCTION_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        argmax/device/argmax_device_operation.cpp
-        argmax/device/argmax_multi_core_program_factory.cpp
-        argmax/device/argmax_single_core_program_factory.cpp
-        argmax/argmax.cpp
-        accumulation/accumulation_common.cpp
-        accumulation/cumprod/cumprod.cpp
-        accumulation/cumsum/cumsum.cpp
-        accumulation/ema/ema.cpp
-        accumulation/ema/device/ema_device_operation.cpp
-        accumulation/ema/device/ema_program_factory.cpp
-        accumulation/device/accumulation_device_operation.cpp
-        accumulation/device/accumulation_program_factory.cpp
-        sampling/device/sampling_device_operation.cpp
-        sampling/device/sampling_program_factory.cpp
-        sampling/sampling.cpp
-        moe/device/moe_device_operation.cpp
-        moe/device/moe_program_factory.cpp
-        moe/moe.cpp
-        prod/device/prod_all_program_factory.cpp
-        generic/device/reduce_op_device_operation.cpp
-        generic/device/reduce_op_single_core_hw_program_factory.cpp
-        generic/device/reduce_op_multi_core_h_program_factory.cpp
-        generic/device/reduce_op_multi_core_w_program_factory.cpp
-        generic/device/reduce_op.cpp
-        generic/device/common.cpp
-        generic/device/welford_reduce_device_operation.cpp
-        generic/device/welford_reduce_program_factory.cpp
-        generic/generic_reductions.cpp
-        prod/device/prod_all_device_operation.cpp
-        prod/device/prod_nc_op.cpp
-        prod/device/prod_nc_device_operation.cpp
-        prod/device/prod_nc_program_factory.cpp
-        prod/device/prod_op_all.cpp
-        prod/prod.cpp
-        topk/device/topk_device_operation.cpp
-        topk/device/topk_utils.cpp
-        topk/topk.cpp
-        topk/device/topk_single_core_program_factory.cpp
-        topk/device/topk_multi_core_program_factory.cpp
-        reduction_common/reduction_common.cpp
-        manual_seed/manual_seed.cpp
-        manual_seed/device/manual_seed_operation.cpp
-        manual_seed/device/manual_seed_program_factory.cpp
+        ${TTNN_OP_REDUCTION_SRCS}
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_full_like ${LIB_TYPE})
 add_library(TTNN::Ops::FullLike ALIAS ttnn_op_full_like)
 
@@ -10,9 +12,9 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES full_like.hpp
+        FILES ${TTNN_OP_FULL_LIKE_API_HEADERS}
     PRIVATE
-        full_like.cpp
+        ${TTNN_OP_FULL_LIKE_SRCS}
 )
 
 target_include_directories(ttnn_op_full_like PRIVATE ${FixmeOpIncDirs})

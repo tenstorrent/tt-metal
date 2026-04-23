@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_prefetcher ${LIB_TYPE})
 add_library(TTNN::Ops::Prefetcher ALIAS ttnn_op_prefetcher)
 
@@ -25,9 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        prefetcher/device/dram_prefetcher_device_operation.cpp
-        prefetcher/device/dram_prefetcher_program_factory.cpp
-        prefetcher/dram_prefetcher.cpp
+        ${TTNN_OP_PREFETCHER_SRCS}
 )
 
 target_include_directories(ttnn_op_prefetcher PRIVATE ${FixmeOpIncDirs})

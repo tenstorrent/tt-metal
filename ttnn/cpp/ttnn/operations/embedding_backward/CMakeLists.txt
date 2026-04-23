@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_embedding_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Embedding::Backward ALIAS ttnn_op_embedding_backward)
 
@@ -19,15 +21,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES embedding_backward.hpp
+        FILES ${TTNN_OP_EMBEDDING_BACKWARD_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        embedding_backward.cpp
-        device/embedding_backward_device_operation.cpp
-        device/embedding_backward_program_factory.cpp
+        ${TTNN_OP_EMBEDDING_BACKWARD_SRCS}
 )
 
 target_include_directories(ttnn_op_embedding_backward PRIVATE ${FixmeOpIncDirs})
