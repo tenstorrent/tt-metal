@@ -356,6 +356,22 @@ void py_module(nb::module_& m) {
         "Create an autograd Tensor from a tt::tt_metal::Tensor");
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
+
+    // Register a Python atexit hook to close the AutoContext device while the
+    // Python interpreter is still alive. AutoContext is held in
+    // ttsl::Indestructible<AutoContext>, so its destructor is intentionally
+    // never run; without this hook the underlying MeshDevice (and its
+    // D2HSocket / NamedShm resources) would never be torn down, and the C++
+    // ShmResourceTracker atexit handler that runs after Python finalization
+    // would walk std::set<std::string> entries whose backing heap may already
+    // have been recycled, causing a use-after-free at process exit.
+    nb::module_::import_("atexit").attr("register")(nb::cpp_function([]() {
+        try {
+            AutoContext::get_instance().close_device();
+        } catch (...) {
+            // Best-effort cleanup; swallow any errors during shutdown.
+        }
+    }));
 }
 
 }  // namespace ttml::nanobind::autograd
