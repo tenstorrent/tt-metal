@@ -453,14 +453,18 @@ def sample_token(
     if greedy:
         return logits.argmax().item()
 
-    # Apply repetition penalty to previously generated tokens
+    # float32: faster topk/softmax/multinomial on CPU than bfloat16 for this vocab size
+    if logits.dtype != torch.float32:
+        logits = logits.float()
+
+    # Apply repetition penalty to previously generated tokens (vectorized; hot loop)
     if repetition_penalty != 1.0 and generated_tokens:
-        for token_id in set(generated_tokens):
-            if 0 <= token_id < logits.size(-1):
-                if logits[token_id] > 0:
-                    logits[token_id] = logits[token_id] / repetition_penalty
-                else:
-                    logits[token_id] = logits[token_id] * repetition_penalty
+        idx = torch.tensor(list(set(generated_tokens)), dtype=torch.long, device=logits.device)
+        vocab = logits.numel()
+        idx = idx[(idx >= 0) & (idx < vocab)]
+        if idx.numel() > 0:
+            vals = logits[idx]
+            logits[idx] = torch.where(vals > 0, vals / repetition_penalty, vals * repetition_penalty)
 
     logits = logits / temperature
     if top_k > 0:
@@ -542,43 +546,39 @@ def sample_from_tt_vocab_logits(
 ) -> int:
     """Argmax or sample from on-device logits [..., seq, vocab].
 
-        **Greedy** uses full-vocab ``to_torch`` then CPU ``argmax`` (same sequence-axis
-        handling as sampling). The previous ``untilize`` + on-device ``argmax`` path
-        could return invalid token IDs for some sliced / trace-backed logits tensors,
-        which then broke ``F.embedding`` in the CP decode loop.
+    **Greedy** uses full-vocab ``to_torch`` then CPU ``argmax`` (same sequence-axis
+    handling as sampling). The previous ``untilize`` + on-device ``argmax`` path
+    could return invalid token IDs for some sliced / trace-backed logits tensors,
+    which then broke ``F.embedding`` in the CP decode loop.
 
-    <<<<<<< Updated upstream
-        **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` +
-        :func:`sample_token` on the host (on-device topk/pad paths were slower than bf16
-        logits D2H for this demo's vocab width and trace count).
-    =======
-        **Sampling** (temperature / top_k / multinomial) uses ``to_torch`` +
-        :func:`sample_token` on the host.
-    >>>>>>> Stashed changes
+    **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` on
+    device logits, then :func:`sample_token` on the host. On-device top-k paths were
+    measured as slower than bf16 logits D2H for this demo's vocab width and trace count.
 
-        If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (full logits
-        ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
+    If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (full logits
+    ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
     """
     _pc = time.perf_counter
     t0 = _pc() if prof_acc is not None else 0.0
     th = ttnn.to_torch(logits_tt, dtype=torch.bfloat16)
     if th.ndim >= 3 and th.shape[-2] > 1:
         th = th[:, :, -1, :]
-    th1d = th.reshape(-1)
+    th1d = th.reshape(-1).contiguous()
     t1 = _pc() if prof_acc is not None else 0.0
     if greedy:
         out = int(th1d.float().argmax().item())
         if prof_acc is not None:
             prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
         return out
-    out = sample_token(
-        th1d,
-        temperature,
-        top_k,
-        greedy,
-        repetition_penalty,
-        generated_tokens,
-    )
+    with torch.inference_mode():
+        out = sample_token(
+            th1d,
+            temperature,
+            top_k,
+            greedy,
+            repetition_penalty,
+            generated_tokens,
+        )
     if prof_acc is not None:
         prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
         prof_acc["cpu_sample"] = prof_acc.get("cpu_sample", 0.0) + (_pc() - t1)
