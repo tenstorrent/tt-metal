@@ -11,15 +11,22 @@ constexpr uint32_t cb_indices = tt::CBIndex::c_3;
 constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
 constexpr uint32_t num_experts = get_compile_time_arg_val(0);
-constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(1);
-constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
-constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t dispatch_table_aligned_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t indices_pages_per_core = get_compile_time_arg_val(5);
-constexpr uint32_t indices_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t indices_aligned_page_size = get_compile_time_arg_val(7);
+// Number of tile-sized CB pages holding one emb_dim row in c_0 / c_17
+// (ceil(emb_dim / 1024)).
+constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
+// Number of real 32x32 output tiles per 32-token block = emb_dim / 32.
+// This only coincides with (emb_dim_cb_tiles * 32) when emb_dim is a multiple
+// of 1024; for non-1024-aligned emb_dim the CB holds padding tiles that must
+// NOT be written to the output buffer.
+constexpr uint32_t emb_dim_out_tiles = get_compile_time_arg_val(2);
+constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(3);
+constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(4);
+constexpr uint32_t dispatch_table_aligned_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t indices_pages_per_core = get_compile_time_arg_val(6);
+constexpr uint32_t indices_page_size = get_compile_time_arg_val(7);
+constexpr uint32_t indices_aligned_page_size = get_compile_time_arg_val(8);
 
-constexpr auto weight_accessor_args = TensorAccessorArgs<8>();
+constexpr auto weight_accessor_args = TensorAccessorArgs<9>();
 constexpr auto output_accessor_args = TensorAccessorArgs<weight_accessor_args.next_compile_time_args_offset()>();
 constexpr auto dispatch_table_accessor_args =
     TensorAccessorArgs<output_accessor_args.next_compile_time_args_offset()>();
@@ -102,21 +109,26 @@ void kernel_main() {
         }
     }
 
-    // Phase 2: Write output tiles after compute finishes
-    constexpr uint32_t tiles_total = emb_dim_tiles * TOKENS_PER_CORE;
-    cb_wait_front(cb_output, tiles_total);
+    // Phase 2: Write output tiles after compute finishes.
+    // The compute kernel's rowmajor CB holds TOKENS_PER_CORE * emb_dim_cb_tiles
+    // tile-sized pages (including padding when emb_dim is not 1024-aligned);
+    // tilize produces the same number of output tiles in c_16, but only the
+    // first emb_dim_out_tiles of them contain valid embedding data. Skip the
+    // trailing padding tiles by writing only emb_dim_out_tiles to the output.
+    constexpr uint32_t cb_output_tiles = emb_dim_cb_tiles * TOKENS_PER_CORE;
+    cb_wait_front(cb_output, cb_output_tiles);
 
     uint32_t cb_read_addr = get_read_ptr(cb_output);
 
     uint32_t tile_row = token_start_idx / TOKENS_PER_CORE;
-    uint32_t start_tile_idx = tile_row * tiles_total;
+    uint32_t start_tile_idx = tile_row * emb_dim_out_tiles;
 
-    for (uint32_t tile_idx = 0; tile_idx < tiles_total; ++tile_idx) {
+    for (uint32_t tile_idx = 0; tile_idx < emb_dim_out_tiles; ++tile_idx) {
         noc_async_write_page(start_tile_idx + tile_idx, output_addrg, cb_read_addr);
         cb_read_addr += output_tile_size;
     }
 
     noc_async_write_barrier();
 
-    cb_pop_front(cb_output, tiles_total);
+    cb_pop_front(cb_output, cb_output_tiles);
 }

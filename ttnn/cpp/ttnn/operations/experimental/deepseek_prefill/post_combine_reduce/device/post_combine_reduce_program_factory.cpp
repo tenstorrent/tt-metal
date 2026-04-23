@@ -48,16 +48,28 @@ CreatedProgram create_at(
         num_tokens *= combine_shape[i];
     }
 
-    constexpr uint32_t TILE_SIZE = 1024;  // 32 x 32
-    const uint32_t emb_dim_tiles = emb_dim / TILE_SIZE;
+    constexpr uint32_t TILE_SIZE = 1024;  // 32 x 32 bfloat16 tile (element count)
+    constexpr uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t BF16_BYTES = 2;
+
+    // Number of tile-sized CB pages needed to hold one emb_dim row.
+    // ceil(emb_dim / 1024) supports non-1024-aligned dims (e.g. GPT-OSS 2880).
+    const uint32_t emb_dim_cb_tiles = (emb_dim + TILE_SIZE - 1) / TILE_SIZE;
+    // Number of real 32x32 output tiles per 32-token block.
+    const uint32_t emb_dim_out_tiles = emb_dim / TILE_WIDTH;
+    // Raw byte count for NoC reads in the reader (handles non-aligned emb_dim).
+    const uint32_t emb_dim_bytes = emb_dim * BF16_BYTES;
 
     TT_FATAL(
-        emb_dim % TILE_SIZE == 0,
-        "Embedding dimension {} must be divisible by tile size (1024), got {} tiles",
+        emb_dim % TILE_WIDTH == 0,
+        "Embedding dimension {} must be divisible by tile width ({}), got {}",
         emb_dim,
-        emb_dim_tiles);
+        TILE_WIDTH,
+        emb_dim);
     TT_FATAL(
-        emb_dim_tiles <= 8, "Embedding dimension tiles {} must fit in 8 DST registers for batching", emb_dim_tiles);
+        emb_dim_cb_tiles <= 8,
+        "Embedding dimension tiles {} must fit in 8 DST registers for batching",
+        emb_dim_cb_tiles);
 
     constexpr uint32_t REQUIRED_TOKENS_PER_CORE = 32;
     TT_FATAL(
@@ -98,7 +110,7 @@ CreatedProgram create_at(
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
     // c_0: Stream one expert at a time through c_0 to minimize L1 footprint.
-    uint32_t combine_cb_size = emb_dim_tiles * tile_size;
+    uint32_t combine_cb_size = emb_dim_cb_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_combine_config =
         tt::tt_metal::CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_0, input_cb_data_format}})
             .set_page_size(tt::CBIndex::c_0, tile_size);
@@ -132,14 +144,14 @@ CreatedProgram create_at(
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_indices_config);
 
     // c_16: Output
-    uint32_t output_cb_size = REQUIRED_TOKENS_PER_CORE * emb_dim_tiles * tile_size;
+    uint32_t output_cb_size = REQUIRED_TOKENS_PER_CORE * emb_dim_cb_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, tile_size);
     auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
     // c_17: Row-major scratch for tilize
-    uint32_t rowmajor_cb_size = 32 * emb_dim_tiles * tile_size;
+    uint32_t rowmajor_cb_size = 32 * emb_dim_cb_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_rowmajor_config =
         tt::tt_metal::CircularBufferConfig(rowmajor_cb_size, {{tt::CBIndex::c_17, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_17, tile_size);
@@ -151,28 +163,30 @@ CreatedProgram create_at(
     auto* dispatch_table_buffer = expert_dispatch_table.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
-    // Reader compile-time args: num_experts, emb_dim_tiles, combine accessor
+    // Reader compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_bytes, combine accessor
     std::vector<uint32_t> reader_compile_time_args = {
         num_experts,
-        emb_dim_tiles,
+        emb_dim_cb_tiles,
+        emb_dim_bytes,
     };
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 
-    // Compute compile-time args: num_experts, emb_dim_tiles,
+    // Compute compile-time args: num_experts, emb_dim_cb_tiles,
     //   dispatch_table_num_pages, indices_pages_per_core
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
-        emb_dim_tiles,
+        emb_dim_cb_tiles,
         dispatch_table_num_pages,
         indices_pages_per_core,
     };
 
-    // Writer compile-time args: num_experts, emb_dim_tiles,
+    // Writer compile-time args: num_experts, emb_dim_cb_tiles, emb_dim_out_tiles,
     //   dispatch_table pages/sizes, indices pages/sizes,
     //   weight accessor, output accessor, dispatch_table accessor, indices accessor
     std::vector<uint32_t> writer_compile_time_args = {
         num_experts,
-        emb_dim_tiles,
+        emb_dim_cb_tiles,
+        emb_dim_out_tiles,
         dispatch_table_num_pages,
         get_page_size(expert_dispatch_table),
         dispatch_table_aligned_page_size,
