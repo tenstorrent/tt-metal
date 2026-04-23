@@ -98,6 +98,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+    static_config_.realtime_profiler_program_id_fifo_addr = my_dispatch_constants.get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO);
 }
 
 void DispatchSKernel::GenerateDependentConfigs() {
@@ -178,6 +180,8 @@ void DispatchSKernel::CreateKernel() {
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
+        {"REALTIME_PROFILER_PROGRAM_ID_FIFO_ADDR",
+         std::to_string(static_config_.realtime_profiler_program_id_fifo_addr.value())},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
 

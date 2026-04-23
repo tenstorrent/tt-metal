@@ -101,7 +101,11 @@ struct realtime_profiler_timestamp_t {
 };
 
 // Real-time profiler message for D2H socket streaming (ping-pong buffering)
-// Placed after profiler_msg_t in mailboxes_t to allow for expansion
+// Placed after profiler_msg_t in mailboxes_t to allow for expansion.
+// NOTE: program_id_fifo intentionally lives in realtime_profiler_dispatch_fifo_t below
+// (carved into dispatch-core L1 via CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO)
+// rather than being replicated in every worker's mailbox. Producer and consumer both run on
+// the same dispatch core, so per-worker mailbox replication of the 128-byte FIFO was wasted L1.
 struct realtime_profiler_msg_t {
     volatile uint32_t config_buffer_addr;       // Address of D2H socket config buffer in L1
     volatile uint32_t realtime_profiler_state;  // Current state (RealtimeProfilerState enum)
@@ -113,13 +117,25 @@ struct realtime_profiler_msg_t {
     // Ping-pong buffer B
     struct realtime_profiler_timestamp_t kernel_start_b;  // Device kernel start time (buffer B)
     struct realtime_profiler_timestamp_t kernel_end_b;    // Device kernel stop time (buffer B)
-    // Program ID circular buffer
-    volatile uint32_t program_id_fifo[32];    // Circular buffer to hold program IDs
-    volatile uint32_t program_id_fifo_start;  // Read index (consumer)
-    volatile uint32_t program_id_fifo_end;    // Write index (producer)
     // Sync mechanism - host writes timestamp, device captures and responds
     volatile uint32_t sync_request;         // 1 = enter sync mode, 0 = exit
     volatile uint32_t sync_host_timestamp;  // Host writes timestamp here for sync
+};
+
+// Real-time profiler program-id FIFO. Shared on the dispatch core only between cq_dispatch
+// BRISC (producer, calls program_id_fifo_append) and cq_dispatch_subordinate NCRISC
+// (consumer, calls program_id_fifo_pop). Lives at a fixed L1 offset assigned by
+// DispatchMemMap via CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO; the
+// address is propagated to both kernels as a compile-time define
+// (CQ_DISPATCH_REALTIME_PROFILER_FIFO_ADDR / DISPATCH_S_REALTIME_PROFILER_FIFO_ADDR).
+//
+// The FIFO is sized 32 entries because the dispatcher BRISC pushes to it asynchronously
+// from dispatch_s NCRISC, and BRISC may push up to ~32 kernels before NCRISC drains the
+// first one. Do NOT shrink this without confirming the producer/consumer asynchrony bound.
+struct realtime_profiler_dispatch_fifo_t {
+    volatile uint32_t program_id_fifo[32];    // Circular buffer to hold program IDs
+    volatile uint32_t program_id_fifo_start;  // Read index (consumer)
+    volatile uint32_t program_id_fifo_end;    // Write index (producer)
 };
 
 // Messages for host to tell brisc to go

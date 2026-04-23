@@ -130,6 +130,13 @@ constexpr uint32_t dispatch_cb_pages_per_block = dispatch_cb_pages / dispatch_cb
 volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(GET_MAILBOX_ADDRESS_DEV(realtime_profiler));
 
+// Real-time profiler program-id FIFO lives at a fixed dispatch-core-local L1 address
+// assigned by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO).
+// Host passes that address via the REALTIME_PROFILER_PROGRAM_ID_FIFO_ADDR compile-time define.
+// Producer is here (BRISC); consumer is cq_dispatch_subordinate NCRISC on the same core.
+volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t* realtime_profiler_program_id_fifo =
+    reinterpret_cast<volatile tt_l1_ptr realtime_profiler_dispatch_fifo_t*>(REALTIME_PROFILER_PROGRAM_ID_FIFO_ADDR);
+
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 
@@ -1285,7 +1292,8 @@ re_run_command:
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             if (realtime_profiler_mailbox->realtime_profiler_core_noc_xy != 0) {
-                while (!program_id_fifo_append(realtime_profiler_mailbox, cmd->set_write_offset.program_host_id)) {
+                while (
+                    !program_id_fifo_append(realtime_profiler_program_id_fifo, cmd->set_write_offset.program_host_id)) {
                     invalidate_l1_cache();
                 }
             }

@@ -99,6 +99,8 @@ void DispatchKernel::GenerateStaticConfigs() {
     static_config_.fabric_header_rb_entries = DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+    static_config_.realtime_profiler_program_id_fifo_addr = my_dispatch_constants.get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::REALTIME_PROFILER_PROGRAM_ID_FIFO);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -513,6 +515,8 @@ void DispatchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+        {"REALTIME_PROFILER_PROGRAM_ID_FIFO_ADDR",
+         std::to_string(static_config_.realtime_profiler_program_id_fifo_addr.value())},
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
         {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL",

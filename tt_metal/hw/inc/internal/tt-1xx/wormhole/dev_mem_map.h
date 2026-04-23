@@ -85,8 +85,11 @@
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
-// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 13152
+// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small.
+// realtime_profiler_msg_t.program_id_fifo[32] (128B) and its 8B of indices were moved out of
+// mailboxes_t into a dispatch-core-local L1 region (CommandQueueDeviceAddrType::
+// REALTIME_PROFILER_PROGRAM_ID_FIFO), trimming this size by 136 bytes from 13152.
+#define MEM_MAILBOX_SIZE 13016
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)
