@@ -5,29 +5,37 @@
 // Test kernel: Metal 2.0 named-args loopback producer.
 // Reads data from a single-page DRAM buffer and pushes it entry-by-entry into a DFB.
 //
-// Uses Metal 2.0 named-arg accessors exclusively (via get_arg):
-//   args::src_addr      — named RTA (per-node), DRAM source address
-//   args::num_entries   — named CRTA (broadcast), number of entries to transfer
-//   args::bank_id       — named CTA, DRAM bank ID (typically 0 for single-page buffers)
-//   args::entry_size    — named CTA, bytes per DFB entry
-//   get_vararg(0)       — vararg RTA (0-indexed), a sentinel value the test verifies
+// Exercises the Metal 2.0 kernel-args feature surface:
+//   producer_args::src_addr     — named RTA (per-node), DRAM source address
+//   producer_args::num_entries  — named CRTA (broadcast), number of entries to transfer
+//   producer_args::bank_id      — named CTA, DRAM bank ID (typically 0 for single-page buffers)
+//   producer_args::entry_size   — named CTA, bytes per DFB entry
+//   get_vararg(0..2)            — three RTA varargs (per-node, positional from 0)
+//   get_common_vararg(0)        — one CRTA vararg (broadcast, positional from 0)
+//
+// Note the custom `producer_args` namespace (distinct from the consumer's default `args`);
+// this verifies the args_namespace feature works end-to-end on HW.
+//
+// Vararg offset verification: the XOR of this kernel's four vararg values is folded into the
+// first word of each DFB entry before push_back. The consumer does the symmetric thing,
+// XORing its own vararg sum into the first word on read. The host arranges for both sums to
+// match, so the two XORs cancel and the input/output data compare stays clean — but only if
+// every get_vararg / get_common_vararg offset is correct. A wrong offset at any index will
+// return the wrong word, flip bits in the sum, scramble the first word, and fail the test.
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg(args::src_addr);
-    uint32_t num_entries = get_arg(args::num_entries);
-    constexpr uint32_t bank_id = get_arg(args::bank_id);
-    constexpr uint32_t entry_size = get_arg(args::entry_size);
+    uint32_t src_addr = get_arg(producer_args::src_addr);
+    uint32_t num_entries = get_arg(producer_args::num_entries);
+    constexpr uint32_t bank_id = get_arg(producer_args::bank_id);
+    constexpr uint32_t entry_size = get_arg(producer_args::entry_size);
 
-    // Prove that get_vararg(0) addresses the first vararg regardless of how many named
-    // RTAs precede it in the dispatch buffer. The host passes an agreed sentinel value;
-    // if the offset is wrong, we'd read back garbage (or worse, the first named RTA).
-    uint32_t sentinel = get_vararg(0);
-    // Use it to ensure the compiler doesn't DCE the load.
-    volatile uint32_t touch = sentinel;
-    (void)touch;
+    // Vararg sum: exercises get_vararg(0), get_vararg(1), get_vararg(2), get_common_vararg(0).
+    // If any offset is wrong, this XOR won't cancel against the consumer's and the first
+    // word of each DFB entry will end up corrupted in the DRAM output buffer.
+    const uint32_t vararg_xor = get_vararg(0) ^ get_vararg(1) ^ get_vararg(2) ^ get_common_vararg(0);
 
     experimental::DataflowBuffer buf(dfb::loopback_dfb);
 
@@ -36,6 +44,10 @@ void kernel_main() {
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
         noc_async_read(src_noc_addr, buf.get_write_ptr(), entry_size);
         noc_async_read_barrier();
+        // Fold vararg sum into the first word of this entry — the consumer will XOR
+        // its own sum into the same word on read.
+        volatile tt_l1_ptr uint32_t* dfb_write_ptr = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
+        dfb_write_ptr[0] ^= vararg_xor;
         buf.push_back(1);
         src_addr += entry_size;
     }
