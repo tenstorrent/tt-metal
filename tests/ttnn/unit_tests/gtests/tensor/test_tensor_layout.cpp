@@ -332,6 +332,12 @@ INSTANTIATE_TEST_SUITE_P(
             .padded_shape = Shape{2, 2, 64, 32},
             .dtype = DataType::BFLOAT16,
             .expected_physical_shape = tt::tt_metal::Shape2D{256, 32}},
+        // Overpadding on H/W.
+        TilePaddedAlignmentTestParams{
+            .shape = Shape{1, 2, 16, 16},
+            .padded_shape = Shape{2, 2, 64, 32},
+            .dtype = DataType::BFLOAT16,
+            .expected_physical_shape = tt::tt_metal::Shape2D{256, 32}},
         // Padding on C (dim -3) while N stays equal; padded[-2]=64 > 32.
         TilePaddedAlignmentTestParams{
             .shape = Shape{3, 1, 64, 32},
