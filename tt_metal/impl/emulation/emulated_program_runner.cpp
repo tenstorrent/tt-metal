@@ -1398,6 +1398,7 @@ static void launch_cores(
                                               ly,
                                               kidx,
                                               &kep = kernel_exceptions[kidx]]() {
+                            (void)kidx;
                             __rt_args = ki.rt_args;
                             __common_rt_args = ki.common_rt_args;
                             __emule_bridge_l1 = l1_data;
