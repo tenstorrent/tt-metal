@@ -51,7 +51,7 @@ class Mesh:
             raise RuntimeError(msg)
         return self._axis_map[name]
 
-    def axis_mapper(self, name: str, tdim: int):
+    def axis_mapper(self, name: str, tdim: int) -> ttnn.CppTensorToMesh:
         """Return a mapper that shards a tensor along ``tdim`` across the named mesh axis.
 
         The mapper is passed to ``Tensor.from_numpy`` (or an initializer's ``mapper``
@@ -61,6 +61,13 @@ class Mesh:
         dev = ttml.autograd.AutoContext.get_instance().get_device()
         cluster_axis = self.axis_index(name)
         return ttml.core.distributed.shard_tensor_to_mesh_mapper(dev, tdim, cluster_axis)
+
+    def axis_mapper_config(self, name: str, tdim: int) -> ttnn.MeshMapperConfig:
+        """Return a MeshMapperConfig that shards along ``tdim`` across the named mesh axis."""
+        cluster_axis = self.axis_index(name)
+        placements = [ttnn.PlacementReplicate() for _ in self.shape]
+        placements[cluster_axis] = ttnn.PlacementShard(tdim)
+        return ttnn.MeshMapperConfig(placements)
 
 
 # Mirrors get_max_dimensions_for_architecture() in tt_metal/fabric/mesh_graph_descriptor.cpp
