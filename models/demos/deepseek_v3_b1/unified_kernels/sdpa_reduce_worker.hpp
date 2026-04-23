@@ -84,6 +84,8 @@ template <
     uint32_t num_l_chunks,
     uint32_t tiles_per_l_chunk>
 struct SdpaChunkSender {
+    static constexpr bool use_posted_forwarder_writes = true;
+
     // Core coordinates (constant across rounds)
     uint32_t current_core_x;
     uint32_t current_core_y;
@@ -96,7 +98,6 @@ struct SdpaChunkSender {
     // Precomputed NOC addresses (computed once per round in setup_round)
     uint64_t dst_base_noc;       // Fabric destination payload base for L chunks
     uint64_t sem_noc;            // Fabric destination semaphore
-    uint64_t fwd_slot_base_noc;  // Forwarder slot base
     uint64_t fwd_sem_noc;        // Forwarder semaphore
     volatile PACKET_HEADER_TYPE* header;
 
@@ -110,11 +111,16 @@ struct SdpaChunkSender {
     static constexpr uint32_t MS_SLOT_OFFSET = 0;
     static constexpr uint32_t L_SLOT_OFFSET = 1;
 
+    FORCE_INLINE void setup_forwarder_write_state() const {
+        // Only the forwarder core coordinate is fixed across rounds; the destination L1 address is still per-slot.
+        ncrisc_noc_write_set_state</*posted=*/use_posted_forwarder_writes, /*one_packet=*/false>(
+            noc_index, write_cmd_buf, get_noc_addr(fwd_core_x, fwd_core_y, 0), 0, NOC_UNICAST_WRITE_VC);
+    }
+
     FORCE_INLINE void setup_round(const SdpaRoundConfig& new_cfg) {
         cfg = new_cfg;
         dst_base_noc = get_noc_addr(current_core_x, current_core_y, cfg.dst_base_addr);
         sem_noc = get_noc_addr(current_core_x, current_core_y, cfg.sem_addr);
-        fwd_slot_base_noc = get_noc_addr(fwd_core_x, fwd_core_y, cfg.fwd_slot_addr);
         fwd_sem_noc = get_noc_addr(fwd_core_x, fwd_core_y, cfg.fwd_sem_addr);
 
         header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(cfg.header_addr);
@@ -133,16 +139,28 @@ struct SdpaChunkSender {
 
     FORCE_INLINE void send_packet(
         uint64_t dst_noc,
-        uint64_t fwd_slot_noc,
+        uint32_t fwd_slot_addr,
         uint32_t fwd_slot_idx,
         uint32_t src_addr,
         uint32_t payload_size) const {
         header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc);
-        noc_async_write(cfg.header_addr, fwd_slot_noc, packet_header_size_bytes);
-        uint64_t fwd_payload_noc = fwd_slot_noc + packet_header_size_bytes;
-        noc_async_write(src_addr, fwd_payload_noc, payload_size);
+        ncrisc_noc_write_with_state<
+            noc_mode,
+            /*posted=*/use_posted_forwarder_writes,
+            /*update_counter=*/true,
+            /*one_packet=*/false>(noc_index, write_cmd_buf, cfg.header_addr, fwd_slot_addr, packet_header_size_bytes);
+        ncrisc_noc_write_with_state<
+            noc_mode,
+            /*posted=*/use_posted_forwarder_writes,
+            /*update_counter=*/true,
+            /*one_packet=*/false>(
+            noc_index, write_cmd_buf, src_addr, fwd_slot_addr + packet_header_size_bytes, payload_size);
         // The forwarder reads packet size from the staged header, so the whole slot must be visible before signaling.
-        noc_async_writes_flushed();
+        if constexpr (use_posted_forwarder_writes) {
+            noc_async_posted_writes_flushed();
+        } else {
+            noc_async_writes_flushed();
+        }
         noc_semaphore_inc(fwd_sem_noc, 1u << fwd_slot_idx);
     }
 
@@ -150,7 +168,7 @@ struct SdpaChunkSender {
         if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
             header->set_payload_size_bytes(aligned_ms_payload_bytes);
         }
-        send_packet(dst_base_noc + total_l_bytes, fwd_slot_base_noc, cfg.base_slot_idx, src_addr, ms_tile_size_bytes);
+        send_packet(dst_base_noc + total_l_bytes, cfg.fwd_slot_addr, cfg.base_slot_idx, src_addr, ms_tile_size_bytes);
     }
 
     template <bool streaming>
@@ -160,7 +178,7 @@ struct SdpaChunkSender {
         }
 
         uint64_t current_dst_noc = dst_base_noc;
-        uint64_t current_fwd_slot_noc = fwd_slot_base_noc + (L_SLOT_OFFSET * slot_size);
+        uint32_t current_fwd_slot_addr = cfg.fwd_slot_addr + (L_SLOT_OFFSET * slot_size);
         uint32_t current_fwd_slot_idx = cfg.base_slot_idx + L_SLOT_OFFSET;
         uint32_t current_src_addr = src_addr;
         for (uint32_t i = 0; i < num_l_chunks; i++) {
@@ -169,9 +187,9 @@ struct SdpaChunkSender {
             }
 
             send_packet(
-                current_dst_noc, current_fwd_slot_noc, current_fwd_slot_idx, current_src_addr, l_chunk_size_bytes);
+                current_dst_noc, current_fwd_slot_addr, current_fwd_slot_idx, current_src_addr, l_chunk_size_bytes);
             current_dst_noc += l_chunk_size_bytes;
-            current_fwd_slot_noc += slot_size;
+            current_fwd_slot_addr += slot_size;
             current_fwd_slot_idx++;
             current_src_addr += l_chunk_size_bytes;
         }
@@ -704,6 +722,7 @@ struct SdpaReduceWorker {
 
             // Initialize sender with core coordinates
             Sender sender{args.current_core_x, args.current_core_y, args.fwd_core_x, args.fwd_core_y};
+            sender.setup_forwarder_write_state();
             PacketHeaderPool::reset();
             auto* header = PacketHeaderPool::allocate_header(1);
 
