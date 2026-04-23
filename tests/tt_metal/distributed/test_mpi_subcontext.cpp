@@ -59,8 +59,8 @@ void run_prefill_quad2x4_mock_galaxy() {
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     MetalContext::instance().initialize_fabric_config();
 
-    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
-    // not the full world. Rename or remove.
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
+    // returns the sub-context, not the full world. Rename or remove.
     const auto& ctx = MetalContext::instance().full_world_distributed_context();
     auto world = multihost::DistributedContext::get_world_context();
     const int local_rank = static_cast<int>(*ctx.rank());
@@ -99,8 +99,8 @@ void run_decode_quad2x4_mock_galaxy() {
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     MetalContext::instance().initialize_fabric_config();
 
-    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
-    // not the full world. Rename or remove.
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
+    // returns the sub-context, not the full world. Rename or remove.
     const auto& ctx = MetalContext::instance().full_world_distributed_context();
     auto world = multihost::DistributedContext::get_world_context();
     const int local_rank = static_cast<int>(*ctx.rank());
@@ -183,8 +183,8 @@ TEST(MpiSubContext, CurrentWorldIsSplitSubcommunicator) {
     auto& metal = MetalContext::instance();
 
     // --- get_current_world() is the split subcommunicator ---
-    // TODO: full_world_distributed_context() is a misleading name — it actually returns
-    // the *sub-context* communicator (post MPI_Comm_split), NOT the full MPI_COMM_WORLD.
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is a misleading
+    // name — it actually returns the *sub-context* communicator (post MPI_Comm_split), NOT the full MPI_COMM_WORLD.
     // Rename or remove in favor of get_current_world() / get_distributed_context_ptr().
     const auto& current = metal.full_world_distributed_context();
 
@@ -296,8 +296,8 @@ TEST(MpiSubContext, LauncherMetadataAndTranslationInSplitLaunch) {
     }
 
     auto& metal = MetalContext::instance();
-    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
-    // not the full world. Rename or remove.
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
+    // returns the sub-context, not the full world. Rename or remove.
     const auto& sub_ctx = metal.full_world_distributed_context();
     auto job_world = multihost::DistributedContext::get_world_context();
     ASSERT_NE(job_world, nullptr);
@@ -357,8 +357,8 @@ TEST(MpiSubContext, SingleGalaxySplitContext) {
         GTEST_SKIP();
     }
 
-    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
-    // not the full world. Rename or remove.
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
+    // returns the sub-context, not the full world. Rename or remove.
     const auto& distributed_context = MetalContext::instance().full_world_distributed_context();
     const int local_size = static_cast<int>(*distributed_context.size());
 
