@@ -52,7 +52,7 @@ def test_group_norm_large_ex_external_cb(device, specify_grid):
         bias=b_tt,
         core_grid=grid_size,
         inplace=False,
-        num_out_blocks=-1,
+        num_out_blocks=-1 if specify_grid else None,
     )
     output_tensor = ttnn.to_torch(output_tensor_tt)
     assert_numeric_metrics(

@@ -1185,7 +1185,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         core_grid=grid_size if specify_grid else None,
         inplace=False,
-        num_out_blocks=1,
+        num_out_blocks=1 if specify_grid else None,
         use_welford=True,
     )
 
