@@ -43,7 +43,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 
-    const uint64_t local_weights_noc_addr = get_noc_addr(0, local_weights_addrgen);
+    const uint64_t local_weights_noc_addr = local_weights_addrgen.get_noc_addr(0);
     noc_async_write(local_weights_l1_addr, local_weights_noc_addr, local_weights_page_size_bytes);
     noc_async_write_barrier();
 }
