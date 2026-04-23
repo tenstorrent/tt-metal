@@ -37,10 +37,15 @@ struct NoPostBias {
  *                      Required when bias_padded_shape[-2] == tile_height (see PR #42430).
  *
  * Composes with matmul_block by reading from the same interm_cb that matmul_block
- * packed to (when pack_last_to_interm=true).
+ * packed to (when pack_last_to_interm=true). When the upstream matmul_block runs
+ * with row_major_output=true, pass row_major_output=true here too so the bias helper
+ * consumes partials_cb and produces out_cb in matching row-major layout; otherwise
+ * (default) both layouts are subblock-major.
  *
- * CB flow: partials_cb (wait+pop per subblock) + bias_cb (caller owns wait/pop)
- *          --> out_cb (reserve+push per subblock)
+ * CB flow (row_major_output=false): partials_cb (wait+pop per subblock) + bias_cb
+ *          (caller owns wait/pop) --> out_cb (reserve+push per subblock).
+ * CB flow (row_major_output=true):  partials_cb (wait+pop per M-row-group) + bias_cb
+ *          (caller owns wait/pop) --> out_cb (reserve+push per M-row-group).
  *
  * Uses 4-phase DST management (tile_regs_acquire/commit/wait/release).
  *
@@ -52,13 +57,16 @@ struct NoPostBias {
  *
  * ── Template Parameters ────────────────────────────────────────────────────
  *
- *   partials_cb    CB containing matmul output (= interm_cb from matmul_block).
- *   bias_cb        CB containing bias tiles. Row-broadcast: one tile per output column.
- *                  Elementwise: multiple M rows per column.
- *   out_cb         Output CB for biased result.
- *   row_broadcast  true for add_tiles_bcast_rows, false for add_tiles. (default: true)
- *   PostBiasFn     Functor called per output sub-block after bias addition, before
- *                  packing. (default: NoPostBias)
+ *   partials_cb       CB containing matmul output (= interm_cb from matmul_block).
+ *   bias_cb           CB containing bias tiles. Row-broadcast: one tile per output column.
+ *                     Elementwise: multiple M rows per column.
+ *   out_cb            Output CB for biased result.
+ *   row_broadcast     true for add_tiles_bcast_rows, false for add_tiles. (default: true)
+ *   row_major_output  When true, consume partials_cb and produce out_cb in row-major
+ *                     layout (matches matmul_block with row_major_output=true). Default
+ *                     false uses the legacy subblock-major layout.
+ *   PostBiasFn        Functor called per output sub-block after bias addition, before
+ *                     packing. (default: NoPostBias)
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
@@ -67,19 +75,24 @@ struct NoPostBias {
  *   out_subblock_h     Output sub-block height in tiles.
  *   out_subblock_w     Output sub-block width in tiles.
  *   post_bias          PostBiasFn instance (default: {}).
+ *   out_row_width      N-tiles per row of the row-major CB layout. Ignored when
+ *                      row_major_output=false. Default 0 derives from
+ *                      out_subblock_w * in1_num_subblocks.
  */
 template <
     uint32_t partials_cb,
     uint32_t bias_cb,
     uint32_t out_cb,
     bool row_broadcast = true,
+    bool row_major_output = false,
     typename PostBiasFn = bias_add_config::NoPostBias>
 ALWI void add_bias_bcast_rows(
     uint32_t in0_num_subblocks,
     uint32_t in1_num_subblocks,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    PostBiasFn post_bias = {});
+    PostBiasFn post_bias = {},
+    uint32_t out_row_width = 0);
 
 }  // namespace compute_kernel_lib
 

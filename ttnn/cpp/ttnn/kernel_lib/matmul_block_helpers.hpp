@@ -93,6 +93,12 @@ struct NoPreKBlock {
  *                      factory pads per_core_N_compute above the actual in1 shard width
  *                      (e.g. matmul_multicore_reuse_mcast_dram_sharded), otherwise the
  *                      helper will wait/pop wrong tile counts and deadlock.
+ *   out_row_width      N-tiles per row in the OUTPUT CB layout (row stride for row_major
+ *                      pack). Defaults to 0, meaning reuse in1_per_core_w. For most factories
+ *                      in1 read stride and output pack stride coincide. DRAM-sharded is
+ *                      the exception: it reads in1 at per_core_N_in1_sender (unpadded shard
+ *                      width) but packs output at per_core_N_compute (padded after subblock-
+ *                      growth); those factories must pass the larger pack stride here.
  */
 template <
     bool transpose = false,
@@ -117,7 +123,8 @@ ALWI void matmul_block(
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
     bool retain_in0 = false,
-    uint32_t in1_per_core_w = 0);
+    uint32_t in1_per_core_w = 0,
+    uint32_t out_row_width = 0);
 
 /**
  * matmul_reduce_inplace: in-place reduce via matmul using a single-tile column identity.

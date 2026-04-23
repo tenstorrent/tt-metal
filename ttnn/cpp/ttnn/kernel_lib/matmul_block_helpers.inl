@@ -42,7 +42,8 @@ ALWI void matmul_block(
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
     bool retain_in0,
-    uint32_t in1_per_core_w) {
+    uint32_t in1_per_core_w,
+    uint32_t out_row_width) {
 
     const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
     const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;
@@ -53,9 +54,16 @@ ALWI void matmul_block(
     if (in1_per_core_w == 0) {
         in1_per_core_w = out_subblock_w * in1_num_subblocks;
     }
+    // out_row_width: N-tiles per row of the OUTPUT CB layout (row stride for row_major pack).
+    // For most factories the in1 CB width and output pack width coincide, so we default to
+    // in1_per_core_w. DRAM-sharded passes the larger padded per_core_N_compute here to keep
+    // row_group_tiles / row_pos aligned with what the compute actually packs.
+    if (out_row_width == 0) {
+        out_row_width = in1_per_core_w;
+    }
     const uint32_t in1_block_num_tiles = in1_per_core_w * block_w;
     const uint32_t out_block_num_tiles = out_num_tiles * in0_num_subblocks * in1_num_subblocks;
-    const uint32_t row_group_tiles = out_subblock_h * in1_per_core_w;
+    const uint32_t row_group_tiles = out_subblock_h * out_row_width;
 
     ASSERT(block_w > 0);
     ASSERT(in0_num_subblocks > 0);
@@ -103,6 +111,15 @@ ALWI void matmul_block(
                 }
             }
 
+            // Non-last K-blocks spill into interm_cb. When FUSE_BIAS (pack_last_to_interm)
+            // also runs through interm_cb as pack_target, all blocks — non-last and last —
+            // write to the same CB at overlapping positions, so L1_ACC only accumulates
+            // correctly if non-last and last share the same layout. In that case we must
+            // spill row-major too. Otherwise (software reload path, or !pack_last_to_interm
+            // where the last block writes to out_cb), keep non-last subblock-major so the
+            // per-subblock reload at the last K-block can read partials contiguously.
+            constexpr bool spill_row_major = row_major_output && packer_l1_acc && pack_last_to_interm;
+
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 if constexpr (row_major_output) {
@@ -110,6 +127,8 @@ ALWI void matmul_block(
                     // Smaller than full-block reserve, so shared out/interm CBs don't deadlock.
                     if (last_out) {
                         cb_reserve_back(pack_target, row_group_tiles);
+                    } else if constexpr (spill_row_major) {
+                        cb_reserve_back(interm_cb, row_group_tiles);
                     }
                 }
 
@@ -190,7 +209,9 @@ ALWI void matmul_block(
                                 uint32_t dst_idx = 0;
                                 uint32_t col_base = in1_subblock * out_subblock_w;
                                 for (uint32_t r = 0; r < out_subblock_h; r++) {
-                                    uint32_t row_pos = r * in1_per_core_w;
+                                    // Row stride uses out_row_width (padded output-pack width),
+                                    // not in1_per_core_w — those differ for DRAM-sharded.
+                                    uint32_t row_pos = r * out_row_width;
                                     for (uint32_t c = 0; c < out_subblock_w; c++) {
                                         pack_tile<true>(dst_idx, pack_target, row_pos + col_base + c);
                                         dst_idx++;
@@ -207,18 +228,42 @@ ALWI void matmul_block(
                         }
 
                     } else {
-                        // Non-last K-block: spill partial to interm_cb.
+                        // Non-last K-block: spill partial to interm_cb. spill_row_major (defined
+                        // at the top of the K-block loop body) decides whether to match the
+                        // last-block row-major layout (needed when pack_last_to_interm + L1_ACC
+                        // accumulate into the same interm_cb buffer) or keep legacy subblock-
+                        // major (compatible with software reload's per-subblock read).
                         tile_regs_commit();
-                        cb_reserve_back(interm_cb, out_num_tiles);
+                        if constexpr (!spill_row_major) {
+                            cb_reserve_back(interm_cb, out_num_tiles);
+                        }
                         tile_regs_wait();
 
                         if constexpr (packer_l1_acc) {
                             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
                         }
 
-                        pack_tile_block(0, interm_cb, out_num_tiles);
+                        if constexpr (spill_row_major) {
+                            if (out_subblock_h == 1) {
+                                pack_tile_block(0, interm_cb, out_subblock_w);
+                            } else {
+                                uint32_t dst_idx = 0;
+                                uint32_t col_base = in1_subblock * out_subblock_w;
+                                for (uint32_t r = 0; r < out_subblock_h; r++) {
+                                    uint32_t row_pos = r * out_row_width;
+                                    for (uint32_t c = 0; c < out_subblock_w; c++) {
+                                        pack_tile<true>(dst_idx, interm_cb, row_pos + col_base + c);
+                                        dst_idx++;
+                                    }
+                                }
+                            }
+                        } else {
+                            pack_tile_block(0, interm_cb, out_num_tiles);
+                        }
                         tile_regs_release();
-                        cb_push_back(interm_cb, out_num_tiles);
+                        if constexpr (!spill_row_major) {
+                            cb_push_back(interm_cb, out_num_tiles);
+                        }
                     }
 
                     in1_index_subblock_offset += out_subblock_w;
@@ -227,6 +272,8 @@ ALWI void matmul_block(
                 if constexpr (row_major_output) {
                     if (last_out) {
                         cb_push_back(pack_target, row_group_tiles);
+                    } else if constexpr (spill_row_major) {
+                        cb_push_back(interm_cb, row_group_tiles);
                     }
                 }
 
@@ -234,22 +281,24 @@ ALWI void matmul_block(
             }
 
             if constexpr (packer_l1_acc) {
-                // Wait/pop partials in subblock-sized steps so the step size matches
-                // downstream consumers' wait_front(out_num_tiles) calls (e.g. bias add,
-                // reload). The CB API requires identical increments across all waits.
+                // Wait/pop the L1_ACC partials in increments that match the producer's push
+                // granularity: row_group_tiles when spill_row_major (FUSE_BIAS + L1_ACC path
+                // pushes per M-row-group), otherwise subblock-sized. The CB API requires
+                // identical increments across all waits.
+                const uint32_t drain_step = spill_row_major ? row_group_tiles : out_num_tiles;
                 if constexpr (pack_last_to_interm) {
                     if (block < num_k_blocks - 1) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_num_tiles) {
-                            cb_wait_front(interm_cb, out_num_tiles);
-                            cb_pop_front(interm_cb, out_num_tiles);
+                        for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
+                            cb_wait_front(interm_cb, drain_step);
+                            cb_pop_front(interm_cb, drain_step);
                         }
                     }
                     enable_reload = false;
                 } else {
                     if (num_k_blocks >= 2 && block < num_k_blocks - 2) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_num_tiles) {
-                            cb_wait_front(interm_cb, out_num_tiles);
-                            cb_pop_front(interm_cb, out_num_tiles);
+                        for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
+                            cb_wait_front(interm_cb, drain_step);
+                            cb_pop_front(interm_cb, drain_step);
                         }
                     }
                     if (block == num_k_blocks - 2) {
