@@ -676,9 +676,7 @@ def _alloc_large_per_core_compressed_tensor(mesh_device, grid):
     total_w = shard_w * grid.num_cores()
     # Shard data on dim 0 across mesh devices so each device gets `tile` rows.
     x = torch.randn(tile * num_devices, total_w)
-    # Single format: bfp8 only. Multi-format (e.g. ["bfp8","bfp4"]) creates non-uniform per-bank
-    # sizes which the per-core allocator path doesn't handle (orthogonal bug — segfaults at GC).
-    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.9, formats=["bfp8"])
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.99, formats=["bfp8", "bfp4"])
     mem_config = _make_sharded_mem_config(
         (tile, total_w), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, grid
     )
@@ -692,21 +690,36 @@ def _alloc_large_per_core_compressed_tensor(mesh_device, grid):
     )
 
 
+def _try_compressed_per_core_collision(mesh_device, per_core_grid, cb_grid):
+    """Allocate IO + per-core CompressedTensor + run CB program. Returns the captured error
+    message if generic_op raised, else None.
+
+    NOTE: this is intentionally a separate function so its locals (io_tensors, _ct) live in
+    THIS frame. When this function returns, the frame is released along with all per-device
+    per-core buffers — while mesh_device is still alive. Putting these allocations directly in
+    the test function would have any later assert / pytest.fail capture them via the failure
+    traceback, pinning the buffers past the function-scoped mesh_device's teardown and crashing
+    the next test's gc.collect."""
+    io_tensors = _make_io_tensors(mesh_device, cb_grid)
+    _ct = _alloc_large_per_core_compressed_tensor(mesh_device, per_core_grid)
+    # Multi-format CompressedTensor's per-core size depends on which format the assigner chose
+    # per tile (bfp4 ~544 B/tile, bfp8 ~1056 B/tile). Use a CB big enough that even the smallest
+    # per-core allocation collides: 1.1 MB CB + ~319 KB per-core (all-bfp4 worst case) > 1.4 MB
+    # bank → guaranteed collision.
+    try:
+        _run_cb_heavy_noop_program(io_tensors, cb_grid, cb_total_size_bytes=1100 * 1024)
+        return None
+    except RuntimeError as e:
+        return str(e)
+
+
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 def test_compressed_per_core_cb_collision_errors_on_same_cores(mesh_device):
     """Same as test_per_core_cb_collision_errors_on_same_cores but using CompressedTensor."""
     same_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
-    io_tensors = _make_io_tensors(mesh_device, same_grid)
-    _ct = _alloc_large_per_core_compressed_tensor(mesh_device, same_grid)
-
-    # try/except, NOT pytest.raises: pytest.raises retains the ExceptionInfo (and its traceback,
-    # which pins this frame's locals — io_tensors, _ct — past mesh_device fixture teardown,
-    # crashing later destructors). try/except auto-clears the exception/traceback on block exit.
-    try:
-        _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=512 * 1024)
-        pytest.fail("Expected RuntimeError from CB validator (collision with per-core tensor)")
-    except RuntimeError as e:
-        assert any(s in str(e) for s in ("clash", "circular buffer", "L1")), f"Unexpected error: {e}"
+    err = _try_compressed_per_core_collision(mesh_device, same_grid, same_grid)
+    assert err is not None, "Expected RuntimeError from CB validator (collision with per-core tensor)"
+    assert any(s in err for s in ("clash", "circular buffer", "L1")), f"Unexpected error: {err}"
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
@@ -714,7 +727,5 @@ def test_compressed_per_core_cb_no_collision_on_disjoint_cores(mesh_device):
     """Same as test_per_core_cb_no_collision_on_disjoint_cores but using CompressedTensor."""
     a_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     b_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0))])
-    io_tensors = _make_io_tensors(mesh_device, b_grid)
-    _ct = _alloc_large_per_core_compressed_tensor(mesh_device, a_grid)
-
-    _run_cb_heavy_noop_program(io_tensors, b_grid, cb_total_size_bytes=512 * 1024)
+    err = _try_compressed_per_core_collision(mesh_device, a_grid, b_grid)
+    assert err is None, f"Expected no error on disjoint cores, but got: {err}"
