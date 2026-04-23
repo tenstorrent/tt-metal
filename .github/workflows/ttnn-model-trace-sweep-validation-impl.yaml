@@ -136,11 +136,6 @@ jobs:
             "$PINNED_TRACE_ID" \
             model_tracer/traced_operations/ttnn_operations_master.json
 
-      - name: Normalize master JSON arguments and recompute hashes
-        run: |
-          python3 model_tracer/normalize_for_validation.py \
-            model_tracer/traced_operations/ttnn_operations_master.json
-
       - name: Run config hash preflight
         run: |
           python3 model_tracer/config_hash_preflight.py \
@@ -515,18 +510,6 @@ jobs:
           fi
 
           echo "Found ${#sweep_trace_files[@]} sweep trace file(s)"
-
-          # Normalize arguments in both master and sweep JSONs so that format
-          # differences (old vs new placement strings, metadata keys) are
-          # canonicalized before comparison.  Also recomputes config_hash.
-          echo "Normalizing master trace arguments..."
-          python3 model_tracer/normalize_for_validation.py \
-            model_tracer/traced_operations/ttnn_operations_master.json
-
-          echo "Normalizing sweep trace arguments..."
-          for stf in "${sweep_trace_files[@]}"; do
-            python3 model_tracer/normalize_for_validation.py "$stf"
-          done
 
           set +e
           python3 tests/sweep_framework/validate_sweep_trace.py \

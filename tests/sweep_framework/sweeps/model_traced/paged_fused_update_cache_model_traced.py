@@ -197,8 +197,18 @@ def run(
     # spec causes a device-level hang (NOC deadlock) that is NOT catchable via
     # try/except — only a 60s timeout kills it.  Keep all tensors on DRAM.
     def _to_ttnn(torch_tensor, dtype, layout, mem_config, placement_key="input_a_tensor_placement"):
+        placement = kwargs.get(placement_key, None)
         if not is_host:
-            if is_mesh_device:
+            if is_mesh_device and placement:
+                return create_tensor_on_mesh(
+                    torch_tensor,
+                    device,
+                    dtype,
+                    layout,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                    placement,
+                )
+            elif is_mesh_device:
                 return ttnn.from_torch(
                     torch_tensor,
                     dtype=dtype,
