@@ -663,8 +663,13 @@ MatmulProgramConfig create_matmul_program_config(
             k_tiles_per_core = 1;
         }
 
+        // When a_is_sharded and input_b is batched, m_tiles_per_core is the per-core shard
+        // height, which may exceed the per-batch-instance M (multiple batches stacked on
+        // the height axis). The kernel iterates per batch instance, and the downstream
+        // validator enforces M % out_subblock_h == 0, so cap subblock selection by M.
+        const uint32_t m_tiles_for_subblock = std::min<uint32_t>(m_tiles_per_core, div_up(m_size, ttnn::TILE_SIZE));
         auto matmul_params = get_subblock_sizes(
-            m_tiles_per_core, n_tiles_per_core, deref_compute_kernel_config_or_default(compute_kernel_config));
+            m_tiles_for_subblock, n_tiles_per_core, deref_compute_kernel_config_or_default(compute_kernel_config));
         uint32_t out_subblock_h = std::get<0>(matmul_params);
         uint32_t out_subblock_w = std::get<1>(matmul_params);
 
@@ -1113,6 +1118,7 @@ MatmulProgramConfig get_matmul_program_config(
         }
 
         const auto N = utilities::get_N_dim(b_shape_padded, in1_tile);
+        const auto M = utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
 
         auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
         uint32_t per_core_M = in0_shard_shape[0] / in0_tile.get_height();
@@ -1121,9 +1127,13 @@ MatmulProgramConfig get_matmul_program_config(
 
         // Non-mcast MatmulMultiCoreReuseProgramConfig factory hardcodes ROW_MAJOR_OUTPUT=1
         // in its compute kernel, so the tuner is free to pick any (h, w) without constraints.
+        // When per_core_M > M (batched matmul stacks multiple batch instances along the
+        // per-core height axis), out_subblock_h must also divide M — the kernel iterates
+        // per batch instance and the downstream validator enforces M % out_subblock_h == 0.
+        // Pass min(per_core_M, M) so the tuner's divisibility check covers both constraints.
         auto_tune::SubblockTuneInputs subblock_inputs{
             .compute_kernel_config = deref_compute_kernel_config_or_default(compute_kernel_config)};
-        subblock_inputs.per_core_M = per_core_M;
+        subblock_inputs.per_core_M = std::min(per_core_M, M);
         subblock_inputs.per_core_N = per_core_N;
         subblock_inputs.prefer_fast_path = true;
         auto subblock_choice = auto_tune::determine_largest_subblock(subblock_inputs);
