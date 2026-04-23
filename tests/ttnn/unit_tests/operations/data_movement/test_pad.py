@@ -184,20 +184,20 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
         num_cores_x = dram_grid.x
         num_cores_y = dram_grid.y
     else:
-        num_cores_x = 8
-        num_cores_y = 8
-        if num_cores_y > device.core_grid.y:
-            num_cores_y = device.core_grid.y
+        compute_grid = device.compute_with_storage_grid_size()
+        num_cores_x = min(8, compute_grid.x)
+        num_cores_y = min(8, compute_grid.y)
 
     # shard config
-    shard_h = (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    num_cores = num_cores_x * num_cores_y
+    shard_h = ttnn.core.divup(n * c * h, num_cores)
     grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
 
     # output shard config
-    shard_h = (n_unpadded * c_unpadded * h_unpadded + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    shard_h = ttnn.core.divup(n_unpadded * c_unpadded * h_unpadded, num_cores)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
     output_mem_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
@@ -343,8 +343,6 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint16])
 @pytest.mark.parametrize("buffer_type", [ttnn.types.BufferType.L1, ttnn.types.BufferType.DRAM])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type):
-    if device.core_grid.y < 8:
-        pytest.skip("n300 does not have 8x8 grid")
     for _ in range(2):
         run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type)
         # dummy tensor to change tensor alloc
