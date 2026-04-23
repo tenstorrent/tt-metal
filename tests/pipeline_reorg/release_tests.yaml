@@ -549,7 +549,7 @@
   team: models
   model-name: unet-shallow
 
-- name: llama3.1-8b P150 performance
+- name: Llama 3.1-8B P150 performance
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
   skus:
@@ -559,7 +559,7 @@
   team: models
   model-name: llama3.1-8b
 
-- name: llama3.1-8b P150 stress
+- name: Llama 3.1-8B P150 stress
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "stress" --max_seq_len 131072
   skus:
@@ -570,7 +570,7 @@
   model-name: llama3.1-8b
 
 # LLMBox Multi-card tests
-- name: llama3.1-8b LLMBox performance batch-32
+- name: Llama 3.1-8B LLMBox performance batch-32
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
   skus:
@@ -590,7 +590,7 @@
   team: models
   model-name: llama3.1-8b
 
-- name: llama3.1-8b LLMBox data-parallel performance
+- name: Llama 3.1-8B LLMBox data-parallel performance
   cmd: |
     HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4 --max_seq_len 131072 --timeout=600
   skus:
