@@ -1980,3 +1980,283 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
         sram_cores_override=down_cores,
         accum_experts=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# BSPM real-assignment tests — Step 2.3
+# ---------------------------------------------------------------------------
+
+
+def _run_dram_bspm(
+    mesh_device,
+    M,
+    K,
+    N,
+    bspm_path,
+    bspm_expert_configs,
+    active_expert_ids,
+    pcc_threshold=0.90,
+    subblock_k=None,
+    cores_per_dram_bank=1,
+):
+    """DRAM-only ExpertKernel with real BSPM assignments.
+
+    bspm_expert_configs: list of (expert_idx, proj_idx) — one entry per registered expert slot.
+    All slots use the same bspm_path; assignments are loaded per (expert_idx, proj_idx).
+    Weights are random so no HF checkpoint is required; the purpose is to validate that the
+    kernel correctly decompresses a real mixed-precision {bfp4, bfp2, zero} tile map.
+
+    Requires BSPM_RESULTS_DIR env var and the corresponding .bspm file to be present.
+    """
+    import numpy as np
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    from models.demos.deepseek_v3_b1.weights.transforms.moe import shuffle_dram_assignment
+
+    tile_w = 32
+    num_devices = mesh_device.get_num_devices()
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+    num_experts = len(bspm_expert_configs)
+
+    grids = _setup_core_grids(mesh_device, cores_per_dram_bank, 0, None, has_sram=False)
+    dram_cores_list = grids["dram_cores_list"]
+    dram_core_grid = grids["dram_core_grid"]
+    compute_core_grid = grids["compute_core_grid"]
+    num_dram_cores = len(dram_cores_list)
+    num_banks = num_dram_cores // cores_per_dram_bank
+    num_cores = compute_core_grid.num_cores()
+
+    Kt, dram_per_core_N, subblock_k_v, N_dram_per_device = _compute_dram_matmul_params(
+        K, N, tile_w, num_banks, num_dram_cores, num_dram_cores, cores_per_dram_bank, subblock_k
+    )
+    assert (
+        N_dram_per_device == N
+    ), f"N_dram_per_device ({N_dram_per_device}) != N ({N}): DRAM padding not supported in BSPM tests"
+
+    dram_grid_size = mesh_device.dram_grid_size()
+    dram_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        ]
+    )
+    dram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_grid,
+            [K, dram_per_core_N * tile_w * cores_per_dram_bank],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+
+    dram_cts = []
+    torch_b_all = {}
+
+    for slot_idx, (expert_idx, proj_idx) in enumerate(bspm_expert_configs):
+        assignment = load_bspm_for_expert(
+            str(bspm_path),
+            expert_idx=expert_idx,
+            proj_idx=proj_idx,
+            tile_rows=K // tile_w,
+            tile_cols=N // tile_w,
+        )
+        assignment_shuffled = shuffle_dram_assignment(assignment, num_banks)
+
+        # Random per-device weights (tensor parallel: each device gets distinct N columns)
+        per_dev_weights = []
+        per_dev_shuffled = []
+        for dev_idx in range(num_devices):
+            torch.manual_seed(slot_idx * 100 + dev_idx + 7)
+            b = torch.randn(K, N_dram_per_device).float()
+            per_dev_weights.append(b)
+            per_dev_shuffled.append(shuffle_tensor_tiles(b, tile_w, num_banks))
+        torch_b_all[slot_idx] = per_dev_weights
+
+        # 4D tensor (mesh_rows, mesh_cols, K, N_per_dev) + assignment stacked per device
+        b_4d = torch.stack(per_dev_shuffled).reshape(mesh_rows, mesh_cols, K, N_dram_per_device)
+        # tiles_h = num_devices * K // tile_w, tiles_w = N // tile_w
+        assignment_4d = np.tile(assignment_shuffled, (num_devices, 1))
+
+        ct = CompressedTensor(
+            b_4d,
+            assignment_4d,
+            device=mesh_device,
+            memory_config=dram_b_mem,
+            per_core_allocation=False,
+            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+        )
+        logger.info(f"  BSPM slot {slot_idx} (expert={expert_idx}, proj={proj_idx}): {ct.tile_counts}")
+        assert ct.tile_counts.get("bfp4", 0) > 0, f"Slot {slot_idx}: expected bfp4 tiles from 3.5 b/e assignment"
+        low_p = ct.tile_counts.get("bfp2", 0) + ct.tile_counts.get("bfp0", 0)
+        assert low_p > 0, f"Slot {slot_idx}: expected bfp2/bfp0 tiles from 3.5 b/e assignment"
+        dram_cts.append(ct)
+
+    dram_meta_flags = [1] * num_experts
+    is_dram_flags = list(dram_meta_flags)
+    num_subblocks_k = Kt // subblock_k_v
+
+    dram_meta_tensors = create_dram_expert_tensors_multi_device(
+        mesh_device,
+        dram_cts,
+        subblock_k_v,
+        num_subblocks_k,
+        dram_per_core_N,
+        cores_per_dram_bank=cores_per_dram_bank,
+        num_total_experts=num_experts,
+        is_dram_flags=dram_meta_flags,
+    )
+
+    a_tensor = _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores, M, K, tile_w)
+    index_tensor = _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags)
+    expert_selection_meta = _build_expert_selection_meta(mesh_device, a_tensor, is_dram_flags)
+
+    num_active = len(active_expert_ids)
+    out_tensor = _build_dram_output(
+        mesh_device, M, dram_per_core_N, num_active, num_dram_cores, num_devices, dram_core_grid, tile_w
+    )
+
+    result = ExpertKernel.op(
+        a_tensor,
+        [],
+        dram_cts,
+        out_tensor,
+        index_tensor,
+        num_active_experts=num_active,
+        subblock_k=subblock_k_v,
+        dram_core_grid=dram_core_grid,
+        dram_meta_tensors=dram_meta_tensors,
+        dram_per_core_n=dram_per_core_N,
+        expert_selection_meta=expert_selection_meta,
+        has_sram=False,
+        sram_core_grid=None,
+        sram_fmt_tensors={},
+        sram_k_offsets=None,
+        cores_per_dram_bank=cores_per_dram_bank,
+        sram_per_core_n=0,
+        sram_k_per_core=Kt,
+        sram_output_tensor=None,
+        dram_fuse_silu=False,
+        tp_expert=True,
+    )
+
+    _validate_dram_output(
+        result,
+        torch_a,
+        torch_b_all,
+        active_expert_ids,
+        dram_per_core_N,
+        num_dram_cores,
+        pcc_threshold,
+        False,
+        tile_w,
+    )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_bspm_single_device(device):
+    """1 DRAM expert, real BSPM assignment at 3.5 b/e — gate_proj shape (K=7168, N=2048).
+
+    Validates the DRAM streaming kernel correctly decompresses a real {bfp4, bfp2, zero}
+    tile map from a binary .bspm file. Weights are random; only the assignment is real.
+    Requires BSPM_RESULTS_DIR.
+    """
+    import os
+    from pathlib import Path
+
+    bspm_dir = os.environ.get("BSPM_RESULTS_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_RESULTS_DIR not set")
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    _run_dram_bspm(
+        device,
+        M=1,
+        K=7168,
+        N=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(0, 0)],  # expert 0, proj_idx=0 (gate_proj)
+        active_expert_ids=[0],
+        pcc_threshold=0.90,
+    )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_bspm_multi_device(bh_2d_mesh_device):
+    """2 DRAM experts, real BSPM assignments, 4×2 mesh — gate_proj shape (K=7168, N=2048).
+
+    Slot 0 uses expert_idx=0 gate_proj assignment; slot 1 uses expert_idx=1 gate_proj.
+    Both experts are active. Validates tensor-parallel DRAM streaming with real mixed-precision
+    tile maps across all 8 devices simultaneously.
+    Requires BSPM_RESULTS_DIR.
+    """
+    import os
+    from pathlib import Path
+
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+
+    bspm_dir = os.environ.get("BSPM_RESULTS_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_RESULTS_DIR not set")
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    _run_dram_bspm(
+        mesh,
+        M=1,
+        K=7168,
+        N=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(0, 0), (1, 0)],  # experts 0 and 1, both gate_proj
+        active_expert_ids=[0, 1],
+        pcc_threshold=0.90,
+    )
+
+
+@pytest.mark.skip_post_commit
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
+    """4 DRAM experts registered, only 2 active — validates no output corruption in inactive slots.
+
+    Expert slots 0–3 all use real BSPM gate_proj assignments (experts 0–3, proj_idx=0).
+    The router selects only slots 0 and 2; slots 1 and 3 have CTs allocated but are never
+    computed. Verifies that active-expert outputs pass PCC ≥ 0.90 and the kernel correctly
+    skips inactive slots without corrupting the output tensor.
+    Requires BSPM_RESULTS_DIR.
+    """
+    import os
+    from pathlib import Path
+
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+
+    bspm_dir = os.environ.get("BSPM_RESULTS_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_RESULTS_DIR not set")
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    _run_dram_bspm(
+        mesh,
+        M=1,
+        K=7168,
+        N=2048,
+        bspm_path=bspm_path,
+        bspm_expert_configs=[(0, 0), (1, 0), (2, 0), (3, 0)],  # 4 registered experts
+        active_expert_ids=[0, 2],  # sparse: only experts 0 and 2 selected this step
+        pcc_threshold=0.90,
+    )

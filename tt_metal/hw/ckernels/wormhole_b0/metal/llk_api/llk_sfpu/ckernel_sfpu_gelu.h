@@ -7,6 +7,7 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
+#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_recip.h"
@@ -407,6 +408,10 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
+        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_<2>
+        // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
+        // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
+        // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
         _init_sfpu_reciprocal_<false>();
     }
 }

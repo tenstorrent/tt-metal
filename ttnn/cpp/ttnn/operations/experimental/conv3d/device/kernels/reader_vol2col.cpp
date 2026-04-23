@@ -4,25 +4,27 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
 // Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
 // padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
-template <uint32_t padded_page_bytes>
-FORCE_INLINE void pre_zero_pages(uint32_t write_addr, uint32_t num_pages) {
+template <uint32_t padded_page_bytes, typename Dst>
+FORCE_INLINE void pre_zero_pages(experimental::Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
     static_assert(padded_page_bytes % 16 == 0, "CB page size must be 16-byte aligned for NOC transactions");
-    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t total = num_pages * padded_page_bytes;
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    experimental::set_read_state<MEM_ZEROS_SIZE>(noc, MEM_ZEROS_BASE);
     while (total >= MEM_ZEROS_SIZE) {
-        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
+        experimental::read_with_state(noc, dst, MEM_ZEROS_BASE, {.offset_bytes = offset});
+        offset += MEM_ZEROS_SIZE;
         total -= MEM_ZEROS_SIZE;
     }
     if (total > 0) {
-        noc_async_read(zeros_noc_addr, write_addr, total);
+        experimental::UnicastEndpoint self_ep;
+        noc.async_read(
+            self_ep, dst, total, experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()), {.offset_bytes = offset});
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
@@ -36,25 +38,34 @@ inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound)
     return idx;
 }
 
-template <uint32_t in_row_size_bytes>
-inline void zeroPad(uint32_t cb_write_addr) {
+template <uint32_t in_row_size_bytes, typename Dst>
+inline void zeroPad(experimental::Noc noc, const Dst& dst, uint32_t offset) {
     // Zero-fill from MEM_ZEROS
     constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
-    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+
+    experimental::UnicastEndpoint self_ep;
+    const auto zeros_src = experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_full_reads; ++i) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
-        cb_write_addr += MEM_ZEROS_SIZE;
+        noc.async_read(self_ep, dst, MEM_ZEROS_SIZE, zeros_src, {.offset_bytes = offset});
+        offset += MEM_ZEROS_SIZE;
     }
     if (partial_read_size > 0) {
-        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
+        noc.async_read(self_ep, dst, partial_read_size, zeros_src, {.offset_bytes = offset});
     }
 }
 
-template <typename Reader>
-FORCE_INLINE uint64_t
-get_input_noc_addr(const Reader& reader, uint32_t in_page_idx, uint32_t c_in_offset_bytes, uint32_t in_row_size_bytes) {
+template <typename Reader, typename Dst>
+FORCE_INLINE void read_input_row(
+    experimental::Noc noc,
+    const Reader& reader,
+    uint32_t page_idx,
+    uint32_t c_in_offset_bytes,
+    uint32_t in_row_size_bytes,
+    const Dst& dst,
+    uint32_t dst_offset,
+    uint32_t size_bytes) {
     if constexpr (Reader::DSpec::tensor_shape_static) {
         if constexpr ((reader.dspec().rank() > 1) && (reader.dspec().tensor_shape()[1] > 1)) {
             // Width/block sharded RowMajor tensors may split a logical row across multiple pages.
@@ -63,13 +74,23 @@ get_input_noc_addr(const Reader& reader, uint32_t in_page_idx, uint32_t c_in_off
             const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
             const uint32_t in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
             ASSERT(col_page_idx < width_in_pages);
-
-            const uint32_t in_page_id = in_page_idx * width_in_pages + col_page_idx;
-            return reader.get_noc_addr(in_page_id, in_offset_bytes);
+            const uint32_t in_page_id = page_idx * width_in_pages + col_page_idx;
+            noc.async_read(
+                reader,
+                dst,
+                size_bytes,
+                {.page_id = in_page_id, .offset_bytes = in_offset_bytes},
+                {.offset_bytes = dst_offset});
+            return;
         }
     }
 
-    return reader.get_noc_addr(in_page_idx, c_in_offset_bytes);
+    noc.async_read(
+        reader,
+        dst,
+        size_bytes,
+        {.page_id = page_idx, .offset_bytes = c_in_offset_bytes},
+        {.offset_bytes = dst_offset});
 }
 
 // Manages chunked CB writes: reserves TILE_HEIGHT pages, tracks patches written,
@@ -80,37 +101,41 @@ struct ChunkWriter {
     uint32_t remaining;
     uint32_t chunk_size;
     uint32_t in_chunk;
-    uint32_t write_addr;
+    uint32_t write_offset;
+    experimental::Noc noc;
+    experimental::CB cb;
+
+    ChunkWriter(experimental::Noc n) : noc(n), cb(cb_id) {}
 
     void init(uint32_t total_patches) {
         remaining = total_patches;
         in_chunk = 0;
         chunk_size = remaining < chunk_max ? remaining : chunk_max;
-        cb_reserve_back(cb_id, chunk_size);
-        write_addr = get_write_ptr(cb_id);
+        cb.reserve_back(chunk_size);
+        write_offset = 0;
         if constexpr (patch_pad_bytes > 0) {
-            pre_zero_pages<padded_page_bytes>(write_addr, chunk_size);
+            pre_zero_pages<padded_page_bytes>(noc, cb, 0, chunk_size);
         }
     }
 
-    // Call after writing one patch to write_addr.
+    // Call after writing one patch to write_offset.
     // Returns true when a chunk was pushed and a new one reserved — caller must restore NOC packet state.
     bool advance() {
         if constexpr (patch_pad_bytes > 0) {
-            write_addr += patch_pad_bytes;
+            write_offset += patch_pad_bytes;
         }
         in_chunk++;
         if (in_chunk == chunk_size) {
-            noc_async_read_barrier();
-            cb_push_back(cb_id, chunk_size);
+            noc.async_read_barrier();
+            cb.push_back(chunk_size);
             remaining -= chunk_size;
             in_chunk = 0;
             if (remaining > 0) {
                 chunk_size = remaining < chunk_max ? remaining : chunk_max;
-                cb_reserve_back(cb_id, chunk_size);
-                write_addr = get_write_ptr(cb_id);
+                cb.reserve_back(chunk_size);
+                write_offset = 0;
                 if constexpr (patch_pad_bytes > 0) {
-                    pre_zero_pages<padded_page_bytes>(write_addr, chunk_size);
+                    pre_zero_pages<padded_page_bytes>(noc, cb, 0, chunk_size);
                 }
                 return true;  // pushed and re-reserved — caller may need to restore NOC state
             }
@@ -121,14 +146,14 @@ struct ChunkWriter {
     void flush() {
         if (remaining > 0) {
             if (in_chunk > 0) {
-                noc_async_read_barrier();
-                cb_push_back(cb_id, chunk_size);
+                noc.async_read_barrier();
+                cb.push_back(chunk_size);
                 remaining -= chunk_size;
             }
             while (remaining > 0) {
                 const uint32_t cur = remaining < chunk_max ? remaining : chunk_max;
-                cb_reserve_back(cb_id, cur);
-                cb_push_back(cb_id, cur);
+                cb.reserve_back(cur);
+                cb.push_back(cur);
                 remaining -= cur;
             }
         }
@@ -150,15 +175,15 @@ template <
     uint32_t padded_page_bytes,
     uint32_t patch_pad_bytes>
 void vol2col_shard_to_cb(
+    experimental::Noc noc,
     uint32_t shard_l1_base,
-    uint64_t shard_noc_base,
     uint32_t t_base,
     uint32_t h_base,
     uint32_t w_block,
     uint32_t w_block_end,
     ChunkWriter<cb_id, padded_page_bytes, patch_pad_bytes>& chunk) {
     constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
-    noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+    experimental::set_read_state<kW_bytes>(noc, shard_l1_base);
     for (uint32_t w = w_block; w < w_block_end; w++) {
         const uint32_t w_base = (w - w_block) * stride_w;
         for (uint32_t kt = 0; kt < kT; kt++) {
@@ -167,12 +192,13 @@ void vol2col_shard_to_cb(
                 const uint32_t h_local = h_base + kh;
                 const uint32_t shard_offset =
                     (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_base) * C_in_block_bytes;
-                noc_async_read_one_packet_with_state(shard_l1_base + shard_offset, chunk.write_addr);
-                chunk.write_addr += kW_bytes;
+                experimental::read_with_state(
+                    noc, chunk.cb, shard_l1_base + shard_offset, {.offset_bytes = chunk.write_offset});
+                chunk.write_offset += kW_bytes;
             }
         }
         if (chunk.advance()) {
-            noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+            experimental::set_read_state<kW_bytes>(noc, shard_l1_base);
         }
     }
 }
@@ -185,18 +211,27 @@ template <
     uint32_t H_shard_max_W_shard_max,
     uint32_t W_shard_max,
     uint32_t kW,
-    uint32_t stride_w>
-void shift_retained_w_columns(uint32_t shard_l1_base, uint32_t T_shard_cur, uint32_t h_rows_gathered) {
+    uint32_t stride_w,
+    typename ShardCB>
+void shift_retained_w_columns(
+    experimental::Noc noc, const ShardCB& shard_cb, uint32_t T_shard_cur, uint32_t h_rows_gathered) {
     constexpr uint32_t overlap_w = kW > stride_w ? kW - stride_w : 0;
     constexpr uint32_t shift_bytes = overlap_w * C_in_block_bytes;
     constexpr uint32_t src_off = (W_shard_max - overlap_w) * C_in_block_bytes;
+    experimental::UnicastEndpoint self_ep;
+    const uint32_t shard_l1_base = shard_cb.get_write_ptr();
     for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
         for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
             const uint32_t row_base = (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) * C_in_block_bytes;
-            noc_async_read(get_noc_addr(shard_l1_base + row_base + src_off), shard_l1_base + row_base, shift_bytes);
+            noc.async_read(
+                self_ep,
+                shard_cb,
+                shift_bytes,
+                experimental::local_addr(shard_l1_base + row_base + src_off, noc.get_noc_id()),
+                {.offset_bytes = row_base});
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 // Gather rows from DRAM into the L1 shard buffer.
@@ -213,10 +248,12 @@ template <
     uint32_t H_in_W_in,
     uint32_t in_row_size_bytes,
     bool check_padding,
-    typename Reader>
+    typename Reader,
+    typename ShardCB>
 void gather_rows_to_shard(
+    experimental::Noc noc,
     const Reader& in_reader,
-    uint32_t shard_l1_base,
+    const ShardCB& shard_cb,
     uint32_t batch_page_base,
     uint32_t c_in_offset_bytes,
     int32_t t_shard_start,
@@ -241,45 +278,59 @@ void gather_rows_to_shard(
                 (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + w_col_start) * C_in_block_bytes;
             for (uint32_t w_idx = 0; w_idx < w_count; w_idx++) {
                 const int32_t w_in = w_shard_start + static_cast<int32_t>(w_col_start + w_idx);
-                const uint32_t shard_addr = shard_l1_base + shard_offset;
                 if constexpr (check_padding) {
                     const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
                     const bool in_padding = t_outside || h_outside || w_outside;
                     if (in_padding) {
                         if constexpr (is_padding_zeros) {
-                            zeroPad<C_in_block_bytes>(shard_addr);
+                            zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                         } else {
                             const int32_t w_clamped = clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
                             const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
                                                       static_cast<uint32_t>(h_clamped) * W_in +
                                                       static_cast<uint32_t>(w_clamped);
-                            noc_async_read(
-                                get_input_noc_addr(in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes),
-                                shard_addr,
+                            read_input_row(
+                                noc,
+                                in_reader,
+                                page_idx,
+                                c_in_offset_bytes,
+                                in_row_size_bytes,
+                                shard_cb,
+                                shard_offset,
                                 C_in_block_bytes);
                         }
                     } else {
                         const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
                                                   static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
-                        noc_async_read(
-                            get_input_noc_addr(in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes),
-                            shard_addr,
+                        read_input_row(
+                            noc,
+                            in_reader,
+                            page_idx,
+                            c_in_offset_bytes,
+                            in_row_size_bytes,
+                            shard_cb,
+                            shard_offset,
                             C_in_block_bytes);
                     }
                 } else {
                     // Fast path: no padding checks
                     const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
                                               static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
-                    noc_async_read(
-                        get_input_noc_addr(in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes),
-                        shard_addr,
+                    read_input_row(
+                        noc,
+                        in_reader,
+                        page_idx,
+                        c_in_offset_bytes,
+                        in_row_size_bytes,
+                        shard_cb,
+                        shard_offset,
                         C_in_block_bytes);
                 }
                 shard_offset += C_in_block_bytes;
             }
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
 // Dispatch to fast or slow gather based on runtime bounds check.
@@ -371,6 +422,8 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<36>();
     const auto in_reader = TensorAccessor(in_args, in_addr);
 
+    experimental::Noc noc;
+
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;
     constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
@@ -381,13 +434,12 @@ void kernel_main() {
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
     // Reserve shard buffer once (used as scratch space, not streaming CB)
+    experimental::CB shard_cb(cb_input_shard);
     uint32_t shard_l1_base = 0;
-    uint64_t shard_noc_base = 0;
     if constexpr (use_l1_prefetch) {
         constexpr uint32_t shard_total = T_shard_max * H_shard_max_W_shard_max;
-        cb_reserve_back(cb_input_shard, shard_total);
-        shard_l1_base = get_write_ptr(cb_input_shard);
-        shard_noc_base = get_noc_addr(shard_l1_base);
+        shard_cb.reserve_back(shard_total);
+        shard_l1_base = shard_cb.get_write_ptr();
     }
 
     // Process each batch element
@@ -453,14 +505,15 @@ void kernel_main() {
                                         H_shard_max_W_shard_max,
                                         W_shard_max,
                                         kW,
-                                        stride_w>(shard_l1_base, T_shard_cur, h_rows_gathered);
+                                        stride_w>(noc, shard_cb, T_shard_cur, h_rows_gathered);
 
                                     // Gather new W columns for existing h-rows
                                     const uint32_t new_w_cols = W_shard_cur - overlap_w;
                                     GATHER_ROWS(
                                         shard_all_in_bounds,
+                                        noc,
                                         in_reader,
-                                        shard_l1_base,
+                                        shard_cb,
                                         batch_page_base,
                                         c_in_offset_bytes,
                                         t_shard_start,
@@ -473,7 +526,7 @@ void kernel_main() {
                                         new_w_cols);
                                 }
 
-                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk;
+                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk(noc);
                                 chunk.init(num_patches);
 
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
@@ -486,8 +539,9 @@ void kernel_main() {
                                         if (h_needed > h_rows_gathered) {
                                             GATHER_ROWS(
                                                 shard_all_in_bounds,
+                                                noc,
                                                 in_reader,
-                                                shard_l1_base,
+                                                shard_cb,
                                                 batch_page_base,
                                                 c_in_offset_bytes,
                                                 t_shard_start,
@@ -513,7 +567,7 @@ void kernel_main() {
                                             cb_vol2col,
                                             padded_page_bytes,
                                             patch_pad_bytes>(
-                                            shard_l1_base, shard_noc_base, t_base, h_base, w_block, w_block_end, chunk);
+                                            noc, shard_l1_base, t_base, h_base, w_block, w_block_end, chunk);
                                     }
                                 }
                                 chunk.flush();
@@ -530,7 +584,7 @@ void kernel_main() {
                                 const uint32_t w_block_s_start = w_block * stride_w;
                                 const uint32_t w_block_s_end = w_block_end * stride_w;
 
-                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk;
+                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk(noc);
                                 chunk.init(num_patches);
 
                                 for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {
@@ -560,8 +614,9 @@ void kernel_main() {
 
                                                         if constexpr (is_padding_zeros) {
                                                             if (in_padding) {
-                                                                zeroPad<C_in_block_bytes>(chunk.write_addr);
-                                                                chunk.write_addr += C_in_block_bytes;
+                                                                zeroPad<C_in_block_bytes>(
+                                                                    noc, chunk.cb, chunk.write_offset);
+                                                                chunk.write_offset += C_in_block_bytes;
                                                                 continue;
                                                             }
                                                         }
@@ -570,10 +625,16 @@ void kernel_main() {
                                                             batch_page_base + static_cast<uint32_t>(t_idx) * H_in_W_in +
                                                             static_cast<uint32_t>(h_idx) * W_in +
                                                             static_cast<uint32_t>(w_idx);
-                                                        const uint64_t noc_addr = get_input_noc_addr(
-                                                            in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
-                                                        noc_async_read(noc_addr, chunk.write_addr, C_in_block_bytes);
-                                                        chunk.write_addr += C_in_block_bytes;
+                                                        read_input_row(
+                                                            noc,
+                                                            in_reader,
+                                                            page_idx,
+                                                            c_in_offset_bytes,
+                                                            in_row_size_bytes,
+                                                            chunk.cb,
+                                                            chunk.write_offset,
+                                                            C_in_block_bytes);
+                                                        chunk.write_offset += C_in_block_bytes;
                                                     }
                                                 }
                                             }
