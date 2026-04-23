@@ -2,6 +2,10 @@
 include(sources.cmake)
 
 add_executable(unit_tests_integration ${UNIT_TESTS_INTEGRATION_SRC})
+# test_matmul_block.cpp reuses type names (MatmulTileConfig, MatmulTileStimuli)
+# and using-directives that collide with test_matmul_X_tile.cpp in a unity batch.
+set_source_files_properties(
+    matmul/test_matmul_block.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 TT_ENABLE_UNITY_BUILD(unit_tests_integration)
 target_precompile_headers(unit_tests_integration REUSE_FROM metal_common_pch)
 

@@ -632,7 +632,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    uint32_t num_entries_in_buffer = 29;
+    // 28 = 7 * max(P,C) = 7*4, so all entries are evenly covered; still tests wraparound (28 > num_entries=16).
+    uint32_t num_entries_in_buffer = 28;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }
@@ -681,7 +682,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    uint32_t num_entries_in_buffer = 21;
+    // 20 = 5 * lcm(P,C) = 5*4, so all entries are evenly covered; still tests wraparound (20 > num_entries=16).
+    uint32_t num_entries_in_buffer = 20;
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set, num_entries_in_buffer);
 }

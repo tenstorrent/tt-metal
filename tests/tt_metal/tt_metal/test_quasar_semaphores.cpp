@@ -255,7 +255,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
             .compile_args = {sem_core_0, sem_cross},
             .defines = {{"INCREMENT_REMOTE_SEM", "1"}}});
     SetRuntimeArgs(
-        program, dm_writer_0, core_0, {dram_mid_addr, buf_b_addr, num_elements, 0, core_1_virtual.x, core_1_virtual.y});
+        program, dm_writer_0, core_0, {dram_mid_addr, buf_b_addr, num_elements, 0, (uint32_t)core_1_virtual.x, (uint32_t)core_1_virtual.y});
 
     auto dm_reader_1 = experimental::quasar::CreateKernel(
         program,
