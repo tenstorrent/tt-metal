@@ -324,54 +324,59 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     """One ViT-H transformer block (pre-norm, fused qkv, FlashAttention-2, MLP).
 
     All four matmuls use ``ttnn.experimental.minimal_matmul`` with fused bias
-    (and fused GELU for fc1).  This eliminates ~5 small tensor ops per block
-    (4 bias adds + 1 GELU), reducing trace length by ~160 ops across 32 blocks.
-    ``head_dim`` is kept for backward compatibility but is unused.
+    (and fused GELU for fc1).  Intermediate tensors are kept in L1 SRAM to
+    eliminate DRAM round-trips between ops — each intermediate is ~0.5-2 MB,
+    dwarfed by the per-core 1.5 MB L1 × 72 cores = 108 MB total L1.
     """
     del head_dim
     dev = hidden.device()
     ckcfg = _fused_compute_config(dev)
+    _L1 = ttnn.L1_MEMORY_CONFIG
 
     # --- self-attention via FlashAttention-2 ---
-    h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"])
+    h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"], memory_config=_L1)
     N_qkv = 3 * num_heads * HEAD_DIM_PAD
     qkv = ttnn.experimental.minimal_matmul(
         h, block_params["attn"]["qkv_w"],
         bias_tensor=block_params["attn"]["qkv_b"],
         config=_mm_cfg(192, 1280, N_qkv, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
 
-    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads, transpose_key=False)
+    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads, transpose_key=False, memory_config=_L1)
     ctx = ttnn.transformer.scaled_dot_product_attention(
-        q, k, v, is_causal=False, scale=HEAD_DIM_RAW ** -0.5,
+        q, k, v, is_causal=False, scale=HEAD_DIM_RAW ** -0.5, memory_config=_L1,
     )
-    ctx = ttnn.transformer.concatenate_heads(ctx)  # (B, N, h*HEAD_DIM_PAD)
+    ctx = ttnn.transformer.concatenate_heads(ctx, memory_config=_L1)
 
     attn_out = ttnn.experimental.minimal_matmul(
         ctx, block_params["attn"]["proj_w"],
         bias_tensor=block_params["attn"]["proj_b"],
         config=_mm_cfg(192, num_heads * HEAD_DIM_PAD, 1280, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
-    hidden = hidden + attn_out
+    hidden = ttnn.add(hidden, attn_out, memory_config=_L1)
 
     # --- MLP: fc1 with fused GELU, fc2 with fused bias ---
-    h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"])
+    h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"], memory_config=_L1)
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc1_w"],
         bias_tensor=block_params["mlp"]["fc1_b"],
         config=_mm_cfg(192, 1280, 5120, dev),
         compute_kernel_config=ckcfg,
         fused_activation=(ttnn.UnaryOpType.GELU, False),
+        memory_config=_L1,
     )
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc2_w"],
         bias_tensor=block_params["mlp"]["fc2_b"],
         config=_mm_cfg(192, 5120, 1280, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
-    hidden = hidden + h
+    hidden = ttnn.add(hidden, h, memory_config=_L1)
     return hidden
 
 
@@ -390,10 +395,11 @@ def forward(
     decompose cleanly to ``ttnn.fold``).  Output is the post-LN feature map at
     ``(B, 192, 1280)`` token-major.
     """
+    _L1 = ttnn.L1_MEMORY_CONFIG
     x = patch_tokens
     # ``pos_embed`` is the pre-fused ``pos[1:] + pos[:1]`` from upload time —
     # one broadcast add instead of two on every forward.
-    x = x + params["pos_embed"]
+    x = ttnn.add(x, params["pos_embed"], memory_config=_L1)
 
     for i in range(depth):
         x = block(x, params["blocks"][i], num_heads=num_heads, head_dim=head_dim)
@@ -402,5 +408,6 @@ def forward(
         x,
         weight=params["last_norm"]["weight"],
         bias=params["last_norm"]["bias"],
+        memory_config=_L1,
     )
-    return x  # (B, 192, 1280), token-major
+    return x  # (B, 192, 1280), token-major; L1-resident for fast MANO-head read
