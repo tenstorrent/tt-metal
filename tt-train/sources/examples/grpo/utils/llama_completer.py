@@ -25,6 +25,13 @@ from .llama_overrides import LlamaCompositeKV
 TILE_SIZE = 32
 SAMPLE_SEED = 42
 
+# Chunked async readback: every CHUNK decode steps the loop fires a
+# non-blocking d2h for the just-finished chunk, then on the next chunk
+# boundary host-synchronises that read and checks for stop tokens. The check
+# thus lags compute by CHUNK steps, which is the cost of avoiding any
+# per-step host sync.
+CHUNK = 32
+
 
 @dataclass
 class LlamaCompletionCtx:
@@ -97,6 +104,22 @@ def _get_num_devices():
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     device = autograd_ctx.get_device()
     return device.get_num_devices()
+
+
+def _get_mesh_device():
+    return ttml.autograd.AutoContext.get_instance().get_device()
+
+
+def _async_read_to_host(tensors, mesh_device):
+    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
+
+    Returns ``(host_tensors, event)``. The caller must call
+    ``event_synchronize(event)`` before consuming ``host_tensors``; deallocating
+    the source ``tensors`` before then races with the in-flight DMA.
+    """
+    hosts = [t.cpu(blocking=False) for t in tensors]
+    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
+    return hosts, done
 
 
 def _round_up(x: int) -> int:
@@ -400,7 +423,16 @@ class LlamaGRPOCompleter(GRPOCompleter):
             self.transformer_config.max_sequence_length - N,
         )
 
+        mesh_device = _get_mesh_device()
+        composer = _get_dp_composer()
+        stop_ids = self._get_stop_ids()
+        stop_arr = np.fromiter(stop_ids, dtype=np.int32) if stop_ids else np.empty(0, dtype=np.int32)
+
         generated_columns: list = []
+        chunk_columns: list = []
+        pending_hosts: list = []
+        pending_event = None
+        done = np.zeros(B, dtype=bool)
 
         def to_np(column_list):
             arr = np.empty((B, len(column_list)), dtype=np.int32)
@@ -437,20 +469,33 @@ class LlamaGRPOCompleter(GRPOCompleter):
             )
 
             generated_columns.append(last_token_column)
+            chunk_columns.append(last_token_column)
             N += 1
 
             deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
+
+            if (i + 1) % CHUNK == 0:
+                if pending_event is not None:
+                    ttnn.event_synchronize(mesh_event=pending_event)
+                    chunk_np = np.stack(
+                        [h.to_numpy(mesh_composer=composer).reshape(B) for h in pending_hosts],
+                        axis=1,
+                    )
+                    done |= np.isin(chunk_np, stop_arr).any(axis=1)
+                    if done.all():
+                        break
+
+                pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
+                chunk_columns = []
 
         completions_np = to_np(generated_columns)
         deallocate_tensors(generated_columns)
         deallocate_tensors([logits_mask_tensor])
         kv_cache.reset()
 
-        stop_ids = self._get_stop_ids()
-
         completions: List[List[int]] = []
         for i in range(B):
-            to = ctx.max_tokens_to_complete
+            to = completions_np.shape[1]
             for j, token in enumerate(completions_np[i]):
                 if token in stop_ids:
                     to = j
