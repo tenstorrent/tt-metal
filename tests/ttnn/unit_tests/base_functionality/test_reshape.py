@@ -108,6 +108,42 @@ def test_reshape_block_shard(
     assert torch.allclose(expected_output, actual_output)
 
 
+def test_issue_42840_regression_buffer_leak(device):
+    """Regression test for issue #42840: with block-sharded tiled tensors corrupts the output's tile-padding
+    rows with real input data. The padding rows must be zero but contain values from earlier input tiles."""
+    PROBE = {float(t + 1) for t in range((1576 + 31) // 32)}  # {1.0 … 50.0}
+
+    x = torch.zeros(1576, 2304, dtype=torch.bfloat16)
+    for t in range(50):
+        x[t * 32 : min((t + 1) * 32, 1576), :] = float(t + 1)
+
+    block_sharded_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+            [224, 288],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    tt = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=block_sharded_config
+    )
+    tt_r = ttnn.reshape(tt, [8, 197, 2304], memory_config=block_sharded_config)
+    tt_il = ttnn.to_memory_config(tt_r, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1))
+
+    padded = tt_il.to_torch_with_padded_shape().to(torch.float32)
+    padding = padded[:, 197:, :]
+
+    leaks = {}
+    for b in range(8):
+        hits = [v for v in torch.unique(padding[b][padding[b] != 0]).tolist() if v in PROBE]
+        if hits:
+            leaks[b] = [int(v) - 1 for v in hits]
+    assert not leaks, f"Leaked input tile-rows into output padding: {leaks}"
+
+
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_height_shard(device, layout):
     input_shape = [1, 1, 256, 32]
