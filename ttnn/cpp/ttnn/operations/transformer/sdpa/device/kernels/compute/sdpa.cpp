@@ -60,22 +60,24 @@ void kernel_main() {
     const uint32_t num_phases = get_arg_val<uint32_t>(7);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(8);
     uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(9);
+    // Tail args are optional and their presence is gated by compile-time defines matching the host
+    // predicates: num_phases==2 (chunked 2-phase), SDPA_FLAT_WORK, SDPA_KV_CHAIN_ENABLED. Use argidx
+    // to advance only through the slots the host actually pushed so they never collide.
+    uint32_t argidx = 10;
     uint32_t chunked_q_chunk_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(10);
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
 
 #if defined(SDPA_FLAT_WORK)
-    // Flat work distribution: causal only, non-chunked, single phase. Args sit right after
-    // chunked_q_chunk_offset_phase_1. Zigzag sub-mode is compile-time arg 33.
-    const uint32_t global_q_start = get_arg_val<uint32_t>(10);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(11);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
 #endif
 
-    // is_chain_participant — runtime arg appended by the program factory for every core
-    // (value is host-gated: chain_enabled ? chain.participates : 0).  Only consulted by
-    // sdpa_inner_loop when SDPA_KV_CHAIN_ENABLED is defined; on non-chain builds it's ignored.
-    const uint32_t is_chain_participant = get_arg_val<uint32_t>(12);
+    uint32_t is_chain_participant = 0;
+#if defined(SDPA_KV_CHAIN_ENABLED)
+    is_chain_participant = get_arg_val<uint32_t>(argidx++);
+#endif
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 

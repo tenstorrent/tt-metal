@@ -46,18 +46,19 @@ void kernel_main() {
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
     uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
     const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
+    // Tail args are optional and their presence is gated by host predicates matching compile-time
+    // defines: num_phases==2, SDPA_FLAT_WORK. Use argidx so the two modes never share a slot.
+    uint32_t argidx = 12;
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(12);
-        write_offset_phase_2 = get_arg_val<uint32_t>(13);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(argidx++);
+        write_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
 
 #if defined(SDPA_FLAT_WORK)
-    // Flat work distribution: causal only, non-chunked, single phase. Args sit right after
-    // write_offset_phase_1. Zigzag sub-mode is compile-time arg flat_use_zigzag (declared above).
-    const uint32_t global_q_start = get_arg_val<uint32_t>(12);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(13);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
 #endif
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;

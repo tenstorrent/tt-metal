@@ -1543,9 +1543,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             num_phases,
             chunked_q_chunk_offset,
             read_offset,  // read_offset
-            global_q_start,
-            global_q_count,
         };
+
+        // Tail args are optional and only pushed when the matching kernel define is emitted. Kernels
+        // advance argidx through the same set, so slots never collide with num_phases==2 args.
+        if (flatten_work) {
+            reader_args.push_back(global_q_start);
+            reader_args.push_back(global_q_count);
+        }
 
         // Add chain metadata when chain forwarding is enabled (non-causal, or flat-work causal)
         if (chain_enabled) {
@@ -1566,44 +1571,49 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
-            core,
-            {out_addr,
-             i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             num_phases,
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),
-             chunked_q_chunk_offset,
-             write_offset,  // write_offset
-             global_q_start,
-             global_q_count});
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
-            core,
-            {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             num_phases,
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),
-             chunked_q_chunk_offset,
-             global_q_start,
-             global_q_count,
-             // is_chain_participant — only meaningful under SDPA_KV_CHAIN_ENABLED (else ignored).
-             // Chain cores must loop the full k_num_chunks to stay in sync with reader/writer, which
-             // over-read K under causal + chain; lightweight_causal_mask zeroes out the extra columns.
-             static_cast<uint32_t>(chain_enabled ? chain.participates : 0u)});
+
+        std::vector<uint32_t> writer_args = {
+            out_addr,
+            i,
+            local_batch_start,
+            local_batch_end,
+            local_nh_start,
+            local_nh_end,
+            local_q_start,
+            local_q_end,
+            num_phases,
+            static_cast<uint32_t>(flexible_chunked ? 1 : 0),
+            chunked_q_chunk_offset,
+            write_offset,  // write_offset
+        };
+        if (flatten_work) {
+            writer_args.push_back(global_q_start);
+            writer_args.push_back(global_q_count);
+        }
+        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+
+        std::vector<uint32_t> compute_args = {
+            i,
+            local_batch_start,
+            local_batch_end,
+            local_nh_start,
+            local_nh_end,
+            local_q_start,
+            local_q_end,
+            num_phases,
+            static_cast<uint32_t>(flexible_chunked ? 1 : 0),
+            chunked_q_chunk_offset,
+        };
+        if (flatten_work) {
+            compute_args.push_back(global_q_start);
+            compute_args.push_back(global_q_count);
+        }
+        if (chain_enabled) {
+            // Chain cores must loop the full k_num_chunks to stay in sync with reader/writer, which
+            // over-read K under causal + chain; lightweight_causal_mask zeroes the extra columns.
+            compute_args.push_back(static_cast<uint32_t>(chain.participates));
+        }
+        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
     return cached_program_t{
