@@ -19,6 +19,14 @@ on:
         description: "Maximum issues to create (0 = unlimited, useful for testing)"
         type: number
         default: 0
+      llm-backend:
+        description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot' (uses AUTO_TRIAGE_TOKEN, no extra quota)"
+        type: string
+        default: "cursor"
+      workflow-filter:
+        description: "Comma-separated substrings to filter workflow names (e.g. 'ops-unit-tests,Blackhole'). Empty = all."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -26,13 +34,16 @@ permissions:
 
 jobs:
   auto-issues:
-    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@main
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@ebanerjee/create-issues-copilot
     with:
       create-issues: ${{ inputs.create-issues }}
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ fromJSON(inputs.max-issues) }}
+      llm-backend: ${{ inputs.llm-backend }}
+      workflow-filter: ${{ inputs.workflow-filter }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
