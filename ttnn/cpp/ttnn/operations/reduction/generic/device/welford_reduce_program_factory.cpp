@@ -229,8 +229,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     // --- Reader kernel ---
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     tt_metal::KernelHandle reader_kernel_id;
-    if (reduce_h) {
-        // H-reduce: column-partitioned reader reads tiles column by column.
+    if (reduce_h || reduce_hw) {
+        // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
         // Welford processes one column at a time (SFPU can only track one running
         // mean/M2 state), so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
@@ -243,10 +243,7 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
     } else {
-        // W-reduce and HW-reduce: sequential reader reads tiles in memory order.
-        // For W-reduce, each work unit is one row of Wt tiles.
-        // For HW-reduce, tiles are contiguous per NC slice (Ht*Wt each), matching
-        // the compute kernel's access pattern (inner loops: batch, Wt, Ht).
+        // W-reduce: sequential reader reads tiles row by row.
         std::vector<uint32_t> reader_compile_time_args = {scaler_bits};
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
@@ -403,8 +400,9 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     } else if (reduce_hw) {
         // HW-reduce: each work unit is one output element, produced from
         // reduce_batch_size consecutive NC slices (Ht * Wt tiles each).
-        // Reader uses the sequential reader: tiles are contiguous in memory
-        // in NC-slice order, matching the compute kernel's access pattern.
+        // Reader uses the column-partitioned reader with
+        // num_cols = Wt * nc_slices_per_core so the compute kernel's
+        // for wt: for ht: loop order sees column-major tile order.
         TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
         TT_FATAL(
             NC % reduce_batch_size == 0, "NC ({}) must be divisible by reduce_batch_size ({})", NC, reduce_batch_size);
@@ -422,14 +420,17 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             }
             // Total NC slices this core will process
             uint32_t nc_slices_per_core = num_outputs_per_core * reduce_batch_size;
-            // Reader: sequential reader reads all tiles for assigned NC slices.
-            uint32_t num_input_tiles = nc_slices_per_core * HtWt;
-            uint32_t input_start_tile_id = nc_slice_offset * HtWt;
+            // Reader: read all columns for all NC slices assigned to this core.
+            uint32_t num_cols = Wt * nc_slices_per_core;
+            uint32_t col_start_tile_id = nc_slice_offset * HtWt;
             tt_metal::SetRuntimeArgs(
                 program,
                 reader_kernel_id,
                 core,
-                {tensor_arg.buffer()->address(), num_input_tiles, input_start_tile_id});
+                {tensor_arg.buffer()->address(),
+                 col_start_tile_id,
+                 /*curr_col_in_batch=*/0u,
+                 num_cols});
             // Compute: runtime arg is total NC slices (not num_outputs).
             tt_metal::SetRuntimeArgs(
                 program,
