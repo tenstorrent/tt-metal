@@ -70,16 +70,17 @@ inline std::uint32_t _llk_pack_output_addr_offset_words_(
     return tile_size >> 4;
 }
 
-template <bool untilize = false>
+template <PackMode mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
+    static_assert(mode != PackMode::Tilize, "Tilize pack mode not supported on Wormhole B0");
     addr_mod_pack_t {
         .y_src = {.incr = 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
         .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
 
-    if constexpr (untilize)
+    if constexpr (mode == PackMode::Untilize)
     {
         addr_mod_pack_t {
             .y_src = {.incr = 1, .clr = 0, .cr = 1},
@@ -105,7 +106,7 @@ inline void _llk_pack_configure_addrmod_()
         .set(ADDR_MOD_2);
 }
 
-template <bool untilize = false, bool zero_output = false>
+template <PackMode mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -114,10 +115,11 @@ inline void _llk_pack_mop_config_(
     const bool narrow_tile         = false,
     const std::uint32_t num_tiles  = 1)
 {
+    static_assert(mode != PackMode::Tilize, "Tilize pack mode not supported on Wormhole B0");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be >= 1");
 
-    if constexpr (!untilize)
+    if constexpr (mode != PackMode::Untilize)
     {
         if (num_tiles > 1)
         {
@@ -139,7 +141,7 @@ inline void _llk_pack_mop_config_(
     llk_pack_internal::configured_num_tiles   = num_tiles;
     llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
 
-    if constexpr (!untilize)
+    if constexpr (mode != PackMode::Untilize)
     {
         if (partial_face && IS_BFP_FORMAT(pack_dst_format))
         {
@@ -215,7 +217,7 @@ inline void _llk_pack_reconfig_data_format_(
 
     if constexpr (is_tile_dim_reconfig_en)
     {
-        _llk_pack_mop_config_<false, false>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        _llk_pack_mop_config_<PackMode::Default, false>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
     }
 }
 
@@ -225,7 +227,7 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false>
+template <bool is_fp32_dest_acc_en, PackMode mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -237,11 +239,10 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    configure_pack<is_fp32_dest_acc_en, untilize>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+    configure_pack<is_fp32_dest_acc_en, mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false>
+template <PackMode mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -250,18 +251,18 @@ inline void _llk_pack_init_(
     const bool narrow_tile         = false,
     const std::uint32_t num_tiles  = 1)
 {
+    static_assert(mode != PackMode::Tilize, "Tilize pack mode not supported on Wormhole B0");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    _llk_pack_configure_addrmod_<untilize>();
-    _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    _llk_pack_configure_addrmod_<mode>();
+    _llk_pack_mop_config_<mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
     const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false>
+template <PackMode mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t pack_src_format,
@@ -271,13 +272,14 @@ inline void _llk_pack_init_(
     const bool narrow_tile        = false,
     const std::uint32_t num_tiles = 1)
 {
+    static_assert(mode != PackMode::Tilize, "Tilize pack mode not supported on Wormhole B0");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    _llk_pack_configure_addrmod_<untilize>();
-    _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    _llk_pack_configure_addrmod_<mode>();
+    _llk_pack_mop_config_<mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 
     set_packer_l1_offset(pack_dst_format);
     const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
@@ -514,7 +516,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     // for some reason short inits avoid the packer init (probably since it is usually the same)
     // but that means calling it here with reasonable defaults is needed
     // it just initializes the address mods and mop
-    _llk_pack_init_<false, false>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
+    _llk_pack_init_<PackMode::Default, false>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
 }
 
 inline void _llk_pack_fast_tilize_block_(

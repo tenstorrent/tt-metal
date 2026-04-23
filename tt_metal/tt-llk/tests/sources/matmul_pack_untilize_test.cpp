@@ -74,11 +74,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(formats.pack_src, formats.pack_dst, tile_size);
     _llk_pack_dest_init_<sync, is_fp32_dest_acc_en>();
     _llk_pack_untilize_init_<ct_dim>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4);
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, tile_size);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(formats.pack_src, formats.pack_dst, tile_size);
     _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, UNTILIZE>();
     _llk_pack_untilize_init_<ct_dim>(formats.pack_dst, FACE_R_DIM, 4);
 #endif

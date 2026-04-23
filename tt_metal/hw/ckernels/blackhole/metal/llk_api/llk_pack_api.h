@@ -26,6 +26,7 @@
 // TODO NC: Remove as the part of tt-metal#34499
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void llk_pack_mop_config(const uint32_t output, std::uint32_t num_tiles = 1) {
+    constexpr PackMode mode = untilize ? PackMode::Untilize : tilize ? PackMode::Tilize : PackMode::Default;
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -33,7 +34,7 @@ inline void llk_pack_mop_config(const uint32_t output, std::uint32_t num_tiles =
     const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_mop_config_<untilize, zero_output, tilize>(
+    _llk_pack_mop_config_<mode, zero_output>(
         pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
@@ -49,7 +50,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /*untilize*/>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -64,13 +65,14 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
 inline void llk_pack_untilize_hw_configure(
     const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
+    constexpr PackMode mode = untilize ? PackMode::Untilize : tilize ? PackMode::Tilize : PackMode::Default;
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const bool partial_face = get_output_partial_face(output_id);
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, mode>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -102,6 +104,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
+    constexpr PackMode mode = untilize ? PackMode::Untilize : tilize ? PackMode::Tilize : PackMode::Default;
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -118,7 +121,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
     const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
-    _llk_pack_init_<untilize, zero_output, tilize>(
+    _llk_pack_init_<mode, zero_output>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         face_r_dim,
@@ -129,7 +132,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         num_tiles,
         is_input_8bit_format);
 #else
-    _llk_pack_init_<untilize, zero_output, tilize>(
+    _llk_pack_init_<mode, zero_output>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         face_r_dim,
@@ -420,7 +423,7 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
                 .Threshold = 0,
             }};
 
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             tile_size,

@@ -17,10 +17,10 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
-template <bool untilize = false, bool tilize = false>
+template <PackMode mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
-    if constexpr (untilize && !tilize)
+    if constexpr (mode == PackMode::Untilize)
     {
         /*  Y src & Y dest inc by 1 to give strided increments:
             Rows: 0, 16, 1, 17, 2, 18, ........ 15, 31
@@ -35,7 +35,7 @@ inline void _llk_pack_configure_addrmod_()
         addr_mod_pack_t {.y_src = {.incr = 0, .clr = 1}, .y_dst = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}, .z_dst = {.incr = 0, .clr = 1}}.set(
             ADDR_MOD_2);
     }
-    else if constexpr (tilize && !untilize)
+    else if constexpr (mode == PackMode::Tilize)
     {
         addr_mod_pack_t {.y_src = {.incr = 4}, .y_dst = {.incr = 2}, .z_src = {.incr = 0}, .z_dst = {.incr = 0}}.set(ADDR_MOD_0);
 
@@ -69,7 +69,7 @@ inline void _llk_pack_configure_addrmod_()
     }
 }
 
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <PackMode mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
     [[maybe_unused]] const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim           = FACE_R_DIM,
@@ -86,7 +86,7 @@ inline void _llk_pack_mop_config_(
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
-    if constexpr (untilize && !tilize)
+    if constexpr (mode == PackMode::Untilize)
     {
         const std::uint32_t PACK_INTF_SEL  = (tile_c_dim < TILE_C_DIM) ? p_pacr::SINGLE_INTF_ACTIVE : p_pacr::TWO_INTFS_ACTIVE;
         const std::uint32_t MOP_INNER_LOOP = face_r_dim;
@@ -137,7 +137,7 @@ inline void _llk_pack_mop_config_(
             1));
         tmp.program();
     }
-    else if constexpr (tilize && !untilize)
+    else if constexpr (mode == PackMode::Tilize)
     {
         const std::uint32_t PACK_INTF_SEL_0 = 0b0101;
         const std::uint32_t PACK_INTF_SEL_1 = 0b1010;
@@ -332,7 +332,7 @@ inline void _llk_pack_reconfig_data_format_(
 
     if constexpr (is_tile_dim_reconfig_en)
     {
-        _llk_pack_mop_config_<false, false>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        _llk_pack_mop_config_<PackMode::Default, false>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
     }
 }
 
@@ -342,9 +342,9 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
-// If using 8bit datums for unpack src. tilize must be set to false because we skip the blackhole workaround which involves unswizzling rows in the tile,
+// If using 8bit datums for unpack src. mode must not be Tilize because we skip the blackhole workaround which involves unswizzling rows in the tile,
 // and this unswizzling is not needed for 8bit datums as they are not affected by the blackhole issue.
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+template <bool is_fp32_dest_acc_en, PackMode mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -357,12 +357,11 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    configure_pack<is_fp32_dest_acc_en, untilize, tilize>(
+    configure_pack<is_fp32_dest_acc_en, mode>(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <PackMode mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -373,12 +372,11 @@ inline void _llk_pack_init_(
     const std::uint32_t num_tiles  = 1)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    _llk_pack_configure_addrmod_<untilize, tilize>();
-    _llk_pack_mop_config_<untilize, zero_output, tilize>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    _llk_pack_configure_addrmod_<mode>();
+    _llk_pack_mop_config_<mode, zero_output>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
+template <PackMode mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -403,18 +401,20 @@ inline void _llk_pack_init_(
 
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
     // so we can skip the workaround which involves unswizzling rows in the tile.
+    // When skipping the workaround we strip Tilize from the mode (Untilize is preserved).
     if (skip_bh_tilize_workaround)
     {
-        _llk_pack_configure_addrmod_<untilize, false /* tilize */>();
-        _llk_pack_mop_config_<untilize, zero_output, false /* tilize */>(
+        constexpr PackMode workaround_mode = (mode == PackMode::Untilize) ? PackMode::Untilize : PackMode::Default;
+        _llk_pack_configure_addrmod_<workaround_mode>();
+        _llk_pack_mop_config_<workaround_mode, zero_output>(
             pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
-        set_packer_strides<untilize, false /* tilize */>(pack_src_format, tile_c_dim);
+        set_packer_strides<workaround_mode>(pack_src_format, tile_c_dim);
     }
     else
     {
-        _llk_pack_configure_addrmod_<untilize, tilize>();
-        _llk_pack_mop_config_<untilize, zero_output, tilize>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
-        set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
+        _llk_pack_configure_addrmod_<mode>();
+        _llk_pack_mop_config_<mode, zero_output>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        set_packer_strides<mode>(pack_src_format, tile_c_dim);
     }
 
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
