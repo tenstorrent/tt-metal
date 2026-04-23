@@ -481,7 +481,11 @@ inline void _llk_unpack_fast_tilize_mop_config_()
 // BH fast-tilize: block height is always 1 (one row of tiles per call).
 // Multiple rows are handled by the caller, looping over rows and calling
 // the block function once per chunk per row.
-inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim)
+//
+// init_unit_dim: unit_dim of the first chunk (= decompose_row(ct_dim)[0]).
+// Initialising X to the first chunk's width avoids one reinit_xdim call per row.
+// Formula: ct_dim > 5 ? 4 : ct_dim == 5 ? 2 : ct_dim.
+inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t ct_dim, const std::uint32_t init_unit_dim)
 {
     // Context-safe writes only: Tile_x_dim (WRCFG below writes the full 32-bit word,
     // covering cntx0 low-16 and cntx1 high-16), TileDescriptor (shared across contexts),
@@ -528,11 +532,10 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     // tracked as unpacker resources. Explicit stall ensures the write completes.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
-    // X counter end = 4 tile widths (maximum unit_dim). reinit_xdim adjusts this
-    // before any chunk that uses a smaller unit_dim (2 or 3).
-    // CH1_Z stride stays at 4-wide (8 SrcA rows) regardless of unit_dim.
-    // This creates natural gaps in SrcA for unit_dim < 4, preserving the DEST layout.
-    TT_SETADCXX(p_setadc::UNP_A, 4 * TILE_C_DIM - 1, 0x0);
+    // X counter end = first chunk's tile width. CH1_Z stride stays at 4-wide
+    // (8 SrcA rows) regardless of unit_dim — natural gaps in SrcA for unit_dim < 4.
+    // Matching init_unit_dim to the first chunk eliminates one reinit_xdim per row.
+    TT_SETADCXX(p_setadc::UNP_A, init_unit_dim * TILE_C_DIM - 1, 0x0);
 
     // CH1 Z stride: controls SrcA dest address gap between reads.
     // Uses effective_dst_format because Float32/Tf32 are downgraded to bf16 above.

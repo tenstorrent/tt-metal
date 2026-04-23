@@ -28,7 +28,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Delta 2: Metal API init_unit_dim = (full_dim >= 4) ? 4 : full_dim
     const std::uint32_t init_unit_dim = (KT_DIM >= 4) ? 4 : KT_DIM;
-    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM);
+    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM, KT_DIM > 5 ? 4 : KT_DIM == 5 ? 2 : KT_DIM);
 
     // Base address is programmed inside _llk_unpack_fast_tilize_block_ via
     // _llk_unpack_configure_single_address_ (respects current cfg context).

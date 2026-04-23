@@ -260,10 +260,11 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 #ifdef ARCH_BLACKHOLE
-    uint32_t init_udim = (full_dim <= 1) ? 1 : 4;
-    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
+    // first_chunk = decompose_row(full_dim)[0]: avoids first reinit_xdim in block loop.
+    uint32_t first_chunk = (full_dim <= 1) ? 1 : (full_dim > 5) ? 4 : (full_dim == 5) ? 2 : full_dim;
+    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim, first_chunk)));
     MATH((llk_math_fast_tilize_init(icb)));
-    PACK((llk_pack_fast_tilize_init(icb, ocb, init_udim)));
+    PACK((llk_pack_fast_tilize_init(icb, ocb, first_chunk)));
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
@@ -294,7 +295,8 @@ ALWI void fast_tilize_block(
     // Each chunk: wait_for_dest + unpack + math + pack + section_done.
     {
         uint32_t tiles_done = 0;
-        uint32_t prev_chunk = 0;  // matches init_udim from fast_tilize_init
+        // prev_chunk matches first_chunk from fast_tilize_init — avoids first reinit.
+        uint32_t prev_chunk = (block > 5) ? 4 : (block == 5) ? 2 : block;
 
         while (tiles_done < block) {
             // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).

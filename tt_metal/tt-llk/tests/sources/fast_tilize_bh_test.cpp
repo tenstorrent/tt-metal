@@ -117,13 +117,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t compat_dst = ckernel::to_underlying(DataFormat::Float16_b);
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
                 formats.unpack_A_src, formats.unpack_B_src, compat_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-            _llk_unpack_fast_tilize_init_(compat_dst, BLOCK_CT_DIM);
+            _llk_unpack_fast_tilize_init_(compat_dst, BLOCK_CT_DIM, unit_dims[0]);
         }
         else
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
                 formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-            _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM);
+            _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, unit_dims[0]);
         }
         // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
         // via _llk_unpack_configure_single_address_ (respects current cfg context).
@@ -141,9 +141,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // One block call per chunk per row. init configures X for unit_dim=4;
-            // reinit_xdim adjusts before any chunk that uses a smaller unit_dim.
-            std::uint32_t prev_chunk = 4;
+            // One block call per chunk. init configures X for unit_dims[0];
+            // reinit_xdim fires only when unit_dim changes (not on first chunk).
+            std::uint32_t prev_chunk = unit_dims[0];
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 std::uint32_t col_offset = 0;

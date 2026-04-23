@@ -68,15 +68,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
 
-    // fast_tilize_init — init configures X for unit_dim=4 (max); reinit_xdim
-    // adjusts before any chunk that uses a smaller unit_dim.
-    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM);
-
     std::uint32_t unit_dims[MAX_UNITS];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
+    // fast_tilize_init: X configured for first chunk; no reinit needed on first call.
+    const std::uint32_t first_chunk = BLOCK_CT_DIM > 5 ? 4 : BLOCK_CT_DIM == 5 ? 2 : BLOCK_CT_DIM;
+    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, first_chunk);
+
     // fast_tilize_block × rows: caller loops rows, one block call per chunk per row.
-    std::uint32_t prev_chunk = 4;
+    std::uint32_t prev_chunk = first_chunk;
     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
     {
         for (std::uint32_t row = 0; row < BLOCK_RT_DIM; row++)

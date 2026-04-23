@@ -42,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // === Phase 1: Fast-tilize (activation row-major → tilized) ===
     // Base address is programmed inside _llk_unpack_fast_tilize_block_ via
     // _llk_unpack_configure_single_address_ (respects current cfg context).
-    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM);
+    _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, KT_DIM, KT_DIM > 5 ? 4 : KT_DIM == 5 ? 2 : KT_DIM);
     _llk_unpack_fast_tilize_reinit_xdim_(KT_DIM);
     _llk_unpack_fast_tilize_block_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, KT_DIM, 4, 0);
 

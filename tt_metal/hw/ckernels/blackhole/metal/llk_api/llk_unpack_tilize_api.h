@@ -65,9 +65,10 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
  * LLK UNPACK FAST TILIZE SRC A (BH)
  *************************************************************************/
 
-inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
+inline void llk_unpack_fast_tilize_init(
+    const std::uint32_t operand, std::uint32_t full_dim, std::uint32_t init_unit_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
+    _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim, init_unit_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
