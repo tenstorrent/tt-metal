@@ -1348,7 +1348,6 @@ bool write_to_device_buffer(
             src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
         return use_pinned_transfer;
     }
-    return use_pinned_transfer;
 }
 
 // ====== Utility Functions for Reads ======
