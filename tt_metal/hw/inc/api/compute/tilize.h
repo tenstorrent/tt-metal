@@ -306,12 +306,18 @@ ALWI void fast_tilize_block_exact_width(
 #ifdef ARCH_BLACKHOLE
     {
         uint32_t tiles_done = 0;
-        // prev_chunk = 0: always fires reinit on the first chunk.
-        // Cannot use first_chunk(block) here because on the 2nd+ block call
-        // the hardware state reflects the last chunk of the previous call, not init.
-        // (A mixed-decomposition block, e.g. [2,3] for width=5, leaves X for unit=3
-        //  but the next block needs to start at unit=2 — skipping the reinit is wrong.)
-        uint32_t prev_chunk = 0;
+        // For uniform decompositions (block <= 4, or block divisible by 4) every
+        // chunk has the same unit_dim, so last_chunk == first_chunk across repeated
+        // calls. It is safe to seed prev_chunk = first_chunk and skip the reinit on
+        // the first chunk of every block call — the hardware state from the previous
+        // call already matches.
+        // For mixed decompositions (e.g. [4,2] for block=6, [2,3] for block=5) the
+        // last chunk leaves a different X/MOP state than the first chunk needs, so
+        // prev_chunk = 0 is required to force the correcting reinit.
+        // When block is a compile-time constant, this branch resolves at compile time.
+        const bool uniform_decomp = (block <= 4) || (block % 4 == 0);
+        const uint32_t first_chunk = (block > 5) ? 4 : (block == 5) ? 2 : block;
+        uint32_t prev_chunk = uniform_decomp ? first_chunk : 0;
 
         while (tiles_done < block) {
             uint32_t remaining = block - tiles_done;
