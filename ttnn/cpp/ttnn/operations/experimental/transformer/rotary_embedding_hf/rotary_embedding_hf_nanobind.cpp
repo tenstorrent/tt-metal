@@ -26,22 +26,21 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
 
         In decode mode, each batch element can have a different position (different cos/sin values).
 
-        Tensors must use TILE layout. The padded ``head_dim`` (last dimension of ``input_tensor``,
-        ``cos_cache``, and ``sin_cache``) must be divisible by ``2 * ttnn.TILE_SIZE`` (typically
-        ``TILE_SIZE`` is 32, so ``head_dim`` is a multiple of 64).
+        ``input_tensor``, ``cos_cache``, and ``sin_cache`` must be **device** tensors (host tensors
+        are rejected). Tensors must use TILE layout. The padded ``head_dim`` (last dimension of
+        ``input_tensor``, ``cos_cache``, and ``sin_cache``) must be divisible by ``2 * ttnn.TILE_SIZE``
+        (typically ``TILE_SIZE`` is 32, so ``head_dim`` is a multiple of 64).
 
         Args:
-            input_tensor (ttnn.Tensor): Input tensor to apply rotation to
-            cos_cache (ttnn.Tensor): Precomputed cosine values
-            sin_cache (ttnn.Tensor): Precomputed sine values
+            input_tensor (ttnn.Tensor): Input tensor to apply rotation to (on device)
+            cos_cache (ttnn.Tensor): Precomputed cosine values (on device)
+            sin_cache (ttnn.Tensor): Precomputed sine values (on device)
 
         Keyword Args:
             is_decode_mode (bool): When ``True``, use decode mode (height-sharded input and caches).
                 Default: ``False``.
             memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration. If ``None``
-                (default), device-resident ``input_tensor`` uses ``input_tensor.memory_config()``;
-                host tensors use the TT-Metal default output memory configuration
-                (``tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG`` in C++).
+                (default), uses ``input_tensor.memory_config()``.
             compute_kernel_config (Optional[ttnn.DeviceComputeKernelConfig]): Compute kernel settings.
                 If ``None`` (default), the op uses ``init_device_compute_kernel_config`` with
                 ``math_fidelity=HiFi4``, ``math_approx_mode=True``, ``fp32_dest_acc_en=False``,
