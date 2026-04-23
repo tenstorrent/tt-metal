@@ -9,6 +9,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
 #include <functional>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <mutex>
@@ -112,6 +113,13 @@ const std::string& current_allocation_context() {
     return allocation_context_stack.empty() ? empty_context : allocation_context_stack.back();
 }
 
+bool allocation_context_contains(std::string_view ctx) {
+    return std::any_of(
+        allocation_context_stack.begin(), allocation_context_stack.end(), [ctx](const std::string& entry) {
+            return entry == ctx;
+        });
+}
+
 void AllocatorImpl::verify_safe_allocation() const {
     if (!allocations_unsafe_) {
         return;
@@ -206,12 +214,11 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     }
     allocated_buffers_.insert(buffer);
     if (allocations_unsafe_ && tracking_enabled_) {
-        // Only the top of the context stack is checked for suppression.  This is intentional:
-        // corruptible_allocation_scope only suppresses its own direct allocations, NOT program-cache
-        // misses from ops dispatched inside it (those push their own context on top).
+        // If corruptible_allocation_scope appears anywhere in the context stack,
+        // suppress tracking for all nested allocations, including program-cache misses.
         const auto& ctx = current_allocation_context();
         bool skip = false;
-        if (ctx == "corruptible_allocation_scope") {
+        if (allocation_context_contains("corruptible_allocation_scope")) {
             skip = true;
         } else if (skip_program_cache_ && ctx.starts_with("program_cache:")) {
             skip = true;

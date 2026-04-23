@@ -5,6 +5,7 @@
 #include "ttnn/global_circular_buffer.hpp"
 
 #include <memory>
+#include <tt-metalium/allocation_context.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::global_circular_buffer {
@@ -14,6 +15,7 @@ GlobalCircularBuffer create_global_circular_buffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
+    tt::tt_metal::AllocationContextGuard guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }
@@ -23,6 +25,7 @@ GlobalCircularBuffer create_global_circular_buffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) {
+    tt::tt_metal::AllocationContextGuard guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, size, buffer_type);
 }

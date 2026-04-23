@@ -365,7 +365,7 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
 
 
-def _drain_traceback_ids():
+def _drain_traceback_ids(source="op_end", op_name=None):
     """Drain pending allocation traceback IDs captured by the C++ allocator.
 
     Called after every nanobind op returns so the Python stack is captured at
@@ -384,13 +384,22 @@ def _drain_traceback_ids():
     # Drop the last 2 frames (_drain_traceback_ids + FastOperation.__call__) so the
     # traceback ends at the actual op call site in user/model code.
     stack = "".join(_tb.format_stack()[:-2])
+    if source == "op_start":
+        marker = (
+            "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
+            "allocation likely happened outside a wrapped op"
+        )
+        if op_name:
+            marker += f" before '{op_name}'"
+        marker += ".\n"
+        stack = marker + stack
     for buf_id in pending:
         UnsafeAllocationTracker._tracebacks[buf_id] = stack
 
 
 if os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") != "1":
 
-    def _drain_traceback_ids():  # noqa: F811
+    def _drain_traceback_ids(source="op_end", op_name=None):  # noqa: F811
         pass
 
 
@@ -519,13 +528,14 @@ class FastOperation:
             set_tensor_id(input_tensors)
 
         try:
+            _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             _push_allocation_context(self.python_fully_qualified_name)
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
             else:
                 with command_queue(cq_id):
                     result = self.function(*function_args, **function_kwargs)
-            _drain_traceback_ids()
+            _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
         except TypeError as e:
             enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
             if enhanced_msg:
