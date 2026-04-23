@@ -16,6 +16,8 @@
 #endif
 #endif
 
+#include "api/kernel_thread_globals.h"
+
 namespace experimental {
 
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
@@ -135,12 +137,12 @@ inline void DataflowBuffer::finish_impl() {
     // exact multiple of the per-thread batch size. When they are exact, the
     // ISR is guaranteed to have fired for the last full batch, and the
     // all_acked loop below will wait for it naturally.
-    if (ptiles_read_ > 0 &&
-        ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id != 0) {
+    DPRINT << "ptiles_read " << ptiles_read_ << " ptiles_read % num_entries_per_txn_id " << ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id << ENDL();
+    DPRINT << "ctiles_written " << ctiles_written_ << " ctiles_written % num_entries_per_txn_id " << ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id << ENDL();
+    if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
     }
-    if (ctiles_written_ > 0 &&
-        ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id != 0) {
+    if (ctiles_written_ > 0) {
         handle_final_credits<false>(ctiles_written_, ctxn_id_index_);
     }
 #endif
@@ -200,7 +202,7 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
         }
     };
 
-    // Wait until this DM's tail reads have completed.
+    // Wait until this DM's tail transactions have been picked up by the NoC.
     // A transaction passes through three observable states:
     //   not dispatched → tack == 0, tiles == 0
     //   in-flight      → tack >  0
@@ -221,27 +223,40 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
         }
     }
 
-    // Transactions are completed. Spin giving the ISR a chance to fire.
-    // Break when this thread's tile count is a genuine partial tail the ISR can never handle.
-    //
-    // For strided consumers: threshold == num_entries_per_txn_id (1 DM per ISR cycle),
-    // so either field works.
-    // For blocked consumers: threshold = num_consumers * num_entries_per_txn_id (global),
-    // but wr_sent is read per-txn_id (per-DM). Using threshold here causes a race:
-    //   DM0 tiles=2, threshold=8 → 0 < 2 < 8 → DM0 breaks and posts manually;
-    //   other DMs then finish → global wr_sent hits 8 → ISR fires and double-posts for DM0.
-    // Using num_entries_per_txn_id (per-thread) is safe: if any one DM's tiles < per_txn,
-    // the global sum is strictly < threshold, so the ISR cannot and will not fire.
-    uint16_t per_thread_threshold = local_dfb_interface_.num_entries_per_txn_id;
+    // Rendezvous: every participating DM has now issued its tail transaction and seen
+    // the NoC pick it up. This must be unconditional — gating the barrier on
+    // read_actual_slot0() < expected_slot0 is racy because the ISR can fire between
+    // different threads' checks, causing some to enter the barrier and others to skip
+    // it. Once past this point, tiles_to_process on the tail txn_id reflects the
+    // contributions of all producers / consumers for this collective batch.
+    sync_threads();
+
+    // Fast path: if the ISR already handled the collective batch (slot0 caught up while
+    // we were waiting), every thread observes it consistently after the barrier above
+    // and can skip WTP2 / manual posting entirely.
+    if (read_actual_slot0() >= expected_slot0) {
+        return;
+    }
+
+    // Spin giving the ISR a chance to fire. Break when the tail txn_id's tiles_to_process
+    // is a genuine partial batch (below the global ISR-programmed threshold) — the ISR will
+    // never post credits for it, so we fall through to the manual posting below. This check
+    // is correct for blocked consumers and strided producers/consumers now that the barrier
+    // above guarantees all peers have contributed to tiles_to_process.
+    uint16_t global_threshold = local_dfb_interface_.threshold;
     WAYPOINT("WTP2");
+    DPRINT << "expected_slot0 " << expected_slot0 << " read_actual_slot0 " << read_actual_slot0() << " tail txn id " << tail_txn_id
+           << " global threshold " << global_threshold << ENDL();
     while (read_actual_slot0() < expected_slot0) {
         uint64_t tiles;
         if constexpr (is_producer) {
             tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            DPRINT << "wtp2 ack tiles_to_process tid " << tail_txn_id << " tiles " << tiles << ENDL();
         } else {
             tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            DPRINT << "wtp2 sent tiles_to_process tid " << tail_txn_id << " tiles " << tiles << ENDL();
         }
-        if (tiles > 0 && tiles < per_thread_threshold) {
+        if (tiles > 0 && tiles < global_threshold) {
             break;
         }
     }
@@ -257,11 +272,14 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
             if constexpr (is_producer) {
                 uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_posted(tensix_id, tc_id));
                 if (actual < expected) {
+                    WAYPOINT("BI");
+                    DPRINT << "posting " << uint32_t(expected - actual) << " manually" << ENDL();
                     fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
                 }
             } else {
                 uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_acked(tensix_id, tc_id));
                 if (actual < expected) {
+                    DPRINT << "acking " << uint32_t(expected - actual) << " manually" << ENDL();
                     // DPRINT << "expected " << expected << " actual " << actual << ENDL();
                     WAYPOINT("HI");
                     fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
@@ -291,11 +309,19 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
+    const uint32_t txn_id = local_dfb_interface_.txn_ids[ptxn_id_index_];
     WAYPOINT("PIRW");
+    DPRINT << "Posted " << fast_llk_intf_read_posted(tensix_id, tc_id) << " comp to complete " << (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc) << ENDL();
+    DPRINT << "read txn idx " << static_cast<uint32_t>(ptxn_id_index_) << " txn_id " << txn_id << ENDL();
+    for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
+        const uint32_t tid = local_dfb_interface_.txn_ids[i];
+        DPRINT << "tr ack tiles_to_process tid " << tid << " tiles "
+               << CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tid) << ENDL();
+    }
     while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
     while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
     WAYPOINT("PIRD");
-    return local_dfb_interface_.txn_ids[ptxn_id_index_];
+    return txn_id;
 }
 
 // Postamble for implicit-sync read: advance wr_ptr, tile/txn counters, and tc_idx.
@@ -320,12 +346,25 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
+    const uint32_t txn_id = local_dfb_interface_.txn_ids[ctxn_id_index_];
     WAYPOINT("PIWW");
+    DPRINT << "Acked " << fast_llk_intf_read_acked(tensix_id, tc_id) << " comp to complete " << (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc) << ENDL();
+    DPRINT << "write txn idx " << static_cast<uint32_t>(ctxn_id_index_) << " txn_id " << txn_id << ENDL();
+    for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
+        const uint32_t tid = local_dfb_interface_.txn_ids[i];
+        DPRINT << "wr sent tiles_to_process tid " << tid << " tiles "
+               << CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tid) << ENDL();
+    }
+
+    uint64_t outstanding_writes = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, txn_id);
+    uint64_t tiles_to_process = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
+    DPRINT << "wr sent outstanding tid " << txn_id << " count " << outstanding_writes
+           << " tiles_to_process " << tiles_to_process << ENDL();
+
     while (fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-    // DPRINT << "Acked " << fast_llk_intf_read_acked(tensix_id, tc_id) << " occupancy " << fast_llk_intf_get_occupancy(tensix_id, tc_id) << ENDL();
     while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
     WAYPOINT("PIWD");
-    return local_dfb_interface_.txn_ids[ctxn_id_index_];
+    return txn_id;
 }
 
 // Postamble for implicit-sync write: advance rd_ptr, tile/txn counters, and tc_idx.
@@ -358,6 +397,7 @@ Noc::async_read(
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
+    DPRINT << "Issue the read" << ENDL();
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         dst.get_write_ptr(),
@@ -379,6 +419,7 @@ Noc::async_write(
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
+    DPRINT << "Issue the write" << ENDL();
     ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
         noc_id_,
         write_cmd_buf,

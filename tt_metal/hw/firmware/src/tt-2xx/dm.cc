@@ -106,6 +106,7 @@ RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
+
 void device_setup() {
     // instn_buf
     // pc_buf

@@ -283,11 +283,14 @@ void run_single_dfb_program(
                             if (page_id >= co + entries_per_core) {
                                 break;
                             }
-                            // DFB L1 is always interleaved by producer slot regardless of
-                            // whether the consumer is STRIDED or BLOCKED. The ring layout is
-                            // stride = entry_size * num_producers, so slot offsets interleave
-                            // all producers before advancing to the next entry index.
-                            const uint32_t dst_slot = e * dfb_config.num_producers + p;
+                            // Ring layout depends on stride_in_entries, which is set by the
+                            // consumer access pattern:
+                            //   STRIDED: stride = num_producers → interleaved (slot = e*P + p)
+                            //   BLOCKED: stride = 1 → TC-first   (slot = p*E + e)
+                            const uint32_t dst_slot =
+                                (dfb_config.cap == dfb::AccessPattern::BLOCKED)
+                                    ? (p * num_entries_per_producer + e)
+                                    : (e * dfb_config.num_producers + p);
 
                             std::copy(
                                 input.begin() + page_id * wpe,
@@ -315,9 +318,32 @@ void run_single_dfb_program(
                 const uint32_t co = core_to_chunk_offset.at(core);
                 std::vector<uint32_t> l1_data;
                 detail::ReadFromDeviceL1(device, core, alloc_addr, dfb->total_size(), l1_data);
-                std::vector<uint32_t> expected(
-                    input.begin() + co * entry_size / sizeof(uint32_t),
-                    input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
+                const uint32_t wpe_v = entry_size / sizeof(uint32_t);
+                std::vector<uint32_t> expected(words_per_core, 0);
+                if (dfb_config.cap == dfb::AccessPattern::BLOCKED) {
+                    // BLOCKED consumer: ring is TC-first (stride_in_entries=1).
+                    // Ring slot p*E+e holds the tile that producer p wrote at entry e,
+                    // which is input page co + e*num_producers + p.
+                    for (uint32_t p = 0; p < dfb_config.num_producers; p++) {
+                        for (uint32_t e = 0; e < num_entries_per_producer; e++) {
+                            const uint32_t ring_slot = p * num_entries_per_producer + e;
+                            const uint32_t page_id = co + e * dfb_config.num_producers + p;
+                            if (page_id >= co + entries_per_core) {
+                                break;
+                            }
+                            std::copy(
+                                input.begin() + page_id * wpe_v,
+                                input.begin() + page_id * wpe_v + wpe_v,
+                                expected.begin() + ring_slot * wpe_v);
+                        }
+                    }
+                } else {
+                    // STRIDED consumer: ring is interleaved, matching sequential input order.
+                    std::copy(
+                        input.begin() + co * wpe_v,
+                        input.begin() + co * wpe_v + words_per_core,
+                        expected.begin());
+                }
                 if (expected != l1_data) {
                     std::cout << "expected: ";
                     for (const auto& e : expected) {
@@ -855,7 +881,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -871,7 +897,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) { // mismatching
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -906,7 +932,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -922,7 +948,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) { // mismatching
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -957,7 +983,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx2B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -972,7 +998,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) { // mismatching
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx2B) { //  mismatching
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx2B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -1006,7 +1032,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -1021,7 +1047,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) { // mismatching
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
