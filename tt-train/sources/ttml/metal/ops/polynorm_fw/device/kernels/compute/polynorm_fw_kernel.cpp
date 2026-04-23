@@ -34,6 +34,9 @@ constexpr auto cb_bias = tt::CBIndex::c_7;
 // CBs with intermediate computations
 constexpr auto cb_sum_pows = tt::CBIndex::c_8;  // Queue of row sums: [sum(x^2), sum(x^4), sum(x^6)]
 constexpr auto cb_inv_rms = tt::CBIndex::c_9;   // Queue of inv_rms: [inv_rms(x), inv_rms(x^2), inv_rms(x^3)]
+// Preweighted inv_rms coefficients per row: [w2*inv_rms(x), w1*inv_rms(x^2), w0*inv_rms(x^3)].
+// Folds the 3 per-branch weight multiplies out of the Pass-2 inner loop.
+constexpr auto cb_weighted_coeffs = tt::CBIndex::c_11;
 // CB with output data
 constexpr auto cb_output = tt::CBIndex::c_10;
 
@@ -43,7 +46,7 @@ constexpr auto cb_output = tt::CBIndex::c_10;
 // Important ordering note for this kernel:
 // - cb_sum_pows front order is [sum(x^2), sum(x^4), sum(x^6)].
 // - kernel_main calls this helper three times in that order, so cb_inv_rms is produced as
-//   [inv_rms(x), inv_rms(x^2), inv_rms(x^3)] and later indexed by emit_output_for_row().
+//   [inv_rms(x), inv_rms(x^2), inv_rms(x^3)] and consumed by prepare_weighted_coeffs_for_row().
 void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     cb_wait_front(cb_sum, onetile);
     cb_wait_front(cb_scaler, onetile);
@@ -114,11 +117,46 @@ void accumulate_sum_x2_x4_x6_for_row() {
     cb_push_back(cb_sum_pows, /*num_tiles=*/3U);
 }
 
+// Multiply one inv_rms tile by its matching weight scalar and push the result as one tile.
+// inv_rms holds its per-row value at tile col 0 (REDUCE_ROW output); cb_wN is a scalar-filled
+// tile, so element-wise product produces the correct value at col 0 — which is exactly what
+// emit_output_for_row() reads via unary_bcast<COL>.
+inline void emit_weighted_coeff(const uint32_t cb_inv, const uint32_t inv_tile_idx, const uint32_t cb_weight) {
+    constexpr uint32_t reg_coeff = 0U;
+    constexpr uint32_t reg_weight = 1U;
+
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_inv);
+    copy_tile_init(cb_inv);
+    copy_tile(cb_inv, inv_tile_idx, reg_coeff);
+    reconfig_data_format_srca(cb_weight);
+    copy_tile_init(cb_weight);
+    copy_tile(cb_weight, /*tile_idx=*/0U, reg_weight);
+    mul_binary_tile_init();
+    mul_binary_tile(reg_coeff, reg_weight, reg_coeff);
+    tile_regs_commit();
+    pack_and_push(reg_coeff, cb_weighted_coeffs);
+}
+
+// Fold the per-branch weight multiplies out of the Pass-2 inner loop by precomputing
+// weighted inverse-RMS coefficients once per row:
+//   cb_weighted_coeffs front order (after this helper):
+//     tile 0: inv_rms(x)   * w2
+//     tile 1: inv_rms(x^2) * w1
+//     tile 2: inv_rms(x^3) * w0
+void prepare_weighted_coeffs_for_row() {
+    cb_wait_front(cb_inv_rms, /*num_tiles=*/3U);
+    emit_weighted_coeff(cb_inv_rms, /*inv_tile_idx=*/0U, cb_w2);
+    emit_weighted_coeff(cb_inv_rms, /*inv_tile_idx=*/1U, cb_w1);
+    emit_weighted_coeff(cb_inv_rms, /*inv_tile_idx=*/2U, cb_w0);
+    cb_pop_front(cb_inv_rms, /*num_tiles=*/3U);
+}
+
 // Pass-2 (per row):
-// - Consume the 3 inv_rms tiles produced from Pass-1 reductions:
-//     inv_rms tile 2: for x^3 term, tile 1: for x^2 term, tile 0: for x term.
+// - Consume the 3 preweighted coefficient tiles produced by prepare_weighted_coeffs_for_row():
+//     tile 2: w0*inv_rms_x3 (cubic), tile 1: w1*inv_rms_x2 (quadratic), tile 0: w2*inv_rms_x (linear).
 // - For each input tile, compute and accumulate:
-//     w0 * (x^3 * inv_rms_x3) + w1 * (x^2 * inv_rms_x2) + w2 * (x * inv_rms_x) + bias
+//     coeff2 * x^3 + coeff1 * x^2 + coeff0 * x + bias.
 // - Emit one output tile to cb_output at the matching block index.
 void emit_output_for_row() {
     constexpr uint32_t reg_acc = 0U;
@@ -126,7 +164,7 @@ void emit_output_for_row() {
     constexpr uint32_t reg_tmp = 2U;
     constexpr uint32_t reg_bcast_or_scalar = 3U;
 
-    cb_wait_front(cb_inv_rms, /*num_tiles=*/3U);
+    cb_wait_front(cb_weighted_coeffs, /*num_tiles=*/3U);
 
     for (uint32_t col = 0; col < num_inner; col += block_size) {
         const uint32_t current_block_size = std::min(block_size, num_inner - col);
@@ -135,44 +173,35 @@ void emit_output_for_row() {
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             tile_regs_acquire();
 
-            // term3 (cubic branch): w0 * norm(x^3), where norm(x^3) = x^3 * inv_rms_x3.
-            unary_bcast_init<BroadcastType::COL>(cb_inv_rms, cb_inv_rms);
-            unary_bcast<BroadcastType::COL>(cb_inv_rms, /*tile_idx=*/2U, reg_bcast_or_scalar);
+            // term3 (cubic branch): coeff2 * x^3.
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_bcast_or_scalar);
             copy_tile_init(cb_input_pass_2);
             copy_tile(cb_input_pass_2, block_idx, reg_x);
             mul_binary_tile_init();
             mul_binary_tile(reg_x, reg_x, reg_tmp);    // x^2
             mul_binary_tile(reg_tmp, reg_x, reg_tmp);  // x^3
-            reconfig_data_format(cb_input_pass_2, cb_inv_rms);
+            reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // norm(x^3)
-            copy_tile_init(cb_w0);
-            copy_tile(cb_w0, 0, reg_bcast_or_scalar);
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_acc);  // accumulator init
+            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_acc);  // accumulator init: coeff2 * x^3
 
-            // term2 (quadratic branch): w1 * norm(x^2), where norm(x^2) = x^2 * inv_rms_x2.
-            unary_bcast_init<BroadcastType::COL>(cb_inv_rms, cb_inv_rms);
-            unary_bcast<BroadcastType::COL>(cb_inv_rms, /*tile_idx=*/1U, reg_bcast_or_scalar);
+            // term2 (quadratic branch): coeff1 * x^2.
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/1U, reg_bcast_or_scalar);
             mul_binary_tile_init();
             mul_binary_tile(reg_x, reg_x, reg_tmp);  // x^2
-            reconfig_data_format(cb_input_pass_2, cb_inv_rms);
+            reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // norm(x^2)
-            copy_tile_init(cb_w1);
-            copy_tile(cb_w1, 0, reg_bcast_or_scalar);
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // weighted term2
+            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // coeff1 * x^2
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
 
-            // term1 (linear branch): w2 * norm(x), where norm(x) = x * inv_rms_x.
-            unary_bcast_init<BroadcastType::COL>(cb_inv_rms, cb_inv_rms);
-            unary_bcast<BroadcastType::COL>(cb_inv_rms, /*tile_idx=*/0U, reg_bcast_or_scalar);
-            reconfig_data_format(cb_input_pass_2, cb_inv_rms);
+            // term1 (linear branch): coeff0 * x.
+            unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs, cb_weighted_coeffs);
+            unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/0U, reg_bcast_or_scalar);
+            reconfig_data_format(cb_input_pass_2, cb_weighted_coeffs);
             mul_binary_tile_init();
-            mul_binary_tile(reg_x, reg_bcast_or_scalar, reg_tmp);  // norm(x)
-            copy_tile_init(cb_w2);
-            copy_tile(cb_w2, 0, reg_bcast_or_scalar);
-            mul_binary_tile(reg_tmp, reg_bcast_or_scalar, reg_tmp);  // weighted term1
+            mul_binary_tile(reg_x, reg_bcast_or_scalar, reg_tmp);  // coeff0 * x
             add_binary_tile_init();
             add_binary_tile(reg_acc, reg_tmp, reg_acc);
 
@@ -190,13 +219,14 @@ void emit_output_for_row() {
         cb_pop_front(cb_input_pass_2, block_size);
     }
 
-    cb_pop_front(cb_inv_rms, /*num_tiles=*/3U);
+    cb_pop_front(cb_weighted_coeffs, /*num_tiles=*/3U);
 }
 
 // Main row pipeline on this core:
 //   1) accumulate row sums for x^2/x^4/x^6
 //   2) convert each sum to inv_rms (three calls preserve sum order)
-//   3) consume inv_rms triplet and emit final PolyNorm output tiles
+//   3) fold w0/w1/w2 into inv_rms to produce preweighted coefficients
+//   4) consume preweighted coefficients and emit final PolyNorm output tiles
 void kernel_main() {
     cb_wait_front(cb_scaler, onetile);
     cb_wait_front(cb_eps, onetile);
@@ -216,6 +246,7 @@ void kernel_main() {
         reduce_sum_to_inv_rms(cb_sum_pows, cb_inv_rms);
         reduce_sum_to_inv_rms(cb_sum_pows, cb_inv_rms);
 
+        prepare_weighted_coeffs_for_row();
         emit_output_for_row();
     }
 
