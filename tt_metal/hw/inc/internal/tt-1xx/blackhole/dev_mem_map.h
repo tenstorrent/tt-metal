@@ -109,8 +109,9 @@
 
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
-// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12912
+// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small.
+// Grew from 12912 to 14000 with the ttnvtop util_sampler_msg_t addition in dev_msgs.h (adds ~1040 B).
+#define MEM_MAILBOX_SIZE 14000
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 

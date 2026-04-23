@@ -85,8 +85,9 @@
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
-// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12912
+// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small.
+// Grew from 12912 to 14000 with the ttnvtop util_sampler_msg_t addition in dev_msgs.h (adds ~1040 B).
+#define MEM_MAILBOX_SIZE 14000
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)
