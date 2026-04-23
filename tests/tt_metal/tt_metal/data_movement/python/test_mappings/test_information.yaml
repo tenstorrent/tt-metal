@@ -653,14 +653,6 @@ tests:
     name: "Number of Pages Sweep for Single Row DRAM"
     bandwidth_mode: "combined"
 
-  508:
-    name: "Number of Pages Sweep for DRAM One Hop"
-    bandwidth_mode: "combined"
-
-  509:
-    name: "Number of Pages Sweep for DRAM Loop Back"
-    bandwidth_mode: "combined"
-
   600:
     name: "Transaction ID - Read After Write"
 

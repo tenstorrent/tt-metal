@@ -13,6 +13,7 @@
 #include "api/compute/bcast.h"
 #endif
 
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 FORCE_INLINE void reload_from_cb_to_dst(
@@ -111,6 +112,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
+    constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(14);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
@@ -300,7 +302,11 @@ void kernel_main() {
 #endif
 
         reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-        add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+        if constexpr (row_broadcast_bias) {
+            add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+        } else {
+            add_tiles_init(mm_partials_cb_id, bias_cb_id);
+        }
         // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -310,10 +316,14 @@ void kernel_main() {
                 cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                 tile_regs_acquire();
                 for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                    uint32_t bcast_tile_idx = in1_index_subblock_offset;
+                    uint32_t bias_tile_idx = in1_index_subblock_offset;
                     for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                        add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
-                        bcast_tile_idx++;
+                        if constexpr (row_broadcast_bias) {
+                            add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                        } else {
+                            add_tiles(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                        }
+                        bias_tile_idx++;
                     }
                 }
 // if there's no SFPU fusion, we commit the regs so packer can start packing

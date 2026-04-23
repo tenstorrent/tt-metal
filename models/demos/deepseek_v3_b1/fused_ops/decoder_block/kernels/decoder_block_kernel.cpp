@@ -451,8 +451,7 @@ void kernel_main() {
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::WriterCTArgs<
         get_named_compile_time_arg_val("k_page_size"),
         get_named_compile_time_arg_val("vDHt"),
-        get_named_compile_time_arg_val("mla_out_o_cb"),
-        get_named_compile_time_arg_val("mla_use_alt_mcast_vc")>;
+        get_named_compile_time_arg_val("mla_out_o_cb")>;
 
     // Matmul4 CTArgs
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -2556,7 +2555,7 @@ void kernel_main() {
         // GatherReduce3: 112 cores (2x56 halves) -> sender core (11, 9)
         // Each sender produces 1 tile of 1x32; halves are reduced on receiver
         // ========================================================================
-        if constexpr (!Core::is_allreduce_sender_core) {
+        {
             DeviceZoneScopedN("GATHER3");
             deepseek_b1_ops::GatherReduce::
                 Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, Core::is_allreduce_sender_core, true, true>
@@ -2575,36 +2574,22 @@ void kernel_main() {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
-            ccl_writer.open_connections(ccl_sender_args);
-            deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
-            noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores"));
-            allgather_sender.open_connections(allgather_transport_args, false);
-#endif
-            // gather3 must run on ALL RISCs (TRISC does the reduce that feeds local_data_cb).
-            {
-                DeviceZoneScopedN("GATHER3");
-                deepseek_b1_ops::GatherReduce::Op<
-                    Core::is_matmul5_core,
-                    Core::is_allreduce_sender_core,
-                    Core::is_allreduce_sender_core,
-                    true,
-                    true>
-                    gather3;
-                gather3(gather3_args);
-            }
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             ccl_writer(ccl_sender_args);
+
             // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
             {
                 DeviceZoneScopedN("ALLGATHER_TRANSPORT");
+                deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
+                volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
+                noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores"));
                 allgather_sender(allgather_transport_args);
                 // R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
                 if constexpr (AllGatherTransportCT::r2_active) {
                     noc_semaphore_set(ccl_sync_sem, 0);
                 }
             }
+
             constexpr uint32_t ccl_sync_sem_addr = get_named_compile_time_arg_val("ccl_sync_semaphore2_addr");
             constexpr uint32_t input_noc_coord_x = get_named_compile_time_arg_val("input_noc_coord_x");
             constexpr uint32_t input_noc_coord_y = get_named_compile_time_arg_val("input_noc_coord_y");

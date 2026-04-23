@@ -122,11 +122,6 @@ struct Conv2dConfig {
     bool override_output_sharding_config = false;
     // ===============================================================
 
-    // Padding mode for the convolution.
-    // Zeros: standard zero-padding (default).
-    // Replicate: pads by replicating the nearest edge pixel.
-    sliding_window::PaddingMode padding_mode = sliding_window::PaddingMode::Zeros;
-
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
         "activation",
@@ -147,8 +142,7 @@ struct Conv2dConfig {
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
         "force_split_reader",
-        "override_output_sharding_config",
-        "padding_mode");
+        "override_output_sharding_config");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -170,8 +164,7 @@ struct Conv2dConfig {
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
             std::cref(this->force_split_reader),
-            std::cref(this->override_output_sharding_config),
-            std::cref(this->padding_mode));
+            std::cref(this->override_output_sharding_config));
     }
 };
 

@@ -228,8 +228,6 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("compute_config") = nb::none(),
         nb::arg("slice_config") = nb::none());
 
-    export_enum<ttnn::operations::sliding_window::PaddingMode>(mod, "PaddingMode");
-
     auto py_conv_config = nb::class_<Conv2dConfig>(
         mod,
         "Conv2dConfig",
@@ -258,8 +256,7 @@ void bind_conv2d(nb::module_& mod) {
             std::optional<bool>,
             bool,
             std::optional<bool>,
-            bool,
-            ttnn::operations::sliding_window::PaddingMode>(),
+            bool>(),
         nb::kw_only(),
         nb::arg("weights_dtype") = nb::none(),
         nb::arg("activation") = nb::none(),
@@ -280,8 +277,7 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("enable_kernel_stride_folding") = nb::none(),
         nb::arg("enable_activation_reuse") = false,
         nb::arg("force_split_reader") = nb::none(),
-        nb::arg("override_output_sharding_config") = false,
-        nb::arg("padding_mode") = nb::cast(ttnn::operations::sliding_window::PaddingMode::Zeros));
+        nb::arg("override_output_sharding_config") = false);
 
     py_conv_config.def_rw("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
@@ -474,12 +470,6 @@ void bind_conv2d(nb::module_& mod) {
         Additionally, NHW number of cores must match between input and output tensors
 
         ===============================================================
-    )doc");
-
-    py_conv_config.def_rw("padding_mode", &Conv2dConfig::padding_mode, R"doc(
-        The padding mode to use for the convolution.
-        PaddingMode.Zeros: Pads with zeros (default).
-        PaddingMode.Replicate: Pads by replicating the nearest edge pixel.
     )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
