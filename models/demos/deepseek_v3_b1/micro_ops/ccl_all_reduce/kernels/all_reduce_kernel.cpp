@@ -30,7 +30,10 @@ void kernel_main() {
         args.per_core_rta_start_idx = 0;
 
         deepseek_b1_ops::AllReduce::WriterSingleLink<WriterCT> writer;
-        writer(args);
+        {
+            DeviceZoneScopedN("CCL_SENDER_WRITER");
+            writer(args);
+        }
     }
 #endif
 
@@ -65,7 +68,10 @@ void kernel_main() {
         }
 
         deepseek_b1_ops::AllReduce::Reader<ReaderCT> reader;
-        reader(args);
+        {
+            DeviceZoneScopedN("CCL_RECEIVER");
+            reader(args);
+        }
     }
 #endif
 
@@ -83,7 +89,10 @@ void kernel_main() {
 
         deepseek_b1_ops::AllReduce::ComputeArgs args{};
         deepseek_b1_ops::AllReduce::Compute<ComputeCT> compute;
-        compute(args);
+        {
+            DeviceZoneScopedN("CCL_COMPUTE");
+            compute(args);
+        }
     }
 #endif
 }
