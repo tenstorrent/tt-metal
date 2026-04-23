@@ -16,12 +16,12 @@ void kernel_main() {
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
-    fast_tilize_init_exact_width(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
+    fast_tilize_init(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
 
     cb_wait_front(tilize_input_cb_id, tile_height);
     cb_reserve_back(tilize_output_cb_id, num_tiles);
 
-    fast_tilize_block_exact_width(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
+    fast_tilize_block(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
 
     cb_push_back(tilize_output_cb_id, num_tiles);
     cb_pop_front(tilize_input_cb_id, tile_height);

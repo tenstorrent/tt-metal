@@ -288,70 +288,19 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
 }
 
-// Exact-width variants: safe to use only when fast_tilize_init and fast_tilize_block
-// are always called with the same width (full_dim == block on every call).
-// On BH the block function still uses prev_chunk = 0 (conservative), because on the
-// second and later calls the hardware state is whatever the previous call's last
-// chunk left it in (not necessarily first_chunk(block)). The naming signals the
-// caller contract, not a behavioral difference from the generic path.
-// Do NOT use for callers that initialize with a max width and run blocks with smaller widths
-// (e.g. MOE kernels with per-core variable tile counts).
-ALWI void fast_tilize_init_exact_width(
-    uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_tilize_init(icb, full_dim, ocb, call_line);
-}
-
-ALWI void fast_tilize_block_exact_width(
-    uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-#ifdef ARCH_BLACKHOLE
-    {
-        uint32_t tiles_done = 0;
-        // prev_chunk = 0: always fires reinit on the first chunk.
-        // Cannot use first_chunk(block) here because on the 2nd+ block call
-        // the hardware state reflects the last chunk of the previous call, not init.
-        // (A mixed-decomposition block, e.g. [2,3] for width=5, leaves X for unit=3
-        //  but the next block needs to start at unit=2 — skipping the reinit is wrong.)
-        uint32_t prev_chunk = 0;
-
-        while (tiles_done < block) {
-            uint32_t remaining = block - tiles_done;
-            uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
-
-            MATH((llk_math_wait_for_dest_available()));
-            PACK((llk_packer_wait_for_math_done()));
-
-            if (chunk != prev_chunk) {
-                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
-                prev_chunk = chunk;
-            }
-            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
-            MATH((llk_math_fast_tilize_block_(0, icb, 4)));
-            PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk)));
-
-            MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-            PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
-
-            tiles_done += chunk;
-        }
-    }
-#else
-    fast_tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
-#endif
-}
-
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
-    // BH fast-tilize: process block tiles, 4 at a time (one MOP run = 4 tiles).
-    // Each chunk: wait_for_dest + unpack + math + pack + section_done.
+    // BH fast-tilize: row streaming — acquire unpack context once per block call,
+    // run all chunk MOPs under it, release once. Saves (units_per_row - 1) context-
+    // switch sequences per call vs the previous per-chunk approach.
     {
         uint32_t tiles_done = 0;
-        // prev_chunk = 0 so the first chunk always fires reinit_xdim + reinit_unit_dim.
-        // init may have been called with a different full_dim (e.g. MOE kernels init
-        // with max width, block with per-core width), so we cannot assume the hardware
-        // state matches the first chunk of this block call.
+        // prev_chunk = 0: MOE callers may init with max width and block with smaller
+        // width, so hardware state is not predictable at block entry.
         uint32_t prev_chunk = 0;
+
+        UNPACK((llk_unpack_fast_tilize_row_begin(icb, input_tile_index)));
 
         while (tiles_done < block) {
             // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
@@ -368,7 +317,7 @@ ALWI void fast_tilize_block(
                 PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
                 prev_chunk = chunk;
             }
-            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+            UNPACK((llk_unpack_fast_tilize_row_chunk(tiles_done)));
             MATH((llk_math_fast_tilize_block_(0, icb, 4)));
             PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + tiles_done, chunk)));
 
@@ -377,6 +326,8 @@ ALWI void fast_tilize_block(
 
             tiles_done += chunk;
         }
+
+        UNPACK((llk_unpack_fast_tilize_row_end()));
     }
 #else
     uint32_t full_dim = block;

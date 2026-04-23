@@ -172,7 +172,7 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
 
         if constexpr (use_fast) {
-            fast_tilize_init_exact_width(input_cb, block_width_tiles, output_cb);
+            fast_tilize_init(input_cb, block_width_tiles, output_cb);
         } else {
             tilize_init(input_cb, block_width_tiles, output_cb);
         }
@@ -214,7 +214,7 @@ ALWI void tilize(
         out_cb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
-            fast_tilize_block_exact_width(input_cb, block_width_tiles, output_cb);
+            fast_tilize_block(input_cb, block_width_tiles, output_cb);
         } else {
             tilize_block(input_cb, block_width_tiles, output_cb);
         }

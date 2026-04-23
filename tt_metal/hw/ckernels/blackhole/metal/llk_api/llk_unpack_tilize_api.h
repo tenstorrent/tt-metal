@@ -80,6 +80,34 @@ inline void llk_unpack_fast_tilize_reinit_xdim(const std::uint32_t unit_dim) {
     _llk_unpack_fast_tilize_reinit_xdim_(unit_dim);
 }
 
+// Row-streaming variants: acquire/release the unpack context once per row
+// (once per fast_tilize_block call) instead of once per chunk.
+// Saves (units_per_row - 1) context-switch sequences per block call.
+//
+// input_tile_index: row offset in source datums, same semantics as the
+// per-chunk llk_unpack_fast_tilize_block wrapper (Proposal 2 address fold).
+// For typical callers this is 0 (default). Non-zero values shift the base
+// address to account for an input tile row offset.
+inline void llk_unpack_fast_tilize_row_begin(
+    const std::uint32_t operand, const std::uint32_t input_tile_index = 0) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t src_format = unpack_src_format[operand_id];
+    // Fold input_tile_index into the row base address using the same datum-offset
+    // formula as llk_unpack_fast_tilize_block (Proposal 2).
+    const std::uint32_t tile_datum_offset = input_tile_index * TILE_C_DIM;
+    const std::uint32_t base_address      = (get_local_cb_interface(operand_id).fifo_rd_ptr - 1) +
+                                        (SCALE_DATUM_SIZE(src_format, tile_datum_offset) >> 4);
+    _llk_unpack_fast_tilize_row_begin_(base_address);
+}
+
+inline void llk_unpack_fast_tilize_row_chunk(const std::uint32_t col_start = 0) {
+    _llk_unpack_fast_tilize_row_chunk_(col_start);
+}
+
+inline void llk_unpack_fast_tilize_row_end() {
+    _llk_unpack_fast_tilize_row_end_();
+}
+
 inline void llk_unpack_fast_tilize_block(
     const std::uint32_t operand,
     const std::uint32_t tile_index,
