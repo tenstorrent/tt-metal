@@ -29,11 +29,11 @@ ALWI void Load<CB, Slot, Policy, Reconfig>::init() const {
 }
 
 template <uint32_t CB, Dst Slot, LoadPolicy Policy, LoadReconfig Reconfig>
-ALWI void Load<CB, Slot, Policy, Reconfig>::exec() const {
+ALWI void Load<CB, Slot, Policy, Reconfig>::exec(uint32_t offset) const {
     if constexpr (do_wait) {
         cb_wait_front(CB, cb_tile_idx_ + 1);
     }
-    copy_tile(CB, cb_tile_idx_, static_cast<uint32_t>(Slot));
+    copy_tile(CB, cb_tile_idx_, static_cast<uint32_t>(Slot) + offset);
     if constexpr (do_pop) {
         cb_pop_front(CB, 1);
     }
@@ -84,7 +84,7 @@ ALWI void sfpu_pipeline(
     }
 
     // Hoist Load::init once before the tile loop when safe. Otherwise Load::apply
-    // (init+exec) fires per tile inside the cascade — required when the chain
+    // (init+exec) fires per chunk inside the cascade — required when the chain
     // clobbers copy_tile state (e.g. DestReuseOp) or Loads use multiple CBs.
     constexpr bool hoist_load_init = chain_is_hoist_safe_v<Chain>;
     if constexpr (hoist_load_init) {
@@ -99,26 +99,53 @@ ALWI void sfpu_pipeline(
         cb_reserve_back(ocb, num_tiles);
     }
 
-    // One tile per acquire cycle — DEST slots are fixed at compile time.
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    // Batching: pack as many chain iterations into a single acquire cycle as
+    // the DEST register bank allows. Per iteration the chain uses `stride`
+    // slots (= max_dst + 1), so at most DEST_AUTO_LIMIT / stride iterations
+    // fit. A single-slot chain (stride=1) runs DEST_AUTO_LIMIT tiles per
+    // acquire; a multi-slot chain runs fewer. Structurally mirrors
+    // apply_post_chain_batched in binary_op_helpers but stride-aware for
+    // multi-slot chains.
+    //
+    // Fan-in/fan-out chains (anything with a WaitNoPop or NoWaitNoPop Load or
+    // DestReuseOp) can NOT be batched: those policies read the same tile on
+    // every exec, so K execs in one acquire would copy the same input to K
+    // DEST slots. Fall back to iter=1 (behaviourally identical to the old
+    // per-tile pipeline) when chain_supports_batching_v is false.
+    constexpr uint32_t stride = Chain::stride;
+    constexpr uint32_t iter_per_chunk = chain_supports_batching_v<Chain> ? (DEST_AUTO_LIMIT / stride) : 1u;
+    static_assert(iter_per_chunk >= 1, "chain stride exceeds DEST capacity");
+
+    const uint32_t pack_base = static_cast<uint32_t>(pack_slot);
+    uint32_t tiles_processed = 0;
+    for (uint32_t base = 0; base < num_tiles; base += iter_per_chunk) {
+        const uint32_t this_chunk = (base + iter_per_chunk <= num_tiles) ? iter_per_chunk : (num_tiles - base);
+
         tile_regs_acquire();
         if constexpr (hoist_load_init) {
-            chain.apply_no_load_init();
+            chain.apply_batched_no_load_init(0u, this_chunk);
         } else {
-            chain.apply();
+            chain.apply_batched(0u, this_chunk);
         }
         tile_regs_commit();
         tile_regs_wait();
 
         if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
-            cb_reserve_back(ocb, 1);
-        }
-        pack_tile(static_cast<uint32_t>(pack_slot), ocb);
-        if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
-            cb_push_back(ocb, 1);
+            for (uint32_t k = 0; k < this_chunk; ++k) {
+                cb_reserve_back(ocb, 1);
+                pack_tile(pack_base + k * stride, ocb);
+                cb_push_back(ocb, 1);
+            }
+        } else {
+            // Bulk: pack to absolute output tile index. cb_reserve_back already
+            // covered all num_tiles; cb_push_back issued once after the loop.
+            for (uint32_t k = 0; k < this_chunk; ++k) {
+                pack_tile(pack_base + k * stride, ocb, tiles_processed + k);
+            }
         }
 
         tile_regs_release();
+        tiles_processed += this_chunk;
     }
 
     // Bulk output: push all tiles at end.

@@ -122,10 +122,12 @@ struct UnaryOp {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void exec() const { static_cast<const Derived*>(this)->call(dst_idx); }
-    ALWI void apply() const {
+    // offset shifts the DEST slot for batched dispatch: iteration k runs
+    // exec(k * stride), so each chain iteration writes to its own slot block.
+    ALWI void exec(uint32_t offset = 0) const { static_cast<const Derived*>(this)->call(dst_idx + offset); }
+    ALWI void apply(uint32_t offset = 0) const {
         static_cast<const Derived*>(this)->init();
-        exec();
+        exec(offset);
     }
 };
 
@@ -144,10 +146,12 @@ struct BinaryOp {
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void exec() const { static_cast<const Derived*>(this)->call(in0, in1, out); }
-    ALWI void apply() const {
+    ALWI void exec(uint32_t offset = 0) const {
+        static_cast<const Derived*>(this)->call(in0 + offset, in1 + offset, out + offset);
+    }
+    ALWI void apply(uint32_t offset = 0) const {
         static_cast<const Derived*>(this)->init();
-        exec();
+        exec(offset);
     }
 };
 
@@ -167,10 +171,12 @@ struct TernaryOp {
                                             ? ((in0 > in2) ? ((in0 > out) ? in0 : out) : ((in2 > out) ? in2 : out))
                                             : ((in1 > in2) ? ((in1 > out) ? in1 : out) : ((in2 > out) ? in2 : out));
     static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void exec() const { static_cast<const Derived*>(this)->call(in0, in1, in2, out); }
-    ALWI void apply() const {
+    ALWI void exec(uint32_t offset = 0) const {
+        static_cast<const Derived*>(this)->call(in0 + offset, in1 + offset, in2 + offset, out + offset);
+    }
+    ALWI void apply(uint32_t offset = 0) const {
         static_cast<const Derived*>(this)->init();
-        exec();
+        exec(offset);
     }
 };
 
@@ -277,10 +283,10 @@ struct Load : LoadTag {
     // The pipeline hoists this across the tile loop when the chain is hoist-safe
     // (see chain_is_hoist_safe_v); otherwise it fires per tile via apply().
     ALWI void init() const;
-    ALWI void exec() const;
-    ALWI void apply() const {
+    ALWI void exec(uint32_t offset = 0) const;
+    ALWI void apply(uint32_t offset = 0) const {
         init();
-        exec();
+        exec(offset);
     }
 
     // Reset internal tile counter back to 0. Called by sfpu_pipeline after all
@@ -364,8 +370,10 @@ template <>
 struct SfpuChain<> {
     static constexpr uint32_t max_dst = 0;
     static constexpr uint32_t stride = 1;
-    ALWI void apply() const {}
-    ALWI void apply_no_load_init() const {}
+    ALWI void apply(uint32_t = 0) const {}
+    ALWI void apply_no_load_init(uint32_t = 0) const {}
+    ALWI void apply_batched_with_stride(uint32_t, uint32_t, uint32_t) const {}
+    ALWI void apply_batched_with_stride_no_load_init(uint32_t, uint32_t, uint32_t) const {}
     ALWI void init_any_load() const {}
     ALWI void reset_tile_idx() const {}
     ALWI void wait_upfront(uint32_t) const {}
@@ -387,21 +395,56 @@ struct SfpuChain<First, Rest...> {
     constexpr SfpuChain() = default;
     constexpr SfpuChain(First f, Rest... r) : first(f), rest(r...) {}
 
-    ALWI void apply() const {
-        first.apply();
-        rest.apply();
+    ALWI void apply(uint32_t offset = 0) const {
+        first.apply(offset);
+        rest.apply(offset);
     }
 
     // Hoisted-init path: Load elements skip their init() (already done once
     // before the tile loop); every other element runs full apply(). Used by
     // sfpu_pipeline when chain_is_hoist_safe_v<Chain>.
-    ALWI void apply_no_load_init() const {
+    ALWI void apply_no_load_init(uint32_t offset = 0) const {
         if constexpr (is_load_op_v<First>) {
-            first.exec();
+            first.exec(offset);
         } else {
-            first.apply();
+            first.apply(offset);
         }
-        rest.apply_no_load_init();
+        rest.apply_no_load_init(offset);
+    }
+
+    // Batched dispatch: run each op's init() once, then exec() iter_count times
+    // at offsets [base_dst, base_dst + chain_stride, base_dst + 2*chain_stride, ...).
+    // `chain_stride` is the OUTER chain's stride (max_dst + 1) — passed down
+    // explicitly so the recursion into `rest` doesn't shrink the stride as
+    // elements are peeled off. Public entry points below wrap this in the
+    // chain's own stride.
+    ALWI void apply_batched_with_stride(uint32_t base_dst, uint32_t iter_count, uint32_t chain_stride) const {
+        first.init();
+        for (uint32_t k = 0; k < iter_count; ++k) {
+            first.exec(base_dst + k * chain_stride);
+        }
+        rest.apply_batched_with_stride(base_dst, iter_count, chain_stride);
+    }
+
+    // Batched + hoist: skip init() on Load elements (hoisted before chunk loop),
+    // full init+exec×iter_count on everything else.
+    ALWI void apply_batched_with_stride_no_load_init(
+        uint32_t base_dst, uint32_t iter_count, uint32_t chain_stride) const {
+        if constexpr (!is_load_op_v<First>) {
+            first.init();
+        }
+        for (uint32_t k = 0; k < iter_count; ++k) {
+            first.exec(base_dst + k * chain_stride);
+        }
+        rest.apply_batched_with_stride_no_load_init(base_dst, iter_count, chain_stride);
+    }
+
+    // Public batching entry points — use the chain's own stride.
+    ALWI void apply_batched(uint32_t base_dst, uint32_t iter_count) const {
+        apply_batched_with_stride(base_dst, iter_count, stride);
+    }
+    ALWI void apply_batched_no_load_init(uint32_t base_dst, uint32_t iter_count) const {
+        apply_batched_with_stride_no_load_init(base_dst, iter_count, stride);
     }
 
     // Call init() on the first Load found (walking the chain). Used to perform
@@ -585,6 +628,24 @@ struct upfront_cb_info<T, std::void_t<decltype(T::is_upfront), decltype(T::cb)>>
     static constexpr uint32_t cb = T::cb;
 };
 
+// Per-exec advance: does this CB-input op read a different tile each exec()?
+//
+// Advancing: do_pop=true (exec pops → next front becomes tile 0), or
+//            is_upfront=true (exec advances cb_tile_idx_).
+// Non-advancing: WaitNoPop / NoWaitNoPop — same tile every exec. These
+//                typically appear in fan-in/fan-out chains where ordering
+//                across exec calls is controlled by a paired advancing op.
+//
+// The pipeline can only batch multiple chain iterations into one acquire when
+// every CB-input op advances per exec; otherwise batching would read the same
+// tile into multiple DEST slots.
+template <typename T, typename = void>
+struct cb_input_advances : std::true_type {};  // non-CB ops trivially advance
+
+template <typename T>
+struct cb_input_advances<T, std::void_t<decltype(T::do_pop), decltype(T::is_upfront)>>
+    : std::bool_constant<T::do_pop || T::is_upfront> {};
+
 // Does any upfront CB-input element in Chain reference TargetCB?
 template <uint32_t TargetCB, typename Chain>
 struct chain_has_upfront_cb : std::false_type {};
@@ -618,6 +679,25 @@ struct chain_has_duplicate_upfront_cbs<SfpuChain<First, Rest...>>
 template <typename Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v =
     detail::chain_has_duplicate_upfront_cbs<std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
+
+namespace detail {
+
+// All CB-input elements in Chain advance per exec (safe for batching).
+template <typename Chain>
+struct chain_all_advance : std::true_type {};
+template <typename... Ops>
+struct chain_all_advance<SfpuChain<Ops...>> : std::bool_constant<(cb_input_advances<Ops>::value && ...)> {};
+
+}  // namespace detail
+
+/** @brief True when sfpu_pipeline can safely batch multiple chain iterations
+ *  into a single DEST acquire cycle. Requires every CB-input op (Load /
+ *  DestReuseOp) to advance its tile index per exec call. Non-advancing
+ *  policies (WaitNoPop, NoWaitNoPop) signal a fan-in/fan-out intent — the
+ *  pipeline falls back to one iteration per acquire in that case. */
+template <typename Chain>
+inline constexpr bool chain_supports_batching_v =
+    detail::chain_all_advance<std::remove_cv_t<std::remove_reference_t<Chain>>>::value;
 
 // =============================================================================
 // Pipeline Function Declaration

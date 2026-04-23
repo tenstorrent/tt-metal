@@ -156,10 +156,10 @@ struct CopyDest {
     static_assert(src_idx < 8 && dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
 
     ALWI void init() const;
-    ALWI void exec() const;
-    ALWI void apply() const {
+    ALWI void exec(uint32_t offset = 0) const;
+    ALWI void apply(uint32_t offset = 0) const {
         init();
-        exec();
+        exec(offset);
     }
 };
 

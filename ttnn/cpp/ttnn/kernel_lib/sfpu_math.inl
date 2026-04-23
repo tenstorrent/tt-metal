@@ -97,7 +97,9 @@ ALWI void Rpow<Slot>::call(uint32_t d0) const { rpow_tile(d0, base_val); }
 template <Dst Src, Dst Dst_, DataFormat DF>
 ALWI void CopyDest<Src, Dst_, DF>::init() const { copy_dest_values_init(); }
 template <Dst Src, Dst Dst_, DataFormat DF>
-ALWI void CopyDest<Src, Dst_, DF>::exec() const { copy_dest_values<DF>(src_idx, dst_idx); }
+ALWI void CopyDest<Src, Dst_, DF>::exec(uint32_t offset) const {
+    copy_dest_values<DF>(src_idx + offset, dst_idx + offset);
+}
 
 template <Dst Slot>
 ALWI void FillScalar<Slot>::init() const { fill_tile_init(); }
