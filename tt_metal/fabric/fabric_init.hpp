@@ -38,9 +38,18 @@ struct FabricCoresHealth {
 // read times out and leaves a stuck command in the relay ETH core's 4-slot queue (CMD_BUF_SIZE=4).
 // With 4 dead channels the queue fills and the last channel's read_non_mmio enters a no-timeout
 // while(full) loop → indefinite hang.  See #42429.
+//
+// skip_soft_reset_channels: ETH channel IDs with base-UMD relay firmware (edm_status=0x49706550).
+// FIX M (#42429): assert_risc_reset_at_core() is skipped for these channels because their BRISC
+// is alive and serving as the ETH relay endpoint for non-MMIO reads.  Halting the BRISC via
+// assert_risc_reset kills the relay, causing deassert_risc_reset (a relay read) to time out and
+// cascade into a full hang for all subsequent non-MMIO operations.
+// write_launch_msg_to_core handles the firmware transition without needing a soft reset.
+// The L1 clear loop is NOT affected — it still runs for these channels.
 FabricCoresHealth configure_fabric_cores(
     tt::tt_metal::IDevice* device,
-    const std::unordered_set<uint32_t>& pre_known_dead_channels = {});
+    const std::unordered_set<uint32_t>& pre_known_dead_channels = {},
+    const std::unordered_set<uint32_t>& skip_soft_reset_channels = {});
 
 // ---------------------------------------------------------------------------
 // Test seam: fault-injection into configure_fabric_cores() for Scenario W

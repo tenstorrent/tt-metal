@@ -146,7 +146,12 @@ public:
     // pre_dead_channels: ETH channel IDs confirmed dead by terminate_stale_erisc_routers()
     // (probe read timed out).  configure_fabric_cores() skips assert_risc_reset_at_core()
     // for these channels to prevent the indefinite hang observed on T3K Device 4 ch7.
-    void configure_fabric(const std::unordered_set<uint32_t>& pre_dead_channels = {});
+    // skip_soft_reset_channels: ETH channel IDs with base-UMD relay firmware (edm_status=0x49706550).
+    // FIX M (#42429): configure_fabric_cores() must NOT soft-reset these — their BRISC is the relay
+    // endpoint for non-MMIO reads; halting it cascades into a full hang on deassert_risc_reset_at_core.
+    void configure_fabric(
+        const std::unordered_set<uint32_t>& pre_dead_channels = {},
+        const std::unordered_set<uint32_t>& skip_soft_reset_channels = {});
     // Terminate fabric MUX tensix worker cores and re-launch them fresh.
     // Called during quiesce to ensure MUX channel state is reset between iterations.
     void quiesce_and_restart_fabric_workers();

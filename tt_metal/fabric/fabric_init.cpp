@@ -89,7 +89,9 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 }
 
 FabricCoresHealth configure_fabric_cores(
-    tt::tt_metal::IDevice* device, const std::unordered_set<uint32_t>& pre_known_dead_channels) {
+    tt::tt_metal::IDevice* device,
+    const std::unordered_set<uint32_t>& pre_known_dead_channels,
+    const std::unordered_set<uint32_t>& skip_soft_reset_channels) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto soc_desc = cluster.get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -162,6 +164,23 @@ FabricCoresHealth configure_fabric_cores(
                     tt::LogMetal,
                     "configure_fabric_cores: device {} channel {} is pre-confirmed dead — "
                     "skipping soft reset",
+                    chip_id,
+                    router_chan);
+                continue;
+            }
+
+            // FIX M (#42429): Skip soft reset for channels with base-UMD relay firmware.
+            // Their BRISC is running and serves as the ETH relay endpoint for non-MMIO reads.
+            // assert_risc_reset halts the BRISC → deassert_risc_reset (relay read) times out
+            // → all subsequent reads from MMIO→non-MMIO fail → cascade hang.
+            // write_launch_msg_to_core transitions this firmware to fabric firmware without a reset.
+            // NOTE: the L1 clear loop below is NOT skipped — it still runs for these channels.
+            if (skip_soft_reset_channels.count(router_chan)) {
+                log_info(
+                    tt::LogMetal,
+                    "configure_fabric_cores: device {} channel {} base-UMD relay firmware "
+                    "(0x49706550) — skipping soft reset (launch_msg handles transition, "
+                    "halting BRISC would kill the ETH relay) [FIX M #42429]",
                     chip_id,
                     router_chan);
                 continue;

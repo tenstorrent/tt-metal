@@ -383,7 +383,9 @@ bool Device::compile_fabric() {
     return fabric_program_ != nullptr;
 }
 
-void Device::configure_fabric(const std::unordered_set<uint32_t>& pre_dead_channels) {
+void Device::configure_fabric(
+    const std::unordered_set<uint32_t>& pre_dead_channels,
+    const std::unordered_set<uint32_t>& skip_soft_reset_channels) {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -397,7 +399,9 @@ void Device::configure_fabric(const std::unordered_set<uint32_t>& pre_dead_chann
     // pre_dead_channels: channels already confirmed dead by terminate_stale_erisc_routers().
     // Passed through so configure_fabric_cores() can skip assert_risc_reset_at_core() for them
     // and avoid the indefinite hang observed on T3K Device 4 ch7 (#42429).
-    const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels);
+    // skip_soft_reset_channels: channels with base-UMD relay firmware (0x49706550).
+    // FIX M (#42429): soft reset would halt the relay BRISC and cascade → hang.
+    const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_channels);
     if (!health.all_channels_healthy) {
         if (!health.newly_dead_channels.empty()) {
             // Truly unexpected new dead channels: ALL L1 writes to this device now route through

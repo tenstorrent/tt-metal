@@ -715,15 +715,20 @@ bool FabricFirmwareInitializer::is_initialized() const { return initialized_.tes
 //                                rest of the mesh.
 //                                TODO(F2, #42429): replace with surgical per-channel reset
 //                                once single-ERISC reset is verified to not drop the PHY.
-std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::terminate_stale_erisc_routers(
+FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::terminate_stale_erisc_routers(
     Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const {
     // Channels whose probe L1 read threw (physically dead link — remote ERISC completely
     // unresponsive).  Returned to the caller so configure_fabric_cores() can skip
     // assert_risc_reset_at_core() for them, avoiding the ch7-style indefinite hang.
     std::unordered_set<uint32_t> probe_dead_channels;
+    // FIX M (#42429): Channels with base-UMD relay firmware (edm_status == 0x49706550).
+    // configure_fabric_cores() must NOT soft-reset these — their BRISC is alive and serving
+    // as the ETH relay endpoint for non-MMIO reads.  Soft-resetting halts the relay BRISC and
+    // causes all subsequent reads from MMIO→non-MMIO to time out (5s each, then cascade hang).
+    std::unordered_set<uint32_t> base_umd_channels;
 
     if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
-        return {probe_dead_channels, false};
+        return {probe_dead_channels, false, base_umd_channels};
     }
 
     const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
@@ -882,11 +887,15 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
             const bool is_base_umd = (status_buf[0] == kBaseUmdFirmwareSentinel);
 
             if (is_base_umd) {
-                // Live relay firmware — touch nothing.  configure_fabric_cores() handles reset.
+                // Live relay firmware — touch nothing.  configure_fabric_cores() handles the
+                // firmware transition via write_launch_msg_to_core (no soft reset needed).
+                // FIX M: record this channel so configure_fabric_cores() can skip the soft reset.
+                base_umd_channels.insert(eth_chan_id);
                 log_info(
                     tt::LogMetal,
                     "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
-                    "(base-UMD-firmware sentinel) — relay is live, skipping all writes.",
+                    "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
+                    "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
@@ -1023,19 +1032,20 @@ std::pair<std::unordered_set<uint32_t>, bool> FabricFirmwareInitializer::termina
         }
     }
 
-    if (corrupt_count > 0 || stale_running_count > 0) {
+    if (corrupt_count > 0 || stale_running_count > 0 || !base_umd_channels.empty()) {
         log_info(
             tt::LogMetal,
             "terminate_stale_erisc_routers: Device {} summary: corrupt={} stale_running={} "
-            "stale_term_timeout={} (of stale_running) probe_dead={}",
+            "stale_term_timeout={} (of stale_running) probe_dead={} base_umd={}",
             dev->id(),
             corrupt_count,
             stale_running_count,
             stale_timeout_count,
-            probe_dead_channels.size());
+            probe_dead_channels.size(),
+            base_umd_channels.size());
     }
 
-    return {probe_dead_channels, relay_broken};
+    return {std::move(probe_dead_channels), relay_broken, std::move(base_umd_channels)};
 }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
@@ -1125,6 +1135,9 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // At this point all ETH relay ERISCs are still running base UMD firmware and can service
     // the relay read protocol used by terminate_stale_erisc_routers().
     std::unordered_map<ChipId, std::unordered_set<uint32_t>> probe_dead_channels_map;
+    // FIX M (#42429): channels with base-UMD relay firmware (0x49706550) — configure_fabric_cores()
+    // must skip soft reset for these to avoid killing the ETH relay endpoint.
+    std::unordered_map<ChipId, std::unordered_set<uint32_t>> base_umd_channels_map;
     bool any_relay_broken = false;
     for (auto* dev : compiled_devices) {
         if (dev) {
@@ -1173,8 +1186,10 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                     dev->id(),
                     probe_dead_channels.size());
             } else {
-                std::tie(probe_dead_channels, relay_broken) =
-                    terminate_stale_erisc_routers(dev, builder_context);
+                auto result = terminate_stale_erisc_routers(dev, builder_context);
+                probe_dead_channels = std::move(result.probe_dead_channels);
+                relay_broken = result.relay_broken;
+                base_umd_channels_map[dev->id()] = std::move(result.base_umd_channels);
             }
 
             if (relay_broken || !probe_dead_channels.empty()) {
@@ -1209,14 +1224,14 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // Pass 1: non-MMIO devices (relay-dependent — must run before MMIO ETH switches fw)
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
-            dev->configure_fabric(probe_dead_channels_map[dev->id()]);
+            dev->configure_fabric(probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()]);
             configured_count++;
         }
     }
     // Pass 2: MMIO devices (PCIe-direct — safe to configure after non-MMIO relay ops complete)
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
-            dev->configure_fabric(probe_dead_channels_map[dev->id()]);
+            dev->configure_fabric(probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()]);
             configured_count++;
         }
     }

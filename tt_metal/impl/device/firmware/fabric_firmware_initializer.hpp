@@ -110,14 +110,24 @@ private:
     // tear down the WH ETH PHY link and break non-MMIO L1 access for the rest of the mesh).
     // Called before configure_fabric_cores() clears L1 (Fix A).
     //
-    // Returns {probe_dead_channels, relay_broken}:
+    // Result fields:
     // - probe_dead_channels: ETH channel IDs whose probe read timed out (ERISC unresponsive).
     //   Passed to configure_fabric_cores() to skip assert_risc_reset_at_core() for dead channels.
     // - relay_broken: true when the relay queue reached saturation risk (kMaxRelayTimeouts
     //   consecutive read timeouts), indicating the non-MMIO device's ETH relay path is broken
     //   and the device is effectively unreachable for ANY L1 write (not just ETH core writes).
     //   Callers use this to skip dispatch kernel initialization for unreachable non-MMIO devices.
-    std::pair<std::unordered_set<uint32_t>, bool> terminate_stale_erisc_routers(
+    // - base_umd_channels: ETH channel IDs where edm_status == 0x49706550 (base-UMD relay
+    //   firmware is running — BRISC is alive).  FIX M (#42429): configure_fabric_cores() must
+    //   SKIP assert_risc_reset_at_core() for these channels — halting their BRISC kills the ETH
+    //   relay endpoint used by non-MMIO reads, cascading into a full hang.  write_launch_msg_to_core
+    //   transitions this firmware to fabric firmware without needing a soft reset.
+    struct TerminateStaleResult {
+        std::unordered_set<uint32_t> probe_dead_channels;
+        bool relay_broken;
+        std::unordered_set<uint32_t> base_umd_channels;
+    };
+    TerminateStaleResult terminate_stale_erisc_routers(
         Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const;
 
     tt::tt_fabric::ControlPlane& control_plane_;
