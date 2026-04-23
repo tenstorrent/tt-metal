@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_invalid_quasar_sfpu_format_combination
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
@@ -34,41 +35,6 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if format combination is invalid for Quasar.
-
-    Args:
-        fmt: Format configuration with input and output formats
-        dest_acc: Destination accumulation mode
-
-    Returns:
-        True if the combination is invalid, False otherwise
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    return False
-
-
 def generate_sfpu_nonlinear_combinations(
     formats_list: List[FormatConfig],
 ):
@@ -92,7 +58,7 @@ def generate_sfpu_nonlinear_combinations(
         )
         for dest_acc in dest_acc_modes:
             # Skip invalid format combinations for Quasar
-            if _is_invalid_quasar_combination(fmt, dest_acc):
+            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
                 continue
 
             for dest_sync in dest_sync_modes:
