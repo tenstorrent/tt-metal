@@ -14,7 +14,6 @@ run_dual_galaxy_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_galaxy_unit_tests"
 
-  # tt-run --tcp-interface handles the extra mpi_run args
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="cnx1"
   # heuristic to extract only 2 first hosts from the hostfile
