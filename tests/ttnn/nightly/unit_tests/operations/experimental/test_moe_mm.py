@@ -171,22 +171,24 @@ def prepare_output_tensor(tt_output, ring2cores):
     # output, without the final selection of top 8 experts.
     # So we retain it for reference, but not used in the test.
     # --------------------------------------------------------------------------
-    # output = torch.cat(each_shard, dim=1)
+    output = torch.cat(each_shard, dim=1)
 
     # # Get the 32 scores values from each tile.
-    # f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
-    # f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
+    f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
+    f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
 
-    # group_scores = torch.cat([f1_scores, f2_scores], dim=-1)
-    # return group_scores.transpose(0, 1)
+    group_scores = torch.cat([f1_scores, f2_scores], dim=-1).transpose(0, 1)
+    # return group_scores
     # --------------------------------------------------------------------------
 
     # Only the last core has the values in the first 8 rows of the first 2 faces of the tile
+    # this is to get the intermediate results of the matmul + bias results
     tt_values = each_shard[-1][:8, :].transpose(0, 1)
     tt_as_bf16_indices = each_shard[-1][8:16, :].transpose(0, 1).view(torch.uint16)
 
     # Initialize an empty array of shape tt_indices
     tt_indices = torch.empty(tt_as_bf16_indices.shape, dtype=torch.uint16)
+    breakpoint()
     for m, k in itertools.product(range(tt_as_bf16_indices.shape[0]), range(tt_as_bf16_indices.shape[1])):
         tt_indices[m, k] = tt_as_bf16_indices[m, k].item() >> 7
 
@@ -343,7 +345,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=input_sharded_mem_config,
             )
-
+        breakpoint()
         ttnn.experimental.deepseek.moe.moe_gate_mm(
             tt_input,
             w_tensor=tt_w,

@@ -1,41 +1,27 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from pathlib import Path
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.reference_utils import topk_bitonic
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import (
-    BinaryOpConfig,
-    FromWeightConfig,
-    LinearConfig,
-    LinearFallbackConfig,
-    MeshDeviceStub,
-    MulConfig,
-    ReshapeConfig,
-    ScatterConfig,
-    TopKConfig,
-    TopKFallbackConfig,
-)
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI2,
-    TOPK_MIN_WIDTH,
-    even_int_div,
-    get_dequantized_tensor,
-    shard_and_save,
-)
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub
+from models.demos.deepseek_v3.utils.config_helpers import get_dequantized_tensor, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
 )
+
+SEND_CORES = (0, 3, 6, 9)
+RECV_CORES = (1, 2, 4, 5, 7, 8, 10, 11)
 
 
 class MoEGate(AbstractModule):
@@ -54,67 +40,184 @@ class MoEGate(AbstractModule):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None
-        gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight")
+        gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight").transpose(0, 1).unsqueeze(0)
         score_correction_bias = get_dequantized_tensor(
-            state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
+            state_dict, f"{prefix}e_score_correction_bias", dtype=torch.bfloat16
+        ).unsqueeze(0)
+        with torch.no_grad():
+            score_correction_bias -= torch.mean(score_correction_bias)
+        # maybe divide weight's mean here
+
+        def prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores):
+            """
+            Prepare the w tensor and bias tensor by padding and reordering tiles.
+
+            Args:
+                torch_w: Weight tensor of shape (L, K, N)
+                torch_bias: Bias tensor of shape (L, N)
+                L: Number of layers
+                K: Input dimension
+                N: Output dimension
+                ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, send_flag)
+
+            Returns:
+                torch_w: Tensor of shape (L, K, N)
+            """
+            Kt, Nt = math.ceil(K / ttnn.TILE_SIZE), math.ceil(N / ttnn.TILE_SIZE)
+            # 8 cores get 2/3rd of K tiles and 1 N tile -> Type 1 (send flag is 0)
+            # 4 cores get 1/3rd of K tiles and 2 N tiles -> Type 2 (send flag is 1)
+            # Every third core is of type 2.
+            w_tile_view = torch_w.view(L, Kt, ttnn.TILE_SIZE, Nt, ttnn.TILE_SIZE)
+
+            # For the 8 cores, we append values from the bias tensor at the end, so it can be read in the
+            # same DRAM transaction, optimally without any additional overhead.
+            bias_tile_view = torch_bias.view(L, Nt, ttnn.TILE_SIZE)
+
+            each_shard = []
+
+            current_N_tile = 0
+            for ring_pos in range(len(ring2cores)):
+                _, _, send_flag = ring2cores[ring_pos]
+
+                if send_flag:
+                    # Type 2: Last 72 K tiles for 2 N tiles
+                    first_chunk = w_tile_view[:, -72:, :, current_N_tile, :]
+                    second_chunk = w_tile_view[:, -72:, :, current_N_tile + 1, :]
+
+                    # Interleave the two chunks, one tile each on width dimension.
+                    interleaved = torch.stack([first_chunk, second_chunk], dim=3)
+
+                    # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE) = (L, E, K, 4096)
+                    # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
+                    interleaved_chunks = interleaved.view(L, 72, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
+
+                    # Since we want the shard height to be same on all 12 cores, we add some padding here.
+                    padding = torch.zeros(L, 5, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE, dtype=torch_w.dtype)
+                    torch_w_with_padding = torch.cat([interleaved_chunks, padding], dim=1)
+                    each_shard.append(torch_w_with_padding)
+                else:
+                    # Type 1: First 2 * 76 K tiles for 1 N tile
+                    all_tiles = w_tile_view[:, : 2 * 76, :, current_N_tile, :]
+
+                    # Separate the even and odd tiles.
+                    even_tiles = all_tiles[:, ::2, :, :]
+                    odd_tiles = all_tiles[:, 1::2, :, :]
+                    interleaved = torch.cat([even_tiles, odd_tiles], dim=-1)
+
+                    # Put one each of even and odd tiles in width dimension.
+                    all_tiles = interleaved.reshape(L, 76, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE)
+
+                    # Create the bias tile with zero padding.
+                    bias_tile = torch.zeros((L, 1, ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE), dtype=torch_bias.dtype)
+
+                    # Add data from bias tensor to the bias tile.
+                    bias_tile[:, 0, 0, : ttnn.TILE_SIZE] = bias_tile_view[:, current_N_tile, :]
+
+                    # Append the bias tensor to the end of the all tiles.
+                    w_bias_tile = torch.cat([all_tiles, bias_tile], dim=1)
+                    each_shard.append(w_bias_tile)
+                    current_N_tile += 1
+
+            torch_w_all_banks = torch.stack(each_shard, dim=0)
+            return torch_w_all_banks
+
+        in0_core_coords = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+
+        core2dram = {}
+        for dram_bank_id, core_coords in enumerate(in0_core_coords):
+            core2dram[core_coords] = dram_bank_id
+
+        in0_num_cores = len(in0_core_coords)
+
+        # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+        in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+        ring2cores = {}
+        for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+            # key: ring_pos, value: (core_coord, dram_bank_id, send_flag)
+            ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in SEND_CORES else 0)
+
+        L = gate_weight.shape[0]
+        K = gate_weight.shape[1]
+        N = gate_weight.shape[2]
+        torch_w_reorders = prepare_w_tensor(gate_weight, score_correction_bias, L, K, N, ring2cores)
+
+        in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
+        in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+
+        # --------------------------------------------------------------------------
+        # Constants
+        # --------------------------------------------------------------------------
+        in0_dtype = ttnn.bfloat16
+        w_dtype = ttnn.bfloat16
+        num_dram_banks = len(in0_core_coords)
+
+        dram_core_coords = [ttnn.CoreCoord(core2dram[in0_core_coord], 0) for in0_core_coord in in0_core_coords_sorted]
+        dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+        dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+        # ------------------------------------------------------------------------
+        # Create DRAM shard spec for w
+        # Tensor shape: (L, K, N) -> Sharded across N cores
+        # ------------------------------------------------------------------------
+        w_shard_height = L * (76 + 1) * ttnn.TILE_SIZE
+        w_shard_width = 2 * ttnn.TILE_SIZE
+
+        w_shard_spec = ttnn.ShardSpec(
+            dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR
         )
+
+        w_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+
         return {
-            "gate_proj": {
+            "weights": {
                 "input_tensor_b": shard_and_save(
-                    output_path / f"gate_proj.input_tensor_b",
-                    gate_weight.T.unsqueeze(0).unsqueeze(0),
+                    output_path / f"weights.input_tensor_b",
+                    torch_w_reorders,
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=w_mem_config,
                     layout=ttnn.TILE_LAYOUT,
                 )
             },
-            "add_score_correction_bias": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.float32,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
+        }
+
+    @classmethod
+    def create_shared_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+    ) -> ModelState:
+        """Create input_indices, output_indices and output_tensor for each MoE layer
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+        Returns:
+            ModelState containing input_indices, output_indices and output_tensor for each MoE layer
+        """
+        in0_core_coords = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+        in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
+        in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+        output_shard_spec = ttnn.ShardSpec(in0_core_range_set, (32, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+        output_tensor = ttnn.empty(
+            shape=(32, 12 * ttnn.TILE_SIZE),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=output_mem_config,
+        )
+
+        return {
+            "gate_routing": {
+                "ttnn_output_tensor": output_tensor,
             },
-            "multiply_expert_scale": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"multiply_expert_scale.input_tensor_b",
-                    torch.tensor([hf_config.routed_scaling_factor])
-                    .repeat(1, hf_config.num_experts_per_tok)
-                    .unsqueeze(0)
-                    .unsqueeze(0),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-            },
-            "scatter_top_expert_groups": {
-                "input": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.input",
-                    torch.full((1, 1, 1, hf_config.n_group), -float("inf")),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
-                "src": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.src",
-                    torch.ones((1, 1, 1, hf_config.topk_group)),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
-            },
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -123,18 +226,13 @@ class MoEGate(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
-        Note: topk_fallback and use_bitonic_sort are defaulted to True and not required in future when we have equivalent topk op.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
             mode: "decode" or "prefill"
-            topk_fallback: whether to use topk fallback
-            use_bitonic_sort: whether to use bitonic sort
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
@@ -143,134 +241,33 @@ class MoEGate(AbstractModule):
             memory_config = ttnn.L1_MEMORY_CONFIG
 
             return {
-                "gate_proj": LinearConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-                ),
-                "add_score_correction_bias": BinaryOpConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                ),
-                "multiply_expert_scale": BinaryOpConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                ),
-                "reshape_scores": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
-                ),
-                "topk_within_expert_groups": TopKConfig(
-                    k=2,  # no hf config for this
-                    dim=-1,
-                ),
-                "topk_expert_groups": TopKConfig(
-                    k=hf_config.topk_group,
-                    dim=-1,
-                ),
-                "scatter_top_expert_groups": ScatterConfig(
-                    input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    dim=3,
-                ),
-                "reshape_group_mask": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, 1),
-                ),
-                "reshape_active_experts": ReshapeConfig(
-                    shape=(1, 1, -1, hf_config.n_routed_experts),
-                ),
-                "mul_scores_with_mask": MulConfig(
-                    memory_config=memory_config,
-                ),
-                "topk_experts": TopKConfig(
-                    k=hf_config.num_experts_per_tok,
-                    dim=-1,
-                ),
-                "topk_fallback": topk_fallback,
-                "topk_fallback_config": TopKFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                    memory_config=memory_config,
-                    use_bitonic_sort=use_bitonic_sort,
-                ),
-                "linear_fallback": False,
-                "linear_fallback_config": LinearFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                ),
+                "weights": {
+                    "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                },
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
-                # "input_memory_config": ttnn.create_sharded_memory_config(  # Bad PCC
-                #         shape=(USERS_PER_ROW, HIDDEN_SIZE),
-                #         core_grid=ttnn.CoreGrid(y=7, x=8),
-                #         strategy=ttnn.ShardStrategy.WIDTH,
-                #     ),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "input_output_shard_shape": (32, 32),
+                "token_shape": (16, 16),
+                "routed_scaling_factor": hf_config.routed_scaling_factor,
+                "enable_sigmoid": True,
+                "mode": mode,
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
 
             return {
-                "gate_proj": LinearConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-                ),
-                "add_score_correction_bias": BinaryOpConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                ),
-                "multiply_expert_scale": BinaryOpConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                ),
-                "reshape_scores": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
-                ),
-                "topk_within_expert_groups": TopKConfig(
-                    k=2,  # no hf config for this
-                    dim=-1,
-                ),
-                "topk_expert_groups": TopKConfig(
-                    k=hf_config.topk_group,
-                    dim=-1,
-                ),
-                "scatter_top_expert_groups": ScatterConfig(
-                    input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    dim=3,
-                ),
-                "reshape_group_mask": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, 1),
-                ),
-                "reshape_active_experts": ReshapeConfig(
-                    shape=(1, 1, -1, hf_config.n_routed_experts),
-                ),
-                "mul_scores_with_mask": MulConfig(
-                    memory_config=memory_config,
-                ),
-                "topk_experts": TopKConfig(
-                    k=hf_config.num_experts_per_tok,
-                    dim=-1,
-                ),
-                "topk_fallback": topk_fallback,
-                "topk_fallback_config": TopKFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                    memory_config=memory_config,
-                    use_bitonic_sort=use_bitonic_sort,
-                ),
-                "linear_fallback": False,
-                "linear_fallback_config": LinearFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                ),
+                "weights": {
+                    "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                },
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "input_output_shard_shape": (32, 32),
+                "token_shape": (16, 16),
+                "routed_scaling_factor": hf_config.routed_scaling_factor,
+                "enable_sigmoid": True,
+                "mode": mode,
             }
 
     @classmethod
@@ -278,160 +275,71 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback, use_bitonic_sort)
+        return cls.model_config(hf_config, mesh_device, "decode")
 
     @classmethod
     def prefill_model_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback, use_bitonic_sort)
+        return cls.model_config(hf_config, mesh_device, "prefill")
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        assert x.memory_config() == cfg["input_memory_config"]
-
-        # Gate projections
-        if cfg["linear_fallback"]:
-            logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
+        mode = cfg["mode"]
+        if mode == "prefill":
+            output_list = []
         else:
-            logits = ttnn.linear(x, **cfg["gate_proj"])
-        # Sigmoid activation
-        scores = ttnn.sigmoid(logits)
-        ttnn.deallocate(logits)
-        token_count = scores.shape[1] * scores.shape[2]
-        scores_flat = scores if scores.shape[1] == 1 else ttnn.reshape(scores, (1, 1, token_count, scores.shape[3]))
-        # Add score correction bias
-        # Expand bias to match scores shape(dynamic shape)
-        scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
-        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
-        scores_with_bias = ttnn.add(
-            scores,
-            scores_correction_bias,
-            memory_config=cfg["add_score_correction_bias"]["memory_config"],
-            dtype=cfg["add_score_correction_bias"]["dtype"],
+            assert x.shape[2] <= 32, "Decode mode only supports 32 tokens"
+        assert "Core should be the same"
+        weight_tensor = cfg["weights"]["input_tensor_b"]
+        output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
+
+        in0_core_coords = cfg["mesh_device"].get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+        in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
+        in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+        in0_shard_spec = ttnn.ShardSpec(
+            grid=in0_core_range_set,
+            shard_shape=(x.shape[2], x.shape[3]),
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
-        scores_with_bias_flat = (
-            scores_with_bias
-            if scores_with_bias.shape[1] == 1
-            else ttnn.reshape(scores_with_bias, (1, 1, token_count, scores_with_bias.shape[3]))
+        input_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
         )
-        # Reshape scores to expert groups
-        expert_scores_grouped = ttnn.reshape(scores_with_bias_flat, **cfg["reshape_scores"])
-        num_experts_per_group = expert_scores_grouped.shape[3]
+        x = ttnn.view(x, (1, x.shape[2], x.shape[3]))
+        x = ttnn.repeat(x, (12, 1, 1))
+        x = ttnn.to_memory_config(x, input_sharded_mem_config)
 
-        # calculate top-2 scores with expert groups
-        if cfg["topk_fallback"]:
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = cls.topk_fallback_op(
-                expert_scores_grouped, **cfg["topk_fallback_config"], **cfg["topk_within_expert_groups"]
-            )
-        else:
-            if expert_scores_grouped.shape[3] < TOPK_MIN_WIDTH:
-                # Pad to 64 for topk op
-                expert_scores_grouped = ttnn.pad(
-                    expert_scores_grouped,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_scores_grouped.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = ttnn.topk(
-                expert_scores_grouped, **cfg["topk_within_expert_groups"]
-            )
-        ttnn.deallocate(expert_scores_grouped)
-        ttnn.deallocate(topk_indices_within_expert_groups)
-        # sum top-2 scores within expert groups
-        expert_group_scores = ttnn.sum(topk_scores_within_expert_groups, dim=3)
-        ttnn.deallocate(topk_scores_within_expert_groups)
-        # reshape to 4D tensor
-        expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
-
-        # calculate top-k expert groups
-        if cfg["topk_fallback"]:
-            topk_expert_groups_scores, topk_expert_groups_indices = cls.topk_fallback_op(
-                expert_group_scores, **cfg["topk_fallback_config"], **cfg["topk_expert_groups"]
-            )
-        else:
-            if expert_group_scores.shape[3] < TOPK_MIN_WIDTH:
-                expert_group_scores = ttnn.pad(
-                    expert_group_scores,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_group_scores.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_expert_groups_scores, topk_expert_groups_indices = ttnn.topk(
-                expert_group_scores, **cfg["topk_expert_groups"]
-            )
-        ttnn.deallocate(expert_group_scores)
-        ttnn.deallocate(topk_expert_groups_scores)
-
-        # create full expert_groups_mask(dynamic shape)
-        input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, token_count, 1)))
-
-        # create full src tensor of ones
-        src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, token_count, 1)))
-
-        # scatter top-k expert groups indices to full expert_groups_mask
-        active_groups_mask = ttnn.scatter(
-            input=input_mask,
-            index=topk_expert_groups_indices,
-            src=src_tensor,
-            dim=cfg["scatter_top_expert_groups"]["dim"],
+        ttnn.experimental.deepseek.moe.moe_gate_mm(
+            x,
+            w_tensor=weight_tensor,
+            output_tensor=output_tensor,
+            layer_id=1,
+            column_id=1,
         )
-        ttnn.deallocate(topk_expert_groups_indices)
-        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
-        active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
+        if mode == "prefill":
+            output_list.append(output_tensor)
+            output = ttnn.stack(output_list, 1)
+        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        assert SEND_CORES == (0, 3, 6, 9), "SEND_CORES should be (0, 3, 6, 9)"
+        weight_tensor = ttnn.reshape(output_tensor, (output_tensor.shape[0], 4, -1))
+        valid_indices = weight_tensor.shape[2] // 3
+        weight_tensor = weight_tensor[:, :, valid_indices:]
+        f1_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], -1, ttnn.TILE_SIZE))[3, :, :16]
+        f2_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], -1, ttnn.TILE_SIZE))[4, :, :16]
+        topk_experts_weights = ttnn.concat([f1_scores, f2_scores], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        topk_experts_weights = ttnn.transpose(topk_experts_weights, 0, 1)
+        topk_experts_indices = ttnn.transpose(output_tensor[8:16, -32:], 0, 1)
+        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, *topk_experts_indices.shape))
+        topk_experts_indices = ttnn.bitwise_right_shift(topk_experts_indices, 7)
+        # or ttnn.logical_right_shift(topk_experts_indices, 7)
+        topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, *topk_experts_weights.shape))
 
-        # expand active_groups_mask to all the experts
-        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
-        ttnn.deallocate(active_groups_mask)
-        active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias_flat, active_experts_mask, **cfg["mul_scores_with_mask"])
-        ttnn.deallocate(scores_with_bias)
-        ttnn.deallocate(active_experts_mask)
-
-        # calculate top-k experts
-        if cfg["topk_fallback"]:
-            topk_experts_scores_with_bias, topk_experts_indices = cls.topk_fallback_op(
-                active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
-            )
-        else:
-            topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
-                active_experts_scores, **cfg["topk_experts"]
-            )
-        ttnn.deallocate(active_experts_scores)
-        ttnn.deallocate(topk_experts_scores_with_bias)
-
-        # gather original scores without bias
-        topk_experts_scores = ttnn.gather(scores_flat, dim=3, index=topk_experts_indices)
-        ttnn.deallocate(scores)
-
-        # normalize scores
-        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
-        topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
-        ttnn.deallocate(topk_expert_scores_sum)
-        ttnn.deallocate(topk_experts_scores)
-
-        # multiply by expert scale
-        expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]
-        # expand expert_scale to match topk_experts_scores_normalized shape(dynamic shape)
-        expert_scale = ttnn.repeat(expert_scale, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
-        expert_scale = ttnn.to_layout(expert_scale, ttnn.TILE_LAYOUT)
-        topk_experts_scores_normalized = ttnn.mul(
-            topk_experts_scores_normalized,
-            expert_scale,
-            memory_config=cfg["multiply_expert_scale"]["memory_config"],
-            dtype=cfg["multiply_expert_scale"]["dtype"],
-        )
-        ttnn.deallocate(expert_scale)
-
-        return topk_experts_scores_normalized, topk_experts_indices
+        return topk_experts_weights, topk_experts_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -440,94 +348,3 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return cls.forward(x, cfg)
-
-    @classmethod
-    def topk_fallback_op(
-        cls,
-        input: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        k: int,
-        dim: int,
-        largest: bool,
-        sorted: bool,
-        use_bitonic_sort: bool,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # convert ttnn mesh tensor to torch tensor
-        logger.info(f"topk_fallback_op: input shape: {input.shape}")
-        torch_input = ttnn.to_torch(
-            input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        if use_bitonic_sort:
-            topk_fn = topk_bitonic
-        else:
-            topk_fn = torch.topk
-
-        torch_topk_scores, torch_topk_indices = topk_fn(torch_input, k=k, dim=dim, largest=largest, sorted=sorted)
-
-        ttnn_topk_scores = ttnn.from_torch(
-            torch_topk_scores,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        ttnn_topk_indices = ttnn.from_torch(
-            torch_topk_indices,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.uint16,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_topk_scores, ttnn_topk_indices
-
-    @classmethod
-    def linear_fallback_op(
-        cls,
-        input_tensor: ttnn.Tensor,
-        input_tensor_b: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        compute_kernel_config=None,
-    ) -> ttnn.Tensor:
-        """Linear fallback operation using torch.nn.functional.linear"""
-        # convert ttnn mesh tensors to torch tensors
-        logger.info(f"linear_fallback_op: input shape: {input_tensor.shape}, weight shape: {input_tensor_b.shape}")
-
-        torch_input = ttnn.to_torch(
-            input_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        torch_weight = ttnn.to_torch(
-            input_tensor_b,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0][0]
-
-        torch_input_2d = torch_input.squeeze(0).squeeze(0)  # [seq_len, hidden_dim]
-        torch_weight_2d = torch_weight.T  # [output_dim, hidden_dim]
-
-        # use torch linear: input @ weight.T
-        torch_output = torch.nn.functional.linear(torch_input_2d, torch_weight_2d)
-
-        # Restore dimensions and convert back to ttnn
-        torch_output = torch_output.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, output_dim]
-
-        ttnn_output = ttnn.from_torch(
-            torch_output,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_output
