@@ -6,6 +6,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -16,10 +17,10 @@ inline void _calculate_abs_sfp_rows_()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0]
 
-    // SFPABS with instr_mod1=1 selects float absolute value (clears sign bit).
-    // instr_mod1=0 would be integer abs (2's complement), which is wrong for float data.
-    // See sfpi_constants.h: SFPABS_MOD1_FLOAT=1, SFPABS_MOD1_INT=0.
-    TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    // Float absolute value (clears sign bit). Use the named constant from
+    // sfpi_constants.h — SFPABS_MOD1_INT would do integer 2's-complement abs,
+    // which is wrong for float data.
+    TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPABS_MOD1_FLOAT);
 
     // Store result back to destination
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
