@@ -34,7 +34,10 @@
 namespace {
 
 constexpr int kRenderHz = 4;
-constexpr int kCorePanelWidth = 40;  // "(xx,yy)  [bar] pct%"
+// Cell format: "(xx,yy) C[........] xxx% D[........] xxx% "
+// visible widths:   8   +    17     +      17       = 42.
+constexpr int kCorePanelWidth = 42;
+constexpr int kBarWidth = 8;
 constexpr int kStaleThresholdMs = 2000;
 
 // ANSI color escapes. Kept inline — no curses dep.
@@ -229,31 +232,19 @@ int main(int argc, char* argv[]) {
         out << "ttnvtop  |  chips=" << maps.size() << "  cores=" << total_cores << "  refresh=" << kRenderHz
             << "Hz  (SHM viewer)\n";
         out << "\n";
-        // Explanation depends on whether compute% is available on all chips.
-        bool all_have_compute = true;
-        for (const auto& m : maps) {
-            if ((m.header->signal_sources & ttnvtop::SIGNAL_SRC_COMPUTE) == 0) {
-                all_have_compute = false;
-                break;
-            }
-        }
-        if (all_have_compute) {
-            out << "What this measures (Phase 2.0 — FPU busy%):\n";
-            out << "  Per Tensix, fraction of AICLK cycles the FPU pipeline was busy,\n";
-            out << "  computed from RISCV_DEBUG_REG_PERF_CNT_FPU delta vs wall-clock\n";
-            out << "  delta between sampler ticks. Smoothed with a ~1s EWMA.\n";
-            out << "  100% = FPU firing every cycle.  0% = no compute.\n";
-            out << "  Caveats: sample gaps across kernel boundaries are dropped\n";
-            out << "  (counters reset on StartPerfCounters). UNPACK/PACK/stall\n";
-            out << "  breakdown is Phase 2.1 (on-chip sampler with mux rotation).\n";
-        } else {
-            out << "What this measures (Phase 1 — dispatch occupancy):\n";
-            out << "  Per Tensix, fraction of the last ~1s in which a kernel was\n";
-            out << "  dispatched to that core (go_msg.signal == RUN_MSG_GO).\n";
-            out << "  100% = kernel dispatched the full window.  0% = idle.\n";
-            out << "  NOT compute busy%: a dispatched kernel stalled on NOC/CB\n";
-            out << "  still reads 100%.\n";
-        }
+        out << "Signals shown per Tensix (EWMA ~1s):\n";
+        out << "  " << kAnsiBold << "C" << kAnsiReset << " = FPU compute busy%   "
+            << "delta(FPU_OUT_H) / delta(WALL_CLOCK). Fraction of wall-clock cycles\n";
+        out << "     the FPU pipeline had a request in flight. NOT peak-FLOPS%; a\n";
+        out << "     stall on unpack/pack still reads 0 even though the core is working.\n";
+        out << "  " << kAnsiBold << "D" << kAnsiReset << " = dispatch occupancy%  "
+            << "fraction of the last 1s a kernel was dispatched to\n";
+        out << "     this core (go_msg.signal == RUN_MSG_GO). Not the same as compute%:\n";
+        out << "     a dispatched kernel stalled on NOC/CB still reads 100%.\n";
+        out << "  Use together: high D + low C = data movement / stalls; both high = real\n";
+        out << "  compute; both low = core genuinely idle.\n";
+        out << "  Color: " << kAnsiGray << "idle" << kAnsiReset << " / " << kAnsiGreen << "low" << kAnsiReset << " / "
+            << kAnsiYellow << "mid" << kAnsiReset << " / " << kAnsiRed << "high" << kAnsiReset << ".\n";
         out << "\n";
 
         // Header row: chip title per column.
@@ -291,24 +282,37 @@ int main(int argc, char* argv[]) {
         for (const auto& m : maps) {
             max_rows = std::max(max_rows, static_cast<size_t>(m.header->num_cores));
         }
-        std::vector<uint64_t> chip_sum(maps.size(), 0);
-        // Visible width of a populated row cell:
-        //   "(xx,yy)  [22-char bar] xxx%"  = 7 + 2 + 24 + 1 + 4 = 38 chars, then 2 trailing spaces.
+        // Per-chip running totals of both signals for the footer averages.
+        std::vector<uint64_t> compute_sum(maps.size(), 0);
+        std::vector<uint64_t> dispatch_sum(maps.size(), 0);
+        // Per-core row cell visible layout:
+        //   "(xx,yy) C[########] xx% D[########] xx% "
+        //    8       + 13        + 13        + 1 trailing = 35 chars; pad to kCorePanelWidth.
         for (size_t row = 0; row < max_rows; ++row) {
             for (size_t c = 0; c < maps.size(); ++c) {
+                const uint32_t src = maps[c].header->signal_sources;
+                const bool show_compute = (src & ttnvtop::SIGNAL_SRC_COMPUTE) != 0;
+                const bool show_dispatch = (src & ttnvtop::SIGNAL_SRC_DISPATCH) != 0;
                 if (row < maps[c].header->num_cores) {
                     const auto& v = maps[c].cores[row];
-                    // Phase 1: show dispatch-occupancy. When SIGNAL_SRC_COMPUTE is
-                    // set (Phase 2+) we'll use compute_busy_p1000 instead.
-                    const uint16_t busy_p1000 = (maps[c].header->signal_sources & ttnvtop::SIGNAL_SRC_COMPUTE)
-                                                    ? v.compute_busy_p1000
-                                                    : v.dispatch_busy_p1000;
-                    const uint32_t pct = busy_p1000 / 10u;
-                    chip_sum[c] += busy_p1000;
-                    const char* color = color_for_pct(pct);
+                    const uint32_t cpct = v.compute_busy_p1000 / 10u;
+                    const uint32_t dpct = v.dispatch_busy_p1000 / 10u;
+                    compute_sum[c] += v.compute_busy_p1000;
+                    dispatch_sum[c] += v.dispatch_busy_p1000;
                     out << "(" << std::setw(2) << static_cast<int>(v.noc_x) << "," << std::setw(2)
-                        << static_cast<int>(v.noc_y) << ")  " << color << make_bar(pct, 22) << " " << std::setw(3)
-                        << pct << "%" << kAnsiReset << "  ";
+                        << static_cast<int>(v.noc_y) << ") ";
+                    if (show_compute) {
+                        out << "C" << color_for_pct(cpct) << make_bar(cpct, kBarWidth) << kAnsiReset << " "
+                            << std::setw(3) << cpct << "% ";
+                    } else {
+                        out << std::string(1 + 2 + kBarWidth + 1 + 3 + 2, ' ');
+                    }
+                    if (show_dispatch) {
+                        out << "D" << color_for_pct(dpct) << make_bar(dpct, kBarWidth) << kAnsiReset << " "
+                            << std::setw(3) << dpct << "% ";
+                    } else {
+                        out << std::string(1 + 2 + kBarWidth + 1 + 3 + 2, ' ');
+                    }
                 } else {
                     out << std::string(kCorePanelWidth, ' ');
                 }
@@ -328,9 +332,10 @@ int main(int argc, char* argv[]) {
         out << "\n";
         for (size_t c = 0; c < maps.size(); ++c) {
             const uint32_t n = maps[c].header->num_cores;
-            const uint32_t avg = (n == 0) ? 0u : static_cast<uint32_t>(chip_sum[c] / (n * 10u));
+            const uint32_t c_avg = (n == 0) ? 0u : static_cast<uint32_t>(compute_sum[c] / (n * 10u));
+            const uint32_t d_avg = (n == 0) ? 0u : static_cast<uint32_t>(dispatch_sum[c] / (n * 10u));
             std::ostringstream t;
-            t << "avg " << std::setw(3) << avg << "%   (" << n << " cores)";
+            t << "avg C=" << std::setw(3) << c_avg << "%  D=" << std::setw(3) << d_avg << "%  (" << n << " cores)";
             std::string s = t.str();
             if (static_cast<int>(s.size()) < kCorePanelWidth) {
                 s.append(kCorePanelWidth - s.size(), ' ');
