@@ -15,8 +15,12 @@ def rgb_to_yuv420p(frames_rgb: np.ndarray) -> np.ndarray:
 
     Output shape is (T, H*W*3//2), uint8, with each row containing Y plane
     (H*W bytes) followed by U plane (H*W/4) then V plane (H*W/4). BT.601
-    limited-range coefficients are used; exact color fidelity is not required
-    for encode-path benchmarking.
+    limited-range coefficients are used.
+
+    Chroma 2×2 subsampling is done in **float**, before the clip+cast to
+    uint8, matching the on-device path. This preserves more precision than
+    the alternative (clip+cast first, then average uint8), where each pixel
+    pays two rounding steps and the clip can saturate mid-pipeline.
     """
     frames_rgb = np.asarray(frames_rgb)
     if frames_rgb.ndim != 4 or frames_rgb.shape[-1] != 3:
@@ -36,12 +40,13 @@ def rgb_to_yuv420p(frames_rgb: np.ndarray) -> np.ndarray:
     u = -0.148 * r - 0.291 * g + 0.439 * b + 128.0
     v = 0.439 * r - 0.368 * g - 0.071 * b + 128.0
 
-    y = y.clip(0, 255).astype(np.uint8)
-    u_full = u.clip(0, 255).astype(np.uint8)
-    v_full = v.clip(0, 255).astype(np.uint8)
+    # Subsample in float, then clip+cast at the very end.
+    u_ds = u.reshape(t, h // 2, 2, w // 2, 2).mean(axis=(2, 4))
+    v_ds = v.reshape(t, h // 2, 2, w // 2, 2).mean(axis=(2, 4))
 
-    u_ds = u_full.reshape(t, h // 2, 2, w // 2, 2).mean(axis=(2, 4)).astype(np.uint8)
-    v_ds = v_full.reshape(t, h // 2, 2, w // 2, 2).mean(axis=(2, 4)).astype(np.uint8)
+    y = y.clip(0, 255).astype(np.uint8)
+    u_ds = u_ds.clip(0, 255).astype(np.uint8)
+    v_ds = v_ds.clip(0, 255).astype(np.uint8)
 
     y_size = h * w
     uv_size = (h * w) // 4

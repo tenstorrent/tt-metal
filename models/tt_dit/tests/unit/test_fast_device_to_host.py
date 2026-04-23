@@ -22,8 +22,9 @@ import torch
 import ttnn
 
 from ...parallel.manager import CCLManager
-from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor_2dshard
+from ...utils.tensor import fast_device_to_host, fast_device_to_host_yuv420, float_to_uint8, typed_tensor_2dshard
 from ...utils.test import line_params, ring_params
+from ...utils.video import rgb_to_yuv420p
 
 # Wan 2.2 VAE output — BCTHW (H and W are parametrized per-test)
 B, C, T = 1, 3, 81
@@ -66,7 +67,10 @@ def _make_ccl_manager(mesh_device: ttnn.MeshDevice, num_links: int, topology: tt
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "mesh_device, num_links, device_params, topology",
-    [[(4, 32), 2, ring_params, ttnn.Topology.Ring], [(4, 8), 2, line_params, ttnn.Topology.Linear]],
+    [
+        [(4, 32), 2, ring_params, ttnn.Topology.Ring],
+        [(4, 8), 2, {**line_params, "l1_small_size": 2048}, ttnn.Topology.Linear],
+    ],
     ids=["bh_4x32", "bh_4x8"],
     indirect=["mesh_device", "device_params"],
 )
@@ -171,6 +175,88 @@ class TestFastDeviceToHost:
             print(f"  Mean error:    {mean_err:.4f}")
             print(f"  Exact match:   {pct_exact:.1f}%")
             assert max_err <= 1, f"Max uint8 error {max_err} > 1 on iter {iteration} ({label})"
+
+    def test_yuv420_accuracy(self, mesh_device, num_links, device_params, topology, height, width):
+        """Compare on-device RGB→YUV420p against the host `rgb_to_yuv420p` oracle.
+
+        Both paths now do the 2×2 chroma subsample in float (before the
+        clip+cast to uint8), so the only remaining difference is bf16 vs
+        float32 rounding across the BT.601 multiplies and the mean. Expected
+        max error ≤2 LSB. Runs twice with different seeds to exercise
+        program-cache reuse (same concern as ``test_uint8_accuracy``).
+        """
+        import numpy as np
+
+        for iteration, seed in enumerate([42, 123]):
+            gen = torch.Generator().manual_seed(seed)
+            ref = torch.rand(B, C, T, height, width, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+            tt_tensor = _shard_to_device(ref, mesh_device)
+
+            # --- Host oracle: bf16 [-1,1] → uint8 RGB → planar YUV420p via BT.601 ---
+            host_rgb_uint8 = ((ref.float() + 1.0) * 0.5 * 255.0).clamp(0, 255).to(torch.uint8)
+            host_rgb_bthwc = host_rgb_uint8.permute(0, 2, 3, 4, 1).contiguous().numpy()  # (B, T, H, W, 3)
+            # rgb_to_yuv420p wants (T, H, W, 3); handle batch by iterating.
+            host_yuv_per_b = [rgb_to_yuv420p(host_rgb_bthwc[b]) for b in range(B)]
+            host_yuv = torch.from_numpy(np.stack(host_yuv_per_b, axis=0))  # (B, T, H*W*3/2)
+
+            # --- Device path ---
+            device_yuv = fast_device_to_host_yuv420(tt_tensor, mesh_device)
+
+            assert (
+                device_yuv.shape == host_yuv.shape
+            ), f"Shape mismatch: device {device_yuv.shape} vs host {host_yuv.shape}"
+
+            diff = (device_yuv.int() - host_yuv.int()).abs()
+            max_err = diff.max().item()
+            mean_err = diff.float().mean().item()
+            pct_exact = (diff == 0).float().mean().item() * 100
+
+            # Per-plane error breakdown — helps triage Y vs chroma regressions.
+            y_end = height * width
+            uv_end = y_end + (height * width) // 4
+            y_err = diff[:, :, :y_end].max().item()
+            u_err = diff[:, :, y_end:uv_end].max().item()
+            v_err = diff[:, :, uv_end:].max().item()
+
+            label = "fresh" if iteration == 0 else "cached"
+            rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+            if rank == 0:
+                print(f"\n--- yuv420 accuracy, iter {iteration} ({label}) ---")
+                print(f"  Max error:     {max_err} (Y={y_err} U={u_err} V={v_err})")
+                print(f"  Mean error:    {mean_err:.4f}")
+                print(f"  Exact match:   {pct_exact:.1f}%")
+            assert max_err <= 2, f"Max yuv420 error {max_err} > 2 on iter {iteration} ({label})"
+
+    def test_yuv420_performance(self, mesh_device, num_links, device_params, topology, height, width):
+        """Measure on-device YUV420p conversion + D2H + planar assembly."""
+        n_iters = 10
+        gen = torch.Generator().manual_seed(42)
+        ref = torch.rand(B, C, T, height, width, generator=gen, dtype=torch.bfloat16) * 2.0 - 1.0
+        tt_tensor = _shard_to_device(ref, mesh_device)
+
+        # Warmup
+        fast_device_to_host_yuv420(tt_tensor, mesh_device)
+
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            fast_device_to_host_yuv420(tt_tensor, mesh_device)
+        ttnn.synchronize_device(mesh_device)
+        end = time.perf_counter()
+
+        avg_s = (end - start) / n_iters
+        tensor_bytes = B * T * height * width * 3 // 2  # YUV420p payload
+        throughput_gbs = (tensor_bytes / avg_s) / 1e9
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            print(f"\n--- on-device YUV420p + D2H + assembly performance (root=0) ---")
+            print(f"  Mesh shape:    {tuple(mesh_device.shape)}")
+            print(f"  Output shape:  (1, {T}, {height * width * 3 // 2}) uint8 planar YUV420p")
+            print(f"  Output size:   {tensor_bytes / 1e6:.1f} MB (vs {B*C*T*height*width / 1e6:.1f} MB for RGB uint8)")
+            print(f"  Iterations:    {n_iters}")
+            print(f"  Average time:  {avg_s * 1000:.1f} ms")
+            print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
 
     def test_uint8_performance(self, mesh_device, num_links, device_params, topology, height, width):
         """Measure on-device uint8 conversion + D2H + permute."""

@@ -338,6 +338,78 @@ def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.typecast(t, ttnn.uint8)
 
 
+def bfloat16_bcthw_to_yuv420_planes(t: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """On-device RGB→YUV420p for a (B, 3, T, H, W) bf16 tensor in [-1, 1].
+
+    Returns (Y, U, V) uint8 tensors with shapes:
+        Y: (B, 1, T, H, W)
+        U: (B, 1, T, H/2, W/2)
+        V: (B, 1, T, H/2, W/2)
+
+    Uses BT.601 coefficients matching the host-side reference
+    :func:`models.tt_dit.utils.video.rgb_to_yuv420p`: the math is applied
+    after mapping [-1, 1] to [0, 255] so the coefficients are identical to the
+    uint8 host path. 2×2 chroma subsampling is done per-plane with a
+    reshape-to-7D + two single-axis ``ttnn.mean`` reductions.
+
+    H, W and the per-shard dimensions must all be even; the 2×2 windows never
+    cross shard boundaries at any currently used mesh/resolution pair.
+
+    Alternative downsample paths were evaluated and discarded:
+      * ``ttnn.avg_pool2d`` on flattened RGB: 23 ms per invocation — the
+        Untilize → reshape → pool → reshape → Tilize round-trip around a pool
+        on sharded data eats the savings the pool itself provides.
+      * Multi-axis ``ttnn.mean(dim=[4, 6])``: decomposes into
+        reduce→permute→reduce→permute; the permutes alone cost ~50 ms.
+      * Slice+add on the "2" axis: slices with nonzero begin on sharded
+        tensors cost 2.5 ms each, and ttnn inserts extra Tilize/Untilize
+        around every op — 23 ms total.
+    """
+    B, C, T, H, W = t.shape
+    assert C == 3, f"Expected C=3 (RGB), got shape {tuple(t.shape)}"
+    assert H % 2 == 0 and W % 2 == 0, f"YUV420p requires even H/W, got {H}x{W}"
+
+    # Scale [-1, 1] → [0, 255] in bf16. Stay in TILE for the elementwise path.
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    t = ttnn.add(t, 1.0)
+    t = ttnn.multiply(t, 127.5)
+
+    # Split R, G, B along C (non-strided slices on a non-trailing dim).
+    r = ttnn.slice(t, [0, 0, 0, 0, 0], [B, 1, T, H, W])
+    g = ttnn.slice(t, [0, 1, 0, 0, 0], [B, 2, T, H, W])
+    b = ttnn.slice(t, [0, 2, 0, 0, 0], [B, 3, T, H, W])
+
+    def _combine(cr: float, cg: float, cb: float, offset: float) -> ttnn.Tensor:
+        out = ttnn.multiply(r, cr)
+        out = ttnn.add(out, ttnn.multiply(g, cg))
+        out = ttnn.add(out, ttnn.multiply(b, cb))
+        out = ttnn.add(out, offset)
+        return ttnn.clamp(out, min=0.0, max=255.0)
+
+    # BT.601 limited-range coefficients from [0, 255] RGB.
+    y = _combine(0.257, 0.504, 0.098, 16.0)
+    u = _combine(-0.148, -0.291, 0.439, 128.0)
+    v = _combine(0.439, -0.368, -0.071, 128.0)
+
+    def _downsample_2x2(x: ttnn.Tensor) -> ttnn.Tensor:
+        # 7D reshape needs ROW_MAJOR (TILE reshape fails on the tiny "2" dims).
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, [B, 1, T, H // 2, 2, W // 2, 2])
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.mean(x, dim=6, keepdim=False)  # average within each column pair
+        x = ttnn.mean(x, dim=4, keepdim=False)  # average within each row pair
+        return x  # (B, 1, T, H/2, W/2)
+
+    u = _downsample_2x2(u)
+    v = _downsample_2x2(v)
+
+    # Final layout + dtype: ROW_MAJOR uint8 for fast D2H zero-copy.
+    y = ttnn.typecast(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint8)
+    u = ttnn.typecast(ttnn.to_layout(u, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint8)
+    v = ttnn.typecast(ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint8)
+    return y, u, v
+
+
 def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
     """Return the mesh axis that spans multiple hosts (0 or 1).
 
@@ -595,6 +667,53 @@ def fast_device_to_host(
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
     return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+
+
+def fast_device_to_host_yuv420(
+    tt_tensor: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    tp_axis: int = 0,
+    sp_axis: int = 1,
+) -> torch.Tensor:
+    """On-device RGB→YUV420p conversion plus fast D2H.
+
+    Input: (B, 3, T, H, W) bf16 in [-1, 1], sharded H on mesh ``tp_axis`` (dim
+    3 in BCTHW) and W on mesh ``sp_axis`` (dim 4).
+
+    Output: (B, T, H*W*3//2) uint8 planar YUV420p, per-frame bytes laid out as
+    ``[Y plane][U plane][V plane]`` — the exact layout ffmpeg expects with
+    ``-pix_fmt yuv420p``. Each batch element can be fed frame-by-frame as
+    ``out[b, t]`` after reshaping to (H*3//2, W), or as a flat write.
+
+    Single-host only.
+    """
+    if ttnn.using_distributed_env():
+        raise NotImplementedError("fast_device_to_host_yuv420 is single-host only")
+
+    # Note: on a mesh-sharded tensor, ``tt_tensor.shape`` reports the
+    # **per-shard** logical dims (not the full logical shape). We only need it
+    # here to sanity-check the channel count.
+    assert tt_tensor.shape[1] == 3, f"Expected C=3 (RGB), got shape {tuple(tt_tensor.shape)}"
+
+    y_dev, u_dev, v_dev = bfloat16_bcthw_to_yuv420_planes(tt_tensor)
+
+    # Y is (B, 1, T, H, W); U, V are (B, 1, T, H/2, W/2). In all three the
+    # spatial dims occupy positions 3 and 4, so concat_dims is identical.
+    concat_dims: list[int | None] = [None, None]
+    concat_dims[tp_axis] = 3
+    concat_dims[sp_axis] = 4
+
+    y_host = fast_device_to_host(y_dev, mesh_device, concat_dims)
+    u_host = fast_device_to_host(u_dev, mesh_device, concat_dims)
+    v_host = fast_device_to_host(v_dev, mesh_device, concat_dims)
+
+    # Read true full dims from the reassembled host tensor.
+    B, _, T, H_full, W_full = y_host.shape
+    y_flat = y_host.squeeze(1).reshape(B, T, H_full * W_full)
+    u_flat = u_host.squeeze(1).reshape(B, T, (H_full * W_full) // 4)
+    v_flat = v_host.squeeze(1).reshape(B, T, (H_full * W_full) // 4)
+    return torch.cat([y_flat, u_flat, v_flat], dim=2)
 
 
 def upsample(
