@@ -15,6 +15,7 @@ the NPU-critical path.
 """
 from __future__ import annotations
 
+import math as _math
 from typing import Any, Dict, Tuple
 
 import torch
@@ -40,6 +41,72 @@ def _t(weight: torch.Tensor, device: Any) -> Any:
     )
 
 
+def _t_bias(bias: torch.Tensor, device: Any) -> Any:
+    """Upload bias as (1, N) bf16 tile — shape required by minimal_matmul bias_tensor API."""
+    return ttnn.from_torch(
+        bias.to(torch.bfloat16).contiguous().unsqueeze(0),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+
+
+_COMPUTE_CFG = None
+
+
+def _fused_compute_config(device: Any) -> Any:
+    global _COMPUTE_CFG
+    if _COMPUTE_CFG is not None:
+        return _COMPUTE_CFG
+    _COMPUTE_CFG = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return _COMPUTE_CFG
+
+
+# Pre-computed (M, K, N) → (M_blk, K_blk, N_blk, sub_h, sub_w) for MANO shapes.
+# Grid constraint: N_t/N_blk ≤ 13 cols, M_t/M_blk ≤ 10 rows (Blackhole 13×10).
+_MM_SHAPE_TABLE: Dict[tuple, tuple] = {
+    (1, 1024, 1536): (1, 8, 4, 1, 2),   # SA QKV — N_t=48, N_blk=4 → 12 cols
+    (1, 512, 1024):  (1, 8, 4, 1, 2),   # SA out / CA out — N_t=32, N_blk=4 → 8 cols
+    (1, 1024, 512):  (1, 8, 2, 1, 2),   # CA Q — N_t=16, N_blk=2 → 8 cols
+    (192, 1280, 1024): (1, 8, 4, 1, 2), # CA KV — M_t=6, N_t=32, N_blk=4 → 8 cols
+    (1, 1024, 1024): (1, 8, 4, 1, 2),   # FF fc1/fc2 — N_t=32, N_blk=4 → 8 cols
+    (1, 1024, 128):  (1, 8, 4, 1, 2),   # dec (padded from 109) — N_t=4, N_blk=4 → 1 col
+}
+_MM_CFGS: Dict[tuple, Any] = {}
+
+
+def _mm_cfg(M: int, K: int, N: int, device: Any) -> Any:
+    key = (M, K, N)
+    if key in _MM_CFGS:
+        return _MM_CFGS[key]
+    params = _MM_SHAPE_TABLE.get(key)
+    if params is None:
+        g = device.compute_with_storage_grid_size()
+        N_t = _math.ceil(N / 32)
+        K_t = _math.ceil(K / 32)
+        K_blk = next((b for b in (8, 4, 2, 1) if K_t % b == 0), 1)
+        N_blk = next(
+            (b for b in sorted([d for d in range(1, N_t + 1) if N_t % d == 0], reverse=True)
+             if N_t // b <= g.x), 1,
+        )
+        params = (1, K_blk, N_blk, 1, min(2, N_blk))
+    g = device.compute_with_storage_grid_size()
+    M_blk, K_blk, N_blk, sub_h, sub_w = params
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=M_blk, K_block_size=K_blk, N_block_size=N_blk,
+        subblock_h=sub_h, subblock_w=sub_w,
+        compute_with_storage_grid_size=ttnn.CoreCoord(g.x, g.y),
+    )
+    _MM_CFGS[key] = cfg
+    return cfg
+
+
 def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     head = ref.head
     td = head.transformer
@@ -56,7 +123,7 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
         "pos_embedding": _t(td.pos_embedding.squeeze(0), device),    # (1, 1024)
         "layers": [],
         "dec_w": _t(dec_w, device),
-        "dec_b": _t(dec_b, device),
+        "dec_b": _t_bias(dec_b, device),
         "dec_split": (head.decpose.out_features, head.decshape.out_features, head.deccam.out_features),
     }
     for blk in td.layers:
@@ -64,31 +131,23 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
             "norm_sa": {"weight": _t(blk.norm_sa.weight, device), "bias": _t(blk.norm_sa.bias, device)},
             "sa_qkv_w": _t(blk.sa.to_qkv.weight.t(), device),        # (1024, 3*512)
             "sa_out_w": _t(blk.sa.to_out.weight.t(), device),        # (512, 1024)
-            "sa_out_b": _t(blk.sa.to_out.bias, device),
+            "sa_out_b": _t_bias(blk.sa.to_out.bias, device),
             "norm_ca": {"weight": _t(blk.norm_ca.weight, device), "bias": _t(blk.norm_ca.bias, device)},
             "ca_q_w": _t(blk.ca.to_q.weight.t(), device),            # (1024, 512)
             "ca_kv_w": _t(blk.ca.to_kv.weight.t(), device),          # (1280, 2*512)
             "ca_out_w": _t(blk.ca.to_out.weight.t(), device),        # (512, 1024)
-            "ca_out_b": _t(blk.ca.to_out.bias, device),
+            "ca_out_b": _t_bias(blk.ca.to_out.bias, device),
             "norm_ff": {"weight": _t(blk.norm_ff.weight, device), "bias": _t(blk.norm_ff.bias, device)},
             "ff_fc1_w": _t(blk.ff.net[0].weight.t(), device),        # (1024, 1024)
-            "ff_fc1_b": _t(blk.ff.net[0].bias, device),
+            "ff_fc1_b": _t_bias(blk.ff.net[0].bias, device),
             "ff_fc2_w": _t(blk.ff.net[2].weight.t(), device),        # (1024, 1024)
-            "ff_fc2_b": _t(blk.ff.net[2].bias, device),
+            "ff_fc2_b": _t_bias(blk.ff.net[2].bias, device),
         })
     return params
 
 
-def _split_qkv_sdpa(qkv, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
-    """(B, N, 3·h·d) → triple of (B, h, N, d) for SDPA."""
-    B, N, _ = qkv.shape
-    qkv = ttnn.reshape(qkv, (B, N, 3, num_heads, head_dim))
-    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))
-    return qkv[0], qkv[1], qkv[2]
-
-
 def _split_qk_qv_sdpa(q, kv, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
-    """Cross-attn variant: Q is already a single token tensor; KV is fused.
+    """Cross-attn variant: Q is a single token tensor; KV is fused.
 
     Returns (q_h, k_h, v_h) all in (B, h, N, d) layout.
     """
@@ -110,40 +169,66 @@ def _merge_heads(ctx, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
 
 
 def _decoder_block(x, context, p: Dict[str, Any]):
-    # --- "self-attention": with N=1 query the softmax(q·kᵀ) is a scalar 1
-    # and Attn(q,k,v) = v, so the only thing self-attn contributes is
-    # ``sa_out(v)``.  We compute V directly from QKV and drop Q, K, the
-    # scaled-dot-product, the softmax, and the @V matmul (≈ 4 ops).
+    dev = x.device()
+    ckcfg = _fused_compute_config(dev)
+
+    # SA: N=1, so attn output == V; skip SDPA entirely.
     h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"])
-    qkv = h @ p["sa_qkv_w"]                                  # (B, 1, 3·512)
-    B = qkv.shape[0]
-    qkv = ttnn.reshape(qkv, (B, 1, 3, NUM_HEADS, HEAD_DIM))
-    qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))                 # (3, B, h, 1, d)
-    v = qkv[2]
-    v = ttnn.permute(v, (0, 2, 1, 3))                        # (B, 1, h, d)
-    v = ttnn.reshape(v, (B, 1, NUM_HEADS * HEAD_DIM))
-    sa = v @ p["sa_out_w"]
-    sa = sa + p["sa_out_b"]
+    qkv = ttnn.experimental.minimal_matmul(
+        h, p["sa_qkv_w"],
+        config=_mm_cfg(1, 1024, 1536, dev),
+        compute_kernel_config=ckcfg,
+    )
+    _, _, v = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv, num_heads=NUM_HEADS, transpose_key=False,
+    )
+    v = ttnn.transformer.concatenate_heads(v)
+    sa = ttnn.experimental.minimal_matmul(
+        v, p["sa_out_w"],
+        bias_tensor=p["sa_out_b"],
+        config=_mm_cfg(1, 512, 1024, dev),
+        compute_kernel_config=ckcfg,
+    )
     x = x + sa
 
-    # --- cross-attention via SDPA ---
+    # Cross-attention via SDPA.
     h = ttnn.layer_norm(x, weight=p["norm_ca"]["weight"], bias=p["norm_ca"]["bias"])
-    q = h @ p["ca_q_w"]                                  # (B, 1, 512)
-    kv = context @ p["ca_kv_w"]                          # (B, 192, 1024)
+    q = ttnn.experimental.minimal_matmul(
+        h, p["ca_q_w"],
+        config=_mm_cfg(1, 1024, 512, dev),
+        compute_kernel_config=ckcfg,
+    )
+    kv = ttnn.experimental.minimal_matmul(
+        context, p["ca_kv_w"],
+        config=_mm_cfg(192, 1280, 1024, dev),
+        compute_kernel_config=ckcfg,
+    )
     q_h, k_h, v_h = _split_qk_qv_sdpa(q, kv)
     ca = ttnn.transformer.scaled_dot_product_attention(q_h, k_h, v_h, is_causal=False, scale=HEAD_DIM ** -0.5)
-    ca = _merge_heads(ca)                                # (B, 1, 512)
-    ca = ca @ p["ca_out_w"]
-    ca = ca + p["ca_out_b"]
+    ca = _merge_heads(ca)
+    ca = ttnn.experimental.minimal_matmul(
+        ca, p["ca_out_w"],
+        bias_tensor=p["ca_out_b"],
+        config=_mm_cfg(1, 512, 1024, dev),
+        compute_kernel_config=ckcfg,
+    )
     x = x + ca
 
-    # --- FFN ---
+    # FFN with fused GELU.
     h = ttnn.layer_norm(x, weight=p["norm_ff"]["weight"], bias=p["norm_ff"]["bias"])
-    h = h @ p["ff_fc1_w"]
-    h = h + p["ff_fc1_b"]
-    h = ttnn.gelu(h)
-    h = h @ p["ff_fc2_w"]
-    h = h + p["ff_fc2_b"]
+    h = ttnn.experimental.minimal_matmul(
+        h, p["ff_fc1_w"],
+        bias_tensor=p["ff_fc1_b"],
+        config=_mm_cfg(1, 1024, 1024, dev),
+        compute_kernel_config=ckcfg,
+        fused_activation=(ttnn.UnaryOpType.GELU, False),
+    )
+    h = ttnn.experimental.minimal_matmul(
+        h, p["ff_fc2_w"],
+        bias_tensor=p["ff_fc2_b"],
+        config=_mm_cfg(1, 1024, 1024, dev),
+        compute_kernel_config=ckcfg,
+    )
     return x + h
 
 
@@ -183,8 +268,12 @@ def forward_device(
     x = x + params["pos_embedding"]
     for i in range(depth):
         x = _decoder_block(x, feature_tokens, params["layers"][i])
-    dec = x @ params["dec_w"]
-    dec = dec + params["dec_b"]
+    dec = ttnn.experimental.minimal_matmul(
+        x, params["dec_w"],
+        bias_tensor=params["dec_b"],
+        config=_mm_cfg(1, 1024, 128, device),
+        compute_kernel_config=_fused_compute_config(device),
+    )
     return dec
 
 
@@ -243,8 +332,12 @@ def forward(
         x = _decoder_block(x, feature_tokens, params["layers"][i])
 
     # Single fused regression matmul → one device→host transfer.
-    dec = x @ params["dec_w"]                              # (B, 1, 109_padded)
-    dec = dec + params["dec_b"]
+    dec = ttnn.experimental.minimal_matmul(
+        x, params["dec_w"],
+        bias_tensor=params["dec_b"],
+        config=_mm_cfg(1, 1024, 128, device),
+        compute_kernel_config=_fused_compute_config(device),
+    )
     dec_h = ttnn.to_torch(dec).to(torch.float32).reshape(B, -1)
     np_pose, np_shape, np_cam = params["dec_split"]
     pose_h = dec_h[:, :np_pose] + init_hand_pose
