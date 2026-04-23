@@ -1514,10 +1514,10 @@ def test_wan_decoder(
 
 
 @pytest.mark.parametrize(
-    "B, C, T, H, W, target_height, target_width, t_chunk_size, cached",
+    "B, C, T, H, W, height, width, t_chunk_size",
     [
-        (1, 16, 7, 60, 104, 480, 832, 7, True),
-        (1, 16, 21, 90, 160, 720, 1280, 21, False),
+        (1, 16, 7, 60, 104, 480, 832, 7),
+        (1, 16, 21, 90, 160, 720, 1280, None),
     ],
     ids=["480p_t7_cached", "720p_t21_fullT"],
 )
@@ -1538,17 +1538,16 @@ def test_wan_decoder_production_blocking(
     T,
     H,
     W,
-    target_height,
-    target_width,
+    height,
+    width,
     t_chunk_size,
-    cached,
     h_axis,
     w_axis,
     num_links,
 ):
     """Verify that the VAE decoder runs end-to-end with production blocking configs.
 
-    Uses the exact (target_height, target_width, t_chunk_size, cached) values
+    Uses the exact (height, width, t_chunk_size) values
     from the pipeline so that WanDecoder -> compute_decoder_dims -> _BLOCKINGS
     exercises the optimized per-layer blocking table rather than the fallback.
     """
@@ -1600,10 +1599,10 @@ def test_wan_decoder_production_blocking(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         dtype=dtype,
-        target_height=target_height,
-        target_width=target_width,
+        height=height,
+        width=width,
         t_chunk_size=t_chunk_size,
-        cached=cached,
+        cached=t_chunk_size is not None,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
@@ -1621,7 +1620,7 @@ def test_wan_decoder_production_blocking(
         dtype=ttnn.bfloat16,
     )
 
-    logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size}, cached={cached})")
+    logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size})")
     start = time.time()
     tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=1)
 
