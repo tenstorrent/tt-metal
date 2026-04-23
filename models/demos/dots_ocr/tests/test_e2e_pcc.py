@@ -8,8 +8,13 @@ Builds the HF Dots reference (``DotsOCRReference``) + TT ``DotsTransformer`` +
 ``DropInVisionTransformer``, runs a minimal TT vision forward with synthetic inputs, and —
 when a device and weights are available — checks shape compatibility with the reference path.
 
-The test stays skippable on CI (no device). When a mesh is available, it loads **real** Dots
-checkpoint tensors via ``load_real_state_dict`` (requires HF cache / network unless skipped).
+The first test (``test_e2e_structural_pcc``) stays skippable on CI (no device). A companion
+test, ``test_e2e_hybrid_compatibility``, runs the full-TTNN :class:`VisionEncoder` with
+default ``MESH_DEVICE``/T3K env and ``HF_MODEL=rednote-hilab/dots.mocr`` (legacy CPU hybrid is
+disabled in code).
+
+When a mesh is available, the structural test loads **real** Dots checkpoint tensors via
+``load_real_state_dict`` (requires HF cache / network unless skipped).
 """
 
 from __future__ import annotations
@@ -127,5 +132,59 @@ def test_e2e_structural_pcc(tmp_path):
             close_dots_mesh_device(device)
 
 
-def test_e2e_hybrid_compatibility():
-    pytest.skip("Hybrid CPU VisionEncoder is disabled; TTNN-only vision requires a device + weights.")
+def test_e2e_hybrid_compatibility(tmp_path):
+    """
+    End-to-end :class:`VisionEncoder` on device with real Dots ``vision_tower`` weights.
+
+    The legacy CPU hybrid path is removed; this checks the supported stack: full TTNN vision
+    (same defaults as ``test_e2e_structural_pcc`` for mesh and checkpoint id).
+    """
+    ttnn = pytest.importorskip("ttnn")
+    if not hasattr(ttnn, "open_mesh_device") or not hasattr(ttnn, "MeshShape"):
+        pytest.skip("TTNN mesh API not available")
+
+    torch.manual_seed(0)
+
+    os.environ.setdefault("MESH_DEVICE", "T3K")
+    os.environ.setdefault("DOTS_T3K_OPEN_FULL_MESH", "1")
+    os.environ.setdefault("DOTS_T3K_CREATE_SUBMESH", "1")
+    os.environ.setdefault("DOTS_T3K_TP", "2")
+    default_model_id = "rednote-hilab/dots.mocr"
+    os.environ.setdefault("HF_MODEL", default_model_id)
+
+    from models.demos.dots_ocr.reference.hf_utils import get_hf_model_id
+    from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
+    from models.demos.dots_ocr.tt.vision import VisionEncoder
+    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+    device = None
+    try:
+        try:
+            device = open_mesh_device()
+        except Exception as exc:
+            pytest.skip(f"TT device unavailable ({type(exc).__name__}): {exc}")
+
+        model_id = os.environ.get("HF_MODEL", get_hf_model_id())
+        try:
+            state_dict = load_hf_state_dict_filtered(model_id, ("vision_tower.", "model.vision_tower."))
+        except Exception as exc:
+            pytest.skip(f"Real vision weights required for e2e VisionEncoder test: {exc}")
+
+        encoder = VisionEncoder(
+            mesh_device=device,
+            hf_model=None,
+            state_dict=state_dict,
+            weight_cache_path=tmp_path,
+            hidden_size=1536,
+            out_hidden_size=1536,
+            spatial_merge_size=2,
+        )
+        pixel_values = torch.randn(1, 3, 224, 224, dtype=torch.bfloat16)
+        grid_thw = torch.tensor([[1, 16, 16]], dtype=torch.int32)
+        out = encoder.forward(pixel_values, grid_thw)
+        assert isinstance(out, torch.Tensor) and out.dim() == 2
+        assert out.shape[1] == 1536 and out.shape[0] > 0
+        assert not torch.isnan(out).any() and not torch.isinf(out).any()
+    finally:
+        if device is not None:
+            close_dots_mesh_device(device)

@@ -115,9 +115,12 @@ def benchmark_ttnn(
 
     from models.demos.dots_ocr.demo.demo import _build_tt_stack
     from models.demos.dots_ocr.tt.common import (
+        argmax_token_id_host_via_ttnn,
         merge_vision_tokens,
+        pad_embedding_ttnn,
         preprocess_inputs_prefill,
         sample_host,
+        text_embeds_from_ttnn_embedding,
         text_rope_from_hf,
     )
     from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, open_mesh_device
@@ -134,7 +137,7 @@ def benchmark_ttnn(
         inputs = ref.preprocess_image_and_prompt(image, prompt)
 
         pad_token_id = ref.tokenizer.pad_token_id or 0
-        pad_embedding = ref.model.get_input_embeddings()(torch.tensor([pad_token_id])).squeeze(0)
+        pad_embedding = pad_embedding_ttnn(tt_model, int(pad_token_id))
 
         stop_ids: set[int] = set()
         for attr in ("eos_token_id", "pad_token_id"):
@@ -152,7 +155,7 @@ def benchmark_ttnn(
             else:
                 image_embeds = torch.tensor([], dtype=torch.bfloat16)
 
-            text_embeds = ref.model.get_input_embeddings()(inputs.input_ids)
+            text_embeds = text_embeds_from_ttnn_embedding(tt_model, inputs.input_ids)
             input_embeds = (
                 merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, ref.model.config)
                 if image_embeds.numel() > 0
@@ -174,7 +177,10 @@ def benchmark_ttnn(
             )
             ttft = time.perf_counter() - t_prefill
 
-            out_tok = torch.argmax(logits, dim=-1)
+            try:
+                out_tok = argmax_token_id_host_via_ttnn(logits, mesh_device=mesh_device)
+            except Exception:
+                out_tok = torch.argmax(logits, dim=-1)
             current_pos = torch.tensor([decoding_pos[0]])
             decoded = 1
             t_decode = time.perf_counter()

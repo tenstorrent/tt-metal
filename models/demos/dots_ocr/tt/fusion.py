@@ -18,7 +18,9 @@ def merge_vision_tokens_host(
     """
     Host-side fusion used by the TT pipeline.
 
-    We keep this on host to avoid a large masked_scatter/scatter on device.
+    We keep this on host to avoid a large masked_scatter/scatter on device. For the **device** path, see
+    :func:`models.demos.dots_ocr.tt.common.merge_vision_tokens_ttnn` (used with
+    :func:`models.demos.dots_ocr.tt.common.preprocess_inputs_prefill_ttnn` and ``--device-fusion`` in the demo).
     """
     return merge_vision_tokens_torch(
         input_ids=input_ids,

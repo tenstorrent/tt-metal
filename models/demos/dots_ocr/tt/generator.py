@@ -11,7 +11,12 @@ from loguru import logger
 
 from models.common.warmup import WarmupForwardMixin
 from models.demos.dots_ocr.tt._ttnn_import import get_ttnn
-from models.demos.dots_ocr.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
+from models.demos.dots_ocr.tt.common import (
+    fused_ttnn_embeddings_to_torch,
+    get_block_size,
+    get_max_prefill_chunk_size,
+    num_blocks_in_seq,
+)
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -43,7 +48,12 @@ class Generator(WarmupForwardMixin):
     def processor(self):
         return self._ttt.processor
 
-    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(self, tokens, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
+        ttnn = get_ttnn()
+        if ttnn is not None and isinstance(tokens, ttnn.Tensor):
+            tokens = fused_ttnn_embeddings_to_torch(tokens, self.mesh_device)
+        if not isinstance(tokens, torch.Tensor):
+            raise TypeError("prefill_forward_text expects torch or ttnn embedding tensor [B, S, D] after conversion")
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)

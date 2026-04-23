@@ -11,6 +11,10 @@ Two backends, selected with ``--backend``:
 - ``ttnn``: Builds the Dots TT stack (``DotsTransformer`` + optional
             ``DropInVisionTransformer`` for ``--vision-backend ttnn``) and runs prefill + decode via
             :class:`models.tt_transformers.tt.generator.Generator`. Requires ``MESH_DEVICE`` to be set.
+            By default, device-side fusion/prefill padding is ON (disable with ``--no-device-fusion`` or
+            ``DOTS_DEVICE_FUSION=0``). Greedy token id selection defaults to host ``torch.argmax``; use
+            ``--device-argmax`` (or ``DOTS_DEVICE_ARGMAX=1``) for TTNN argmax. Optional ``--fixed-decode-steps``
+            runs Option A fixed-length decode.
 
 The TTNN path loads **real** checkpoint tensors via ``DotsModelArgs.load_real_state_dict`` /
 ``models.demos.dots_ocr.tt.load.load_dots_full_state_dict`` (filtered HF loads; no dummy weights).
@@ -235,6 +239,8 @@ def _decode_loop(
     max_new_tokens: int,
     stop_at_eos: bool = True,
     repetition_penalty: float | None = None,
+    device_argmax: bool = False,
+    fixed_steps: bool = False,
 ) -> list[list[int]]:
     """
     Argmax decode on the host: one user per batch (typical for Dots OCR), returns per-user
@@ -243,8 +249,13 @@ def _decode_loop(
     batch_size = prefilled_logits.shape[0]
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)], dtype=torch.int32)
 
-    # argmax over vocab dim on the final prefill token
-    prefilled_token = torch.argmax(prefilled_logits, dim=-1)  # [B, 1]
+    # Next-token selection for the final prefill token (default: host torch.argmax; opt-in TTNN).
+    if device_argmax:
+        from models.demos.dots_ocr.tt.common import argmax_token_id_host_via_ttnn
+
+        prefilled_token = argmax_token_id_host_via_ttnn(prefilled_logits, mesh_device=generator.mesh_device)
+    else:
+        prefilled_token = torch.argmax(prefilled_logits, dim=-1)  # [B, 1]
     out_tok = prefilled_token
     all_outputs: list[list[int]] = [[int(prefilled_token[b].item())] for b in range(batch_size)]
 
@@ -262,22 +273,133 @@ def _decode_loop(
         f"repetition_penalty={repetition_penalty})"
     )
 
+    # Option A: fixed-step decode. We still run a Python loop (TTNN does not provide a dynamic
+    # device-side loop primitive here), but we eliminate per-token EOS bookkeeping and only
+    # decode/tokenize after the loop.
+    if fixed_steps:
+        out_buf = torch.empty((batch_size, max_new_tokens), dtype=torch.int64)
+        out_buf[:, 0] = prefilled_token.view(-1).to(torch.int64)
+        for iteration in range(1, max_new_tokens):
+            t0 = time.perf_counter()
+            use_device_pick = bool(device_argmax) and not (repetition_penalty is not None and repetition_penalty > 1.0)
+            if use_device_pick:
+                tt_out = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=False,
+                    page_table=None,
+                    kv_cache=None,
+                    sampling_params=None,
+                    read_from_device=False,
+                )
+                if isinstance(tt_out, list):
+                    tt_logits = tt_out[0][0]
+                elif isinstance(tt_out, tuple):
+                    tt_logits = tt_out[0]
+                else:
+                    tt_logits = tt_out
+                from models.demos.dots_ocr.tt.common import argmax_token_id_ttnn
+
+                out_tok = argmax_token_id_ttnn(
+                    tt_logits, mesh_device=generator.mesh_device, batch_size=batch_size, layout="decode"
+                )
+                try:
+                    import ttnn
+
+                    ttnn.deallocate(tt_logits)
+                except Exception:
+                    pass
+            else:
+                logits, _ = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=False,
+                    page_table=None,
+                    kv_cache=None,
+                    sampling_params=None,
+                    read_from_device=True,
+                )
+                if repetition_penalty is not None and repetition_penalty > 1.0 and batch_size == 1:
+                    seen = set(int(x) for x in out_buf[0, :iteration].tolist())
+                    logits = _apply_repetition_penalty_to_logits(
+                        logits, token_ids_to_penalize=seen, penalty=repetition_penalty
+                    )
+                out_tok = torch.argmax(logits, dim=-1)
+            if out_tok.dim() == 1:
+                out_tok = out_tok.unsqueeze(-1)
+            elapsed = time.perf_counter() - t0
+            if iteration == 1 or (iteration + 1) % 8 == 0:
+                logger.info(f"[TTNN] iter {iteration + 1}/{max_new_tokens}: {elapsed * 1000:.0f}ms")
+            out_buf[:, iteration] = out_tok.view(-1).to(torch.int64)
+            current_pos += 1
+
+        # Host-side trim at EOS/stop tokens (Option A still avoids per-step EOS bookkeeping).
+        out_lists = [out_buf[b].tolist() for b in range(batch_size)]
+        if stop_at_eos and stop_ids:
+            trimmed: list[list[int]] = []
+            for b in range(batch_size):
+                seq = out_lists[b]
+                cut = None
+                for i, t in enumerate(seq):
+                    if int(t) in stop_ids:
+                        cut = i
+                        break
+                trimmed.append(seq[:cut] if cut is not None else seq)
+            out_lists = trimmed
+        return out_lists
+
+    # Legacy EOS-aware path (kept for debugging or very short runs).
     for iteration in range(max_new_tokens):
         t0 = time.perf_counter()
-        logits, _ = generator.decode_forward(
-            out_tok,
-            current_pos,
-            enable_trace=False,
-            page_table=None,
-            kv_cache=None,
-            sampling_params=None,
-        )
-        if repetition_penalty is not None and repetition_penalty > 1.0 and batch_size == 1:
-            seen = set(all_outputs[0])
-            logits = _apply_repetition_penalty_to_logits(logits, token_ids_to_penalize=seen, penalty=repetition_penalty)
-        elif repetition_penalty is not None and repetition_penalty > 1.0 and batch_size > 1:
-            logger.warning("[TTNN] repetition_penalty is only applied when batch_size==1 (Dots OCR demo is batch=1).")
-        out_tok = torch.argmax(logits, dim=-1)
+        use_device_pick = bool(device_argmax) and not (repetition_penalty is not None and repetition_penalty > 1.0)
+        if use_device_pick:
+            tt_out = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=False,
+                page_table=None,
+                kv_cache=None,
+                sampling_params=None,
+                read_from_device=False,
+            )
+            # tt_out is typically [(tt_logits, tt_log_probs)] for data_parallel=1.
+            if isinstance(tt_out, list):
+                tt_logits = tt_out[0][0]
+            elif isinstance(tt_out, tuple):
+                tt_logits = tt_out[0]
+            else:
+                tt_logits = tt_out
+            from models.demos.dots_ocr.tt.common import argmax_token_id_ttnn
+
+            out_tok = argmax_token_id_ttnn(
+                tt_logits, mesh_device=generator.mesh_device, batch_size=batch_size, layout="decode"
+            )
+            try:
+                import ttnn
+
+                ttnn.deallocate(tt_logits)
+            except Exception:
+                pass
+        else:
+            logits, _ = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=False,
+                page_table=None,
+                kv_cache=None,
+                sampling_params=None,
+                read_from_device=True,
+            )
+            if repetition_penalty is not None and repetition_penalty > 1.0 and batch_size == 1:
+                seen = set(all_outputs[0])
+                logits = _apply_repetition_penalty_to_logits(
+                    logits, token_ids_to_penalize=seen, penalty=repetition_penalty
+                )
+            elif repetition_penalty is not None and repetition_penalty > 1.0 and batch_size > 1:
+                logger.warning(
+                    "[TTNN] repetition_penalty is only applied when batch_size==1 (Dots OCR demo is batch=1)."
+                )
+            out_tok = torch.argmax(logits, dim=-1)
         if out_tok.dim() == 1:
             out_tok = out_tok.unsqueeze(-1)
         elapsed = time.perf_counter() - t0
@@ -321,6 +443,9 @@ def run_ttnn_backend(
     use_host_rope: bool = False,
     sanity_text_only: bool = False,
     ttnn_repetition_penalty: float | None = None,
+    device_fusion: bool = True,
+    device_argmax: bool = False,
+    fixed_decode_steps: bool = False,
 ) -> str:
     logger.info(
         f"[TTNN] Loading {model_id} and building Dots TT stack (MESH_DEVICE={os.environ.get('MESH_DEVICE', 'N150')})"
@@ -331,7 +456,19 @@ def run_ttnn_backend(
         print(f"ttnn not importable: {exc}")
         return ""
 
-    from models.demos.dots_ocr.tt.common import merge_vision_tokens, preprocess_inputs_prefill, text_rope_from_hf
+    from models.demos.dots_ocr.tt.common import (
+        fused_ttnn_embeddings_to_torch,
+        merge_vision_tokens,
+        merge_vision_tokens_ttnn,
+        pad_embedding_ttnn,
+        pad_embedding_ttnn_tensor,
+        preprocess_inputs_prefill,
+        preprocess_inputs_prefill_ttnn,
+        text_embeds_from_ttnn_embedding,
+        text_embeds_from_ttnn_embedding_ttnn,
+        text_rope_from_hf,
+        ttnn_fused_batch_to_user_list,
+    )
     from models.demos.dots_ocr.tt.generator import Generator
     from models.demos.dots_ocr.tt.mesh import close_dots_mesh_device, get_max_seq_len_cap, open_mesh_device
     from models.demos.dots_ocr.tt.model import DotsTransformer, DropInVisionTransformer
@@ -412,26 +549,46 @@ def run_ttnn_backend(
             )
             image_embeds = image_embeds.to(torch.bfloat16)
 
-        text_embeds = ref.model.get_input_embeddings()(inputs.input_ids)
-        input_embeds = (
-            merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, ref.model.config)
-            if image_embeds.numel() > 0
-            else text_embeds
-        )
-
         pad_token_id = ref.tokenizer.pad_token_id or 0
-        pad_embedding = ref.model.get_input_embeddings()(torch.tensor([pad_token_id])).squeeze(0)
 
-        input_prefill, decoding_pos, prefill_lens = preprocess_inputs_prefill(
-            [input_embeds[0]],
-            model_args,
-            inputs.attention_mask,
-            pad_embedding,
-        )
+        if device_fusion:
+            logger.info("[TTNN] device_fusion: text+vision merge + prefill on mesh (one D2H readback in prefill)")
+            text_ttnn = text_embeds_from_ttnn_embedding_ttnn(tt_model, inputs.input_ids)
+            if image_embeds.numel() > 0:
+                fused_ttnn = merge_vision_tokens_ttnn(
+                    inputs.input_ids, text_ttnn, image_embeds, ref.model.config, mesh_device=mesh_device
+                )
+            else:
+                fused_ttnn = text_ttnn
+            pad_tt = pad_embedding_ttnn_tensor(tt_model, int(pad_token_id))
+            per_user = ttnn_fused_batch_to_user_list(fused_ttnn)
+            input_prefill, decoding_pos, prefill_lens = preprocess_inputs_prefill_ttnn(
+                per_user, model_args, inputs.attention_mask, pad_tt
+            )
+            prefill_for_rope: torch.Tensor | None = None
+            if use_host_rope:
+                prefill_for_rope = fused_ttnn_embeddings_to_torch(fused_ttnn, mesh_device)
+        else:
+            text_embeds = text_embeds_from_ttnn_embedding(tt_model, inputs.input_ids)
+            input_embeds = (
+                merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, ref.model.config)
+                if image_embeds.numel() > 0
+                else text_embeds
+            )
+            pad_embedding = pad_embedding_ttnn(tt_model, int(pad_token_id))
+            input_prefill, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+                [input_embeds[0]],
+                model_args,
+                inputs.attention_mask,
+                pad_embedding,
+            )
+            prefill_for_rope = input_embeds
 
         rot_mats = None
         if use_host_rope:
-            cos, sin = text_rope_from_hf(inputs, input_embeds, ref.model, model_args, pad_token_id)
+            if prefill_for_rope is None:
+                raise RuntimeError("use_host_rope: internal error (no embeddings for RoPE)")
+            cos, sin = text_rope_from_hf(inputs, prefill_for_rope, ref.model, model_args, pad_token_id)
             rot_mats = (cos, sin)
         else:
             logger.info("[TTNN] Using device-side RoPE caches (no host rot_mats)")
@@ -455,6 +612,8 @@ def run_ttnn_backend(
             max_new_tokens=max_new_tokens,
             stop_at_eos=stop_at_eos,
             repetition_penalty=ttnn_repetition_penalty,
+            device_argmax=device_argmax,
+            fixed_steps=fixed_decode_steps,
         )
         decode_time = time.perf_counter() - t0
         decoded = _decode_ttnn_new_tokens(ref, all_outputs[0])
@@ -470,6 +629,8 @@ def run_ttnn_backend(
         if len(all_outputs[0]) > 0 and decode_time > 0:
             print(f"Decode t/s:       {len(all_outputs[0]) / decode_time:.1f}")
         print(f"Output:           {decoded}")
+        if device_fusion:
+            print(f"Device fusion:   on (ttnn merge + ttnn prefill pad)")
         return decoded
     finally:
         # Explicitly drop objects that may hold MeshDevice references before closing the mesh.
@@ -626,6 +787,23 @@ def main() -> None:
         help="TTNN decode only: HF-style repetition penalty (>1.0, e.g. 1.12–1.2) to reduce **/token loops. "
         "Also DOTS_TTNN_REPETITION_PENALTY.",
     )
+    parser.add_argument(
+        "--no-device-fusion",
+        action="store_true",
+        help="Disable TTNN device-side fusion/prefill padding (defaults to ON).",
+    )
+    parser.add_argument(
+        "--device-argmax",
+        action="store_true",
+        help="Use TTNN for greedy token selection (prefill row + decode logits). Default: host torch.argmax. "
+        "Also DOTS_DEVICE_ARGMAX=1.",
+    )
+    parser.add_argument(
+        "--fixed-decode-steps",
+        action="store_true",
+        help="Option A: run exactly --max-new-tokens decode steps, then trim at EOS. Default is EOS-aware per-step loop. "
+        "Also DOTS_FIXED_DECODE_STEPS=1.",
+    )
     args = parser.parse_args()
 
     model_id = args.hf_model or get_hf_model_id()
@@ -639,6 +817,31 @@ def main() -> None:
                 ttnn_repetition_penalty = float(_rp)
             except ValueError:
                 ttnn_repetition_penalty = None
+
+    # Device fusion: default ON. Disable via --no-device-fusion or DOTS_DEVICE_FUSION=0.
+    device_fusion = not bool(args.no_device_fusion) and os.environ.get(
+        "DOTS_DEVICE_FUSION", "1"
+    ).strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "n",
+    )
+    # Device argmax: default OFF (host torch.argmax). Enable via --device-argmax or DOTS_DEVICE_ARGMAX=1.
+    device_argmax = bool(args.device_argmax) or os.environ.get("DOTS_DEVICE_ARGMAX", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    fixed_decode_steps = bool(args.fixed_decode_steps) or os.environ.get(
+        "DOTS_FIXED_DECODE_STEPS", ""
+    ).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
 
     # Resolve prompt set
     if args.prompts_json:
@@ -676,6 +879,9 @@ def main() -> None:
                 use_host_rope=args.use_host_rope,
                 sanity_text_only=args.sanity_text_only,
                 ttnn_repetition_penalty=ttnn_repetition_penalty,
+                device_fusion=device_fusion,
+                device_argmax=device_argmax,
+                fixed_decode_steps=fixed_decode_steps,
             )
 
 

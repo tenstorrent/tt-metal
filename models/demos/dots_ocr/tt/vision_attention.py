@@ -9,6 +9,8 @@ Runs QKV, RoPE, attention, and out-projection fully in TTNN.
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from models.common.lightweightmodule import LightweightModule
@@ -28,14 +30,35 @@ def _rotate_half(x):
     return ttnn.concat([neg_x2, x1], dim=-1)
 
 
-def _apply_rotary_tt(q, k, cos, sin):
+def _apply_rotary_tt(q, k, cos, sin, *, out_dtype):
     ttnn = get_ttnn()
     if ttnn is None:
         raise RuntimeError("ttnn is required")
-    # q,k: [B, H, S, D], cos/sin: [1, 1, S, D] or broadcastable.
+    f32 = getattr(ttnn, "float32", None)
+    # HF `apply_rotary_pos_emb_vision` upcasts to float32, applies, then casts back to activations
+    # (see remote `modeling_dots_vision.apply_rotary_pos_emb_vision`). Do the same in TTNN so Q/K
+    # fed into attention are not computed in bfloat16 RoPE math.
+    if f32 is not None:
+        qf = ttnn.typecast(q, dtype=f32)
+        kf = ttnn.typecast(k, dtype=f32)
+        cos_f = ttnn.typecast(cos, dtype=f32)
+        sin_f = ttnn.typecast(sin, dtype=f32)
+    else:
+        qf, kf, cos_f, sin_f = q, k, cos, sin
+
+    # q,k: [B, H, S, D], cos/sin broadcastable to [B, H, S, D] (e.g. [1,1,S,D]).
     # Match the HF rotate-half formulation used by the reference vision tower.
-    q_embed = ttnn.add(ttnn.mul(q, cos, use_legacy=True), ttnn.mul(_rotate_half(q), sin, use_legacy=True))
-    k_embed = ttnn.add(ttnn.mul(k, cos, use_legacy=True), ttnn.mul(_rotate_half(k), sin, use_legacy=True))
+    q_embed = ttnn.add(
+        ttnn.mul(qf, cos_f, use_legacy=False),
+        ttnn.mul(_rotate_half(qf), sin_f, use_legacy=False),
+    )
+    k_embed = ttnn.add(
+        ttnn.mul(kf, cos_f, use_legacy=False),
+        ttnn.mul(_rotate_half(kf), sin_f, use_legacy=False),
+    )
+    if f32 is not None and out_dtype is not None:
+        q_embed = ttnn.typecast(q_embed, dtype=out_dtype)
+        k_embed = ttnn.typecast(k_embed, dtype=out_dtype)
     return q_embed, k_embed
 
 
@@ -297,7 +320,8 @@ class VisionAttentionTT(LightweightModule):
             cos, sin = rot_mats
             if not isinstance(cos, ttnn.Tensor) or not isinstance(sin, ttnn.Tensor):
                 raise TypeError("rot_mats must be ttnn tensors")
-            q, k = _apply_rotary_tt(q, k, cos, sin)
+            # Match HF: RoPE in fp32, activations (bf16) after rotation unless caller promotes later.
+            q, k = _apply_rotary_tt(q, k, cos, sin, out_dtype=self.dtype)
 
         # Block-diagonal attention using cu_seqlens to prevent cross-image attention.
         cu = kwargs.get("cu_seqlens")
@@ -312,6 +336,15 @@ class VisionAttentionTT(LightweightModule):
         # For correctness/PCC, use the explicit per-segment SDPA path below.
         # The windowed/varlen SDPA kernels can have different numerics and have historically
         # produced low PCC vs HF for Dots vision.
+        #
+        # Additionally, even the fused `ttnn.transformer.scaled_dot_product_attention` can diverge
+        # from HF eager attention. Match HF ``VisionAttention`` (eager) exactly:
+        #   - q, k, v stay in activation dtype (bf16) for both matmuls
+        #   - ``attn_weights = (q @ k^T) / sqrt(d)`` in bf16 (same as PyTorch on bf16 inputs)
+        #   - ``softmax(..., dtype=float32)`` on those logits, then ``.to(q.dtype)`` for probs
+        #   - ``ctx = attn_probs @ v`` in bf16
+        # Promoting q/k/v to float32 for the whole pipeline (as we did earlier) does *not* match
+        # eager and tanks PCC vs the HF reference.
 
         if isinstance(cu, ttnn.Tensor):
             cu_host = _tt_to_torch_single_replica(self.mesh_device, cu).flatten().to(torch.int64).tolist()
@@ -323,6 +356,20 @@ class VisionAttentionTT(LightweightModule):
             raise ValueError(f"Invalid cu_seqlens={cu_host} for S={int(s)}")
 
         ctx_segments = []
+        scale = 1.0 / math.sqrt(float(hd))
+        f32 = getattr(ttnn, "float32", None)
+
+        # Use default ttnn matmul configuration for bf16@bf16 attention. Tuning
+        # ``WormholeComputeKernelConfig`` (e.g. fp32_dest accum) is aimed mainly at f32
+        # matmuls; forcing it for bf16 Q@K^T and attn@V can diverge from CPU eager PyTorch
+        # and depress ``Block0 attn`` PCC.
+        def _matmul(a, b):
+            return ttnn.matmul(
+                a,
+                b,
+                memory_config=getattr(ttnn, "DRAM_MEMORY_CONFIG", None),
+            )
+
         for a, b0 in zip(cu_host[:-1], cu_host[1:]):
             a = int(a)
             b0 = int(b0)
@@ -332,7 +379,18 @@ class VisionAttentionTT(LightweightModule):
             q_seg = ttnn.slice(q, (0, 0, a, 0), (1, h, b0, hd))
             k_seg = ttnn.slice(k, (0, 0, a, 0), (1, h, b0, hd))
             v_seg = ttnn.slice(v, (0, 0, a, 0), (1, h, b0, hd))
-            ctx_seg = ttnn.transformer.scaled_dot_product_attention(q_seg, k_seg, v_seg, is_causal=False)
+            # scores: [1, H, seg, seg] in activation dtype (match PyTorch bf16 @ bf16 -> bf16)
+            kt = ttnn.transpose(k_seg, -2, -1)
+            scores = _matmul(q_seg, kt)
+            scores = ttnn.mul(scores, scale, use_legacy=False)
+            # Eager HF: F.softmax(logits, dim=-1, dtype=float32) then .to(q.dtype) before @ v
+            if f32 is not None:
+                scores_f = ttnn.typecast(scores, dtype=f32)
+                attn_f = ttnn.softmax(scores_f, dim=-1, numeric_stable=True)
+                attn = ttnn.typecast(attn_f, dtype=self.dtype)
+            else:
+                attn = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+            ctx_seg = _matmul(attn, v_seg)
             ctx_segments.append(ctx_seg)
 
         ctx = ttnn.concat(ctx_segments, dim=2) if len(ctx_segments) > 1 else ctx_segments[0]
