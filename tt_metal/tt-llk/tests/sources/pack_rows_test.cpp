@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool UNTILIZE = false;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else

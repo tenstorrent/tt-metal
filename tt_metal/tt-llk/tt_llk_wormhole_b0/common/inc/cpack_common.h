@@ -674,7 +674,7 @@ inline void reconfig_packer_data_format(
     set_packer_strides(pack_src_format);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize>
+template <bool is_fp32_dest_acc_en, PackMode mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -748,9 +748,10 @@ inline void configure_pack(
 
     const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
 
+    static_assert(mode != PackMode::Tilize, "Tilize pack mode not supported on Wormhole B0");
     // To untilize narrow tile (32x16) we just pack 2 faces back to back
     // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
 
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }

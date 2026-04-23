@@ -93,12 +93,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool TILIZE   = false; // Input to pack is already in tile format
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats.pack_dst);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : TILIZE ? PackMode::Tilize : PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
+    _llk_pack_init_<UNTILIZE ? PackMode::Untilize : TILIZE ? PackMode::Tilize : PackMode::Default, false>(formats.pack_dst);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-    _llk_pack_init_<UNTILIZE, false>(formats.pack_dst);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
+    _llk_pack_init_<UNTILIZE ? PackMode::Untilize : PackMode::Default, false>(formats.pack_dst);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en, UNTILIZE>();
 #endif
 

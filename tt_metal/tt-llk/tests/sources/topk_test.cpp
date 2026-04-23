@@ -449,15 +449,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
                         _llk_pack_hw_configure_<
                             is_fp32_dest_acc_en,
-                            false,  // untilize
-                            false>( // tilize
+                            PackMode::Default>(
                             pack_src_format,
                             pack_dst_format,
                             16 * 16 * 4);
 #else
                         _llk_pack_hw_configure_<
                             is_fp32_dest_acc_en,
-                            false>( // untilize
+                            PackMode::Default>(
                             pack_src_format,
                             pack_dst_format,
                             16 * 16 * 4);
@@ -484,7 +483,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                     }
 
-                    _llk_pack_init_<false, false>(pack_dst_format);
+                    _llk_pack_init_<PackMode::Default, false>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 
