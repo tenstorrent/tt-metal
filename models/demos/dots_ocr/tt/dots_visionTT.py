@@ -15,6 +15,7 @@ Typical `state_dict` prefix: ``"vision_tower."`` (keys like ``vision_tower.block
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -486,10 +487,18 @@ class DotsVisionTransformerTT(LightweightModule):
         weight_cache_path: Optional[Any] = None,
     ):
         super().__init__()
-        if not isinstance(vision_config, DotsVisionConfig):
-            self.dots_cfg = DotsVisionConfig(**vision_config)
-        else:
+        if isinstance(vision_config, DotsVisionConfig):
             self.dots_cfg = vision_config
+        elif isinstance(vision_config, Mapping):
+            self.dots_cfg = DotsVisionConfig(**vision_config)
+        elif hasattr(vision_config, "to_dict"):
+            # Handles dynamically loaded config classes from trust_remote_code.
+            self.dots_cfg = DotsVisionConfig(**vision_config.to_dict())
+        else:
+            raise TypeError(
+                "vision_config must be DotsVisionConfig, mapping, or to_dict()-compatible config object; "
+                f"got {type(vision_config)!r}"
+            )
         self.pfx = state_dict_prefix
         self.mesh = mesh_device
         self.cfg = DotsVisionTtConfig(
@@ -536,8 +545,9 @@ class DotsVisionTransformerTT(LightweightModule):
 
     @torch.inference_mode()
     def _patchify(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
-        if hidden_states.dtype != torch.bfloat16:
-            hidden_states = hidden_states.bfloat16()
+        patch_dtype = self._patch.patchifier.proj.weight.dtype
+        if hidden_states.dtype != patch_dtype:
+            hidden_states = hidden_states.to(dtype=patch_dtype)
         return self._patch(hidden_states, grid_thw)
 
     @torch.inference_mode()
@@ -580,6 +590,14 @@ class DotsVisionTransformerTT(LightweightModule):
         if not return_host_torch:
             return x
         s_merge = seqlen // (self.cfg.spatial_merge_size**2)
-        o = ttnn.to_torch(x)[:, 0, 0, :s_merge, : self.cfg.hidden_size]
+        o_full = ttnn.to_torch(x)
+        if o_full.dim() == 5:
+            o = o_full[:, 0, 0, :s_merge, : self.cfg.hidden_size]
+        elif o_full.dim() == 4:
+            o = o_full[:, 0, :s_merge, : self.cfg.hidden_size]
+        elif o_full.dim() == 3:
+            o = o_full[:, :s_merge, : self.cfg.hidden_size]
+        else:
+            raise RuntimeError(f"Unexpected merged tensor rank {o_full.dim()} with shape {tuple(o_full.shape)}")
         ttnn.deallocate(x)
         return o.squeeze(0) if t == 1 else o.reshape(-1, self.cfg.hidden_size)

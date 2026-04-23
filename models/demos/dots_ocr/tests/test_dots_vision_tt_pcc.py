@@ -123,6 +123,9 @@ def test_dots_vision_tt_pcc_vs_reference(mesh_device, ensure_gc):
     hf_model.eval()
     vision_ref = hf_model.vision_tower
     vision_ref.eval()
+    # Some vision params can remain fp32 (e.g., newly initialized Conv2d bias),
+    # while inputs are bf16. Align module dtype to avoid conv dtype mismatch.
+    vision_ref = vision_ref.to(dtype=torch.bfloat16)
     state_dict = hf_model.state_dict()
 
     pv, grid_thw = _build_inputs_like_demo(model_dir, device=torch.device("cpu"))
