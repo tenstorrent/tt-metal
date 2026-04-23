@@ -317,6 +317,7 @@ def test_ttnn_combine(
     topology,
     use_predictable_data,
     run_pcc_check,
+    dispatched_buffer_layout,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     torch.manual_seed(42)
