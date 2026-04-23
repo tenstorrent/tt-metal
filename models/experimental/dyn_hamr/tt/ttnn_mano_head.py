@@ -156,6 +156,57 @@ def _rot6d_to_rotmat_torch(x6: torch.Tensor) -> torch.Tensor:
     return torch.stack((b1, b2, b3), dim=-1)
 
 
+def forward_device(
+    feature_tokens,
+    params: Dict[str, Any],
+    device: Any,
+    depth: int = 6,
+    cached_token: Tuple[Any, ...] = (),
+):
+    """Device-only MANO head forward.  Returns the on-device ``dec`` tensor
+    of shape ``(B, 1, 109_padded)`` — the caller is responsible for copying
+    it back to host and applying ``init_hand_pose / init_betas / init_cam``
+    plus the rot-6d → rotmat conversion.
+
+    Split out so the trace-capture path can record only device ops.
+    """
+    B = feature_tokens.shape[0]
+    if cached_token and cached_token[0].shape[0] == B:
+        token = cached_token[0]
+    else:
+        token = ttnn.from_torch(
+            torch.zeros(B, 1, 1, dtype=torch.bfloat16),
+            device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+        )
+    x = token @ params["to_token_embedding"]["weight"]
+    x = x + params["to_token_embedding"]["bias"]
+    x = x + params["pos_embedding"]
+    for i in range(depth):
+        x = _decoder_block(x, feature_tokens, params["layers"][i])
+    dec = x @ params["dec_w"]
+    dec = dec + params["dec_b"]
+    return dec
+
+
+def host_finalize(
+    dec_host: torch.Tensor,
+    params_dec_split: Tuple[int, int, int],
+    init_hand_pose: torch.Tensor,
+    init_betas: torch.Tensor,
+    init_cam: torch.Tensor,
+    num_hand_joints: int = 15,
+) -> torch.Tensor:
+    """Apply the host-side post-processing (init-param add, 6D→rotmat
+    conversion, flatten) to a ``dec`` tensor that was just copied back."""
+    B = dec_host.shape[0]
+    np_pose, np_shape, np_cam = params_dec_split
+    pose_h = dec_host[:, :np_pose] + init_hand_pose
+    betas_h = dec_host[:, np_pose : np_pose + np_shape] + init_betas
+    cam_h = dec_host[:, np_pose + np_shape : np_pose + np_shape + np_cam] + init_cam
+    rotmats = _rot6d_to_rotmat_torch(pose_h).view(B, num_hand_joints + 1, 3, 3)
+    return torch.cat([rotmats.reshape(B, -1), betas_h, cam_h], dim=-1)
+
+
 def forward(
     feature_tokens,
     params: Dict[str, Any],

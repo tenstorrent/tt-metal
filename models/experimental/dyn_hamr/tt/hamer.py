@@ -124,6 +124,12 @@ class TtHamer:
         # already-projected/uploaded tokens skips a CPU Conv2d + ~MB transfer
         # on every call after the first.
         self._patch_cache: dict = {}
+        # Trace replay state: (trace_id, cached_input_tt, dec_output_tt).
+        # Captured lazily on the first repeat call so the warmup forward JITs
+        # all kernels first (trace can't capture compilation).  Subsequent
+        # forwards execute the captured trace, eliminating per-op Python
+        # dispatch overhead.
+        self._trace = None
         if _USE_TT:
             self._open_device()
             if self.device is not None:
@@ -209,23 +215,66 @@ class TtHamer:
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                 )
-                # Bound the cache so unrelated inputs don't pile DRAM up.
                 if len(self._patch_cache) >= 4:
                     self._patch_cache.clear()
                 self._patch_cache[cache_key] = tt_tokens
-            tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)  # (B, 192, 1280)
-            return ttnn_mano_head.forward(
-                tt_feat,
-                self._head_params,
-                device=self.device,
-                init_hand_pose=self._init_pose,
-                init_betas=self._init_betas,
-                init_cam=self._init_cam,
-                cached_token=(self._head_token,),
+                # New input — invalidate any captured trace bound to a
+                # different cached token tensor.
+                self._trace = None
+
+            B = image.shape[0]
+            # Trace replay: skips Python dispatch overhead for the entire
+            # ViT + MANO chain.  Captured lazily on the second hit so warmup
+            # JITs all kernels first.
+            if (
+                self._trace is None
+                and getattr(self, "_is_mesh", False)
+                and getattr(self, "_warmup_done", False)
+            ):
+                self._capture_trace(tt_tokens)
+
+            if self._trace is not None and self._trace[1] is tt_tokens:
+                trace_id, _, dec_buffer = self._trace
+                ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
+                dec_h = ttnn.to_torch(dec_buffer).to(torch.float32).reshape(B, -1)
+            else:
+                tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)
+                dec = ttnn_mano_head.forward_device(
+                    tt_feat, self._head_params, device=self.device, cached_token=(self._head_token,),
+                )
+                dec_h = ttnn.to_torch(dec).to(torch.float32).reshape(B, -1)
+                self._warmup_done = True
+
+            return ttnn_mano_head.host_finalize(
+                dec_h,
+                self._head_params["dec_split"],
+                self._init_pose,
+                self._init_betas,
+                self._init_cam,
             )
         except Exception as e:
             print(f"[dyn_hamr] tt-nn forward failed: {e}; falling back to CPU ref for this call")
+            self._trace = None
             return None
+
+    def _capture_trace(self, tt_tokens) -> None:
+        """Capture ViT + MANO device-only forward into a replayable trace."""
+        try:
+            import ttnn  # noqa: WPS433
+            from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
+            from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
+
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)
+            dec_buffer = ttnn_mano_head.forward_device(
+                tt_feat, self._head_params, device=self.device, cached_token=(self._head_token,),
+            )
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            self._trace = (trace_id, tt_tokens, dec_buffer)
+            print("[dyn_hamr] tt-nn trace captured — replay path active")
+        except Exception as e:
+            print(f"[dyn_hamr] trace capture failed: {e}; sticking with eager path")
+            self._trace = None
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:
         tt_out = self._forward_device(image)
