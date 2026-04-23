@@ -240,7 +240,6 @@ inline void _llk_pack_hw_configure_(
     configure_pack<is_fp32_dest_acc_en, untilize>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
 template <bool untilize = false, bool zero_output = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
@@ -255,27 +254,6 @@ inline void _llk_pack_init_(
     _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
-    const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
-}
-
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false>
-inline void _llk_pack_init_(
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t pack_src_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t num_faces,
-    const bool partial_face       = false,
-    const bool narrow_tile        = false,
-    const std::uint32_t num_tiles = 1)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    _llk_pack_configure_addrmod_<untilize>();
-    _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
-
-    set_packer_l1_offset(pack_dst_format);
     const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
     const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);

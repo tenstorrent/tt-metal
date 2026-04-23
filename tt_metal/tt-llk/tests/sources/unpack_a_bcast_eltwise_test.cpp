@@ -85,7 +85,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
+#ifdef ARCH_BLACKHOLE
+    _llk_pack_init_<false, false>(formats.pack_src);
+#else
     _llk_pack_init_<false, false>(formats.pack_dst);
+#endif
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();

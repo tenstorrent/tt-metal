@@ -163,7 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
+    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
 #else
     _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif

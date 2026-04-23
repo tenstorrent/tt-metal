@@ -71,17 +71,12 @@ inline void _llk_pack_configure_addrmod_()
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_mop_config_(
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim           = FACE_R_DIM,
-    const std::uint32_t tile_c_dim           = TILE_C_DIM,
-    const std::uint32_t num_faces            = 4,
-    [[maybe_unused]] const bool partial_face = false,
-    [[maybe_unused]] const bool narrow_tile  = false,
-    const std::uint32_t num_tiles            = 1)
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const std::uint32_t num_tiles  = 1)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!partial_face, "partial_face: this parameter is unused");
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
 
     constexpr std::uint32_t MEGAROW          = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
@@ -324,7 +319,6 @@ inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t tile_c_dim = TILE_C_DIM,
     const std::uint32_t num_faces  = 4,
     const bool partial_face        = false,
-    const bool narrow_tile         = false,
     const std::uint32_t num_tiles  = 1)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -332,7 +326,7 @@ inline void _llk_pack_reconfig_data_format_(
 
     if constexpr (is_tile_dim_reconfig_en)
     {
-        _llk_pack_mop_config_<false, false>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        _llk_pack_mop_config_<false, false>(face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }
 
@@ -361,32 +355,12 @@ inline void _llk_pack_hw_configure_(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void _llk_pack_init_(
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false,
-    const bool narrow_tile         = false,
-    const std::uint32_t num_tiles  = 1)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    _llk_pack_configure_addrmod_<untilize, tilize>();
-    _llk_pack_mop_config_<untilize, zero_output, tilize>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
-}
-
-// TODO NC: Clean up as the part of tt-metal#34587
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t tile_c_dim,
-    const std::uint32_t num_faces,
-    const bool partial_face              = false,
-    const bool narrow_tile               = false,
+    const std::uint32_t face_r_dim       = FACE_R_DIM,
+    const std::uint32_t tile_c_dim       = TILE_C_DIM,
+    const std::uint32_t num_faces        = 4,
     const std::uint32_t num_tiles        = 1,
     const bool skip_bh_tilize_workaround = false)
 {
@@ -406,14 +380,13 @@ inline void _llk_pack_init_(
     if (skip_bh_tilize_workaround)
     {
         _llk_pack_configure_addrmod_<untilize, false /* tilize */>();
-        _llk_pack_mop_config_<untilize, zero_output, false /* tilize */>(
-            pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        _llk_pack_mop_config_<untilize, zero_output, false /* tilize */>(face_r_dim, tile_c_dim, num_faces, num_tiles);
         set_packer_strides<untilize, false /* tilize */>(pack_src_format, tile_c_dim);
     }
     else
     {
         _llk_pack_configure_addrmod_<untilize, tilize>();
-        _llk_pack_mop_config_<untilize, zero_output, tilize>(pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, num_tiles);
+        _llk_pack_mop_config_<untilize, zero_output, tilize>(face_r_dim, tile_c_dim, num_faces, num_tiles);
         set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
     }
 

@@ -71,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<false, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
-    _llk_pack_init_<false, false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4);
+    _llk_pack_init_<false, false, false>(formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 #else
     _llk_pack_hw_configure_<false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, 4);

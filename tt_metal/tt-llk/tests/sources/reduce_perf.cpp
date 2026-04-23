@@ -177,9 +177,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
+#ifdef ARCH_BLACKHOLE
+        _llk_pack_init_<
+            /* untilize */ false,
+            /* zero output */ false>(formats.pack_src);
+#else
         _llk_pack_init_<
             /* untilize */ false,
             /* zero output */ false>(formats.pack_dst);
+#endif
         _llk_pack_reduce_mask_config_<
             /* untilize */ false,
             REDUCE_DIM>();

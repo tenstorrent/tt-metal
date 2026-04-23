@@ -227,9 +227,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_C_DIM * TILE_R_DIM);
+#ifdef ARCH_BLACKHOLE
+        _llk_pack_init_<
+            /* untilize */ false,
+            /* zero_output */ false>(formats.pack_src);
+#else
         _llk_pack_init_<
             /* untilize */ false,
             /* zero_output */ false>(formats.pack_dst);
+#endif
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

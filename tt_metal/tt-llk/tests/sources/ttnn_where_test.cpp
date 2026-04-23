@@ -158,7 +158,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
 #endif
 
+#ifdef ARCH_BLACKHOLE
+    _llk_pack_init_<false, false>(PACK_FMT); // pack_src == pack_dst == PACK_FMT in this test
+#else
     _llk_pack_init_<false, false>(PACK_FMT);
+#endif
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

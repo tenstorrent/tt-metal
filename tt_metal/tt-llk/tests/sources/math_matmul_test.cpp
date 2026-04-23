@@ -124,11 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces,
         params.PARTIAL_FACE_PACK);
     _llk_pack_init_<false, false, false>(
-        formats.pack_dst,
-        params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        TILE_C_DIM,
-        params.num_faces,
-        false /* partial_face parameter is unused on BH */);
+        formats.pack_src, params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(

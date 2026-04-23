@@ -218,7 +218,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_dst_format0 = ckernel::to_underlying(DataFormat::Float16_b);
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<false, false, false>(pack_src_format0, pack_dst_format0, 128);
-    _llk_pack_init_<false, false, false>(pack_dst_format0, pack_dst_format0, 16, TILE_C_DIM, 4, false, false);
+    _llk_pack_init_<false, false, false>(pack_src_format0, 16, TILE_C_DIM, 4);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 #else
     _llk_pack_hw_configure_<false, false>(pack_src_format0, pack_dst_format0, 128);
@@ -243,7 +243,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_dst_format1 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format1, pack_dst_format1, 128);
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false, false, false>(pack_dst_format1, pack_dst_format1, 16, TILE_C_DIM, 4, false, false);
+    _llk_pack_init_<false, false, false>(pack_src_format1, 16, TILE_C_DIM, 4);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 #else
     _llk_pack_init_<false, false>(pack_dst_format1);
@@ -269,7 +269,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_dst_format2 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format2, pack_dst_format2, 128);
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false, false, false>(pack_dst_format2, pack_dst_format2, 16, TILE_C_DIM, 4, false, false);
+    _llk_pack_init_<false, false, false>(pack_src_format2, 16, TILE_C_DIM, 4);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 #else
     _llk_pack_init_<false, false>(pack_dst_format2);
@@ -293,7 +293,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_dst_format3 = ckernel::to_underlying(DataFormat::Float16_b);
     _llk_pack_reconfig_data_format_<false, false>(pack_src_format3, pack_dst_format3, 128);
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false, false, false>(pack_dst_format3, pack_dst_format3, 16, TILE_C_DIM, 4, false, false);
+    _llk_pack_init_<false, false, false>(pack_src_format3, 16, TILE_C_DIM, 4);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 #else
     _llk_pack_init_<false, false>(pack_dst_format3);

@@ -476,7 +476,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             TILE_C_DIM,
                             4 /* num_faces */,
                             false /* partial_face */,
-                            false /* narrow_tile */,
                             1 /* num_tiles */);
 #else
                         _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
@@ -484,7 +483,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                     }
 
+#ifdef ARCH_BLACKHOLE
+                    _llk_pack_init_<false, false>(pack_src_format);
+#else
                     _llk_pack_init_<false, false>(pack_dst_format);
+#endif
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 
