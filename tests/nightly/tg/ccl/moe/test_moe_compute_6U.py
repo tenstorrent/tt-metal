@@ -1063,7 +1063,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
-@pytest.mark.timeout(600)
 @torch.no_grad()
 def test_moe_compute(
     mesh_device,
