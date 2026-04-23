@@ -106,6 +106,7 @@ def test_buffer_num_pages(shape, dtype, layout, expected_pages, device):
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.get_dram_alignment),
         (ttnn.L1_MEMORY_CONFIG, ttnn.get_l1_alignment),
     ],
+    ids=["dram", "l1"],
 )
 def test_buffer_aligned_page_size(memory_config, alignment_fn, device):
     torch_tensor = torch.randn((1, 1, 32, 32), dtype=torch.float32)
