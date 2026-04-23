@@ -123,10 +123,19 @@ def test_sdpa_decode_paged_partial_mask_worker_node_regression(device):
     # giving a tree with 1 root + 2 workers. Without this, on Galaxy all 32
     # chips × 64 cores = 2048 cores would be used, exceeding
     # MAX_TREE_REDUCTION_ROUNDS=6 (supports max 64 cores) and causing TT_FATAL.
+    # Use a (8,4)=32 core grid with max_cores_per_head_batch=3.
+    # This gives exactly 3 cores for k_num_chunks=3 pages:
+    #   Core 0 (root, do_reduce=True):  page 0 (valid)
+    #   Core 1 (worker, do_reduce=False): page 1 (valid)
+    #   Core 2 (worker, do_reduce=False): page 2 (PARTIAL — 4 valid, 60 zeros)
+    # grid_size.x=8 >= num_cores_per_head=3 satisfies the row constraint.
+    # max_cores_per_head_batch=3 caps the cores so Galaxy's 2048 cores don't
+    # exceed MAX_TREE_REDUCTION_ROUNDS=6.
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
         q_chunk_size=nh,
         k_chunk_size=block_size,
+        max_cores_per_head_batch=3,
     )
 
     # === Random Q, K, V ===
