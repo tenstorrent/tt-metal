@@ -109,22 +109,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Fast-tilize uses compat 16-bit DEST. When dest_acc=Yes, format inference
-        // may derive a 32-bit unpack_A_dst (e.g. Tf32). Override to Float16_b so the
-        // unpack produces 16-bit SrcA data and CH1_Z stride is correct.
-        if constexpr (is_fp32_dest_acc_en)
-        {
-            const std::uint32_t compat_dst = ckernel::to_underlying(DataFormat::Float16_b);
-            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, compat_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-            _llk_unpack_fast_tilize_init_(compat_dst, BLOCK_CT_DIM, unit_dims[0]);
-        }
-        else
-        {
-            _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-            _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, unit_dims[0]);
-        }
+        // Use the inferred unpack_A_dst directly so test_fast_tilize_full covers the
+        // Float32-input path end-to-end (including the Tf32-SrcA case that production
+        // conv2d hits). Earlier this was forced to Float16_b as a workaround; now the
+        // LLK is expected to handle fp32 input correctly.
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+        _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, unit_dims[0]);
         // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
         // via _llk_unpack_configure_single_address_ (respects current cfg context).
     }

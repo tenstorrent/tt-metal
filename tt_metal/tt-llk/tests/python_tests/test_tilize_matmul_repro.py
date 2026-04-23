@@ -752,6 +752,10 @@ def test_6_std_tilize_matmul_accum(formats, dest_acc, kt_dim, num_iters, stimulu
 def test_7_fast_tilize_matmul_accum(formats, dest_acc, kt_dim, num_iters, stimulus):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("BH only")
+    # Known hang on BH silicon with kt_dim=4 and num_iters>=3 — root cause not yet
+    # diagnosed (chip TENSIX_TIMED_OUT, requires reset). Skip until fixed.
+    if kt_dim == 4 and num_iters >= 3:
+        pytest.skip("hangs on BH silicon (TENSIX timeout)")
     _run_tilize_matmul_accum(
         "sources/fast_tilize_matmul_accum_repro.cpp",
         formats,

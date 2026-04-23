@@ -490,6 +490,25 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    // Save the unpacker Out_data_format word so we can restore it in uninit if the
+    // fp32/tf32 → bf16 downgrade below modifies it.
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_3, THCON_SEC0_REG2_Out_data_format_ADDR32);
+
+    // BH fast-tilize forces a 16-bit DEST view in the math thread (MOVA2D cannot
+    // safely write Dst32b in this flow — see _llk_math_fast_tilize_init_). That makes
+    // TF32/Float32 SrcA incompatible: MOVA2D(TF32) + Dst16b is ISA UB, and MOVA2D(bf16)
+    // + Dst32b is also UB. The only consistent combination is bf16 SrcA + Dst16b, so
+    // downgrade SrcA output to Float16_b here when the caller requested fp32/tf32.
+    // The unpacker performs the fp32 → bf16 conversion on the L1 → SrcA path. This
+    // matches the precision Metal previously consumed from the fp32 fast-tilize path.
+    const std::uint32_t effective_dst_format = (unpack_dst_format == (std::uint32_t)DataFormat::Float32 || unpack_dst_format == (std::uint32_t)DataFormat::Tf32)
+                                                   ? (std::uint32_t)DataFormat::Float16_b
+                                                   : unpack_dst_format;
+    if (effective_dst_format != unpack_dst_format)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(effective_dst_format);
+    }
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -511,9 +530,10 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     // This creates natural gaps in SrcA for unit_dim < 4, preserving the DEST layout.
     TT_SETADCXX(p_setadc::UNP_A, init_unit_dim * TILE_C_DIM - 1, 0x0);
 
-    // CH1 Z stride: controls SrcA dest address gap between reads
-    const std::uint32_t ch1_x_stride = (unpack_dst_format == (std::uint32_t)DataFormat::Float32 || unpack_dst_format == (std::uint32_t)DataFormat::Int32 ||
-                                        unpack_dst_format == (std::uint32_t)DataFormat::Tf32)
+    // CH1 Z stride: controls SrcA dest address gap between reads.
+    // Uses effective_dst_format because Float32/Tf32 are downgraded to bf16 above.
+    const std::uint32_t ch1_x_stride = (effective_dst_format == (std::uint32_t)DataFormat::Float32 ||
+                                        effective_dst_format == (std::uint32_t)DataFormat::Int32 || effective_dst_format == (std::uint32_t)DataFormat::Tf32)
                                            ? 4
                                            : 2;
     // stride = 4 * 32 * 2 = 256 bytes = 8 contiguous SrcA rows per read
@@ -617,6 +637,8 @@ inline void _llk_unpack_fast_tilize_uninit_()
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, 0, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, 0, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    // Restore Out_data_format (init may have downgraded it from fp32/tf32 to bf16).
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_3, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
 
     TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
