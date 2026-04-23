@@ -21,6 +21,7 @@ Inference only; weights are converted on the host via
 """
 from __future__ import annotations
 
+import math as _math
 from typing import Any, Dict, List
 
 import torch
@@ -46,13 +47,23 @@ def _t(weight: torch.Tensor, device: Any) -> Any:
 
 def _t_bfp8(weight: torch.Tensor, device: Any) -> Any:
     """BFP8 weight tile — half the DRAM bandwidth of bfloat16 with negligible
-    PCC drop on transformer weights.  Reserved for the giant FC1/FC2 matmuls
-    where the per-op weight read dominates."""
+    PCC drop on transformer weights.  Bandwidth saving dominates dequant cost
+    when trace replay is active (dequant is pre-compiled into the static program)."""
     return ttnn.from_torch(
         weight.to(torch.bfloat16).contiguous(),
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
+    )
+
+
+def _t_bias(bias: torch.Tensor, device: Any) -> Any:
+    """Upload bias as (1, N) bf16 tile — shape required by minimal_matmul bias_tensor API."""
+    return ttnn.from_torch(
+        bias.to(torch.bfloat16).contiguous().unsqueeze(0),  # (N,) → (1, N)
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
     )
 
 
@@ -145,16 +156,16 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
             "norm1": {"weight": _t(blk.norm1.weight, device), "bias": _t(blk.norm1.bias, device)},
             "attn": {
                 "qkv_w": _t(qkv_w_padded, device),
-                "qkv_b": _t(qkv_b_padded, device),
+                "qkv_b": _t_bias(qkv_b_padded, device),
                 "proj_w": _t(proj_w_padded, device),
-                "proj_b": _t(blk.attn.proj.bias, device),
+                "proj_b": _t_bias(blk.attn.proj.bias, device),
             },
             "norm2": {"weight": _t(blk.norm2.weight, device), "bias": _t(blk.norm2.bias, device)},
             "mlp": {
                 "fc1_w": _t_bfp8(blk.mlp.fc1.weight.t(), device),
-                "fc1_b": _t(blk.mlp.fc1.bias, device),
+                "fc1_b": _t_bias(blk.mlp.fc1.bias, device),
                 "fc2_w": _t_bfp8(blk.mlp.fc2.weight.t(), device),
-                "fc2_b": _t(blk.mlp.fc2.bias, device),
+                "fc2_b": _t_bias(blk.mlp.fc2.bias, device),
             },
         })
     return params
@@ -215,28 +226,97 @@ def _mlp_grid(device):
     return _MLP_GRID
 
 
+# --------------------------------------------------------------------------- #
+# Fused matmul helpers (minimal_matmul: MatmulMultiCoreReuseMultiCast + bias)
+# --------------------------------------------------------------------------- #
+_COMPUTE_CFG = None
+
+
+def _fused_compute_config(device: Any) -> Any:
+    """HiFi2 + fp32 accumulator + L1 packer — the recommended config for
+    fused-bias matmuls per tt_dit/layers/linear.py."""
+    global _COMPUTE_CFG
+    if _COMPUTE_CFG is not None:
+        return _COMPUTE_CFG
+    _COMPUTE_CFG = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return _COMPUTE_CFG
+
+
+# Pre-computed MinimalMatmulConfig table for our ViT shapes on Blackhole 13×10.
+# (M, K, N) → (M_blk, K_blk, N_blk, sub_h, sub_w)
+# Constraints: N_t/N_blk ≤ grid_x=13, M_t/M_blk ≤ grid_y=10.
+_MM_SHAPE_TABLE: Dict[tuple, tuple] = {
+    # QKV: (1,192,1280)@(1280,4608)  → tiles (6,40,144)
+    (192, 1280, 4608): (1, 8, 12, 1, 2),
+    # proj: (1,192,1536)@(1536,1280) → tiles (6,48,40)
+    (192, 1536, 1280): (1, 8,  4, 1, 2),
+    # fc1:  (1,192,1280)@(1280,5120) → tiles (6,40,160)
+    (192, 1280, 5120): (1, 8, 16, 1, 2),
+    # fc2:  (1,192,5120)@(5120,1280) → tiles (6,160,40)
+    (192, 5120, 1280): (1, 8,  4, 1, 2),
+}
+_MM_CFGS: Dict[tuple, Any] = {}
+
+
+def _mm_cfg(M: int, K: int, N: int, device: Any) -> Any:
+    """Return a cached ``ttnn.MinimalMatmulConfig`` for (M, K, N)."""
+    key = (M, K, N)
+    if key in _MM_CFGS:
+        return _MM_CFGS[key]
+    params = _MM_SHAPE_TABLE.get(key)
+    if params is None:
+        # Generic fallback: M_blk=1, K_blk=8, N_blk chosen to fit grid.
+        g = device.compute_with_storage_grid_size()
+        N_t = _math.ceil(N / 32)
+        K_t = _math.ceil(K / 32)
+        K_blk = next((b for b in (8, 4, 2, 1) if K_t % b == 0), 1)
+        N_blk = next(
+            (b for b in sorted([d for d in range(1, N_t + 1) if N_t % d == 0], reverse=True)
+             if N_t // b <= g.x),
+            1,
+        )
+        params = (1, K_blk, N_blk, 1, min(2, N_blk))
+    g = device.compute_with_storage_grid_size()
+    M_blk, K_blk, N_blk, sub_h, sub_w = params
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=M_blk,
+        K_block_size=K_blk,
+        N_block_size=N_blk,
+        subblock_h=sub_h,
+        subblock_w=sub_w,
+        compute_with_storage_grid_size=ttnn.CoreCoord(g.x, g.y),
+    )
+    _MM_CFGS[key] = cfg
+    return cfg
+
+
 def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     """One ViT-H transformer block (pre-norm, fused qkv, FlashAttention-2, MLP).
 
-    Attention runs through ``ttnn.transformer.scaled_dot_product_attention``
-    on tile-aligned heads (``HEAD_DIM_PAD = 96``).  Padded cols are zeroed in
-    the upload-time weight transform so the math is exact.  ``head_dim`` arg
-    kept in the signature for backward compatibility but is unused.
-
-    The MLP matmuls explicitly request the full Blackhole grid via
-    ``core_grid`` so the 1280→5120 → 5120→1280 pair (largest matmuls in the
-    block) saturate compute instead of running on the default conservative
-    subset.
+    All four matmuls use ``ttnn.experimental.minimal_matmul`` with fused bias
+    (and fused GELU for fc1).  This eliminates ~5 small tensor ops per block
+    (4 bias adds + 1 GELU), reducing trace length by ~160 ops across 32 blocks.
+    ``head_dim`` is kept for backward compatibility but is unused.
     """
-    del head_dim  # padded head dim handled internally
-    grid = _mlp_grid(hidden.device())
+    del head_dim
+    dev = hidden.device()
+    ckcfg = _fused_compute_config(dev)
 
     # --- self-attention via FlashAttention-2 ---
-    # QKV/proj kept on the default grid: explicit full-grid here costs PCC
-    # without buying speed (presumably different reduction order).
     h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"])
-    qkv = h @ block_params["attn"]["qkv_w"]
-    qkv = qkv + block_params["attn"]["qkv_b"]
+    N_qkv = 3 * num_heads * HEAD_DIM_PAD
+    qkv = ttnn.experimental.minimal_matmul(
+        h, block_params["attn"]["qkv_w"],
+        bias_tensor=block_params["attn"]["qkv_b"],
+        config=_mm_cfg(192, 1280, N_qkv, dev),
+        compute_kernel_config=ckcfg,
+    )
 
     q, k, v = _split_qkv_sdpa(qkv, num_heads)
     ctx = ttnn.transformer.scaled_dot_product_attention(
@@ -244,17 +324,29 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     )
     ctx = _merge_heads(ctx, num_heads)
 
-    attn_out = ctx @ block_params["attn"]["proj_w"]
-    attn_out = attn_out + block_params["attn"]["proj_b"]
+    attn_out = ttnn.experimental.minimal_matmul(
+        ctx, block_params["attn"]["proj_w"],
+        bias_tensor=block_params["attn"]["proj_b"],
+        config=_mm_cfg(192, num_heads * HEAD_DIM_PAD, 1280, dev),
+        compute_kernel_config=ckcfg,
+    )
     hidden = hidden + attn_out
 
-    # --- MLP (full-grid) ---
+    # --- MLP: fc1 with fused GELU, fc2 with fused bias ---
     h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"])
-    h = ttnn.matmul(h, block_params["mlp"]["fc1_w"], core_grid=grid)
-    h = h + block_params["mlp"]["fc1_b"]
-    h = ttnn.gelu(h)
-    h = ttnn.matmul(h, block_params["mlp"]["fc2_w"], core_grid=grid)
-    h = h + block_params["mlp"]["fc2_b"]
+    h = ttnn.experimental.minimal_matmul(
+        h, block_params["mlp"]["fc1_w"],
+        bias_tensor=block_params["mlp"]["fc1_b"],
+        config=_mm_cfg(192, 1280, 5120, dev),
+        compute_kernel_config=ckcfg,
+        fused_activation=(ttnn.UnaryOpType.GELU, False),
+    )
+    h = ttnn.experimental.minimal_matmul(
+        h, block_params["mlp"]["fc2_w"],
+        bias_tensor=block_params["mlp"]["fc2_b"],
+        config=_mm_cfg(192, 5120, 1280, dev),
+        compute_kernel_config=ckcfg,
+    )
     hidden = hidden + h
     return hidden
 
