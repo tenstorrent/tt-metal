@@ -270,9 +270,6 @@ _SHARD_GRID_2X1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.C
 _SHARD_GRID_2X2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 
 
-import logging
-
-
 def _align_tile(value):
     return (value + 31) // 32 * 32
 
@@ -304,12 +301,6 @@ def _legacy_output_memory_config(tensor_shape, grid, memory_layout, orientation)
         ttnn.TensorMemoryLayout.WIDTH_SHARDED: {"shard_grid": grid, "shard_shape": width_shard_shape},
         ttnn.TensorMemoryLayout.BLOCK_SHARDED: {"shard_grid": grid, "shard_shape": block_sharded_shard_shape},
     }
-    logging.info(
-        f"height_shard_shape: {height_shard_shape}, width_shard_shape: {width_shard_shape}, block_sharded_shard_shape: {block_sharded_shard_shape}"
-    )
-    logging.info(
-        f"tensor_shape: {tensor_shape}, grid: {grid}, memory_layout: {memory_layout}, orientation: {orientation}"
-    )
     info = layout_map[memory_layout]
     shard_spec = ttnn.ShardSpec(info["shard_grid"], info["shard_shape"], orientation)
     return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
@@ -321,6 +312,7 @@ def _legacy_output_memory_config(tensor_shape, grid, memory_layout, orientation)
     [
         ([1, 1, 32, 128], [1, 1, 32, 64], [1, 1, 32, 64], None),
         ([1, 1, 32, 128], [1, 1, 32, 64], [1, 1, 32, 64], [1, 1, 32, 32]),
+        ([1, 1, 48, 96], [1, 1, 37, 55], [1, 1, 37, 55], [1, 1, 37, 32]),
     ],
 )
 @pytest.mark.parametrize("shard_core_grid", [_SHARD_GRID_2X1])
@@ -381,6 +373,7 @@ def test_gather_nd_sharded_to_nd_sharded(
     "tensor_shape, index_shape, input_shard_shape",
     [
         ([1, 1, 32, 128], [1, 1, 32, 64], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55], [1, 1, 37, 55]),
     ],
 )
 @pytest.mark.parametrize("shard_core_grid", [_SHARD_GRID_2X1])
@@ -419,6 +412,7 @@ def test_gather_nd_sharded_to_interleaved(
     "tensor_shape, index_shape, output_shard_shape",
     [
         ([1, 1, 32, 128], [1, 1, 32, 64], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55], [1, 1, 37, 55]),
     ],
 )
 @pytest.mark.parametrize("shard_core_grid", [_SHARD_GRID_2X1])
@@ -456,6 +450,7 @@ def test_gather_interleaved_to_nd_sharded(
     "tensor_shape, index_shape, input_shard_shape",
     [
         ([1, 1, 32, 128], [1, 1, 32, 64], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55], [1, 1, 37, 55]),
     ],
 )
 @pytest.mark.parametrize("shard_core_grid", [_SHARD_GRID_2X1])
@@ -512,6 +507,7 @@ def test_gather_nd_sharded_to_legacy_sharded(
     "tensor_shape, index_shape",
     [
         ([1, 1, 32, 128], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55]),
     ],
 )
 @pytest.mark.parametrize("shard_core_grid", [_SHARD_GRID_2X1])
@@ -552,9 +548,14 @@ def test_gather_legacy_sharded_to_nd_sharded(
 
 
 @pytest.mark.parametrize("dim", [-1])
-def test_gather_interleaved_to_legacy_sharded(device, dim):
-    tensor_shape = [1, 1, 32, 128]
-    index_shape = [1, 1, 32, 64]
+@pytest.mark.parametrize(
+    "tensor_shape, index_shape",
+    [
+        ([1, 1, 32, 128], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55]),
+    ],
+)
+def test_gather_interleaved_to_legacy_sharded(device, dim, tensor_shape, index_shape):
     torch.manual_seed(42)
     input_torch = torch.randn(tensor_shape, dtype=torch.bfloat16)
     index_torch = torch.randint(0, tensor_shape[dim], index_shape, dtype=torch.int64)
@@ -582,9 +583,14 @@ def test_gather_interleaved_to_legacy_sharded(device, dim):
 
 
 @pytest.mark.parametrize("dim", [-1])
-def test_gather_legacy_sharded_to_interleaved(device, dim):
-    tensor_shape = [1, 1, 32, 128]
-    index_shape = [1, 1, 32, 64]
+@pytest.mark.parametrize(
+    "tensor_shape, index_shape",
+    [
+        ([1, 1, 32, 128], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55]),
+    ],
+)
+def test_gather_legacy_sharded_to_interleaved(device, dim, tensor_shape, index_shape):
     torch.manual_seed(42)
     input_torch = torch.randn(tensor_shape, dtype=torch.bfloat16)
     index_torch = torch.randint(0, tensor_shape[dim], index_shape, dtype=torch.int64)
@@ -618,9 +624,14 @@ def test_gather_legacy_sharded_to_interleaved(device, dim):
 
 
 @pytest.mark.parametrize("dim", [-1])
-def test_gather_preallocated_nd_sharded_output(device, dim):
-    tensor_shape = [1, 1, 32, 128]
-    index_shape = [1, 1, 32, 64]
+@pytest.mark.parametrize(
+    "tensor_shape, index_shape",
+    [
+        ([1, 1, 32, 128], [1, 1, 32, 64]),
+        ([1, 1, 48, 96], [1, 1, 37, 55]),
+    ],
+)
+def test_gather_preallocated_nd_sharded_output(device, dim, tensor_shape, index_shape):
     torch.manual_seed(42)
     input_torch = torch.randn(tensor_shape, dtype=torch.bfloat16)
     index_torch = torch.randint(0, tensor_shape[dim], index_shape, dtype=torch.int64)
@@ -658,11 +669,15 @@ def test_gather_preallocated_nd_sharded_output(device, dim):
 
 
 @pytest.mark.parametrize("dim", [-1])
-def test_gather_nd_sharded_high_rank(device, dim):
+@pytest.mark.parametrize(
+    "tensor_shape, index_shape, input_shard_shape",
+    [
+        ([1, 1, 2, 32, 128], [1, 1, 2, 32, 64], [1, 1, 2, 32, 64]),
+        ([1, 1, 2, 48, 96], [1, 1, 2, 37, 55], [1, 1, 2, 37, 55]),
+    ],
+)
+def test_gather_nd_sharded_high_rank(device, dim, tensor_shape, index_shape, input_shard_shape):
     """Rank-5 tensors: gather on last dim with ND-sharded input and output."""
-    tensor_shape = [1, 1, 2, 32, 128]
-    index_shape = [1, 1, 2, 32, 64]
-    input_shard_shape = [1, 1, 2, 32, 64]
     torch.manual_seed(42)
     input_torch = torch.randn(tensor_shape, dtype=torch.bfloat16)
     index_torch = torch.randint(0, tensor_shape[dim], index_shape, dtype=torch.int64)

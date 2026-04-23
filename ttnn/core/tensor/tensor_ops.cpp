@@ -26,19 +26,22 @@
 #include <tt_stl/small_vector.hpp>
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 // Matches ttnn::operations::data_movement::squeeze_shape_to_ND (leading dims folded into [0]).
-// Used to keep ND shard_shape rank in sync with logical shape when a view only reduces rank via that fold.
-tt::tt_metal::Shape squeeze_shape_to_nd_for_view(const tt::tt_metal::Shape& shape, const uint32_t n) {
+// Used to keep shard_shape rank in sync with logical shape when a view only reduces rank via that fold.
+// If no squeeze is necessary, return the shape without change.
+tt::tt_metal::Shape squeeze_shape_for_view(const tt::tt_metal::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
         return shape;
     }
-    ttsl::SmallVector<uint32_t> shape_nd(n);
-    std::copy(shape.view().rbegin(), shape.view().rbegin() + n, shape_nd.rbegin());
+    ttsl::SmallVector<uint32_t> squeezed_shape(n);
+    std::copy(shape.view().rbegin(), shape.view().rbegin() + n, squeezed_shape.rbegin());
     const auto rank_diff_end = shape.rank() - n + 1;
-    shape_nd[0] = std::accumulate(shape.cbegin(), shape.cbegin() + rank_diff_end, 1, std::multiplies<uint32_t>());
+    squeezed_shape[0] = std::accumulate(shape.cbegin(), shape.cbegin() + rank_diff_end, 1, std::multiplies<uint32_t>());
 
-    return tt::tt_metal::Shape(std::move(shape_nd));
+    return tt::tt_metal::Shape(std::move(squeezed_shape));
 }
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 namespace tt::tt_metal {
@@ -301,12 +304,12 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         const size_t old_log_rank = input_tensor.logical_shape().rank();
         const size_t new_log_rank = new_logical_shape.rank();
         if (nd_spec.shard_shape.rank() == old_log_rank && new_log_rank < old_log_rank) {
-            const auto expected_logical =
-                ::squeeze_shape_to_nd_for_view(input_tensor.logical_shape(), static_cast<uint32_t>(new_log_rank));
+            const auto expected_logical = CMAKE_UNIQUE_NAMESPACE::squeeze_shape_for_view(
+                input_tensor.logical_shape(), static_cast<uint32_t>(new_log_rank));
             if (expected_logical == new_logical_shape) {
                 auto new_nd = nd_spec;
-                new_nd.shard_shape =
-                    ::squeeze_shape_to_nd_for_view(nd_spec.shard_shape, static_cast<uint32_t>(new_log_rank));
+                new_nd.shard_shape = CMAKE_UNIQUE_NAMESPACE::squeeze_shape_for_view(
+                    nd_spec.shard_shape, static_cast<uint32_t>(new_log_rank));
                 output_memory_config = MemoryConfig{input_memory_config.buffer_type(), std::move(new_nd)};
             }
         }
