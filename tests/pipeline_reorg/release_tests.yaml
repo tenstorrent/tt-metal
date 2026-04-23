@@ -155,6 +155,30 @@
   owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
 
+# N150 E2E tests (from models_e2e_tests.yaml)
+- name: Llama 3.1-8B N150 e2e tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model-name: llama3.1-8b
+  skus:
+    wh_n150:
+      timeout: 7
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Whisper N150 e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest --timeout=600 models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  model-name: whisper
+  skus:
+    wh_n150:
+      timeout: 10
+  owner_id: U0491KT8MNY # Mohamed Bahnas
+  team: models
+
 # N300 Core models
 - name: resnet N300 functional
   cmd: run_resnet_func
@@ -439,6 +463,64 @@
   skus:
     wh_galaxy_release:
       timeout: 25
+  owner_id: U08TJ70UFRT # Stuti Raizada
+  team: models
+
+# Galaxy E2E tests (from models_e2e_tests.yaml)
+- name: Galaxy Llama 3.1-8B data-parallel e2e tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+  model-name: llama3.1-8b-dp-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 20
+  owner_id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: Galaxy Llama 3.3-70B e2e tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
+  model-name: llama3.3-70b-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 30
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: Galaxy Llama 3.3-70B data-parallel e2e tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
+  model-name: llama3.3-70b-dp-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 20
+  owner_id: U08BH66EXAL # Radoica Draskic
+  team: models
+
+- name: Galaxy Qwen3-32B e2e tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
+  model-name: qwen3-32b-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 10
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: Galaxy GPT-OSS 120B e2e tests (high batch)
+  cmd: |
+    uv pip install -r models/demos/gpt_oss/requirements.txt
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
+    pytest models/demos/gpt_oss/demo/text_demo.py -k "mesh_4x8 and batch128" --timeout 1200
+  model-name: gpt-oss-120b-high-batch-galaxy
+  skus:
+    wh_galaxy_release:
+      timeout: 20
   owner_id: U08TJ70UFRT # Stuti Raizada
   team: models
 
