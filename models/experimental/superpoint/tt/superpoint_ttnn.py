@@ -419,12 +419,15 @@ class TtSuperPoint:
         )
         # Close the NMS loop on device with the fused C++ kernel:
         # output[i] = s_padded[i] if s_padded[i] == s_pooled[i] else 0.
-        # max_pool2d returns a height-sharded tensor; pass memory_config=DRAM
-        # to to_layout so it interleaves + converts layout in one op.
-        s_padded_tile = ttnn.to_layout(s_padded, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        s_pooled_tile = ttnn.to_layout(s_pooled, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        ttnn.deallocate(s_padded)
+        # max_pool2d returns a height-sharded tensor, so re-interleave into
+        # DRAM before TILE conversion (sharded->tile is rejected unless every
+        # shard is tile-aligned).
+        s_pooled_dram = ttnn.to_memory_config(s_pooled, DRAM)
         ttnn.deallocate(s_pooled)
+        s_padded_tile = ttnn.to_layout(s_padded, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        s_pooled_tile = ttnn.to_layout(s_pooled_dram, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        ttnn.deallocate(s_padded)
+        ttnn.deallocate(s_pooled_dram)
         s_nms = ttnn.experimental.sp_eq_mul_mask(s_padded_tile, s_pooled_tile)
         ttnn.deallocate(s_padded_tile)
         ttnn.deallocate(s_pooled_tile)
