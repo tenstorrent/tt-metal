@@ -233,7 +233,7 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         if (desc.cbs[ci].buffer) {
-            result.cbs.push_back({static_cast<uint32_t>(program_cbs[ci]->id()), desc.cbs[ci].buffer});
+            result.cbs.push_back({program_cbs[ci]->id(), desc.cbs[ci].buffer});
         }
     }
 
