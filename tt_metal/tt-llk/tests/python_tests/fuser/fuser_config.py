@@ -20,6 +20,7 @@ from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .fused_operand import OperandRegistry
 from .fused_operation import FusedOperation
+from .fuser_sentinel import FuserSentinel
 
 
 @dataclass
@@ -31,6 +32,7 @@ class GlobalConfig:
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
+    sentinel: FuserSentinel
 
 
 class FuserConfig(TestConfig):

@@ -271,7 +271,7 @@ class FpuMathSchema(BaseModel):
 
         return self
 
-    def to_compute_node(self, operands):
+    def to_compute_node(self, operands, output):
         src_a = operands.get(self.src_a)
         src_b = operands.get(self.src_b)
 
@@ -318,7 +318,9 @@ class FpuMathSchema(BaseModel):
         if self.acc_to_dest:
             kwargs["acc_to_dest"] = self.acc_to_dest
 
-        return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
+        return ComputeNode(
+            fpu=fpu, src_a=src_a, src_b=src_b, output=output, sfpu=None, **kwargs
+        )
 
     def get_output_dimensions(self, operands) -> Tuple[int, int]:
         src_a = operands.get(self.src_a).dimensions
@@ -352,7 +354,7 @@ class UnarySfpuMathSchema(BaseModel):
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
 
-    def to_compute_node(self, operands):
+    def to_compute_node(self, operands, output):
 
         sfpu = UnarySfpu(
             self.operation.to_math_operation(),
@@ -378,7 +380,7 @@ class BinarySfpuMathSchema(BaseModel):
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
 
-    def to_compute_node(self, operands):
+    def to_compute_node(self, operands, output):
 
         sfpu = BinarySfpu(
             self.operation.to_math_operation(),
@@ -424,7 +426,7 @@ class OperationSchema(BaseModel):
 
     def to_fused_operation(self, operands):
         output = operands.get(name=self.output)
-        math_ops = [m.to_compute_node(operands) for m in self.math]
+        math_ops = [m.to_compute_node(operands, output) for m in self.math]
         output.is_output = True
 
         max_out_dims = self._calculate_max_output_dimensions(operands)

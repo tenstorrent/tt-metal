@@ -10,11 +10,13 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
+from helpers.data_format_inference import infer_math_format, infer_unpack_out
 from helpers.llk_params import (
     AccToDest,
     BroadcastType,
     ClearFP32DstAcc,
     DataCopyType,
+    DataFormat,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
     MathFidelity,
@@ -41,6 +43,8 @@ class ComputeNode:
         sfpu: Sfpu = None,
         src_a: Operand = None,
         src_b: Operand = None,
+        output: Operand = None,
+        is_fp32_dest_acc_en: bool = False,
         unpack_transpose_faces: Transpose = Transpose.No,
         unpack_transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
@@ -53,6 +57,9 @@ class ComputeNode:
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
         acc_to_dest: AccToDest = AccToDest.No,
         unpack_to_dest: UnpackToDest = UnpackToDest.No,
+        _unpack_a_out_format: DataFormat = None,
+        _unpack_b_out_format: DataFormat = None,
+        _math_format: DataFormat = None,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -91,6 +98,40 @@ class ComputeNode:
         else:
             self.data_copy_type = data_copy_type
 
+        if self.src_a is None and self.src_b is None:
+            return
+
+        if output is None:
+            raise ValueError(
+                "Cannot determine intermediate data formats without output"
+            )
+
+        if self.src_a is not None:
+            self._unpack_a_out_format = infer_unpack_out(
+                self.src_a.data_format,
+                output.data_format,
+                is_fp32_dest_acc_en,
+                self.unpack_to_dest,
+            )
+
+        if self.src_a is not None:
+            self._unpack_b_out_format = infer_unpack_out(
+                self.src_b.data_format,
+                output.data_format,
+                is_fp32_dest_acc_en,
+                self.unpack_to_dest,
+            )
+
+        # The data format used for mathematical computations, desired format in dest register
+        self._math_format = infer_math_format(
+            self._unpack_a_out_format, self._unpack_b_out_format
+        )
+
+        # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
+        # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
+        if self._math_format == DataFormat.Fp8_e4m3:
+            self._math_format = DataFormat.Float16
+
     def unpack(
         self,
         operation: "FusedOperation",
@@ -106,6 +147,8 @@ class ComputeNode:
             PerfRunType.MATH_ISOLATE,
         )
         if not skip_init:
+            config.sentinel.reconfigure_self(config, operation, self)
+            code += config.sentinel.reconfigure_math_format(operation, config)
             code += self.unpacker().init(operation, config, self, block)
 
         code += self.unpacker().loop.unpack_loop(operation, config, self, block)
@@ -130,6 +173,9 @@ class ComputeNode:
             PerfRunType.L1_CONGESTION,
         )
         if not skip_init:
+            # if config.sentinel.should_reconfigure(self.src_a, self.src_b, operation.output):
+            config.sentinel.reconfigure_self(config, operation, self)
+            code += config.sentinel.reconfigure_math_format(operation, config)
             code += self.fpu.init(operation, config, self, block)
 
         code += self.fpu.loop.math_loop(operation, config, self, block)

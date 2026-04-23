@@ -56,7 +56,6 @@ class DatacopyFpu(Fpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
@@ -64,9 +63,9 @@ class DatacopyFpu(Fpu):
         is_int_fpu_en = dest_acc
 
         return (
-            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}>(\n"
-            f"        {num_faces}, math_format{stage}\n"
-            f"    );\n"
+            f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}>(\n"
+            f"    {num_faces}, {compute_unit.math_format}\n"
+            f");\n"
         )
 
     def calculate(
@@ -84,7 +83,7 @@ class DatacopyFpu(Fpu):
 
         code = (
             f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-            f"        {block.tile_id_block}, math_format{stage}, math_format{stage}\n"
+            f"        {block.tile_id_block}, {compute_unit.math_format}, {compute_unit.math_format}\n"
             f"    );\n"
         )
 

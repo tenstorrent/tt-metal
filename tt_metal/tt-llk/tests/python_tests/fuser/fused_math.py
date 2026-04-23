@@ -124,20 +124,20 @@ class ComputePipeline:
     def unpack_operand_constants(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
-        stage = operation.stage_id
-        unpack_a_src = operation.unpack_a_in
-        unpack_a_dst = operation.unpack_a_out
-        unpack_b_src = operation.unpack_b_in
-        unpack_b_dst = operation.unpack_b_out
+        # stage = operation.stage_id
+        # unpack_a_src = operation.unpack_a_in
+        # unpack_a_dst = operation.unpack_a_out
+        # unpack_b_src = operation.unpack_b_in
+        # unpack_b_dst = operation.unpack_b_out
 
-        code = (
-            f"    // Operation {stage}: Fused Unpack\n"
-            f"    [[maybe_unused]] const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
-            f"    [[maybe_unused]] const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
-            f"    [[maybe_unused]] const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
-            f"    [[maybe_unused]] const std::uint32_t unpack_b_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_dst.name});\n"
-        )
-        return code
+        # code = (
+        # f"    // Operation {stage}: Fused Unpack\n"
+        # f"    [[maybe_unused]] const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
+        # f"    [[maybe_unused]] const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
+        # f"    [[maybe_unused]] const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
+        # f"    [[maybe_unused]] const std::uint32_t unpack_b_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_dst.name});\n"
+        # )
+        return ""
 
     def unpack_hw_configure(
         self,
@@ -145,32 +145,23 @@ class ComputePipeline:
         config: "GlobalConfig",
         compute_unit: "ComputeNode",
     ) -> str:
-        stage = operation.stage_id
-        unpa_tile_size = compute_unit.src_a.tile_size
-        unpb_tile_size = compute_unit.src_b.tile_size
-        dest_acc = config.dest_acc.cpp_enum_value
-        unpa_face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        unpb_face_r_dim = compute_unit.src_b.tile_shape.face_r_dim
-        unpa_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        unpb_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
+        # stage = operation.stage_id
+        # unpa_tile_size = compute_unit.src_a.tile_size
+        # unpb_tile_size = compute_unit.src_b.tile_size
+        # dest_acc = config.dest_acc.cpp_enum_value
+        # unpa_face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        # unpb_face_r_dim = compute_unit.src_b.tile_shape.face_r_dim
+        # unpa_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        # unpb_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
 
-        if stage == 1:
-            code = (
-                f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
-                f"    unpack_a_src_format{stage}, unpack_b_src_format{stage}, unpack_a_dst_format{stage}, unpack_b_dst_format{stage},\n"
-                f"    {unpa_face_r_dim}, {unpb_face_r_dim}, {unpa_num_faces}, {unpb_num_faces}, {unpa_tile_size}, {unpb_tile_size}\n"
-                f");\n"
-            )
-        else:
-            code = (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, false>(\n"
-                f"    unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {unpa_tile_size}\n"
-                f");\n"
-                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
-                f"    unpack_b_src_format{stage}, unpack_b_dst_format{stage}, {unpb_tile_size}\n"
-                f");\n"
-            )
-        return code
+        # if stage == 1:
+        #     return (
+        #         f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
+        #         f"    unpack_a_src_format{stage}, unpack_b_src_format{stage}, unpack_a_dst_format{stage}, unpack_b_dst_format{stage},\n"
+        #         f"    {unpa_face_r_dim}, {unpb_face_r_dim}, {unpa_num_faces}, {unpb_num_faces}, {unpa_tile_size}, {unpb_tile_size}\n"
+        #         f");\n"
+        #     )
+        return ""
 
     def unpacker_sync_with_packer(
         self,
@@ -230,10 +221,10 @@ class ComputePipeline:
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
+        code = ""
+
         if stage == 1:
             code = f"_llk_math_hw_configure_<{dest_acc}>(math_format{stage}, math_format{stage});\n"
-        else:
-            code = f"_llk_math_reconfig_data_format_<{dest_acc}, false>(math_format{stage}, math_format{stage});\n"
 
         code += f"_llk_math_pack_sync_init_<dest_sync{stage}, {dest_acc}>();\n"
 
@@ -270,11 +261,11 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        math_format = operation.output.data_format
+        # math_format = operation.output.data_format
         dest_sync = operation.dest_sync.cpp_enum_value
 
         code = f"// Operation {stage}: Math Setup\n"
-        code += f"const std::uint32_t math_format{stage} = ckernel::to_underlying(DataFormat::{math_format.name});\n"
+        # code += f"const std::uint32_t math_format{stage} = ckernel::to_underlying(DataFormat::{math_format.name});\n"
         code += f"constexpr DstSync dest_sync{stage} = {dest_sync};\n"
 
         return code
@@ -286,7 +277,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.math_hw_configure(operation, config)
+        # code += self.math_hw_configure(operation, config)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
