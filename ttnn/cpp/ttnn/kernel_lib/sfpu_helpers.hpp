@@ -30,6 +30,7 @@
 #include "api/compute/eltwise_unary/i0.h"
 #include "api/compute/eltwise_unary/i1.h"
 #include "api/compute/eltwise_unary/lgamma.h"
+#include "api/compute/logsigmoid.h"
 #include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/eltwise_unary/elu.h"
 #include "api/compute/eltwise_unary/selu.h"
@@ -1084,6 +1085,14 @@ template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct SfpuMin : BinaryOp<SfpuMin<In0, In1, Out>, In0, In1, Out> {
     ALWI void init() const;
     ALWI void call(uint32_t a, uint32_t b, uint32_t c) const;
+};
+
+// logsigmoid(x, exp_neg_x) = log(sigmoid(x))
+// In0 = x, In1 = exp(-x) (pre-computed), Out = logsigmoid(x)
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct Logsigmoid : BinaryOp<Logsigmoid<In0, In1, Out>, In0, In1, Out> {
+    ALWI void init() const;
+    ALWI void call(uint32_t d0, uint32_t d1, uint32_t d_out) const;
 };
 
 // --- Ternary SFPU Ops ---

@@ -469,6 +469,13 @@ ALWI void SfpuMin<In0, In1, Out>::init() const { binary_min_tile_init(); }
 template <Dst In0, Dst In1, Dst Out>
 ALWI void SfpuMin<In0, In1, Out>::call(uint32_t a, uint32_t b, uint32_t c) const { binary_min_tile(a, b, c); }
 
+template <Dst In0, Dst In1, Dst Out>
+ALWI void Logsigmoid<In0, In1, Out>::init() const { logsigmoid_tile_init(); }
+template <Dst In0, Dst In1, Dst Out>
+ALWI void Logsigmoid<In0, In1, Out>::call(uint32_t d0, uint32_t d1, uint32_t d_out) const {
+    logsigmoid_tile(d0, d1, d_out);
+}
+
 // =============================================================================
 // Op Method Definitions — Ternary SFPU (4 ops)
 // =============================================================================
