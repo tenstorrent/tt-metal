@@ -18,12 +18,12 @@ namespace ckernel {
 // Instead we open the SFPU section once and invoke the full-tile helper.
 // ---------------------------------------------------------------------------
 
-template <ckernel::sfpu::SfpuBcastDim BCAST_DIM>
+template <ckernel::BroadcastType BCAST_DIM>
 inline void llk_math_eltwise_binary_sfpu_binary_bcast_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_sfpu_binary_bcast_init_<BCAST_DIM>);
 }
 
-template <ckernel::BinaryOp BINOP, ckernel::sfpu::SfpuBcastDim BCAST_DIM>
+template <ckernel::BinaryOp BINOP, ckernel::BroadcastType BCAST_DIM>
 inline void llk_math_eltwise_binary_sfpu_binary_bcast(
     uint32_t dst_index_data, uint32_t dst_index_bcast, uint32_t dst_index_out) {
     _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(0);
@@ -43,7 +43,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_bcast(
 // --- BCAST_COL ---------------------------------------------------------------
 
 inline void llk_math_eltwise_binary_sfpu_bcast_col_init() {
-    llk_math_eltwise_binary_sfpu_binary_bcast_init<ckernel::sfpu::SfpuBcastDim::BCAST_COL>();
+    llk_math_eltwise_binary_sfpu_binary_bcast_init<ckernel::BroadcastType::COL>();
 }
 
 inline void llk_math_eltwise_binary_sfpu_sub_bcast_col_init() { llk_math_eltwise_binary_sfpu_bcast_col_init(); }
@@ -53,24 +53,24 @@ inline void llk_math_eltwise_binary_sfpu_add_bcast_col_init() { llk_math_eltwise
 inline void llk_math_eltwise_binary_sfpu_mul_bcast_col_init() { llk_math_eltwise_binary_sfpu_bcast_col_init(); }
 
 inline void llk_math_eltwise_binary_sfpu_sub_bcast_col(uint32_t dst_index_data, uint32_t dst_index_col_vec) {
-    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::SUB, ckernel::sfpu::SfpuBcastDim::BCAST_COL>(
+    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL>(
         dst_index_data, dst_index_col_vec, /*dst_index_out=*/dst_index_data);
 }
 
 inline void llk_math_eltwise_binary_sfpu_add_bcast_col(uint32_t dst_index_data, uint32_t dst_index_col_vec) {
-    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::ADD, ckernel::sfpu::SfpuBcastDim::BCAST_COL>(
+    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL>(
         dst_index_data, dst_index_col_vec, /*dst_index_out=*/dst_index_data);
 }
 
 inline void llk_math_eltwise_binary_sfpu_mul_bcast_col(uint32_t dst_index_data, uint32_t dst_index_col_vec) {
-    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::MUL, ckernel::sfpu::SfpuBcastDim::BCAST_COL>(
+    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL>(
         dst_index_data, dst_index_col_vec, /*dst_index_out=*/dst_index_data);
 }
 
 // --- BCAST_ROW ---------------------------------------------------------------
 
 inline void llk_math_eltwise_binary_sfpu_bcast_row_init() {
-    llk_math_eltwise_binary_sfpu_binary_bcast_init<ckernel::sfpu::SfpuBcastDim::BCAST_ROW>();
+    llk_math_eltwise_binary_sfpu_binary_bcast_init<ckernel::BroadcastType::ROW>();
 }
 
 inline void llk_math_eltwise_binary_sfpu_sub_bcast_row_init() { llk_math_eltwise_binary_sfpu_bcast_row_init(); }
@@ -80,17 +80,17 @@ inline void llk_math_eltwise_binary_sfpu_add_bcast_row_init() { llk_math_eltwise
 inline void llk_math_eltwise_binary_sfpu_mul_bcast_row_init() { llk_math_eltwise_binary_sfpu_bcast_row_init(); }
 
 inline void llk_math_eltwise_binary_sfpu_sub_bcast_row(uint32_t dst_index_data, uint32_t dst_index_row_vec) {
-    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::SUB, ckernel::sfpu::SfpuBcastDim::BCAST_ROW>(
+    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW>(
         dst_index_data, dst_index_row_vec, /*dst_index_out=*/dst_index_data);
 }
 
 inline void llk_math_eltwise_binary_sfpu_add_bcast_row(uint32_t dst_index_data, uint32_t dst_index_row_vec) {
-    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::ADD, ckernel::sfpu::SfpuBcastDim::BCAST_ROW>(
+    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW>(
         dst_index_data, dst_index_row_vec, /*dst_index_out=*/dst_index_data);
 }
 
 inline void llk_math_eltwise_binary_sfpu_mul_bcast_row(uint32_t dst_index_data, uint32_t dst_index_row_vec) {
-    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::MUL, ckernel::sfpu::SfpuBcastDim::BCAST_ROW>(
+    llk_math_eltwise_binary_sfpu_binary_bcast<ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW>(
         dst_index_data, dst_index_row_vec, /*dst_index_out=*/dst_index_data);
 }
 

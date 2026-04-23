@@ -11,8 +11,8 @@
 #include "experimental/circular_buffer.h"
 
 // Compile-time parameters (set from host via defines):
-//   BCAST_DIM_VAL : 0 = BCAST_COL, 1 = BCAST_ROW         (ckernel::SfpuBcastDim)
-//   BINOP_VAL     : 0 = ADD,       1 = SUB,    2 = MUL   (ckernel::SfpuBcastOp)
+//   BCAST_DIM_VAL : 0 = COL,  1 = ROW              -> ckernel::BroadcastType
+//   BINOP_VAL     : 0 = ADD,  1 = SUB,  2 = MUL    -> ckernel::EltwiseBinaryType
 //
 // DST layout used by this kernel:
 //   dst[0] = data tile   (input A, also output written in-place)
@@ -23,8 +23,12 @@ namespace {
 constexpr uint32_t kDstData = 0;
 constexpr uint32_t kDstBcast = 1;
 
-constexpr auto kBcastDim = static_cast<ckernel::SfpuBcastDim>(BCAST_DIM_VAL);
-constexpr auto kBcastOp = static_cast<ckernel::SfpuBcastOp>(BINOP_VAL);
+constexpr ckernel::BroadcastType kBcastDim =
+    (BCAST_DIM_VAL == 0) ? ckernel::BroadcastType::COL : ckernel::BroadcastType::ROW;
+
+constexpr ckernel::EltwiseBinaryType kBcastOp = (BINOP_VAL == 0)   ? ckernel::EltwiseBinaryType::ELWADD
+                                                : (BINOP_VAL == 1) ? ckernel::EltwiseBinaryType::ELWSUB
+                                                                   : ckernel::EltwiseBinaryType::ELWMUL;
 
 }  // namespace
 

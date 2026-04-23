@@ -86,12 +86,6 @@ namespace sfpu
 // Layout constants
 // ============================================================================
 
-enum class SfpuBcastDim : std::uint8_t
-{
-    BCAST_COL = 0,
-    BCAST_ROW = 1,
-};
-
 // One dest-register tile occupies 64 addr units (4 faces x 16 addr/face).
 constexpr std::uint32_t DEST_TILE_SIZE_RAW = 64;
 
@@ -518,10 +512,12 @@ inline void _calculate_sfpu_binary_bcast_row_full_tile_(std::uint32_t dst_index_
 // Public API
 // ============================================================================
 
-template <BinaryOp BINOP, SfpuBcastDim BCAST_DIM>
+template <BinaryOp BINOP, BroadcastType BCAST_DIM>
 inline void _calculate_sfpu_binary_bcast_full_tile_(std::uint32_t dst_index_data, std::uint32_t dst_index_bcast, std::uint32_t dst_index_out)
 {
-    if constexpr (BCAST_DIM == SfpuBcastDim::BCAST_COL)
+    static_assert(
+        BCAST_DIM == BroadcastType::COL || BCAST_DIM == BroadcastType::ROW, "SFPU binary bcast only supports BroadcastType::COL / BroadcastType::ROW");
+    if constexpr (BCAST_DIM == BroadcastType::COL)
     {
         _calculate_sfpu_binary_bcast_col_full_tile_<BINOP>(dst_index_data, dst_index_bcast, dst_index_out);
     }
@@ -531,9 +527,11 @@ inline void _calculate_sfpu_binary_bcast_full_tile_(std::uint32_t dst_index_data
     }
 }
 
-template <SfpuBcastDim BCAST_DIM>
+template <BroadcastType BCAST_DIM>
 inline void _sfpu_binary_bcast_init_()
 {
+    static_assert(
+        BCAST_DIM == BroadcastType::COL || BCAST_DIM == BroadcastType::ROW, "SFPU binary bcast only supports BroadcastType::COL / BroadcastType::ROW");
     // Initialize SFPU config register (matches sibling SFPU init helpers,
     // e.g. _init_add_top_row_, init_reduce_*). Required before any replay
     // recording or SFPCONFIG-based lane-mask setup below.
@@ -546,7 +544,7 @@ inline void _sfpu_binary_bcast_init_()
     }
         .set(ADDR_MOD_7);
 
-    if constexpr (BCAST_DIM == SfpuBcastDim::BCAST_COL)
+    if constexpr (BCAST_DIM == BroadcastType::COL)
     {
         // Build persistent col-0 lane mask in LREG_MASK.
         _build_lane_mask_col0_();

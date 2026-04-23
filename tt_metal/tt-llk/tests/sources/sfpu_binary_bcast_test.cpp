@@ -53,7 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-static constexpr auto BCAST_DIM             = static_cast<SfpuBcastDim>(BCAST_DIM_VAL);
+static constexpr auto BCAST_DIM             = static_cast<BroadcastType>(BCAST_DIM_VAL);
 static constexpr std::uint32_t INPUT_TILE_A = INPUT_TILE_A_VAL;
 static constexpr std::uint32_t INPUT_TILE_B = INPUT_TILE_A + 1;
 static constexpr std::uint32_t RESULT_TILE  = INPUT_TILE_A + 2;

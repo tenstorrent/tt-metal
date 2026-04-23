@@ -270,14 +270,17 @@ def sfpu_binary(
 # ---------------------------------------------------------------------------
 
 
-class SfpuBcastDim(Enum):
-    BCAST_COL = 0
-    BCAST_ROW = 1
+class BroadcastType(Enum):
+    # Values must match ckernel::BroadcastType in llk_defs.h
+    # (NONE=0, COL=1, ROW=2, SCALAR=3) because the kernel does
+    # `static_cast<BroadcastType>(BCAST_DIM_VAL)`.
+    COL = 1
+    ROW = 2
 
 
 @dataclass
 class SFPU_BCAST_DIM(TemplateParameter):
-    bcast_dim: SfpuBcastDim
+    bcast_dim: BroadcastType
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t BCAST_DIM_VAL = {self.bcast_dim.value};"
@@ -309,7 +312,7 @@ _BCAST_BINARY_OPS = {
 def _golden_sfpu_binary_bcast(
     src_A: torch.Tensor,
     src_B: torch.Tensor,
-    bcast_dim: SfpuBcastDim,
+    bcast_dim: BroadcastType,
     op,
     stimuli_format: DataFormat,
 ) -> torch.Tensor:
@@ -323,7 +326,7 @@ def _golden_sfpu_binary_bcast(
     a = src_A.flatten()[:1024].reshape(32, 32)
     b = src_B.flatten()[:1024].reshape(32, 32)
 
-    if bcast_dim == SfpuBcastDim.BCAST_ROW:
+    if bcast_dim == BroadcastType.ROW:
         b_bcast = b[0].unsqueeze(0).expand_as(b)
     else:
         b_bcast = b[:, 0].unsqueeze(1).expand_as(b)
@@ -341,7 +344,7 @@ def _golden_sfpu_binary_bcast(
             DataFormat.Bfp8_b,
         ]
     ),
-    bcast_dim=[SfpuBcastDim.BCAST_ROW, SfpuBcastDim.BCAST_COL],
+    bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
     mathop=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
