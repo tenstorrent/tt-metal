@@ -13,15 +13,12 @@ namespace ttnn::experimental::prim {
 using namespace tt::constants;
 
 RotaryEmbeddingHfMultiCore::cached_program_t RotaryEmbeddingHfMultiCore::create(
-    const RotaryEmbeddingHfParams& operation_attributes,
-    const RotaryEmbeddingHfInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    const RotaryEmbeddingHfParams& operation_attributes, const RotaryEmbeddingHfInputs& tensor_args, Tensor& output) {
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input_tensor;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
-    auto& output = tensor_return_value;
 
     Program program{};
 
@@ -295,18 +292,20 @@ RotaryEmbeddingHfMultiCore::cached_program_t RotaryEmbeddingHfMultiCore::create(
 
 void RotaryEmbeddingHfMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const RotaryEmbeddingHfParams& /* operation_attributes */,
+    const RotaryEmbeddingHfParams& operation_attributes,
     const RotaryEmbeddingHfInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    Tensor& output) {
     using namespace tt::constants;
+
+    (void)operation_attributes;
 
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* cos_buffer = tensor_args.cos_cache.buffer();
     auto* sin_buffer = tensor_args.sin_cache.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
+    auto* dst_buffer = output.buffer();
 
     bool in_sharded = tensor_args.input_tensor.is_sharded();
-    bool out_sharded = tensor_return_value.is_sharded();
+    bool out_sharded = output.is_sharded();
 
     auto& program = cached_program.program;
     const auto& cores = cached_program.shared_variables.cores;

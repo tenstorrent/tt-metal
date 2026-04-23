@@ -176,7 +176,7 @@ RotaryEmbeddingHfMultiCoreSharded::cached_program_t RotaryEmbeddingHfMultiCoreSh
     shared_variables.cb_sin = cb_sin;
     shared_variables.cb_output = cb_output;
 
-    return {std::move(program), std::move(shared_variables)};
+    return {std::move(program), shared_variables};
 }
 
 void RotaryEmbeddingHfMultiCoreSharded::override_runtime_arguments(
