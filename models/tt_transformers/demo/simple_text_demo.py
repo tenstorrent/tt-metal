@@ -1585,7 +1585,7 @@ def test_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name=model_name,
+            ml_model_name=model_name.lower(),
             ml_model_type="llm",
             device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
