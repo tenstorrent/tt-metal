@@ -141,6 +141,57 @@ ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
     MATH((llk_math_eltwise_binary_sfpu_mul_bcast_row(dst_data_idx, dst_row_vec_idx)));
 }
 
+// ============================================================================
+// Unified templated API: select broadcast dim and binop at compile time.
+// ============================================================================
+
+enum class SfpuBcastDim : uint8_t { COL = 0, ROW = 1 };
+enum class SfpuBcastOp : uint8_t { ADD = 0, SUB = 1, MUL = 2 };
+
+// clang-format off
+/**
+ * Compile-time-dispatched init for SFPU binary broadcast. Picks the column or
+ * row variant based on the `Dim` template parameter; the binop opcode is
+ * selected per call in `sfpu_bcast`, so a single init covers ADD / SUB / MUL.
+ */
+// clang-format on
+template <SfpuBcastDim Dim>
+ALWI void sfpu_bcast_init() {
+    if constexpr (Dim == SfpuBcastDim::COL) {
+        sfpu_bcast_col_init();
+    } else {
+        sfpu_bcast_row_init();
+    }
+}
+
+// clang-format off
+/**
+ * Compile-time-dispatched SFPU binary broadcast. Equivalent to the matching
+ * `sfpu_{add,sub,mul}_bcast_{col,row}` selected by the `Dim` and `Op` template
+ * parameters. See those functions for semantics and preconditions.
+ */
+// clang-format on
+template <SfpuBcastDim Dim, SfpuBcastOp Op>
+ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
+    if constexpr (Dim == SfpuBcastDim::COL) {
+        if constexpr (Op == SfpuBcastOp::ADD) {
+            sfpu_add_bcast_col(dst_data_idx, dst_bcast_idx);
+        } else if constexpr (Op == SfpuBcastOp::SUB) {
+            sfpu_sub_bcast_col(dst_data_idx, dst_bcast_idx);
+        } else {
+            sfpu_mul_bcast_col(dst_data_idx, dst_bcast_idx);
+        }
+    } else {
+        if constexpr (Op == SfpuBcastOp::ADD) {
+            sfpu_add_bcast_row(dst_data_idx, dst_bcast_idx);
+        } else if constexpr (Op == SfpuBcastOp::SUB) {
+            sfpu_sub_bcast_row(dst_data_idx, dst_bcast_idx);
+        } else {
+            sfpu_mul_bcast_row(dst_data_idx, dst_bcast_idx);
+        }
+    }
+}
+
 #endif  // ARCH_WORMHOLE || ARCH_BLACKHOLE
 
 }  // namespace ckernel
