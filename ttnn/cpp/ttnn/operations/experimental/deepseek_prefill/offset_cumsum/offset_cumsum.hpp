@@ -15,7 +15,8 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
     uint32_t num_links,
-    const ttnn::MemoryConfig& memory_config);
+    const ttnn::MemoryConfig& memory_config,
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum
 

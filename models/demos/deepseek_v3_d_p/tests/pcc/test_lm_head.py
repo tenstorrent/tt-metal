@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -64,7 +65,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             1,
             ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
@@ -72,7 +73,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
         ),
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             1,
             ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="ring"),
@@ -80,7 +81,7 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
         ),
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),

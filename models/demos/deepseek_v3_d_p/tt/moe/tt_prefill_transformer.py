@@ -31,6 +31,8 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
+TT_PREFILL_TRANSFORMER_L1_SMALL = 4096
+
 
 class TtPrefillTransformer(LightweightModule):
     """

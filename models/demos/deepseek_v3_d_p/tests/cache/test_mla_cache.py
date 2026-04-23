@@ -13,6 +13,7 @@ from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -33,7 +34,7 @@ def cleanup_cache():
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
             id="linear-2x2",
         ),

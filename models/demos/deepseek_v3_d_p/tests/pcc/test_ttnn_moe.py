@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
     log_combine_mismatch_details,
@@ -71,6 +72,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -82,6 +84,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -93,6 +96,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL,
             },
             1,
             ttnn.Topology.Linear,
@@ -122,9 +126,6 @@ def test_ttnn_moe(
     Both TtMoe and TorchMoe create their gate internally from gate_weights
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
-
-    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
-    # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
 
     profiler.clear()
     profiler.start("test_ttnn_moe")

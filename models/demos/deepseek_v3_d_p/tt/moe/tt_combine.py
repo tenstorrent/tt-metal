@@ -88,5 +88,6 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
+            use_l1_small_for_semaphores=True,
         )
         return output

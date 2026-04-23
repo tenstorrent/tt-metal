@@ -13,6 +13,7 @@ from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_gate_weights, get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -53,7 +54,7 @@ def create_gate_input(config, mesh_device):
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
             id="linear-2x2",
         ),

@@ -32,13 +32,15 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
                 * :attr:`cluster_axis`: Axis along which to all_gather across devices.
                 * :attr:`num_links`: Number of links for all_gather.
                 * :attr:`memory_config`: Memory configuration for intermediate and output tensors.
+                * :attr:`use_l1_small_for_semaphores`: If true, allocate all_gather semaphores in L1_SMALL instead of L1.
 
         )doc",
         &offset_cumsum,
         nb::arg("input_tensor").noconvert(),
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
-        nb::arg("memory_config"));
+        nb::arg("memory_config"),
+        nb::arg("use_l1_small_for_semaphores") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum::detail

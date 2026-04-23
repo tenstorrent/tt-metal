@@ -394,6 +394,7 @@ class TtMoe(LightweightModule):
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
                 num_links=self.col_num_links,
                 topology=self.col_topology,
+                use_l1_small_for_semaphores=True,
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 

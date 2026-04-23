@@ -15,6 +15,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TT_PREFILL_TRANSFORMER_L1_SMALL
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -35,7 +36,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
     [
         pytest.param(
             1,
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
+            {"fabric_config": ttnn.FabricConfig.DISABLED, "l1_small_size": TT_PREFILL_TRANSFORMER_L1_SMALL},
             id="single-chip",
         ),
     ],

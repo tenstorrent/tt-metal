@@ -189,6 +189,7 @@ class TtLMHead(LightweightModule):
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
                 num_links=self.num_links,
                 topology=self.topology,
+                use_l1_small_for_semaphores=True,
             )
         else:
             x_full = x  # No TP sharding, x already has full emb_dim

@@ -200,6 +200,7 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
+            use_l1_small_for_semaphores=True,
         )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
