@@ -613,6 +613,7 @@ def _postprocess_worker_shm(
     shm_ring: torch.Tensor,
     ring_size: int,
     shm_preds: torch.Tensor | None = None,
+    h264_queue: "mp.Queue | None" = None,
 ):
     """BG process: per-tile NMS + cross-tile merge + draw + encode."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -767,18 +768,40 @@ def _postprocess_worker_shm(
             # cv2.imencode releases the GIL so threads give real parallelism.
             t0 = time.perf_counter()
             canvas = draw_hud(canvas, hud_label, ema_fps)
-            # Drain completed futures
-            encode_futures = [ef for ef in encode_futures if not ef.done()]
-            # Block only if all workers are saturated
-            if len(encode_futures) >= 3:
-                encode_futures[0].result()
-                encode_futures.pop(0)
-            # CRITICAL: copy canvas before encoding.  `canvas` is a numpy view
-            # into shared memory (shm_ring).  With RING_SIZE=4 and ~26ms pipeline
-            # latency, the prep process overwrites this slot ~27ms after BG reads
-            # it — while the 28ms JPEG encode is still reading.  The race causes
-            # half-old/half-new frames → "boxes appear and disappear" glitch.
-            encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality, fc))
+            if h264_queue is not None:
+                # Convert BGR → YUV I420 here, in the BG worker. libx264's
+                # internal swscale BGR→YUV at 4K costs ~15 ms/frame and
+                # serialises with encode; cv2.cvtColor releases the GIL and
+                # has spare host-CPU headroom here. Sending yuv420p directly
+                # into the encoder roughly halves encoder-thread wall time
+                # at 3840×2160, lifting delivered fps from ~17 → ~30+.
+                yuv_i420 = cv2.cvtColor(canvas, cv2.COLOR_BGR2YUV_I420)
+                try:
+                    h264_queue.put_nowait(yuv_i420)
+                except Exception:
+                    try:
+                        h264_queue.get_nowait()
+                    except Exception:
+                        pass
+                    try:
+                        h264_queue.put_nowait(yuv_i420)
+                    except Exception:
+                        pass
+            else:
+                # Multi-worker encode: 3 threads overlap cv2.imencode (~28ms each)
+                # with NMS+merge+draw (~13ms).  Only block if all 3 workers busy.
+                # cv2.imencode releases the GIL so threads give real parallelism.
+                # Drain completed futures
+                encode_futures = [ef for ef in encode_futures if not ef.done()]
+                # Block only if all workers are saturated
+                if len(encode_futures) >= 3:
+                    encode_futures[0].result()
+                    encode_futures.pop(0)
+                # CRITICAL: copy canvas before encoding.  `canvas` is a numpy view
+                # into shared memory (shm_ring).  With RING_SIZE=4 and ~26ms pipeline
+                # latency, the prep process overwrites this slot ~27ms after BG reads
+                # it — while the 28ms JPEG encode is still reading.
+                encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality, fc))
             t_encode = time.perf_counter() - t0
 
             dt_post = time.perf_counter() - t_post_start
@@ -942,8 +965,8 @@ def run_sahi_640_pipelined(args):
     coco_names = _load_coco_names()
     names_dict = _coco_names_dict(coco_names)
     conf = max(args.conf, _CONF_FLOOR_640)
-    merge_iou = args.sahi_merge_threshold
-    merge_class_agnostic = args.sahi_class_agnostic
+    merge_iou = args.merge_threshold
+    merge_class_agnostic = args.class_agnostic
     print(
         f"{TAG} NMS conf={conf} iou={args.iou} " f"merge_iou={merge_iou} class_agnostic={merge_class_agnostic}",
         flush=True,
@@ -987,6 +1010,42 @@ def run_sahi_640_pipelined(args):
     q_post: mp.Queue = _ctx.Queue(maxsize=4)
     hud_label = f"YOLOv8L SAHI-640 4K " f"({mesh_rows}x{mesh_cols}={total_devices} chips, " f"{tiles_per_frame} tiles)"
 
+    # --- H.264 streaming server (optional, when --serve --serve-codec h264) -
+    # Runs as a separate mp.Process; receives drawn BGR canvases via an
+    # mp.Queue(2) (drop-oldest back-pressure).  Serves fMP4 over chunked HTTP
+    # — ~4 Mbps vs MJPEG's ~2.8 Gbps at 4K, so the demo is WAN-viewable.
+    h264_queue: "mp.Queue | None" = None
+    h264_proc: "mp.Process | None" = None
+    _serve_codec = getattr(args, "serve_codec", "h264")
+    if args.serve and _serve_codec == "h264" and not is_image:
+        from models.demos.yolo_eval import _h264_server as _h264
+
+        # Canvas dims = display_width × scaled height (or frame dims if native).
+        _dw = int(getattr(args, "display_width", 0) or 0)
+        if _dw > 0:
+            _out_w = _dw - (_dw & 1)  # force even (yuv420p)
+            _out_h = int(round(frame_h * _out_w / frame_w))
+            _out_h -= _out_h & 1
+        else:
+            _out_w = frame_w - (frame_w & 1)
+            _out_h = frame_h - (frame_h & 1)
+        _target_fps = int(getattr(args, "stream_fps", 60) or 60)
+        _bitrate = int(getattr(args, "stream_bitrate", 4_000_000) or 4_000_000)
+        _keyint = int(getattr(args, "stream_keyint", 60) or 60)
+        h264_queue = _ctx.Queue(maxsize=2)
+        h264_proc = _ctx.Process(
+            target=_h264.run_server,
+            args=(h264_queue, args.host, int(args.port), _out_w, _out_h, _target_fps, _bitrate, _keyint),
+            daemon=True,
+            name="sahi640-h264",
+        )
+        h264_proc.start()
+        print(
+            f"{TAG} H.264 server: http://{args.host}:{args.port}/  "
+            f"({_out_w}x{_out_h}@{_target_fps}fps, {_bitrate/1e6:.1f} Mbps, keyint={_keyint})",
+            flush=True,
+        )
+
     bg_proc = _ctx.Process(
         target=_postprocess_worker_shm,
         args=(
@@ -1005,6 +1064,7 @@ def run_sahi_640_pipelined(args):
             shm_ring,
             RING_SIZE,
             shm_preds,
+            h264_queue,
         ),
         daemon=True,
         name="sahi640-bg",
@@ -1427,13 +1487,13 @@ def parse_args() -> argparse.Namespace:
         help="Scale output width. 0 = native.",
     )
     p.add_argument(
-        "--sahi-merge-threshold",
+        "--merge-threshold",
         type=float,
         default=0.4,
         help="Cross-tile merge NMS IoU.",
     )
     p.add_argument(
-        "--sahi-class-agnostic",
+        "--class-agnostic",
         action="store_true",
         help="Merge across classes.",
     )
@@ -1442,6 +1502,30 @@ def parse_args() -> argparse.Namespace:
         "--pace",
         action="store_true",
         help="Pace output to source video FPS for smooth playback.",
+    )
+    p.add_argument(
+        "--serve-codec",
+        choices=["h264", "mjpeg"],
+        default="h264",
+        help="Streaming codec for --serve. h264=fMP4 over HTTP (WAN-friendly, ~4 Mbps); mjpeg=legacy file-polled MJPEG.",
+    )
+    p.add_argument(
+        "--stream-bitrate",
+        type=int,
+        default=45_000_000,
+        help="H.264 peak bitrate cap in bps (CRF is the quality anchor; this is maxrate). Default 45 Mbps — headroom for CRF 16 peaks without capping busy frames, still WAN-friendly.",
+    )
+    p.add_argument(
+        "--stream-fps",
+        type=int,
+        default=60,
+        help="H.264 stream framerate (browser playback rate). Producer encodes with wall-clock PTS.",
+    )
+    p.add_argument(
+        "--stream-keyint",
+        type=int,
+        default=60,
+        help="H.264 keyframe interval in frames (default 60 = ~1s keyframe cadence).",
     )
     return p.parse_args()
 
@@ -1454,7 +1538,10 @@ def main():
     args._frame_file = frame_file
 
     http_proc = None
-    if args.serve:
+    # H.264 server is started inside run_sahi_640_pipelined (runs as mp.Process
+    # so BG worker can push BGR canvases through mp.Queue without pickling to
+    # disk). Only spawn the legacy MJPEG file-poller subprocess for --serve-codec mjpeg.
+    if args.serve and args.serve_codec == "mjpeg":
         server_script = str(Path(__file__).resolve().parent / "_mjpeg_server.py")
         print(
             f"[main] Starting MJPEG server on " f"http://{args.host}:{args.port}/",
