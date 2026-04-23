@@ -103,12 +103,15 @@ constexpr uint64_t kRegFpu2 = kRiscvDebugBase + 0x020;
 //
 // WALL_CLOCK_L / WALL_CLOCK_H ARE paired halves of one 64-bit free-running
 // cycle counter.
-constexpr uint64_t kPerfWindowStart = kRiscvDebugBase + 0x120;
-constexpr size_t kPerfWindowSize = 0x1F8 + 4 - 0x120;
-constexpr size_t kOffFpuOutL = 0x120 - 0x120;  // 0x00 — ref_cnt (used by startup probe)
-constexpr size_t kOffFpuOutH = 0x124 - 0x120;  // 0x04 — req_cnt (FPU busy cycles since last arm)
-constexpr size_t kOffWallL = 0x1F0 - 0x120;    // 0xD0 — low half of 64-bit wall clock
-constexpr size_t kOffWallH = 0x1F8 - 0x120;    // 0xD8 — high half
+// Counter addresses. Remote chips cannot be read with a single large block —
+// UMD's ETH tunnel aliases/zeros past the first 4 bytes of a debug-reg
+// block. We use one 8-byte read for the adjacent OUT_L/OUT_H pair, then
+// two separate 4-byte reads for WALL_CLOCK_L and WALL_CLOCK_H (there's a
+// 4-byte gap at 0x1F4 between them).
+constexpr uint64_t kAddrFpuOutL = kRiscvDebugBase + 0x120;  // 4 B
+constexpr uint64_t kAddrFpuOutH = kRiscvDebugBase + 0x124;  // 4 B, adjacent to OUT_L
+constexpr uint64_t kAddrWallL = kRiscvDebugBase + 0x1F0;    // 4 B
+constexpr uint64_t kAddrWallH = kRiscvDebugBase + 0x1F8;    // 4 B, +8 from WALL_L
 
 // EWMA smoothing for compute_busy. alpha = 2/(N+1) for N-sample horizon.
 // N=10 gives a ~1s smoothing window at 10 Hz publish rate.
@@ -415,15 +418,11 @@ int main(int argc, char* argv[]) {
         if (!chip.cores.empty()) {
             auto* dev = chip.cores[0].device;
             auto coord = chip.cores[0].translated;
-            std::vector<uint8_t> probe_buf(kPerfWindowSize);
             uint32_t l0 = 0, l1 = 0;
             try {
-                dev->read_from_device(probe_buf.data(), coord, kPerfWindowStart, kPerfWindowSize);
-                std::memcpy(&l0, probe_buf.data() + kOffFpuOutL, sizeof(l0));
-                // give it a moment to accumulate
+                dev->read_from_device(&l0, coord, kAddrFpuOutL, sizeof(l0));
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                dev->read_from_device(probe_buf.data(), coord, kPerfWindowStart, kPerfWindowSize);
-                std::memcpy(&l1, probe_buf.data() + kOffFpuOutL, sizeof(l1));
+                dev->read_from_device(&l1, coord, kAddrFpuOutL, sizeof(l1));
             } catch (const std::exception&) {
             }
             const bool ticking = (l1 != l0);
@@ -451,7 +450,6 @@ int main(int argc, char* argv[]) {
     // per-chip threads are a Phase 3 optimization.
     auto sampler = [&]() {
         std::vector<uint8_t> buf(kReadSize);
-        std::vector<uint8_t> perf_buf(kPerfWindowSize);
         const auto period = std::chrono::microseconds(1'000'000 / cli.sample_hz);
         auto next = std::chrono::steady_clock::now();
         while (!g_stop.load(std::memory_order_relaxed)) {
@@ -478,24 +476,54 @@ int main(int argc, char* argv[]) {
                     }
 
                     // Perf counters (Phase 2.0). busy% = delta(OUT_H) / delta(WALL_CLOCK).
-                    // WALL_CLOCK is a free-running 64-bit counter that ticks
-                    // unconditionally; OUT_H (FPU req count) only accumulates
-                    // while the counter is armed — so the ratio correctly
-                    // attributes idle time to 0% busy.
+                    //
+                    // We use four separate 4-byte reads per core per tick
+                    // (OUT_L, OUT_H, WALL_L, WALL_H). The 220-byte block-read
+                    // approach did not survive UMD's ETH tunnel on remote
+                    // chips: past the first 4 bytes the returned buffer
+                    // either aliased (OUT_H == OUT_L) or read all-ones
+                    // (WALL_CLOCK). Four small reads land correctly on
+                    // both local and remote.
                     bool have_perf = false;
+                    uint32_t fpu_out_l_now = 0;
                     uint32_t fpu_out_h_now = 0;
+                    uint32_t wall_l_now = 0;
+                    uint32_t wall_h_now = 0;
                     uint64_t wall_now = 0;
                     try {
-                        c.device->read_from_device(perf_buf.data(), c.translated, kPerfWindowStart, kPerfWindowSize);
+                        c.device->read_from_device(&fpu_out_l_now, c.translated, kAddrFpuOutL, sizeof(fpu_out_l_now));
+                        c.device->read_from_device(&fpu_out_h_now, c.translated, kAddrFpuOutH, sizeof(fpu_out_h_now));
+                        c.device->read_from_device(&wall_l_now, c.translated, kAddrWallL, sizeof(wall_l_now));
+                        c.device->read_from_device(&wall_h_now, c.translated, kAddrWallH, sizeof(wall_h_now));
                         have_perf = true;
                     } catch (const std::exception&) {
                     }
                     if (have_perf) {
-                        uint32_t wl = 0, wh = 0;
-                        std::memcpy(&wl, perf_buf.data() + kOffWallL, sizeof(wl));
-                        std::memcpy(&wh, perf_buf.data() + kOffWallH, sizeof(wh));
-                        wall_now = (static_cast<uint64_t>(wh) << 32) | wl;
-                        std::memcpy(&fpu_out_h_now, perf_buf.data() + kOffFpuOutH, sizeof(fpu_out_h_now));
+                        wall_now = (static_cast<uint64_t>(wall_h_now) << 32) | wall_l_now;
+                        // Periodic live probe: dump raw counter values for
+                        // core (1,1) on each chip once per second so we can
+                        // tell "counter stopped" from "counter ticking but
+                        // OUT_H reads 0" from "everything working, workload
+                        // really has no FPU activity here".
+                        if (c.noc_x == 1 && c.noc_y == 1) {
+                            static std::atomic<uint64_t> last_probe_us{0};
+                            const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                                    std::chrono::steady_clock::now().time_since_epoch())
+                                                    .count();
+                            const uint64_t lp = last_probe_us.load(std::memory_order_relaxed);
+                            if (static_cast<uint64_t>(now_us) - lp > 1'000'000) {
+                                last_probe_us.store(now_us, std::memory_order_relaxed);
+                                std::fprintf(
+                                    stderr,
+                                    "[live-probe] core(1,1) is_remote=%d "
+                                    "wall=0x%016lx out_l=0x%08x out_h=0x%08x\n",
+                                    c.is_remote ? 1 : 0,
+                                    wall_now,
+                                    fpu_out_l_now,
+                                    fpu_out_h_now);
+                                std::fflush(stderr);
+                            }
+                        }
                     }
 
                     {
