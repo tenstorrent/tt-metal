@@ -436,7 +436,40 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         per_core_M = div_up(div_up(M, grid_size.x * grid_size.y), in0_tile.get_height());
         per_core_N = N / in1_tile.get_width();
     }
-    uint32_t in0_block_w = K / in0_tile.get_width() % 2 == 0 ? 2 : 1;
+    // K-iteration tuning: pre-refactor hardcoded in0_block_w to 1 or 2 regardless of K
+    // size. With real K sizes (hundreds of tiles in modern models) that's orders of
+    // magnitude more outer-K iterations than necessary. determine_largest_in0_block_w
+    // picks the largest in0_block_w that (a) divides Kt, (b) fits in L1 once double-
+    // buffered in0 + in1 + fixed output/interm footprint is counted, (c) stays under
+    // kMaxAutoTunedInBlockW. The cap limits bf16 accumulation drift: in0_block_w is
+    // the MATH accumulation depth between packer pushes, and bf16's 7-bit mantissa can
+    // miss PCC=0.9999 thresholds on numerically-sensitive downstream paths
+    // (silu + sharded output etc.) at larger block widths. 4 gives a 2x K-iteration
+    // reduction vs the pre-refactor pick of 2 while staying inside what matmul tests
+    // tolerate. Callers that want larger in0_block_w can still pass an explicit
+    // program_config.
+    constexpr uint32_t kMaxAutoTunedInBlockW = 4;
+    const uint32_t Kt = K / in0_tile.get_width();
+    const uint32_t in0_tile_size =
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype()));
+    const uint32_t in1_tile_size =
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    auto_tune::InBlockWTuneInputs ibw_inputs;
+    ibw_inputs.Kt = Kt;
+    ibw_inputs.per_core_M = per_core_M;
+    ibw_inputs.per_core_N = per_core_N;
+    ibw_inputs.in0_single_tile_size = in0_tile_size;
+    ibw_inputs.in1_single_tile_size = in1_tile_size;
+    ibw_inputs.out_single_tile_size = in0_tile_size;  // conservative, matches get_estimated_size_of_cbs
+    ibw_inputs.interm_single_tile_size = utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype);
+    ibw_inputs.fuse_bias = bias_single_tile_size > 0;
+    // Budget with the same 128 KB safety margin used by the row_major_output L1 check.
+    const uint32_t max_l1 = utilities::get_max_l1_space(input_tensor_a);
+    ibw_inputs.l1_budget_bytes = max_l1 > (128u * 1024u) ? (max_l1 - 128u * 1024u) : 0;
+    ibw_inputs.max_in0_block_w = std::min(Kt, kMaxAutoTunedInBlockW);
+    const uint32_t tuned_ibw = auto_tune::determine_largest_in0_block_w(ibw_inputs);
+    const uint32_t pre_refactor_seed = (Kt % 2 == 0) ? 2u : 1u;
+    uint32_t in0_block_w = std::max(tuned_ibw, pre_refactor_seed);
     // Pre-refactor set per_core_N_equals_subblock_w_constraint when out_sharded && !mcast_in0
     // to satisfy the subblock-major writer. row_major_output below switches the writer so
     // the tuner is free to pick any (h, w). The mcast_in0 && out_sharded case still requires
