@@ -134,6 +134,11 @@ void kernel_main() {
         (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
+    using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+    constexpr bool has_straddle = Straddle::has_straddle;
+    constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
+    constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
+
     RingAccumulatorState acc_state = {
         {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
@@ -189,6 +194,11 @@ void kernel_main() {
         lw_mask.joint_l_partial_col = joint_l_partial_col;
         lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
         lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
+        // Straddle mask fires only on the rix>rid halved-range iters that would otherwise exclude
+        // the straddle chunk. Must agree with the K-loop extension condition below.
+        const bool ring_iter_needs_straddle_mask = has_straddle && is_causal && is_balanced && (ring_index > ring_id);
+        lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
+        lw_mask.straddle_mask_chunk_id = straddle_chunk_id;
         if (ring_iter_needs_global_n_mask) {
             const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
             const uint32_t valid_tiles =
@@ -252,7 +262,13 @@ void kernel_main() {
 
             uint32_t iter_num_kv_chunks = num_kv_chunks;
             if (is_causal && is_balanced && ring_index > ring_id) {
-                iter_num_kv_chunks /= 2;
+                if constexpr (has_straddle) {
+                    // Straddle chunk straddles the coarse-half boundary; extend to include it.
+                    // Its late-half columns are -inf-masked via lw_mask.straddle_* above.
+                    iter_num_kv_chunks = straddle_chunk_id + 1;
+                } else {
+                    iter_num_kv_chunks /= 2;
+                }
             }
             bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
 

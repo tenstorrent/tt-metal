@@ -13,8 +13,8 @@ import os
 from pathlib import Path
 from typing import Dict
 
-import numpy as np
 import ml_dtypes
+import numpy as np
 
 import ttnn
 import ttml
@@ -62,9 +62,7 @@ def _pad_and_resize(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray
     if need_random:
         rng = np.random.default_rng()
         if tgt_rows > src_rows:
-            out[cr:, :] = rng.normal(0.0, 0.02, (tgt_rows - cr, tgt_cols)).astype(
-                arr.dtype
-            )
+            out[cr:, :] = rng.normal(0.0, 0.02, (tgt_rows - cr, tgt_cols)).astype(arr.dtype)
         if tgt_cols > src_cols:
             out[:cr, cc:] = rng.normal(0.0, 0.02, (cr, tgt_cols - cc)).astype(arr.dtype)
     return out
@@ -79,9 +77,23 @@ def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
     return arr.astype(ml_dtypes.bfloat16)
 
 
-def _assign_tensor(param, arr_4d: np.ndarray) -> None:
-    restored = ttml.autograd.Tensor.from_numpy(arr_4d, layout=ttnn.Layout.TILE)
+def _assign_tensor(param, arr_4d: np.ndarray, mapper=None) -> None:
+    """Overwrite *param* with a TTML tensor built from *arr_4d*, optionally sharded via *mapper*."""
+    restored = ttml.autograd.Tensor.from_numpy(arr_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper)
     param.assign(restored)
+
+
+def _make_tp_mapper(shard_type):
+    """Create a shard-to-mesh mapper for the given shard type, or ``None`` if replicated.
+
+    In TTML's 4-D weight layout ``(1, 1, out_features, in_features)``:
+      - ``"col_w"`` shards dim 2 (rows = output features) for ColumnParallelLinear.
+      - ``"row_w"`` shards dim 3 (cols = input features) for RowParallelLinear.
+    """
+    if shard_type is None:
+        return None
+    dim = 2 if shard_type == "col_w" else 3
+    return ttml.mesh().axis_mapper("tp", tdim=dim)
 
 
 def load_from_safetensors(
@@ -118,9 +130,15 @@ def load_from_safetensors(
     used_params: set[str] = set()
     ignored_hf: set[str] = set()
 
+    use_tp = config.use_tp
+    tp_size = ttml.mesh().axis_size("tp") if use_tp else 1
+
     num_heads = config.num_attention_heads
     num_kv_heads = config.num_key_value_heads
 
+    # HF stores k_proj and v_proj as separate tensors; TTML combines them into
+    # a single kv_linear weight.  We stage K and V as they arrive and combine
+    # once both are available for a given layer.
     k_staged: Dict[int, np.ndarray] = {}
     v_staged: Dict[int, np.ndarray] = {}
 
@@ -139,27 +157,31 @@ def load_from_safetensors(
         tgt_shape = param.shape()
         tgt_rows, tgt_cols = tgt_shape[-2], tgt_shape[-1]
 
+        shard_type = "col_w" if use_tp else None
+        full_rows = tgt_rows * tp_size if shard_type == "col_w" else tgt_rows
+        full_cols = tgt_cols
+
         k = k_staged.pop(layer_idx)
         v = v_staged.pop(layer_idx)
 
         combined = np.concatenate([k, v], axis=0)
         cr, cc = combined.shape
-        if cr != tgt_rows or cc != tgt_cols:
-            if cc == tgt_rows and cr == tgt_cols:
+        if cr != full_rows or cc != full_cols:
+            if cc == full_rows and cr == full_cols:
                 combined = combined.T
             else:
                 raise RuntimeError(
                     f"KV concat shape mismatch at layer {layer_idx}: "
-                    f"combined=({cr}x{cc}), target=({tgt_rows}x{tgt_cols})"
+                    f"combined=({cr}x{cc}), target=({full_rows}x{full_cols})"
                 )
 
-        _assign_tensor(param, _to_bf16_4d(combined))
+        mapper = _make_tp_mapper(shard_type)
+        _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
         print(f"  Combined k_proj + v_proj -> kv_linear for layer {layer_idx}")
 
     weight_tying = config.weight_tying
 
     for hf_name, hf_arr in all_tensors.items():
-        hf_arr = hf_arr.astype(np.float32)
         print(f"Loading tensor: {hf_name}, shape={hf_arr.shape}, dtype={hf_arr.dtype}")
 
         # ── Embedding ──
@@ -172,11 +194,7 @@ def load_from_safetensors(
         ):
             from ttml.models import WeightTyingType
 
-            emb_param_name = (
-                "Llama/fc/weight"
-                if weight_tying == WeightTyingType.Enabled
-                else "Llama/tok_emb/weight"
-            )
+            emb_param_name = "Llama/fc/weight" if weight_tying == WeightTyingType.Enabled else "Llama/tok_emb/weight"
             param = get_param(emb_param_name)
             tgt = param.shape()
             resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
@@ -188,10 +206,13 @@ def load_from_safetensors(
             from ttml.models import WeightTyingType
 
             if weight_tying == WeightTyingType.Disabled:
+                shard_type = "col_w" if use_tp else None
                 param = get_param("Llama/fc/weight")
                 tgt = param.shape()
-                resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
-                _assign_tensor(param, _to_bf16_4d(resized))
+                full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+                resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
+                mapper = _make_tp_mapper(shard_type)
+                _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
             continue
 
         # ── Final RMSNorm ──
@@ -226,25 +247,26 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # q_proj
+            # q_proj — column-parallel (output features sharded)
             if hf_name in (
                 f"{pfx}.self_attn.q_proj.weight",
                 f"{pfx2}.self_attn.q_proj.weight",
             ):
                 w = _unpermute_proj_rows(hf_arr, num_heads)
+                shard_type = "col_w" if use_tp else None
                 param = get_param(f"Llama/blocks/{i}/attention/q_linear/weight")
                 tgt = param.shape()
-                tr, tc = tgt[-2], tgt[-1]
+                tr = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+                tc = tgt[-1]
                 r, c = w.shape
                 if r == tr and c == tc:
                     pass
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
-                _assign_tensor(param, _to_bf16_4d(w))
+                    raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
+                mapper = _make_tp_mapper(shard_type)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
@@ -268,14 +290,16 @@ def load_from_safetensors(
                 matched = True
                 break
 
-            # o_proj
+            # o_proj — row-parallel (input features sharded)
             if hf_name in (
                 f"{pfx}.self_attn.o_proj.weight",
                 f"{pfx2}.self_attn.o_proj.weight",
             ):
+                shard_type = "row_w" if use_tp else None
                 param = get_param(f"Llama/blocks/{i}/attention/out_linear/weight")
                 tgt = param.shape()
-                tr, tc = tgt[-2], tgt[-1]
+                tr = tgt[-2]
+                tc = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
                 r, c = hf_arr.shape
                 w = hf_arr
                 if r == tr and c == tc:
@@ -283,21 +307,22 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
-                _assign_tensor(param, _to_bf16_4d(w))
+                    raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
+                mapper = _make_tp_mapper(shard_type)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
-            # gate_proj -> w1
+            # gate_proj -> w1 — column-parallel
             if hf_name in (
                 f"{pfx}.mlp.gate_proj.weight",
                 f"{pfx2}.mlp.gate_proj.weight",
             ):
+                shard_type = "col_w" if use_tp else None
                 param = get_param(f"Llama/blocks/{i}/mlp/w1/weight")
                 tgt = param.shape()
-                tr, tc = tgt[-2], tgt[-1]
+                tr = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+                tc = tgt[-1]
                 r, c = hf_arr.shape
                 w = hf_arr
                 if r == tr and c == tc:
@@ -305,21 +330,22 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
-                _assign_tensor(param, _to_bf16_4d(w))
+                    raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
+                mapper = _make_tp_mapper(shard_type)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
-            # up_proj -> w3
+            # up_proj -> w3 — column-parallel
             if hf_name in (
                 f"{pfx}.mlp.up_proj.weight",
                 f"{pfx2}.mlp.up_proj.weight",
             ):
+                shard_type = "col_w" if use_tp else None
                 param = get_param(f"Llama/blocks/{i}/mlp/w3/weight")
                 tgt = param.shape()
-                tr, tc = tgt[-2], tgt[-1]
+                tr = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+                tc = tgt[-1]
                 r, c = hf_arr.shape
                 w = hf_arr
                 if r == tr and c == tc:
@@ -327,21 +353,22 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
-                _assign_tensor(param, _to_bf16_4d(w))
+                    raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
+                mapper = _make_tp_mapper(shard_type)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
-            # down_proj -> w2
+            # down_proj -> w2 — row-parallel
             if hf_name in (
                 f"{pfx}.mlp.down_proj.weight",
                 f"{pfx2}.mlp.down_proj.weight",
             ):
+                shard_type = "row_w" if use_tp else None
                 param = get_param(f"Llama/blocks/{i}/mlp/w2/weight")
                 tgt = param.shape()
-                tr, tc = tgt[-2], tgt[-1]
+                tr = tgt[-2]
+                tc = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
                 r, c = hf_arr.shape
                 w = hf_arr
                 if r == tr and c == tc:
@@ -349,10 +376,9 @@ def load_from_safetensors(
                 elif c == tr and r == tc:
                     w = w.T
                 else:
-                    raise RuntimeError(
-                        f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})"
-                    )
-                _assign_tensor(param, _to_bf16_4d(w))
+                    raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
+                mapper = _make_tp_mapper(shard_type)
+                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
                 matched = True
                 break
 
@@ -362,9 +388,7 @@ def load_from_safetensors(
     # ── Report ──
     unused = [n for n in parameters if n not in used_params]
     if unused:
-        print(
-            f"Warning: {len(unused)} model parameters were NOT loaded from safetensors:"
-        )
+        print(f"Warning: {len(unused)} model parameters were NOT loaded from safetensors:")
         for n in unused:
             print(f"  - {n}")
     else:

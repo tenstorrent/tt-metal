@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -36,6 +37,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<1>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
+    experimental::CircularBuffer cb(cb_id);
+
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
     // control_value locally
@@ -49,14 +52,14 @@ void kernel_main() {
     const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);
 
     // read a ublock of tiles from src to CB
-    cb_reserve_back(cb_id, num_tiles);
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
+    cb.reserve_back(num_tiles);
+    uint32_t l1_write_addr = cb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc_async_read_tile(i, src_addrgen, l1_write_addr);
         noc_async_read_barrier();
         l1_write_addr += tile_bytes;
     }
-    cb_push_back(cb_id, num_tiles);
+    cb.push_back(num_tiles);
 
     if (is_controller) {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
@@ -81,12 +84,12 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
     }
 
-    cb_wait_front(cb_id, num_tiles);
-    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    cb.wait_front(num_tiles);
+    uint32_t l1_read_addr = cb.get_read_ptr();
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
         noc_async_write_tile(i, dst_addrgen, l1_read_addr);
         noc_async_write_barrier();
         l1_read_addr += tile_bytes;
     }
-    cb_pop_front(cb_id, num_tiles);
+    cb.pop_front(num_tiles);
 }
