@@ -5,6 +5,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "api/compute/eltwise_binary.h"
 
 /**
  * @file eltwise_helpers.hpp
@@ -182,6 +183,31 @@ struct has_pop_a<T, std::void_t<decltype(std::declval<const T>().pop_a_upfront(E
 template <typename T>
 inline constexpr bool has_pop_a_v = has_pop_a<T>::value;
 
+// SFINAE: does T have reset_tile_idx()?
+template <typename T, typename = void>
+struct has_reset_tile_idx : std::false_type {};
+template <typename T>
+struct has_reset_tile_idx<T, std::void_t<decltype(std::declval<const T>().reset_tile_idx())>> : std::true_type {};
+template <typename T>
+inline constexpr bool has_reset_tile_idx_v = has_reset_tile_idx<T>::value;
+
+// True if chain contains a DestReuseOp (has clashes_with_fpu and is not a LoadTag).
+// Signals eltwise_op to re-call copy_tile_to_dst_init_short per tile.
+template <typename T, typename = void>
+struct has_dest_reuse_flag : std::false_type {};
+template <typename T>
+struct has_dest_reuse_flag<T, std::void_t<decltype(T::clashes_with_fpu)>>
+    : std::bool_constant<T::clashes_with_fpu && !is_load_op_v<T>> {};
+template <typename T>
+inline constexpr bool has_dest_reuse_flag_v = has_dest_reuse_flag<T>::value;
+
+template <typename Chain>
+struct chain_has_dest_reuse : std::false_type {};
+template <typename... Ops>
+struct chain_has_dest_reuse<SfpuChain<Ops...>> : std::bool_constant<(has_dest_reuse_flag_v<Ops> || ...)> {};
+template <typename Chain>
+inline constexpr bool chain_has_dest_reuse_v = chain_has_dest_reuse<Chain>::value;
+
 }  // namespace detail
 
 // =============================================================================
@@ -195,6 +221,7 @@ ALWI void chain_wait_b_upfront(const SfpuChain<>&, EltwiseTileShape) {}
 ALWI void chain_pop_b_upfront(const SfpuChain<>&, EltwiseTileShape) {}
 ALWI void chain_wait_a_upfront(const SfpuChain<>&, EltwiseTileShape) {}
 ALWI void chain_pop_a_upfront(const SfpuChain<>&, EltwiseTileShape) {}
+ALWI void chain_reset_tile_idx(const SfpuChain<>&) {}
 
 // Recursive cases
 template <typename First, typename... Rest>
@@ -244,6 +271,109 @@ ALWI void chain_pop_a_upfront(const SfpuChain<First, Rest...>& chain, EltwiseTil
     }
     chain_pop_a_upfront(chain.rest, shape);
 }
+
+template <typename First, typename... Rest>
+ALWI void chain_reset_tile_idx(const SfpuChain<First, Rest...>& chain) {
+    if constexpr (detail::has_reset_tile_idx_v<First>) {
+        chain.first.reset_tile_idx();
+    }
+    chain_reset_tile_idx(chain.rest);
+}
+
+// =============================================================================
+// DestReuseOp — FPU chain element that operates on DEST + one CB operand
+// =============================================================================
+
+/**
+ * @brief CB lifecycle policy for DestReuseOp.
+ *
+ * - WaitAndPop:         standalone: wait 1, binary_dest_reuse, pop 1 per tile
+ * - NoWaitPop:          paired with Load<WaitNoPop> on same CB — no wait (Load
+ *                       already waited), binary_dest_reuse, pop 1 per tile
+ * - WaitUpfrontNoPop:   wait all tiles upfront, read indexed, no pop (persistent CB)
+ * - WaitUpfrontPopAtEnd: wait all tiles upfront, read indexed, pop all at end
+ * - NoWaitNoPop:        caller manages all lifecycle
+ */
+enum class DestReuseInputPolicy {
+    WaitAndPop,
+    NoWaitPop,
+    WaitUpfrontNoPop,
+    WaitUpfrontPopAtEnd,
+    NoWaitNoPop,
+};
+
+/**
+ * @brief FPU binary chain element: old_DEST[Slot] OP Cb[tile] → DEST[Slot].
+ *
+ * Computes one of:
+ *   DEST_TO_SRCA: old_DEST OP cb_tile  (e.g. ELWMUL+SRCA → old_DEST * cb_tile)
+ *   DEST_TO_SRCB: cb_tile OP old_DEST  (e.g. ELWSUB+SRCB → cb_tile - old_DEST)
+ *
+ * Must follow a prior operation that leaves a value in DEST[Slot].
+ *
+ * init() is a no-op — binary_dest_reuse_tiles_init is called per-tile inside exec()
+ * because it clobbers the copy_tile MOP used by preceding Load elements.  When this
+ * element is present, eltwise_op re-calls copy_tile_to_dst_init_short each tile.
+ *
+ * Typical use (tanhshrink, hardswish):
+ *   sfpu_chain(
+ *       Load<cb_x, Dst::D0, LoadPolicy::WaitNoPop>{},    // wait, copy, NO pop
+ *       Tanh<Dst::D0>{},                                  // D0 = tanh(x)
+ *       DestReuseOp<cb_x, EltwiseBinaryType::ELWSUB,
+ *                   EltwiseBinaryReuseDestType::DEST_TO_SRCB,
+ *                   Dst::D0, DestReuseInputPolicy::NoWaitPop>{})
+ *   // D0 = cb_x[0] - tanh(x) = x - tanh(x); cb_x tile popped by DestReuseOp
+ */
+template <
+    uint32_t Cb,
+    EltwiseBinaryType BinOp = EltwiseBinaryType::ELWMUL,
+    EltwiseBinaryReuseDestType ReuseType = EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+    Dst Slot = Dst::D0,
+    DestReuseInputPolicy Policy = DestReuseInputPolicy::WaitAndPop>
+struct DestReuseOp {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static constexpr uint32_t max_dst = dst_idx;
+    // Signals to eltwise_op that this element clobbers the copy_tile unpack MOP,
+    // requiring per-tile re-init of copy_tile_to_dst_init_short.
+    static constexpr bool clashes_with_fpu = true;
+
+    mutable uint32_t tile_idx_ = 0;
+
+    // No-op: real init happens inside exec() per tile to avoid MOP clobbering.
+    ALWI void init() const {}
+
+    ALWI void exec(uint32_t /*ht*/, uint32_t /*wt*/, uint32_t /*cols*/) const {
+        if constexpr (Policy == DestReuseInputPolicy::WaitAndPop) {
+            cb_wait_front(Cb, 1);
+            binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
+            binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, 0, dst_idx);
+            cb_pop_front(Cb, 1);
+        } else if constexpr (Policy == DestReuseInputPolicy::NoWaitPop) {
+            binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
+            binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, 0, dst_idx);
+            cb_pop_front(Cb, 1);
+        } else {
+            // Upfront-waited or no-wait: advancing tile index
+            binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
+            binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, tile_idx_++, dst_idx);
+        }
+    }
+
+    // Called by chain_wait_b_upfront / chain_pop_b_upfront before/after tile loop
+    ALWI void wait_b_upfront(EltwiseTileShape shape) const {
+        if constexpr (
+            Policy == DestReuseInputPolicy::WaitUpfrontNoPop || Policy == DestReuseInputPolicy::WaitUpfrontPopAtEnd) {
+            cb_wait_front(Cb, shape.rows * shape.cols);
+        }
+    }
+    ALWI void pop_b_upfront(EltwiseTileShape shape) const {
+        if constexpr (Policy == DestReuseInputPolicy::WaitUpfrontPopAtEnd) {
+            cb_pop_front(Cb, shape.rows * shape.cols);
+        }
+    }
+
+    ALWI void reset_tile_idx() const { tile_idx_ = 0; }
+};
 
 // =============================================================================
 // FpuBinaryOp — CRTP base for FPU binary chain elements (FpuAdd, FpuSub, FpuMul)

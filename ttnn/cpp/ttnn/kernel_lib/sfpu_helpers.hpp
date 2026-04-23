@@ -235,6 +235,23 @@ constexpr bool is_load_op_v = std::is_base_of_v<LoadTag, T>;
 enum class SfpuInputPolicy { WaitAndPopPerTile, WaitUpfrontNoPop, NoWaitNoPop };
 
 /**
+ * @brief Per-Load CB lifecycle policy (explicit; overrides sfpu_chain auto-detection).
+ *
+ * Used as a template parameter on Load<CB, Slot, Policy> to declare the CB
+ * wait/pop behaviour for this particular Load. The default (WaitAndPop) matches
+ * the historical auto-compaction behaviour — adjacent same-CB Loads are merged.
+ *
+ * Non-default policies produce an individual CompactLoad with explicit flags
+ * and are never merged with adjacent Loads.
+ *
+ * - WaitAndPop:  wait for tile, copy, pop (streaming — default)
+ * - WaitNoPop:   wait for tile, copy, no pop (paired with DestReuseOp on same CB)
+ * - NoWaitPop:   no wait (pre-waited), copy, pop
+ * - NoWaitNoPop: no wait, no pop (caller manages lifecycle)
+ */
+enum class LoadPolicy { WaitAndPop, WaitNoPop, NoWaitPop, NoWaitNoPop };
+
+/**
  * @brief Output synchronization policy for SFPU pipeline
  *
  * Controls when to reserve/push output tiles:
@@ -368,11 +385,12 @@ inline constexpr uint32_t cx_max_v = CxMax<Vs...>::value;
  * Users write Load<cb, Dst::D0> in their chains. sfpu_chain() automatically
  * compacts adjacent same-CB Loads into CompactLoad elements.
  */
-template <uint32_t CB, Dst Slot>
+template <uint32_t CB, Dst Slot, LoadPolicy Policy = LoadPolicy::WaitAndPop>
 struct Load : LoadTag {
     static constexpr uint32_t cb = CB;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static constexpr uint32_t max_dst = dst_idx;
+    static constexpr LoadPolicy policy = Policy;
     static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
 };
 
@@ -1299,10 +1317,18 @@ struct AppendLoad<TL, CB, Slot, true> {
 template <typename Acc, typename Elem, bool IsLoad = is_load_op_v<Elem>>
 struct CompactStep;
 
-// Load: use AppendLoad to merge or create
+// Load with default WaitAndPop: compact adjacent same-CB loads as before
 template <typename Acc, uint32_t CB, Dst Slot>
-struct CompactStep<Acc, Load<CB, Slot>, true> {
+struct CompactStep<Acc, Load<CB, Slot, LoadPolicy::WaitAndPop>, true> {
     using type = typename AppendLoad<Acc, CB, Slot>::type;
+};
+
+// Load with explicit non-default policy: create individual CompactLoad, never merge
+template <typename Acc, uint32_t CB, Dst Slot, LoadPolicy Policy>
+struct CompactStep<Acc, Load<CB, Slot, Policy>, true> {
+    static constexpr bool dw = (Policy == LoadPolicy::WaitAndPop || Policy == LoadPolicy::WaitNoPop);
+    static constexpr bool dp = (Policy == LoadPolicy::WaitAndPop || Policy == LoadPolicy::NoWaitPop);
+    using type = typename Append<Acc, CompactLoad<CB, dw, dp, Slot>>::type;
 };
 
 // Non-Load: pass through

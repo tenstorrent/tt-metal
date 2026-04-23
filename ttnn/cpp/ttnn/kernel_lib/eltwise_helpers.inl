@@ -25,19 +25,28 @@ ALWI void eltwise_op(Chain chain, EltwiseTileShape shape) {
         pack_reconfig_data_format(cb_out);
     }
 
-    // Initialize unpacker MOP for Load elements (CompactLoad::init is a no-op by design;
-    // the pipeline owns this call, same as sfpu_pipeline does it before its tile loop)
-    if constexpr (detail::chain_has_load_v<Chain>) {
-        copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+    // DestReuseOp clobbers the copy_tile unpack MOP (binary_dest_reuse_tiles_init
+    // reconfigures the unpacker each call). Two modes:
+    //
+    // No DestReuseOp: hoist copy_tile_to_dst_init_short + chain_init_all once before loop.
+    // With DestReuseOp: re-call copy_tile_to_dst_init_short + chain_init_all every tile so
+    //   each tile starts with a fresh copy MOP before Load::exec, then DestReuseOp::exec
+    //   re-inits for dest-reuse at the end of the tile (as existing kernels already do).
+    constexpr bool has_dest_reuse = detail::chain_has_dest_reuse_v<Chain>;
+    constexpr bool has_load = detail::chain_has_load_v<Chain>;
+
+    if constexpr (!has_dest_reuse) {
+        // Standard path: hoist all inits once
+        if constexpr (has_load) {
+            copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+        }
+        chain_init_all(chain);
     }
 
-    // Hoist all element inits once before the tile loop
-    chain_init_all(chain);
-
-    // Upfront waits for B inputs (broadcast FpuOp — ROW/COL/SCALAR)
+    // Upfront waits for B inputs (broadcast FpuOp / DestReuseOp upfront policies)
     chain_wait_b_upfront(chain, shape);
 
-    // Upfront waits for A inputs (non-streaming FpuOp policy)
+    // Upfront waits for A inputs (non-streaming FpuOp PolicyA)
     chain_wait_a_upfront(chain, shape);
 
     const uint32_t total = shape.rows * shape.cols;
@@ -48,6 +57,15 @@ ALWI void eltwise_op(Chain chain, EltwiseTileShape shape) {
 
     for (uint32_t ht = 0; ht < shape.rows; ++ht) {
         for (uint32_t wt = 0; wt < shape.cols; ++wt) {
+            if constexpr (has_dest_reuse) {
+                // Per-tile path: re-init copy MOP before Load elements run, then
+                // DestReuseOp::exec re-inits for dest-reuse at end of tile.
+                if constexpr (has_load) {
+                    copy_tile_to_dst_init_short(detail::FirstLoadCB<Chain>::value);
+                }
+                chain_init_all(chain);
+            }
+
             tile_regs_acquire();
             chain_exec_eltwise(chain, ht, wt, shape.cols);
             tile_regs_commit();
@@ -72,6 +90,9 @@ ALWI void eltwise_op(Chain chain, EltwiseTileShape shape) {
     // Upfront pops for B and A (consume-mode policies)
     chain_pop_b_upfront(chain, shape);
     chain_pop_a_upfront(chain, shape);
+
+    // Reset advancing tile indices in DestReuseOp (and FpuOp WaitUpfront) for reuse
+    chain_reset_tile_idx(chain);
 }
 
 }  // namespace compute_kernel_lib
