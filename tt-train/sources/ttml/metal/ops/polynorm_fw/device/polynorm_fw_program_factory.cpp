@@ -105,7 +105,7 @@ namespace ttml::metal::ops::polynorm3_fw::device {
 
 // Build and cache the full PolyNorm forward program (reader/compute/writer kernels + CB layout).
 PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const PolyNorm3FWAttributes& args, const PolyNorm3FWTensorArgs& tensor_args, PolyNorm3FWTensorReturn& output) {
     const auto& input = tensor_args.input;
     const auto& weight = tensor_args.weight;
     const auto& bias = tensor_args.bias;
@@ -236,9 +236,9 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
 // Update runtime addresses/scalars when operation attributes or buffers change.
 void PolyNorm3ForwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const PolyNorm3FWAttributes& operation_attributes,
+    const PolyNorm3FWTensorArgs& tensor_args,
+    PolyNorm3FWTensorReturn& tensor_return_value) {
     auto& shared = cached_program.shared_variables;
     auto& program = cached_program.program;
 
