@@ -61,60 +61,13 @@
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
 
 namespace {
-
-// Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
-// This is a performance optimization to ensure that MGD mapping does not bisect a device.
-//
-// * o o * < Corners pinned with *
-// o o o o
-// o o o o
-// o o o o
-// o o o o
-// o o o o
-// o o o o
-// * o o * < Corners pinned with *
-// Generate fixed ASIC position pinnings for a single mesh in UBB galaxy systems.
-// For UBB galaxy runs with 32 chips, it can optionally hard pin fabric node id 0 to asic 1 tray 1.
-// If MGD pinnings are provided for fabric node id 0, MGD pinnings take precedence and hard pinning is skipped.
-std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
-    MeshId mesh_id, const MeshShape& mesh_shape, bool hard_pin_node_0 = false) {
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-
-    // Get all 4 possible corners ASIC positions
-    std::vector<AsicPosition> corner_asic_positions;
-    corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
-    corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
-    corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
-    corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
-
-    // Generate corner fabric node IDs for this mesh
-    std::vector<FabricNodeId> corner_fabric_node_ids;
-    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
-    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
-    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
-    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
-
-    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
-    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
-        // Special case: Hard pin NW corner (fabric node id 0) to asic 1 tray 1 if requested
-        // This is only used when MGD pinnings are not provided for fabric node id 0
-        if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0} && hard_pin_node_0) {
-            fixed_asic_position_pinnings.emplace_back(
-                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1, 1}});
-            continue;
-        }
-
-        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
-    }
-
-    return fixed_asic_position_pinnings;
-}
 
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
@@ -498,7 +451,8 @@ void ControlPlane::init_control_plane(
                 // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
                 if (!is_1d && mesh_chip_count % 32 == 0) {
                     auto mesh_pinnings =
-                        get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                        tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                            mesh_id, mesh_shape, world_size == 1);
                     fixed_asic_position_pinnings.insert(
                         fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
                 }
@@ -608,7 +562,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
             // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
             if (!is_1d && mesh_chip_count % 32 == 0) {
                 auto mesh_pinnings =
-                    get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                    tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                        mesh_id, mesh_shape, world_size == 1);
                 fixed_asic_position_pinnings.insert(
                     fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
             }
