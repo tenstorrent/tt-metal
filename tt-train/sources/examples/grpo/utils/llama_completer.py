@@ -113,11 +113,13 @@ class LlamaGRPOCompleter(GRPOCompleter):
     Args:
         ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are set
             automatically from ``model_source``.
-        transformer_config: Model architecture config dict (same format as
-            used in ``GRPOConfig``).
-        device_config: Device mesh config dict (``enable_ddp``, ``mesh_shape``,
-            etc.). Device initialisation (``enable_fabric``, ``open_device``)
-            is performed inside this constructor.
+        transformer_config: Model architecture config (a
+            :class:`ttml.common.config.TransformerConfig` instance, typically
+            built via ``get_model_config``).
+        device_config: Device mesh config (a
+            :class:`ttml.common.config.DeviceConfig` instance). Device
+            initialisation (``enable_fabric``, ``open_device``) is performed
+            inside this constructor.
         model_source: HuggingFace model ID or path to a local directory
             containing ``model.safetensors``.
     """
@@ -125,12 +127,12 @@ class LlamaGRPOCompleter(GRPOCompleter):
     def __init__(
         self,
         ctx: LlamaCompletionCtx,
-        transformer_config: dict,
-        device_config: dict,
+        transformer_config: TransformerConfig,
+        device_config: DeviceConfig,
         model_source: str,
     ):
-        tf_config = TransformerConfig({"transformer_config": transformer_config})
-        dev_config = DeviceConfig({"device_config": device_config})
+        tf_config = transformer_config
+        dev_config = device_config
 
         if dev_config.total_devices() > 1:
             ttml.core.distributed.enable_fabric(dev_config.total_devices())

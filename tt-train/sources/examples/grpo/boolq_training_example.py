@@ -9,10 +9,9 @@ from datetime import datetime, timezone
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
-from ttml.trainers import TrainerCallback
-from ttml.trainers import GRPOTrainer
-from utils.config import read_yaml
+from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 
@@ -65,18 +64,24 @@ if __name__ == "__main__":
 
     dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
 
+    tt_metal_root = get_tt_metal_runtime_root()
     config_path = os.path.join(
-        get_tt_metal_runtime_root(),
+        tt_metal_root,
         "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
     )
-    transformer_config, device_config, optimizer_config, grpo_config = read_yaml(config_path)
+    raw = load_config(config_path)
+    training_config = TrainingConfig(raw)
+    device_config = DeviceConfig(raw)
+    assert training_config.model_config, "training_config.model_config must be set"
+    transformer_config = get_model_config(training_config.model_config)
+    optimizer_dict = raw["training_config"]["optimizer"]
 
-    output_dir = (
-        get_tt_metal_runtime_root()
-        + "/generated/tt-train/grpo_run/"
-        + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(
+        tt_metal_root,
+        "generated/tt-train/grpo_run",
+        datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
     )
-    grpo_config.output_dir = output_dir
+    grpo_config = get_grpo_config(raw, output_dir=output_dir)
 
     completer = LlamaGRPOCompleter(
         ctx=LlamaCompletionCtx(
@@ -94,7 +99,7 @@ if __name__ == "__main__":
         dataset=dataset,
         config=grpo_config,
         reward_func=boolq_reward,
-        optimizer_config=optimizer_config,
+        optimizer_dict=optimizer_dict,
         callbacks=[GRPOMonitor(output_dir)],
         model_source=model_id,
     )

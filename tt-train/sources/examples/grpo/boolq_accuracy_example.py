@@ -12,8 +12,8 @@ from typing import Sequence, Iterator
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
-from utils.config import read_yaml
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 
@@ -26,7 +26,11 @@ NUM_GENERATIONS = 1
 PROMPTS_TO_VALIDATE = 20
 
 _CONFIG_PATH = Path(__file__).with_suffix(".yaml")
-TRANSFORMER_CONFIG, DEVICE_CONFIG, _, _ = read_yaml(str(_CONFIG_PATH))
+_RAW_CONFIG = load_config(str(_CONFIG_PATH))
+_TRAINING_CONFIG = TrainingConfig(_RAW_CONFIG)
+DEVICE_CONFIG = DeviceConfig(_RAW_CONFIG)
+assert _TRAINING_CONFIG.model_config, "training_config.model_config must be set"
+TRANSFORMER_CONFIG = get_model_config(_TRAINING_CONFIG.model_config)
 
 
 def iter_generated_completions(
