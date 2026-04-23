@@ -55,6 +55,19 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
     uint32_t Wt = input_shape[3] / tile_width;
+
+    // Calculate actual mask tile counts for broadcasting support
+    auto expert_mask_shape = expert_mask_tensor.logical_shape();
+    auto topk_mask_shape = topk_mask_tensor.logical_shape();
+
+    // Calculate actual height tiles for masks (may be less than input's Ht)
+    uint32_t expert_mask_Ht = (expert_mask_shape[0] * expert_mask_shape[1] * expert_mask_shape[2]) / tile_height;
+    uint32_t topk_mask_Ht = (topk_mask_shape[0] * topk_mask_shape[1] * topk_mask_shape[2]) / tile_height;
+
+    // Detect broadcasting: when mask height is 1 but input height is greater
+    bool expert_mask_broadcast_h = (expert_mask_Ht == 1 && Ht > 1);
+    bool topk_mask_broadcast_h = (topk_mask_Ht == 1 && Ht > 1);
+
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
@@ -146,7 +159,17 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, core, c_out0_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index, index_cb_index, topk_mask_cb_index, expert_mask_cb_index, Ht, Wt, k};
+        input_cb_index,
+        index_cb_index,
+        topk_mask_cb_index,
+        expert_mask_cb_index,
+        Ht,
+        Wt,
+        k,
+        expert_mask_broadcast_h ? 1 : 0,  // Broadcast flag for expert mask
+        topk_mask_broadcast_h ? 1 : 0,    // Broadcast flag for topk mask
+        expert_mask_Ht,                   // Actual expert mask height tiles
+        topk_mask_Ht};                    // Actual topk mask height tiles
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(topk_mask_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(expert_mask_buffer).append_to(reader_compile_time_args);
