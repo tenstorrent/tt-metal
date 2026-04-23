@@ -79,15 +79,9 @@ public:
         num_noc_locations_to_process = 0;
 
         // Align the start of rw pointers buffer
-        l1_rw_pointers_buffer_start = (l1_cache_buffer_address + NocL1ToL1Alignment - 1) & ~(NocL1ToL1Alignment - 1);
-        l1_device_print_buffer_start = l1_rw_pointers_buffer_start + rw_pointers_entry_size * noc_locations_count;
-        if constexpr (NocL1ToDramAlignment > NocL1ToL1Alignment) {
-            l1_device_print_buffer_start =
-                (l1_device_print_buffer_start + NocL1ToDramAlignment - 1) & ~(NocL1ToDramAlignment - 1);
-        } else {
-            l1_device_print_buffer_start =
-                (l1_device_print_buffer_start + NocL1ToL1Alignment - 1) & ~(NocL1ToL1Alignment - 1);
-        }
+        l1_rw_pointers_buffer_start = l1_align(l1_cache_buffer_address);
+        l1_device_print_buffer_start =
+            dram_align(l1_rw_pointers_buffer_start + rw_pointers_entry_size * noc_locations_count);
 
         // Check if buffer is large enough to hold necessary data and turn off feature in DRAM if needed.
         uint32_t min_buffer_end = l1_device_print_buffer_start;
@@ -301,14 +295,7 @@ private:
             rw_pointers[1] = stall ? DEVICE_PRINT_RESET_BUFFER_MAGIC : write_position;
 
             // Update current buffer address for next iterations.
-            current_l1_buffer_address += buffer_l1_alignment + remote_buffer_size;
-            if constexpr (NocL1ToDramAlignment > NocL1ToL1Alignment) {
-                current_l1_buffer_address =
-                    (current_l1_buffer_address + NocL1ToDramAlignment - 1) & ~(NocL1ToDramAlignment - 1);
-            } else {
-                current_l1_buffer_address =
-                    (current_l1_buffer_address + NocL1ToL1Alignment - 1) & ~(NocL1ToL1Alignment - 1);
-            }
+            current_l1_buffer_address += dram_align(buffer_l1_alignment + remote_buffer_size);
         }
 
         // Wait for all NOC read transfers to finish.
@@ -351,6 +338,18 @@ private:
 
             // +4 is to update read pointer which is after write pointer.
             noc_async_write(rw_pointer_address_in_l1 + alignment + 4, w_noc_addr + 4, 4);
+        }
+    }
+
+    static uint32_t l1_align(uint32_t address) {
+        return (address + NocL1ToL1Alignment - 1) & ~(NocL1ToL1Alignment - 1);
+    }
+
+    static uint32_t dram_align(uint32_t address) {
+        if constexpr (NocL1ToDramAlignment > NocL1ToL1Alignment) {
+            return (address + NocL1ToDramAlignment - 1) & ~(NocL1ToDramAlignment - 1);
+        } else {
+            return (address + NocL1ToL1Alignment - 1) & ~(NocL1ToL1Alignment - 1);
         }
     }
 
