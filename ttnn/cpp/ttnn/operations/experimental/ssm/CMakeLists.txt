@@ -16,6 +16,7 @@ file(
     hc_sum_reduce/device/kernels/*
     prefix_scan/device/kernels/*
     repeat_and_interleave_eltwise_mul/device/kernels/*
+    sp_eq_mul_mask/device/kernels/*
 )
 
 target_sources(
@@ -39,6 +40,9 @@ target_sources(
         repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_device_operation.cpp
         repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_program_factory.cpp
         repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul.cpp
+        sp_eq_mul_mask/device/sp_eq_mul_mask_device_operation.cpp
+        sp_eq_mul_mask/device/sp_eq_mul_mask_program_factory.cpp
+        sp_eq_mul_mask/sp_eq_mul_mask.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ssm PRIVATE ${FixmeOpIncDirs})

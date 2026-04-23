@@ -16,6 +16,7 @@
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.hpp"
+#include "ttnn/operations/experimental/ssm/sp_eq_mul_mask/sp_eq_mul_mask_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads_nanobind.hpp"
@@ -111,6 +112,7 @@ void py_module(nb::module_& mod) {
     ssm::detail::bind_prefix_scan(mod);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(mod);
     ssm::detail::bind_hc_sum_reduce(mod);
+    ssm::detail::bind_sp_eq_mul_mask(mod);
 
     cnn::detail::bind_convert_to_chw(mod);
     cnn::detail::bind_convert_to_hwc(mod);
