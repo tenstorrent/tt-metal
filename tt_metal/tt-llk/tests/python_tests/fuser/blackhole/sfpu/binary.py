@@ -100,6 +100,7 @@ class BinarySfpu(Sfpu):
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
@@ -113,7 +114,7 @@ class BinarySfpu(Sfpu):
         return (
             f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
             f"    test_utils::call_binary_sfpu_operation<"
-            f"ckernel::DstSync::SyncHalf, is_fp32_dest_acc_en, "
+            f"ckernel::DstSync::SyncHalf, {dest_acc}, "
             f"{approx_mode}, {op}, {iterations}, {format}"
             f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )

@@ -7,24 +7,15 @@
 #include <cstdint>
 
 #include "ckernel_sfpu.h"
-#include "ckernel_sfpu_activations.h"
 #include "ckernel_sfpu_add_top_row.h"
-#include "ckernel_sfpu_binary.h"
-#include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_params.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
-#include "llk_sfpu/llk_math_eltwise_binary_sfpu_init.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
-#include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_abs.h"
