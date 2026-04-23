@@ -44,6 +44,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "impl/threading/thread_pool.hpp"
 #include "device/device_manager.hpp"
+#include <enchantum/enchantum.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
@@ -178,13 +179,20 @@ struct RealtimeProfilerEligibility {
 //      only takes the pinned-memory path — there is no hugepage fallback — so
 //      IOMMU must be enabled on the host for the pinning to succeed. If not,
 //      we disable cleanly rather than fault inside UMD's sysmem mapping.
-//   3. A tensix core was reserved for the RT profiler at dispatch_core_manager
+//   3. Fabric tensix datamover (MUX / UDM) is disabled. When it's enabled, the
+//      fabric mux drains the dispatch-pool at fabric-init time — on small-pool
+//      MMIO chips (e.g. T3K's FABRIC_2D + UDM path) a single extra tensix
+//      reserved for RT profiler tips the pool into exhaustion and makes
+//      fabric_mux_core() TT_THROW "No more available dispatch cores". RT
+//      profiler yields its slot in that case.
+//   4. A tensix core was reserved for the RT profiler at dispatch_core_manager
 //      construction time. The reservation only happens for MMIO chips with
 //      WORKER dispatch — for ETH dispatch the dispatch pool holds ethernet
-//      cores, which cannot run the RT profiler's BRISC worker kernel.
-//   4. Defensive: the reserved coordinate lives inside the logical TENSIX grid
+//      cores, which cannot run the RT profiler's BRISC worker kernel. Check 3
+//      has already handled the fabric-mux branch of the same reservation.
+//   5. Defensive: the reserved coordinate lives inside the logical TENSIX grid
 //      (harvesting overlays could in principle produce a stale entry).
-//   5. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
+//   6. Kernels are not nullified (DEBUG_NULL_KERNELS / TT_METAL_NULL_KERNELS).
 //      When active, the JIT replaces every non-dispatch kernel body — including
 //      the RT profiler BRISC/NCRISC — with a stub that returns immediately
 //      after wait_for_go_message(). The RT profiler state machine would never
@@ -220,21 +228,42 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
-    // 3. Reserved tensix core for the RT profiler kernel / D2H sender.
+    // 3. Fabric tensix datamover (MUX / UDM) competes for the same dispatch-core pool.
+    //    Mirrors the skip path in dispatch_core_manager::reset_dispatch_core_manager — keep
+    //    both sites in sync.
+    const auto fabric_tensix_config = metal.get_fabric_tensix_config();
+    if (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED) {
+        log_info(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: fabric tensix datamover is enabled "
+            "(FabricTensixConfig={}, FabricUDMMode={}), and fabric_mux_core() will drain the "
+            "remaining dispatch-pool cores at fabric-init time. Reserving a tensix for the RT "
+            "profiler on top of that tips the pool into exhaustion on small-pool chips. "
+            "Disable the fabric tensix datamover to re-enable RT profiler.",
+            device_id,
+            enchantum::to_string(fabric_tensix_config),
+            enchantum::to_string(metal.get_fabric_udm_mode()));
+        return {};
+    }
+
+    // 4. Reserved tensix core for the RT profiler kernel / D2H sender. When absent here
+    //    (with the fabric-mux path already ruled out above) the cause is ETH dispatch:
+    //    the dispatch pool holds ethernet cores, which can't run the RT profiler BRISC.
     std::optional<tt_cxy_pair> reserved = dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
     if (!reserved.has_value()) {
         log_info(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: no tensix core could be reserved for the "
-            "RT profiler (typically because dispatch is configured for ETH cores). Switch to "
-            "DispatchCoreConfig(DispatchCoreType::WORKER) to re-enable RT profiler.",
+            "RT profiler. Dispatch is configured for ETH cores, which cannot run the RT profiler "
+            "BRISC kernel. Switch to DispatchCoreConfig(DispatchCoreType::WORKER) to re-enable RT "
+            "profiler.",
             device_id);
         return {};
     }
 
     CoreCoord core(reserved->x, reserved->y);
 
-    // 4. Sanity-check the reservation against the TENSIX grid.
+    // 5. Sanity-check the reservation against the TENSIX grid.
     const auto& soc = cluster.get_soc_desc(device_id);
     CoreCoord tensix_grid = soc.get_grid_size(CoreType::TENSIX);
     if (core.x >= tensix_grid.x || core.y >= tensix_grid.y) {
@@ -250,7 +279,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
-    // 5. Null-kernels mode: the RT profiler's BRISC/NCRISC bodies would be
+    // 6. Null-kernels mode: the RT profiler's BRISC/NCRISC bodies would be
     //    stubbed out by -DDEBUG_NULL_KERNELS, so the on-device state machine
     //    never runs and every host sync would time out. Skip cleanly.
     if (metal.rtoptions().get_kernels_nullified()) {

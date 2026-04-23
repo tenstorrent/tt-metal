@@ -267,9 +267,17 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         //   no benefit.
         // - Skipped for ETH dispatch because the pool holds ethernet cores, not tensixes, and RT
         //   profiler (a worker kernel) cannot use them. Callers fall back to the legacy picker.
+        // - Skipped when the fabric tensix datamover is enabled (MUX or UDM). In those modes the
+        //   fabric mux claims additional dispatch-pool cores at fabric-init time — up to and
+        //   including all remaining slots on small-pool chips like T3K's 2D UDM path. Reserving a
+        //   tensix for RT profiler on top of that tips the pool into exhaustion and triggers the
+        //   "No more available dispatch cores on device N" TT_THROW out of fabric_mux_core(). RT
+        //   profiler is not worth starving fabric for, so we cede the slot back to the pool.
         const bool is_mmio = env.get_cluster().get_associated_mmio_device(device_id) == device_id;
+        const bool fabric_tensix_datamover_enabled =
+            env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
         if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
-            !logical_dispatch_cores.empty()) {
+            !fabric_tensix_datamover_enabled && !logical_dispatch_cores.empty()) {
             CoreCoord rt_core = logical_dispatch_cores.back();
             logical_dispatch_cores.pop_back();
             this->reserved_realtime_profiler_core_by_device_.emplace(
