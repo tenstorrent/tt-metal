@@ -56,9 +56,11 @@
 #include <future>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
+#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <tt_stl/span.hpp>
 
@@ -91,14 +93,9 @@ tt::ARCH get_mock_arch_from_env() {
     return arch;
 }
 
-std::string_view target_device_type_to_string(tt::TargetDevice t) {
-    switch (t) {
-        case tt::TargetDevice::Silicon: return "Silicon";
-        case tt::TargetDevice::Mock: return "Mock";
-        case tt::TargetDevice::Simulator: return "Simulator";
-        case tt::TargetDevice::Emule: return "Emule";
-        default: return "Unknown";
-    }
+constexpr std::string_view target_device_type_to_string(tt::TargetDevice t) noexcept {
+    const std::string_view name = enchantum::to_string(t);
+    return name.empty() ? std::string_view{"Unknown"} : name;
 }
 
 uint64_t now_unix_ns() {
