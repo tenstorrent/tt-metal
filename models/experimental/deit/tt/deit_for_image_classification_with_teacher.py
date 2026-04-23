@@ -45,7 +45,7 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[ttnnr.Tensor] = None,
+        pixel_values: Optional[ttnn.Tensor] = None,
         head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
