@@ -352,20 +352,54 @@ int main(int argc, char* argv[]) {
             }
         }
         out << "\n";
+        // Per Tensix matrix-engine tech report: one FPU request at LoFi
+        // fidelity issues a 4096-muladd matmul tile, so 4 TFLOPs/Tensix at
+        // 1 GHz peak. Each muladd is counted as one op, per tt-metal docs.
+        constexpr uint32_t kLoFiMuladdsPerFpuReq = 4096;
         // Second footer row: absolute FPU-request throughput when AICLK known.
-        //   peak = num_cores × AICLK (1 req/cycle × cores at clock rate)
-        //   achieved = peak × c_avg%
+        //   peak_greq = num_cores × AICLK (1 req/cycle × cores at clock rate)
+        //   achieved_greq = peak_greq × c_avg
         for (size_t c = 0; c < maps.size(); ++c) {
             const uint32_t n = maps[c].header->num_cores;
             const uint32_t aiclk = maps[c].header->aiclk_mhz;
             std::ostringstream t;
             if (aiclk > 0 && n > 0) {
-                const double peak_gops = static_cast<double>(n) * static_cast<double>(aiclk) / 1000.0;  // Gops/s
+                const double peak_greq = static_cast<double>(n) * static_cast<double>(aiclk) / 1000.0;  // Greq/s
                 const double c_avg = static_cast<double>(compute_sum[c]) / (static_cast<double>(n) * 1000.0);
-                const double achieved_gops = peak_gops * c_avg;
-                t << "FPU " << std::fixed << std::setprecision(1) << achieved_gops << " / " << peak_gops << " Gops/s";
+                const double achieved_greq = peak_greq * c_avg;
+                t << "FPU req " << std::fixed << std::setprecision(1) << achieved_greq << " / " << peak_greq
+                  << " Greq/s";
             } else {
                 t << "FPU throughput: unknown (no AICLK)";
+            }
+            std::string s = t.str();
+            if (static_cast<int>(s.size()) < kCorePanelWidth) {
+                s.append(kCorePanelWidth - s.size(), ' ');
+            } else if (static_cast<int>(s.size()) > kCorePanelWidth) {
+                s.resize(kCorePanelWidth);
+            }
+            out << s;
+            if (c + 1 < maps.size()) {
+                out << " | ";
+            }
+        }
+        out << "\n";
+        // Third footer row: TFLOPs estimate assuming each FPU request is a
+        // full-width LoFi matmul tile. Conservative upper bound for non-
+        // matmul workloads; close to truth for prefill-style matmul.
+        for (size_t c = 0; c < maps.size(); ++c) {
+            const uint32_t n = maps[c].header->num_cores;
+            const uint32_t aiclk = maps[c].header->aiclk_mhz;
+            std::ostringstream t;
+            if (aiclk > 0 && n > 0) {
+                const double peak_greq = static_cast<double>(n) * static_cast<double>(aiclk) / 1000.0;
+                const double c_avg = static_cast<double>(compute_sum[c]) / (static_cast<double>(n) * 1000.0);
+                const double peak_tflops = peak_greq * kLoFiMuladdsPerFpuReq / 1000.0;
+                const double achieved_tflops = peak_tflops * c_avg;
+                t << "~" << std::fixed << std::setprecision(0) << achieved_tflops << " / " << std::setprecision(0)
+                  << peak_tflops << " TFLOPs (LoFi matmul-eq)";
+            } else {
+                t << "";
             }
             std::string s = t.str();
             if (static_cast<int>(s.size()) < kCorePanelWidth) {
