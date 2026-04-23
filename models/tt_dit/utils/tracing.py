@@ -242,6 +242,9 @@ class Tracer:
 
 _TRACER_VALID_INPUT_TYPES = (ttnn.Tensor, int, float, str, bool, NoneType)
 
+_MESH_DEVICE_PARAM_NAMES: tuple[str, ...] = ("mesh_device", "device")
+"""Parameter names that ``traced_function`` recognises as the Tracer's mesh device, in priority order."""
+
 
 def _verify_value(value: Any, *, path_label: str) -> Any:
     if not isinstance(value, _TRACER_VALID_INPUT_TYPES):
@@ -249,6 +252,23 @@ def _verify_value(value: Any, *, path_label: str) -> Any:
         raise TypeError(msg)
 
     return value
+
+
+def _is_tracer_valid_value(value: Any) -> bool:
+    """Return True if ``value`` can be passed through to a ``Tracer`` as an input.
+
+    Matches ``_TRACER_VALID_INPUT_TYPES`` plus any nesting of those inside ``tuple``,
+    ``list``, or ``dict`` (the containers supported by ``Tracer._tree_map``). Used at
+    call time by ``traced_function`` to classify each argument as either a tracer input
+    or a bindable config value.
+    """
+    if isinstance(value, _TRACER_VALID_INPUT_TYPES):
+        return True
+    if isinstance(value, (tuple, list)):
+        return all(_is_tracer_valid_value(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, _TRACER_VALID_INPUT_TYPES) and _is_tracer_valid_value(v) for k, v in value.items())
+    return False
 
 
 def _clone_tensor(value: Any, *, path_label: str) -> Any:  # noqa: ARG001
@@ -324,6 +344,7 @@ def traced_function(
     _fn: Callable[..., Any] | None = None,
     *,
     device: ttnn.MeshDevice | Callable[..., ttnn.MeshDevice] | None = None,
+    inject_mesh_device: bool = False,
     prep_run: bool = True,
     clone_prep_inputs: bool = True,
 ) -> Any:
@@ -331,38 +352,70 @@ def traced_function(
 
     Can be applied with or without arguments::
 
-        # Standalone function — device provided directly at decoration time:
-        @traced_function(device=mesh_device, clone_prep_inputs=False)
-        def my_function(x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
-
-        # Method — device resolved lazily via lambda from the bound context (self):
+        # Method — device resolved lazily via callable from the bound context (self):
         @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False)
         def my_method(self, x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
 
+        # Standalone function — device and other non-tracer-valid args are classified
+        # dynamically on the first traced call. The parameter must be named `mesh_device`:
+        @traced_function(clone_prep_inputs=False)
+        def my_function(x, mesh_device, ccl_manager=None, pre_transfer_fn=None): ...
+
+        # Standalone function — `mesh_device` is auto-injected as a wrapper-only kwarg
+        # (like `traced`) and never forwarded to the wrapped function:
+        @traced_function(inject_mesh_device=True, clone_prep_inputs=False)
+        def my_pure_function(x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
+
         # Call without tracing (original function, no overhead):
-        result = my_function(x, scale=1.0)
+        result = my_function(x, mesh_device=md)
+        result = my_pure_function(x, scale=1.0)
         result = model.my_method(x, scale=1.0)
 
         # Call with tracing (captures on first call, replays on subsequent calls):
-        result = my_function(x, scale=1.0, traced=True)
+        result = my_function(x, mesh_device=md, traced=True)
+        result = my_pure_function(x, scale=1.0, mesh_device=md, traced=True)
         result = model.my_method(x, scale=1.0, traced=True)
 
         # With optional Tracer call-time kwargs:
-        result = my_function(x, scale=1.0, traced=True, tracer_cq_id=1, tracer_blocking_execution=False)
+        result = my_function(x, mesh_device=md, traced=True, tracer_cq_id=1, tracer_blocking_execution=False)
 
     The decorated callable gains a ``traced`` keyword argument at call time. When
     ``traced=False`` (the default) the original function is called directly. When
     ``traced=True`` a ``Tracer`` is lazily created on the first call and subsequent
     calls execute the captured trace.
 
-    If the first positional argument is not a valid ``Tracer`` input type
-    (i.e. not a ``ttnn.Tensor``, scalar, or ``None``) it is treated as a
-    bindable context (e.g. ``self``) and bound away before the ``Tracer`` sees
-    any inputs.     When ``device`` is a callable it is called with that context to
-    resolve the device. One ``Tracer`` per unique first argument is maintained in a
-    ``WeakKeyDictionary``, giving per-instance tracing for methods. For plain
-    functions whose first argument is a valid tracer type, a single shared
-    ``Tracer`` is used instead.
+    Three modes for supplying the Tracer's device:
+
+    1. **Context-bound** — ``device=<callable>`` (or literal). The first
+       positional argument is treated as a bindable context (typical for
+       methods: ``self``), bound away via ``functools.partial``, and — when
+       ``device`` is callable — passed through it to resolve the device. One
+       ``Tracer`` per unique context in a ``WeakKeyDictionary``.
+    2. **Auto-discovered** — ``device=None`` (omitted). The function must
+       declare a parameter literally named ``mesh_device`` or ``device``
+       (first match in that priority order). On the first traced call,
+       each argument is classified at runtime: any value that isn't a
+       ``Tracer``-valid input (``ttnn.Tensor``, scalar, ``None``, or a
+       nested ``tuple``/``list``/``dict`` of those) is bound into a
+       ``functools.partial``. The bind set is frozen after the first call
+       and reused. The matched mesh parameter drives the ``Tracer``'s
+       device. One ``Tracer`` is cached per unique tuple of bound-value
+       identities.
+    3. **Injected** — ``inject_mesh_device=True``. The wrapper accepts
+       either ``mesh_device=`` or ``device=`` as an auto-added kwarg
+       (analogous to ``traced=``), consumes it, and never forwards it to
+       the wrapped function. Exactly one of the two may be supplied per
+       call. The function itself must *not* declare a ``mesh_device`` or
+       ``device`` parameter. Other non-tracer-valid args from the wrapped
+       function's signature are still classified and bound on the first
+       traced call, exactly as in mode (2).
+
+    Decoration-time validation:
+      - ``device=`` and ``inject_mesh_device=True`` are mutually exclusive.
+      - ``inject_mesh_device=True`` requires the wrapped function *not* to
+        declare a ``mesh_device`` or ``device`` parameter (to avoid ambiguity).
+      - Omitting ``device=`` with ``inject_mesh_device=False`` on a function
+        that declares neither ``mesh_device`` nor ``device`` raises ``ValueError``.
 
     Tracer call-time kwargs (``tracer_cq_id``, ``tracer_blocking_execution``,
     ``tracer_execute_on_capture``) are forwarded to the ``Tracer`` when tracing
@@ -370,9 +423,13 @@ def traced_function(
 
     Args:
         _fn: The function to wrap when used without parentheses (``@traced_function``).
-        device: Device for tracing. Pass a ``ttnn.MeshDevice`` directly for plain
-            functions, or a callable (e.g. ``lambda self: self.mesh_device``) for
-            methods so it can be resolved lazily from the bound context.
+        device: Device for tracing. For methods, pass a callable
+            (e.g. ``lambda self: self.mesh_device``) so it can be resolved lazily
+            from the bound context. Omit entirely for standalone functions that
+            declare a ``mesh_device`` parameter or set ``inject_mesh_device=True``.
+        inject_mesh_device: If ``True``, the wrapper accepts ``mesh_device=`` as an
+            auto-added kwarg and consumes it without forwarding to the wrapped
+            function. Mutually exclusive with ``device=``.
         prep_run: Forwarded to ``Tracer.__init__``.
         clone_prep_inputs: Forwarded to ``Tracer.__init__``.
     """
@@ -387,24 +444,115 @@ def traced_function(
             raise ValueError(msg)
         return device(context) if callable(device) else device
 
+    if inject_mesh_device and device is not None:
+        msg = "@traced_function: inject_mesh_device=True is mutually exclusive with device="
+        raise ValueError(msg)
+
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        sig = inspect.signature(fn)
+
+        # First matching parameter name (in priority order) is what we'll look up at call time.
+        sig_mesh_param = next((n for n in _MESH_DEVICE_PARAM_NAMES if n in sig.parameters), None)
+
+        if inject_mesh_device and sig_mesh_param is not None:
+            msg = (
+                f"@traced_function: {fn.__qualname__} declares a {sig_mesh_param!r} parameter but "
+                "inject_mesh_device=True would also add one. Rename the parameter, or drop "
+                "inject_mesh_device=True to use signature-based auto-discovery instead."
+            )
+            raise ValueError(msg)
+
+        if device is None and not inject_mesh_device and sig_mesh_param is None:
+            msg = (
+                f"@traced_function: {fn.__qualname__} was decorated without device= and has no "
+                f"parameter named any of {_MESH_DEVICE_PARAM_NAMES}. Provide "
+                "device=<callable returning a ttnn.MeshDevice> (e.g. lambda self: self.mesh_device) "
+                "for methods, declare a 'mesh_device' (or 'device') parameter on the function for "
+                "auto-discovery, or pass inject_mesh_device=True to have the wrapper accept one as "
+                "an auto-added kwarg."
+            )
+            raise ValueError(msg)
+
         _tracers: weakref.WeakKeyDictionary[Any, Tracer] = weakref.WeakKeyDictionary()
-        _tracer_shared: Tracer | None = None
+        _tracers_auto: dict[tuple[int, ...], Tracer] = {}
+        _auto_bind_names: tuple[str, ...] | None = None  # frozen on the first traced call
 
         def _needs_new_tracer(tracer: Tracer | None) -> bool:
             return tracer is None or (not tracer.trace_captured and tracer._function is None)
 
         @functools.wraps(fn)
         def wrapper(*args: Any, traced: bool = False, **kwargs: Any) -> Any:
-            nonlocal _tracer_shared
+            nonlocal _auto_bind_names
+
+            # When injecting, accept either name but only one at a time. The kwarg is consumed
+            # by the wrapper in every path — it is never forwarded to the wrapped function.
+            injected_mesh_device: Any = _OMITTED
+            if inject_mesh_device:
+                supplied = [(n, kwargs.pop(n)) for n in _MESH_DEVICE_PARAM_NAMES if n in kwargs]
+                if len(supplied) > 1:
+                    msg = (
+                        f"@traced_function: pass only one of {_MESH_DEVICE_PARAM_NAMES} as the "
+                        f"injected mesh-device kwarg; got "
+                        f"{ {n: v for n, v in supplied} !r}"
+                    )
+                    raise TypeError(msg)
+                if supplied:
+                    injected_mesh_device = supplied[0][1]
 
             if not traced:
                 for k in _TRACER_CALL_KWARGS:
                     kwargs.pop(k, None)
                 return fn(*args, **kwargs)
 
-            # If the first argument is not a valid Tracer input type, treat it as a
-            # bindable context (e.g. self) — bind it away and track a Tracer per instance.
+            # Auto-discovery path: classify args at runtime on the first traced call.
+            # Everything that isn't a Tracer-valid value is bound into the partial.
+            if device is None:
+                tracer_call_kwargs = {k: kwargs.pop(k) for k in list(kwargs) if k in _TRACER_CALL_KWARGS}
+                bound = sig.bind(*args, **kwargs)
+                bound.apply_defaults()
+
+                if _auto_bind_names is None:
+                    _auto_bind_names = tuple(
+                        name
+                        for name in sig.parameters
+                        if name in bound.arguments and not _is_tracer_valid_value(bound.arguments[name])
+                    )
+                    if not inject_mesh_device and sig_mesh_param not in _auto_bind_names:
+                        md = bound.arguments.get(sig_mesh_param, None) if sig_mesh_param else None
+                        msg = (
+                            f"@traced_function: {fn.__qualname__} expected {sig_mesh_param!r} to "
+                            f"be a non-tracer-valid value (e.g. ttnn.MeshDevice), got "
+                            f"{type(md).__name__}={md!r}"
+                        )
+                        raise TypeError(msg)
+
+                bind_values = {n: bound.arguments.pop(n) for n in _auto_bind_names}
+                if inject_mesh_device:
+                    if injected_mesh_device is _OMITTED:
+                        msg = (
+                            f"@traced_function: {fn.__qualname__} was called with traced=True "
+                            f"but none of {_MESH_DEVICE_PARAM_NAMES} were supplied as kwargs "
+                            "(required when inject_mesh_device=True)."
+                        )
+                        raise TypeError(msg)
+                    mesh_device_val = injected_mesh_device
+                    key = (id(mesh_device_val), *(id(v) for v in bind_values.values()))
+                else:
+                    mesh_device_val = bind_values[sig_mesh_param]
+                    key = tuple(id(v) for v in bind_values.values())
+
+                t = _tracers_auto.get(key)
+                if _needs_new_tracer(t):
+                    _tracers_auto[key] = Tracer(
+                        functools.partial(fn, **bind_values),
+                        device=mesh_device_val,
+                        prep_run=prep_run,
+                        clone_prep_inputs=clone_prep_inputs,
+                    )
+                return _tracers_auto[key](*bound.args, **bound.kwargs, **tracer_call_kwargs)
+
+            # Context-bound path: first arg is a non-tracer-valid context (e.g. self);
+            # bind it away and track one Tracer per instance.
             if args and not isinstance(args[0], _TRACER_VALID_INPUT_TYPES):
                 context, rest = args[0], args[1:]
                 if _needs_new_tracer(_tracers.get(context)):
@@ -416,17 +564,20 @@ def traced_function(
                     )
                 return _tracers[context](*rest, **kwargs)
 
-            # Plain function — single shared Tracer.
-            if _needs_new_tracer(_tracer_shared):
-                _tracer_shared = Tracer(
-                    fn,
-                    device=_resolve_device(None),
-                    prep_run=prep_run,
-                    clone_prep_inputs=clone_prep_inputs,
-                )
-            return _tracer_shared(*args, **kwargs)
+            # device= was supplied but the first positional argument is a valid Tracer input
+            # (or absent), so there's no context to bind. Standalone functions should omit
+            # device= and declare a 'mesh_device' parameter for auto-discovery instead.
+            msg = (
+                f"@traced_function: {fn.__qualname__} was called with traced=True, but device= "
+                "was provided at decoration time and the first positional argument is not a "
+                "bindable context (it is a tracer-valid type). For standalone functions, omit "
+                "device= and declare a 'mesh_device' parameter to use auto-discovery; for "
+                "methods, ensure self is passed positionally."
+            )
+            raise TypeError(msg)
 
         wrapper._tracers = _tracers  # type: ignore[attr-defined]
+        wrapper._tracers_auto = _tracers_auto  # type: ignore[attr-defined]
         return wrapper
 
     if _fn is not None:

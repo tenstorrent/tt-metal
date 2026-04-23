@@ -266,6 +266,7 @@ class WanTransformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = True,
         model_type: str = "t2v",
+        output_dtype: torch.dtype = ttnn.float32,
     ) -> None:
         super().__init__()
 
@@ -276,6 +277,7 @@ class WanTransformer3DModel(Module):
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
         self.cached_rope_features = {}
+        self.output_dtype = output_dtype
 
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
         if model_type == "i2v":
@@ -591,7 +593,9 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep):
+    def inner_step(
+        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep, gather_output=False
+    ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -629,14 +633,15 @@ class WanTransformer3DModel(Module):
                 spatial_norm_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
+        spatial_1BNI = self.proj_out(
+            spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=self.output_dtype
         )
 
         # Gather fp32 spatial output across sequence parallel devices (remains on device)
-        spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
-            proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
-        )
+        if gather_output:
+            spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+            )
 
         return spatial_1BNI
 
@@ -654,6 +659,7 @@ class WanTransformer3DModel(Module):
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance_scale: float,
+        gather_output: bool = False,
     ) -> ttnn.Tensor:
         cond = self.inner_step(
             spatial_1BNI,
@@ -663,6 +669,7 @@ class WanTransformer3DModel(Module):
             trans_mat,
             N,
             timestep,
+            gather_output=gather_output,
         )
         if not do_classifier_free_guidance:
             return cond
