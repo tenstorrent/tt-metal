@@ -253,7 +253,7 @@ def run_eval(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(device, state_dict, num_layers, use_async_ccl=False, max_seq_len=max_seq_len)
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -263,28 +263,29 @@ def run_eval(
             num_layers=text_num_layers,
             batch_size=1,
             max_seq_len=max_seq_len,
+            use_paged_attention=True,
         )
+        from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
+
+        first = runnable[0]
+        warm_prompt = f"{VIDEO_PROMPT}\n{first['prompt_text']}"
+        warm_inputs = preprocess_video(
+            first["local_path"],
+            warm_prompt,
+            num_frames=max_frames,
+            max_fps=max_fps,
+            fps=video_fps,
+            sampling_fps=video_sampling_fps,
+        )
+        _n_out = warm_inputs["n_tokens"] // warm_inputs["n_frames"]
+        _k_pool = warm_inputs["k_pool"]
+        _buckets = [b for b in PREFILL_SEQ_BUCKETS if b <= max_seq_len]
+
+        generator.init_kv_cache()
 
         # Upfront warmup: ViT+pool traces are required for fast DP vision (else eager path can be ~tens of seconds).
         # Prefill/decode traces are optional and only captured when use_trace / use_decode_trace.
         if runnable and (use_dp_vision_trace or use_trace or use_decode_trace):
-            from models.demos.molmo2.tt.vision_backbone import MAX_VIT_FRAMES_FOR_POOL
-
-            first = runnable[0]
-            warm_prompt = f"{VIDEO_PROMPT}\n{first['prompt_text']}"
-            warm_inputs = preprocess_video(
-                first["local_path"],
-                warm_prompt,
-                num_frames=max_frames,
-                max_fps=max_fps,
-                fps=video_fps,
-                sampling_fps=video_sampling_fps,
-            )
-            _n_out = warm_inputs["n_tokens"] // warm_inputs["n_frames"]
-            _k_pool = warm_inputs["k_pool"]
-            _buckets = [b for b in PREFILL_SEQ_BUCKETS if b <= max_seq_len]
-
-            generator.init_kv_cache()
             generator.warmup_video_traces(
                 frames_per_device=8,
                 num_devices=8,
@@ -348,8 +349,9 @@ def run_eval(
                 extract_ms = (time.perf_counter() - t0) * 1000
                 n_frames = video_inputs["n_frames"]
 
-                generator.init_kv_cache()
-                generator.reset_kv_cache(start_pos=0)
+                # generator.init_kv_cache()
+                # generator.reset_kv_cache(start_pos=0)
+                generator.reset_state()
 
                 response, perf = generator.run_video_inference(
                     video_inputs=video_inputs,
@@ -509,19 +511,19 @@ def main():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=16384,
+        default=38 * 1024,
         help="Maximum sequence length for KV cache",
     )
     parser.add_argument(
         "--max-video-frames",
         type=int,
-        default=8,
+        default=384,
         help="Maximum frames to extract per video",
     )
     parser.add_argument(
         "--max-video-fps",
         type=float,
-        default=None,
+        default=10,
         help="HF max_fps cap for sampling (default: omit; HF uses processor default, often 2.0)",
     )
     parser.add_argument(

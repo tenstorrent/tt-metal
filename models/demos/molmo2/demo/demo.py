@@ -327,7 +327,7 @@ class Molmo2Generator:
 
         # Clear KV cache content to prevent stale data leakage between requests
         # This is critical for correct behavior when reusing traces across multiple inferences
-        if self.kv_caches is not None:
+        if self.kv_caches is not None and not self.use_paged_attention:
             for layer_idx, (k_cache, v_cache) in enumerate(self.kv_caches):
                 # Get cache shape and dtype for creating zeros
                 k_shape = list(k_cache.shape)
