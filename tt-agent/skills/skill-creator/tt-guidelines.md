@@ -116,6 +116,38 @@ at time of writing.
 
 ---
 
+## Developer-Rule Conflict Protocol
+
+A developer's personal rules (global CLAUDE.md, project CLAUDE.md, etc.) may
+conflict with what a tt-agent skill needs to do. Personal rules must not
+silently override skill behavior, but skills must not silently override
+personal rules either. The skill surfaces the conflict.
+
+**Applies to any skill that does something autonomous** — commits, creates
+branches, spawns workspaces, deletes files, modifies shared state, runs
+long-lived background work.
+
+**Protocol — run at the start of the skill, before any state-changing work:**
+
+1. **State plainly** what the skill will do autonomously, in one or two
+   sentences. Name the specific actions (e.g., "commit every iteration",
+   "create N new workspaces", "modify source files in place").
+2. **Detect conflicts**: check the developer's CLAUDE.md files for rules
+   that forbid or constrain those actions. Common conflicts: commit rules,
+   push rules, file-deletion rules, parallel-execution rules.
+3. **Surface the conflict**: quote the rule, explain what the skill needs,
+   ask the developer to override or adjust scope.
+4. **Wait for explicit confirmation** before proceeding. Silence is not
+   consent.
+
+The developer's response is session-scoped — it authorizes this one
+invocation, not future ones. A skill that re-enters for a new target
+re-runs the preflight.
+
+**What this is not:** a blanket exemption. `git push`-level prohibitions
+and clearly destructive rules remain in force. The protocol surfaces
+friction between autonomy and personal rules; it does not erase the rules.
+
 ## Self-Check
 
 Before finalizing any skill:
@@ -124,4 +156,5 @@ Before finalizing any skill:
 - [ ] Workflow skills define convergence criteria
 - [ ] Workflow skills have a phase table with Loads and Produces columns
 - [ ] All files referenced in Loads columns exist on disk
+- [ ] Autonomous skills declare and run the Developer-Rule Conflict Protocol
 - [ ] `pytest tt-agent/tests/test_skill_frontmatter.py` passes

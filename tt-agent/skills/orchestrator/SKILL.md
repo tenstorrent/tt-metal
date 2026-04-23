@@ -55,7 +55,8 @@ analyze → scope → decompose → dispatch → verify → iterate
 | Situation | Dispatch to |
 |---|---|
 | Build, run, or execute on device | `/tt:run` |
-| Profile bottleneck, optimize throughput | `/tt:optimizer` |
+| Profile device time on a kernel or op | `/tt:profiler` |
+| Optimize throughput toward a goal (iterative) | `/tt:optimizer` |
 | Regression recovery (was working, now broken) | `/tt:recover` |
 | Kernel-level diagnosis (hang, crash, RISC-V state) | `/tt:debugger` |
 | Write or run tests for an op/kernel/model | `/tt:tester` |
