@@ -81,7 +81,9 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config)
 
     pos_args = extract_positional_args(kwargs)
-    output_dtype = output_dtype or kwargs.get("dtype", pos_args.get(1, ttnn.float32))
+    # arg1 is the actual positional target dtype passed to ttnn.typecast();
+    # "dtype" is an infrastructure kwarg that may differ — arg1 takes priority.
+    output_dtype = output_dtype or pos_args.get(1) or kwargs.get("dtype") or ttnn.float32
     if isinstance(output_dtype, dict):
         output_dtype = parse_dtype(output_dtype.get("repr", ""))
     elif isinstance(output_dtype, str):
