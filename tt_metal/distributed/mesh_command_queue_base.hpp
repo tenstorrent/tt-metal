@@ -73,9 +73,9 @@ private:
         const tt::tt_metal::CoreRangeSet* logical_core_filter);
 
     friend void tt::tt_metal::experimental::core_subset_write::enqueue_write(
-        MeshCommandQueue& cq,
-        MeshBuffer& mesh_buffer,
-        const DistributedHostBuffer& host_buffer,
+        tt::tt_metal::distributed::MeshCommandQueue& cq,
+        tt::tt_metal::distributed::MeshBuffer& mesh_buffer,
+        const tt::tt_metal::DistributedHostBuffer& host_buffer,
         bool blocking,
         const tt::tt_metal::CoreRangeSet& logical_core_filter);
 
