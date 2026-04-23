@@ -121,11 +121,11 @@
  *   sfpu_pipeline(chain, cb_out, 1 [num_tiles]);
  *
  *   // 4. Hardswish: x * hardsigmoid(x)
- *   //    Load x into D0 and D1, hardsigmoid on D0, mul D0*D1->D0
+ *   //    Fan-out: WaitNoPop on first Load, NoWaitPop on second (same CB)
  *   constexpr uint32_t cb_input = 0, cb_output = 2;
  *   auto chain = sfpu_chain(
- *       Load<cb_input, Dst::D0>{},
- *       Load<cb_input, Dst::D1>{},
+ *       Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+ *       Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
  *       Hardsigmoid<Dst::D0>{},
  *       SfpuMul<Dst::D0, Dst::D1, Dst::D0>{}
  *   );
@@ -134,8 +134,8 @@
  *
  *   // 5. Tanhshrink: x - tanh(x)
  *   auto chain = sfpu_chain(
- *       Load<cb_input, Dst::D0>{},
- *       Load<cb_input, Dst::D1>{},
+ *       Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+ *       Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
  *       Tanh<Dst::D1>{},
  *       SfpuSub<Dst::D0, Dst::D1, Dst::D0>{}
  *   );
@@ -160,8 +160,8 @@
  *   sfpu_pipeline(chain, cb_out, num_tiles);  // Auto by default
  *   sfpu_pipeline<SfpuBatching::Disabled>(chain, cb_out, num_tiles);  // Opt out
  *
- *   // 10. WaitUpfrontNoPop — tiles persist in CB for reuse
- *   sfpu_op<cb_in, SfpuBatching::Auto, SfpuInputPolicy::WaitUpfrontNoPop>(
+ *   // 10. NoWaitNoPop — caller manages lifecycle externally
+ *   sfpu_op<cb_in, SfpuBatching::Auto, SfpuInputPolicy::NoWaitNoPop>(
  *       cb_out, num_tiles, Exp<>{});
  *
  *   // 11. Skip data format reconfiguration
@@ -235,18 +235,14 @@ constexpr bool is_load_op_v = std::is_base_of_v<LoadTag, T>;
 enum class SfpuInputPolicy { WaitAndPopPerTile, WaitUpfrontNoPop, NoWaitNoPop };
 
 /**
- * @brief Per-Load CB lifecycle policy (explicit; overrides sfpu_chain auto-detection).
+ * @brief Per-Load CB lifecycle policy.
  *
- * Used as a template parameter on Load<CB, Slot, Policy> to declare the CB
- * wait/pop behaviour for this particular Load. The default (WaitAndPop) matches
- * the historical auto-compaction behaviour — adjacent same-CB Loads are merged.
- *
- * Non-default policies produce an individual CompactLoad with explicit flags
- * and are never merged with adjacent Loads.
+ * Used as a template parameter on Load<CB, Slot, Policy> to control the CB
+ * wait/pop behaviour for this particular Load.
  *
  * - WaitAndPop:  wait for tile, copy, pop (streaming — default)
- * - WaitNoPop:   wait for tile, copy, no pop (paired with DestReuseOp on same CB)
- * - NoWaitPop:   no wait (pre-waited), copy, pop
+ * - WaitNoPop:   wait for tile, copy, no pop (first of a fan-out pair or paired with DestReuseOp)
+ * - NoWaitPop:   no wait (pre-waited), copy, pop (second of a fan-out pair)
  * - NoWaitNoPop: no wait, no pop (caller manages lifecycle)
  */
 enum class LoadPolicy { WaitAndPop, WaitNoPop, NoWaitPop, NoWaitNoPop };
@@ -376,14 +372,15 @@ inline constexpr uint32_t cx_max_v = CxMax<Vs...>::value;
 }  // namespace detail
 
 // =============================================================================
-// Load Op (user-facing) and CompactLoad (internal, produced by sfpu_chain)
+// Load Op
 // =============================================================================
 
 /**
  * @brief User-facing Load: copies a tile from CB into DEST[Slot]
  *
- * Users write Load<cb, Dst::D0> in their chains. sfpu_chain() automatically
- * compacts adjacent same-CB Loads into CompactLoad elements.
+ * Manages its own CB lifecycle (wait/copy/pop) in exec() according to LoadPolicy.
+ * For fan-out (same CB to multiple DEST slots), use:
+ *   Load<CB, D0, LoadPolicy::WaitNoPop> + Load<CB, D1, LoadPolicy::NoWaitPop>
  */
 template <uint32_t CB, Dst Slot, LoadPolicy Policy = LoadPolicy::WaitAndPop>
 struct Load : LoadTag {
@@ -392,35 +389,20 @@ struct Load : LoadTag {
     static constexpr uint32_t max_dst = dst_idx;
     static constexpr LoadPolicy policy = Policy;
     static_assert(static_cast<uint32_t>(Slot) < 8, "DEST slot exceeds maximum capacity (8)");
-};
 
-/**
- * @brief Compacted Load: multiple DEST slots from the same CB, with wait/pop control
- *
- * Produced by sfpu_chain() compile-time transformation. Adjacent same-CB Loads
- * are merged into one CompactLoad. Wait/pop flags are set based on whether this
- * CB appears in other CompactLoad groups elsewhere in the chain.
- *
- * @tparam CB      Circular buffer index
- * @tparam DoWait  If true, exec() calls cb_wait_front before copying
- * @tparam DoPop   If true, exec() calls cb_pop_front after copying
- * @tparam Slots   DEST slot indices to copy into
- */
-template <uint32_t CB, bool DoWait, bool DoPop, Dst... Slots>
-struct CompactLoad : LoadTag {
-    static constexpr uint32_t cb = CB;
-    static constexpr bool do_wait = DoWait;
-    static constexpr bool do_pop = DoPop;
-    static constexpr uint32_t max_dst = detail::cx_max_v<static_cast<uint32_t>(Slots)...>;
-    static constexpr uint32_t num_slots = sizeof...(Slots);
-    static_assert(((static_cast<uint32_t>(Slots) < 8) && ...), "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const {}
 
-    ALWI void init() const;
-    ALWI void exec(uint32_t offset = 0) const;
-    ALWI void apply(uint32_t offset = 0) const {
-        init();
-        exec(offset);
+    ALWI void exec(uint32_t offset = 0) const {
+        if constexpr (Policy == LoadPolicy::WaitAndPop || Policy == LoadPolicy::WaitNoPop) {
+            cb_wait_front(CB, 1);
+        }
+        copy_tile(CB, 0, dst_idx + offset);
+        if constexpr (Policy == LoadPolicy::WaitAndPop || Policy == LoadPolicy::NoWaitPop) {
+            cb_pop_front(CB, 1);
+        }
     }
+
+    ALWI void apply(uint32_t offset = 0) const { exec(offset); }
 };
 
 // =============================================================================
@@ -1172,9 +1154,9 @@ constexpr T cx_max(T a, T b) {
 }
 
 /**
- * @brief Variadic chain of ops (CompactLoad + compute)
+ * @brief Variadic chain of ops (Load + compute)
  *
- * After sfpu_chain() transformation, all elements have init()/exec()/apply():
+ * All elements have init()/exec()/apply():
  * - apply(offset): init()+exec(offset) per element, sequentially
  * - apply_batched(num_iters, stride): init() once then exec() num_iters times per element
  * - exec_only(offset): exec(offset) without init, for single-op optimization
@@ -1231,178 +1213,17 @@ struct SfpuChain<First, Rest...> {
     }
 };
 
-// =============================================================================
-// Compile-time Chain Transformation (Load compaction + wait/pop annotation)
-// =============================================================================
-
-namespace detail {
-
-// --- Type list helpers ---
-
-template <typename... Ts>
-struct TypeList {};
-
-// Build SfpuChain from TypeList
-template <typename TL>
-struct ChainFromList;
-template <typename... Ts>
-struct ChainFromList<TypeList<Ts...>> {
-    using type = SfpuChain<Ts...>;
-};
-
-// Append element to TypeList
-template <typename TL, typename T>
-struct Append;
-template <typename... Ts, typename T>
-struct Append<TypeList<Ts...>, T> {
-    using type = TypeList<Ts..., T>;
-};
-
-// --- Step 1: Compact adjacent same-CB Loads into CompactLoad (wait=true,pop=true initially) ---
-
-// Helper: append a Load, merging with trailing same-CB CompactLoad if present.
-// Uses a two-phase approach: first check if merge is possible, then act.
-
-// Phase 1: Check if last element is CompactLoad<CB,...>
-template <typename TL, uint32_t CB>
-struct LastIsCompactLoadFromCB {
-    static constexpr bool value = false;
-};
-template <uint32_t CB, bool W, bool P, Dst... S>
-struct LastIsCompactLoadFromCB<TypeList<CompactLoad<CB, W, P, S...>>, CB> {
-    static constexpr bool value = true;
-};
-template <typename First, typename Second, typename... Rest, uint32_t CB>
-struct LastIsCompactLoadFromCB<TypeList<First, Second, Rest...>, CB> {
-    static constexpr bool value = LastIsCompactLoadFromCB<TypeList<Second, Rest...>, CB>::value;
-};
-
-// Phase 2: Prepend element to TypeList (preserves order when rebuilding)
-template <typename T, typename TL>
-struct Prepend;
-template <typename T, typename... Ts>
-struct Prepend<T, TypeList<Ts...>> {
-    using type = TypeList<T, Ts...>;
-};
-
-// Phase 3: Replace last CompactLoad<CB,...> by appending a new Slot
-template <typename TL, uint32_t CB, Dst NewSlot>
-struct ReplaceLastLoad;
-template <uint32_t CB, bool W, bool P, Dst... Slots, Dst NewSlot>
-struct ReplaceLastLoad<TypeList<CompactLoad<CB, W, P, Slots...>>, CB, NewSlot> {
-    using type = TypeList<CompactLoad<CB, W, P, Slots..., NewSlot>>;
-};
-template <typename First, typename... Rest, uint32_t CB, Dst NewSlot>
-struct ReplaceLastLoad<TypeList<First, Rest...>, CB, NewSlot> {
-    using type = typename Prepend<First, typename ReplaceLastLoad<TypeList<Rest...>, CB, NewSlot>::type>::type;
-};
-
-// AppendLoad: dispatch merge vs new
-template <typename TL, uint32_t CB, Dst Slot, bool Merge = LastIsCompactLoadFromCB<TL, CB>::value>
-struct AppendLoad;
-
-// No merge: append new CompactLoad
-template <typename... Elems, uint32_t CB, Dst Slot>
-struct AppendLoad<TypeList<Elems...>, CB, Slot, false> {
-    using type = TypeList<Elems..., CompactLoad<CB, true, true, Slot>>;
-};
-
-// Merge: replace last CompactLoad with extended version
-template <typename TL, uint32_t CB, Dst Slot>
-struct AppendLoad<TL, CB, Slot, true> {
-    using type = typename ReplaceLastLoad<TL, CB, Slot>::type;
-};
-
-// Fold step: dispatch Load vs non-Load via helper
-template <typename Acc, typename Elem, bool IsLoad = is_load_op_v<Elem>>
-struct CompactStep;
-
-// Load with default WaitAndPop: compact adjacent same-CB loads as before
-template <typename Acc, uint32_t CB, Dst Slot>
-struct CompactStep<Acc, Load<CB, Slot, LoadPolicy::WaitAndPop>, true> {
-    using type = typename AppendLoad<Acc, CB, Slot>::type;
-};
-
-// Load with explicit non-default policy: create individual CompactLoad, never merge
-template <typename Acc, uint32_t CB, Dst Slot, LoadPolicy Policy>
-struct CompactStep<Acc, Load<CB, Slot, Policy>, true> {
-    static constexpr bool dw = (Policy == LoadPolicy::WaitAndPop || Policy == LoadPolicy::WaitNoPop);
-    static constexpr bool dp = (Policy == LoadPolicy::WaitAndPop || Policy == LoadPolicy::NoWaitPop);
-    using type = typename Append<Acc, CompactLoad<CB, dw, dp, Slot>>::type;
-};
-
-// Non-Load: pass through
-template <typename... AccElems, typename Elem>
-struct CompactStep<TypeList<AccElems...>, Elem, false> {
-    using type = TypeList<AccElems..., Elem>;
-};
-
-// Fold over all ops to produce compacted TypeList
-template <typename Acc, typename... Remaining>
-struct CompactFold {
-    using type = Acc;
-};
-template <typename Acc, typename Head, typename... Tail>
-struct CompactFold<Acc, Head, Tail...> {
-    using type = typename CompactFold<typename CompactStep<Acc, Head>::type, Tail...>::type;
-};
-
-// --- Step 2: Check for multi-group same-CB (static_assert) ---
-
-// Check if CB appears in any load element in a TypeList
-template <uint32_t CB, typename TL>
-struct HasCBInList {
-    static constexpr bool value = false;
-};
-// Non-load: skip
-template <uint32_t CB, typename First, typename... Rest>
-struct HasCBInList<CB, TypeList<First, Rest...>> {
-    static constexpr bool value = HasCBInList<CB, TypeList<Rest...>>::value;
-};
-// CompactLoad match: check CB
-template <uint32_t CB, uint32_t CB2, bool W, bool P, Dst... S, typename... Rest>
-struct HasCBInList<CB, TypeList<CompactLoad<CB2, W, P, S...>, Rest...>> {
-    static constexpr bool value = (CB == CB2) || HasCBInList<CB, TypeList<Rest...>>::value;
-};
-
-// Validate no CB appears in multiple CompactLoad groups
-template <typename TL>
-struct NoMultiGroupCB {
-    static constexpr bool value = true;
-};
-// Non-load: skip
-template <typename First, typename... Rest>
-struct NoMultiGroupCB<TypeList<First, Rest...>> {
-    static constexpr bool value = NoMultiGroupCB<TypeList<Rest...>>::value;
-};
-// CompactLoad: check this CB doesn't appear later
-template <uint32_t CB, bool W, bool P, Dst... S, typename... Rest>
-struct NoMultiGroupCB<TypeList<CompactLoad<CB, W, P, S...>, Rest...>> {
-    static constexpr bool value =
-        !HasCBInList<CB, TypeList<Rest...>>::value && NoMultiGroupCB<TypeList<Rest...>>::value;
-};
-
-// --- Step 3: Annotate wait/pop based on first/last CB appearance ---
-// After compaction + multi-group check, each CB appears exactly once.
-// All CompactLoads get wait=true, pop=true (which is the initial default from Step 1).
-// No further annotation needed for single-group-per-CB.
-
-}  // namespace detail
-
 /**
- * @brief Factory function — compacts adjacent same-CB Loads and returns transformed chain
+ * @brief Factory function — returns an SfpuChain holding the given ops.
  *
- * Usage: auto chain = sfpu_chain(Load<0, Dst::D0>{}, Load<0, Dst::D1>{}, Exp<>{});
- * Produces: SfpuChain<CompactLoad<0, true, true, D0, D1>, Exp<>>
+ * Each Load<CB, Slot, Policy> manages its own CB lifecycle (wait/copy/pop) in
+ * exec() according to its LoadPolicy. For fan-out (same CB to multiple DEST slots),
+ * use Load<CB, D0, LoadPolicy::WaitNoPop> + Load<CB, D1, LoadPolicy::NoWaitPop>:
+ * the first waits and copies without popping; the second copies and pops.
  */
 template <typename... Ops>
-constexpr ALWI auto sfpu_chain(Ops...) {
-    using Compacted = typename detail::CompactFold<detail::TypeList<>, Ops...>::type;
-    static_assert(
-        detail::NoMultiGroupCB<Compacted>::value,
-        "Same CB appears in multiple non-adjacent Load groups. "
-        "Place all Loads from the same CB adjacent in the chain, or use separate CBs.");
-    return typename detail::ChainFromList<Compacted>::type{};
+constexpr ALWI auto sfpu_chain(Ops... ops) {
+    return SfpuChain<Ops...>{ops...};
 }
 
 // =============================================================================

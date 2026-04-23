@@ -501,27 +501,6 @@ template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
 ALWI void Addcdiv<df, In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const { addcdiv_tile<df>(a, b, c, d, value); }
 
 // =============================================================================
-// CompactLoad Method Definitions
-// =============================================================================
-
-template <uint32_t CB, bool DoWait, bool DoPop, Dst... Slots>
-ALWI void CompactLoad<CB, DoWait, DoPop, Slots...>::init() const {
-    // No-op: copy_tile_to_dst_init is handled once by the pipeline before the tile loop.
-    // This keeps init() uniform with compute ops but avoids redundant re-initialization.
-}
-
-template <uint32_t CB, bool DoWait, bool DoPop, Dst... Slots>
-ALWI void CompactLoad<CB, DoWait, DoPop, Slots...>::exec(uint32_t offset) const {
-    if constexpr (DoWait) {
-        cb_wait_front(CB, 1);
-    }
-    ((copy_tile(CB, 0, static_cast<uint32_t>(Slots) + offset)), ...);
-    if constexpr (DoPop) {
-        cb_pop_front(CB, 1);
-    }
-}
-
-// =============================================================================
 // Internal Helpers
 // =============================================================================
 
@@ -535,17 +514,15 @@ constexpr bool sfpu_reconfig_output(SfpuDataFormatReconfig mode) {
     return mode == SfpuDataFormatReconfig::OUTPUT || mode == SfpuDataFormatReconfig::INPUT_AND_OUTPUT;
 }
 
-/** @brief Get the CB of the first CompactLoad in a chain (for input reconfig) */
+/** @brief Get the CB of the first Load element in a chain (for copy_tile_to_dst_init_short) */
 template <typename Chain>
 struct FirstLoadCB { static constexpr uint32_t value = 0; };
-// Non-load first element: recurse
 template <typename First, typename... Rest>
 struct FirstLoadCB<SfpuChain<First, Rest...>> {
     static constexpr uint32_t value = FirstLoadCB<SfpuChain<Rest...>>::value;
 };
-// CompactLoad first element: found it
-template <uint32_t CB, bool W, bool P, Dst... S, typename... Rest>
-struct FirstLoadCB<SfpuChain<CompactLoad<CB, W, P, S...>, Rest...>> {
+template <uint32_t CB, Dst Slot, LoadPolicy Policy, typename... Rest>
+struct FirstLoadCB<SfpuChain<Load<CB, Slot, Policy>, Rest...>> {
     static constexpr uint32_t value = CB;
 };
 
@@ -558,8 +535,8 @@ struct FirstLoadCB<SfpuChain<CompactLoad<CB, W, P, S...>, Rest...>> {
 /**
  * @brief SFPU pipeline: unified chain execution
  *
- * After sfpu_chain() transformation, all chain elements (CompactLoad and compute ops)
- * have init()/exec()/apply(). The pipeline simply calls:
+ * All chain elements (Load and compute ops) have init()/exec()/apply().
+ * The pipeline simply calls:
  * - Non-batched (batch_size=1): chain.apply(0) per tile
  * - Batched: chain.apply_batched(actual, stride) — init once, exec k times per element
  */

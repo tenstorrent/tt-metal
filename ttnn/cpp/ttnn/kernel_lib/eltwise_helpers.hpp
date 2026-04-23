@@ -50,7 +50,6 @@
  * - exec()               — zero-arg: for Load and SFPU ops
  * - exec(ht, wt, cols)   — three-arg: for FpuOp (broadcast-aware tile indexing)
  * - wait_b_upfront(shape) / pop_b_upfront(shape) — for FpuOp B-input lifecycle
- * - wait_a_upfront(shape) / pop_a_upfront(shape) — for FpuOp A-input upfront lifecycle
  *
  * ## Design notes
  *
@@ -82,11 +81,6 @@ struct EltwiseTileShape {
 enum class EltwiseOutputPolicy {
     PerTile,  // reserve-1 / push-1 per tile — streaming, migration compatibility
     Bulk,     // reserve-N upfront / push-N at end — amortized (default)
-};
-
-enum class EltwisePackReconfig {
-    None,      // skip pack_reconfig_data_format
-    Reconfig,  // call pack_reconfig_data_format(cb_out) before the loop
 };
 
 // =============================================================================
@@ -131,7 +125,7 @@ inline constexpr BinaryInputPolicy default_policy_b_v =
     : (Bcast == BroadcastDim::SCALAR) ? BinaryInputPolicy::WaitUpfrontPopAtEnd
                                       : BinaryInputPolicy::WaitAndPopPerTile;  // NONE
 
-// True if chain contains any Load/CompactLoad element (needs copy_tile_to_dst_init_short)
+// True if chain contains any Load element (needs copy_tile_to_dst_init_short)
 template <typename Chain>
 struct chain_has_load : std::false_type {};
 template <typename... Ops>
@@ -165,32 +159,6 @@ struct has_pop_b<T, std::void_t<decltype(std::declval<const T>().pop_b_upfront(E
 template <typename T>
 inline constexpr bool has_pop_b_v = has_pop_b<T>::value;
 
-// SFINAE: does T have wait_a_upfront(EltwiseTileShape)?
-template <typename T, typename = void>
-struct has_wait_a : std::false_type {};
-template <typename T>
-struct has_wait_a<T, std::void_t<decltype(std::declval<const T>().wait_a_upfront(EltwiseTileShape{}))>>
-    : std::true_type {};
-template <typename T>
-inline constexpr bool has_wait_a_v = has_wait_a<T>::value;
-
-// SFINAE: does T have pop_a_upfront(EltwiseTileShape)?
-template <typename T, typename = void>
-struct has_pop_a : std::false_type {};
-template <typename T>
-struct has_pop_a<T, std::void_t<decltype(std::declval<const T>().pop_a_upfront(EltwiseTileShape{}))>> : std::true_type {
-};
-template <typename T>
-inline constexpr bool has_pop_a_v = has_pop_a<T>::value;
-
-// SFINAE: does T have reset_tile_idx()?
-template <typename T, typename = void>
-struct has_reset_tile_idx : std::false_type {};
-template <typename T>
-struct has_reset_tile_idx<T, std::void_t<decltype(std::declval<const T>().reset_tile_idx())>> : std::true_type {};
-template <typename T>
-inline constexpr bool has_reset_tile_idx_v = has_reset_tile_idx<T>::value;
-
 // True if chain contains a DestReuseOp (has clashes_with_fpu and is not a LoadTag).
 // Signals eltwise_op to re-call copy_tile_to_dst_init_short per tile.
 template <typename T, typename = void>
@@ -219,9 +187,6 @@ ALWI void chain_init_all(const SfpuChain<>&) {}
 ALWI void chain_exec_eltwise(const SfpuChain<>&, uint32_t, uint32_t, uint32_t) {}
 ALWI void chain_wait_b_upfront(const SfpuChain<>&, EltwiseTileShape) {}
 ALWI void chain_pop_b_upfront(const SfpuChain<>&, EltwiseTileShape) {}
-ALWI void chain_wait_a_upfront(const SfpuChain<>&, EltwiseTileShape) {}
-ALWI void chain_pop_a_upfront(const SfpuChain<>&, EltwiseTileShape) {}
-ALWI void chain_reset_tile_idx(const SfpuChain<>&) {}
 
 // Recursive cases
 template <typename First, typename... Rest>
@@ -256,50 +221,13 @@ ALWI void chain_pop_b_upfront(const SfpuChain<First, Rest...>& chain, EltwiseTil
     chain_pop_b_upfront(chain.rest, shape);
 }
 
-template <typename First, typename... Rest>
-ALWI void chain_wait_a_upfront(const SfpuChain<First, Rest...>& chain, EltwiseTileShape shape) {
-    if constexpr (detail::has_wait_a_v<First>) {
-        chain.first.wait_a_upfront(shape);
-    }
-    chain_wait_a_upfront(chain.rest, shape);
-}
-
-template <typename First, typename... Rest>
-ALWI void chain_pop_a_upfront(const SfpuChain<First, Rest...>& chain, EltwiseTileShape shape) {
-    if constexpr (detail::has_pop_a_v<First>) {
-        chain.first.pop_a_upfront(shape);
-    }
-    chain_pop_a_upfront(chain.rest, shape);
-}
-
-template <typename First, typename... Rest>
-ALWI void chain_reset_tile_idx(const SfpuChain<First, Rest...>& chain) {
-    if constexpr (detail::has_reset_tile_idx_v<First>) {
-        chain.first.reset_tile_idx();
-    }
-    chain_reset_tile_idx(chain.rest);
-}
-
 // =============================================================================
 // DestReuseOp — FPU chain element that operates on DEST + one CB operand
 // =============================================================================
 
-/**
- * @brief CB lifecycle policy for DestReuseOp.
- *
- * - WaitAndPop:         standalone: wait 1, binary_dest_reuse, pop 1 per tile
- * - NoWaitPop:          paired with Load<WaitNoPop> on same CB — no wait (Load
- *                       already waited), binary_dest_reuse, pop 1 per tile
- * - WaitUpfrontNoPop:   wait all tiles upfront, read indexed, no pop (persistent CB)
- * - WaitUpfrontPopAtEnd: wait all tiles upfront, read indexed, pop all at end
- * - NoWaitNoPop:        caller manages all lifecycle
- */
 enum class DestReuseInputPolicy {
-    WaitAndPop,
-    NoWaitPop,
-    WaitUpfrontNoPop,
-    WaitUpfrontPopAtEnd,
-    NoWaitNoPop,
+    WaitAndPop,  // standalone: wait 1, binary_dest_reuse, pop 1 per tile
+    NoWaitPop,   // paired with Load<WaitNoPop>: no wait, binary_dest_reuse, pop 1 per tile
 };
 
 /**
@@ -337,42 +265,17 @@ struct DestReuseOp {
     // requiring per-tile re-init of copy_tile_to_dst_init_short.
     static constexpr bool clashes_with_fpu = true;
 
-    mutable uint32_t tile_idx_ = 0;
-
     // No-op: real init happens inside exec() per tile to avoid MOP clobbering.
     ALWI void init() const {}
 
     ALWI void exec(uint32_t /*ht*/, uint32_t /*wt*/, uint32_t /*cols*/) const {
         if constexpr (Policy == DestReuseInputPolicy::WaitAndPop) {
             cb_wait_front(Cb, 1);
-            binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
-            binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, 0, dst_idx);
-            cb_pop_front(Cb, 1);
-        } else if constexpr (Policy == DestReuseInputPolicy::NoWaitPop) {
-            binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
-            binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, 0, dst_idx);
-            cb_pop_front(Cb, 1);
-        } else {
-            // Upfront-waited or no-wait: advancing tile index
-            binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
-            binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, tile_idx_++, dst_idx);
         }
+        binary_dest_reuse_tiles_init<BinOp, ReuseType>(Cb);
+        binary_dest_reuse_tiles<BinOp, ReuseType>(Cb, 0, dst_idx);
+        cb_pop_front(Cb, 1);
     }
-
-    // Called by chain_wait_b_upfront / chain_pop_b_upfront before/after tile loop
-    ALWI void wait_b_upfront(EltwiseTileShape shape) const {
-        if constexpr (
-            Policy == DestReuseInputPolicy::WaitUpfrontNoPop || Policy == DestReuseInputPolicy::WaitUpfrontPopAtEnd) {
-            cb_wait_front(Cb, shape.rows * shape.cols);
-        }
-    }
-    ALWI void pop_b_upfront(EltwiseTileShape shape) const {
-        if constexpr (Policy == DestReuseInputPolicy::WaitUpfrontPopAtEnd) {
-            cb_pop_front(Cb, shape.rows * shape.cols);
-        }
-    }
-
-    ALWI void reset_tile_idx() const { tile_idx_ = 0; }
 };
 
 // =============================================================================
@@ -438,19 +341,6 @@ struct FpuBinaryOp {
             cb_pop_front(CbIn1, detail::b_tile_count<Bcast>(shape));
         }
     }
-
-    // A upfront: called by chain_wait/pop_a_upfront before/after tile loop
-    ALWI void wait_a_upfront(EltwiseTileShape shape) const {
-        if constexpr (
-            PolicyA == BinaryInputPolicy::WaitUpfrontNoPop || PolicyA == BinaryInputPolicy::WaitUpfrontPopAtEnd) {
-            cb_wait_front(CbIn0, shape.rows * shape.cols);
-        }
-    }
-    ALWI void pop_a_upfront(EltwiseTileShape shape) const {
-        if constexpr (PolicyA == BinaryInputPolicy::WaitUpfrontPopAtEnd) {
-            cb_pop_front(CbIn0, shape.rows * shape.cols);
-        }
-    }
 };
 
 // =============================================================================
@@ -511,7 +401,7 @@ struct FpuMul
  *
  * Contract:
  *  - chain_init_all(chain) is called once before the tile loop
- *  - B/A upfront waits called before loop; B/A upfront pops called after loop
+ *  - B upfront waits called before loop; B upfront pops called after loop
  *  - Per tile: chain_exec_eltwise(chain, ht, wt, cols)
  *  - pack_slot is validated against Chain::stride at compile time
  *  - shape = EltwiseTileShape::flat(N) for SFPU/non-broadcast; ::of(Ht, Wt) for broadcast
@@ -519,14 +409,12 @@ struct FpuMul
  * @tparam cb_out          Output circular buffer index
  * @tparam pack_slot       DEST slot to pack from (D0 for all standard linear chains)
  * @tparam output_policy   PerTile or Bulk (default Bulk — amortized reserve/push)
- * @tparam pack_reconfig   Whether to call pack_reconfig_data_format before loop
  * @tparam Chain           SfpuChain<...> type (deduced)
  */
 template <
     uint32_t cb_out,
     Dst pack_slot = Dst::D0,
     EltwiseOutputPolicy output_policy = EltwiseOutputPolicy::Bulk,
-    EltwisePackReconfig pack_reconfig = EltwisePackReconfig::None,
     typename Chain>
 ALWI void eltwise_op(Chain chain, EltwiseTileShape shape);
 

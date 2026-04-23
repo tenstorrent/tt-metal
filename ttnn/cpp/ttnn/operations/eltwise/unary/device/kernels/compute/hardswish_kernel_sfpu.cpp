@@ -19,8 +19,8 @@ void kernel_main() {
 
     // hardswish(x) = x * hardsigmoid(x)
     auto chain = sfpu_chain(
-        Load<cb_input, Dst::D0>{},
-        Load<cb_input, Dst::D1>{},
+        Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+        Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
         Hardsigmoid<Dst::D0>{},
         SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
 

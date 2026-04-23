@@ -21,8 +21,8 @@ void kernel_main() {
     //   Load x to D0 and D1 (fan-out), negate D1 to get -x,
     //   compute exp(-x) in D1, then logsigmoid(x, exp(-x)) -> D0.
     auto chain = sfpu_chain(
-        Load<cb_input, Dst::D0>{},
-        Load<cb_input, Dst::D1>{},
+        Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+        Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
         Neg<Dst::D1>{},
         Exp<Approx::Fast, Approx::Fast, Dst::D1>{},
         Logsigmoid<Dst::D0, Dst::D1, Dst::D0>{});

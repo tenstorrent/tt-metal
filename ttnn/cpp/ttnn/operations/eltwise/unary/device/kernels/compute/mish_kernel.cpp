@@ -29,8 +29,8 @@ void kernel_main() {
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         if (use_approx) {
             auto chain = sfpu_chain(
-                Load<cb_input, Dst::D0>{},
-                Load<cb_input, Dst::D1>{},
+                Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+                Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
                 Exp<Approx::Fast, Approx::Fast, Dst::D0>{},
                 Log1p<Approx::Fast, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},
@@ -42,8 +42,8 @@ void kernel_main() {
                 SfpuDataFormatReconfig::NONE>(chain, cb_output, per_core_block_dim);
         } else {
             auto chain = sfpu_chain(
-                Load<cb_input, Dst::D0>{},
-                Load<cb_input, Dst::D1>{},
+                Load<cb_input, Dst::D0, LoadPolicy::WaitNoPop>{},
+                Load<cb_input, Dst::D1, LoadPolicy::NoWaitPop>{},
                 Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
                 Log1p<Approx::Exact, Dst::D0>{},
                 Tanh<Approx::Exact, Dst::D0>{},

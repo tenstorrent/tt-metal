@@ -14,16 +14,11 @@ template <
     uint32_t cb_out,
     Dst pack_slot,
     EltwiseOutputPolicy output_policy,
-    EltwisePackReconfig pack_reconfig,
     typename Chain>
 ALWI void eltwise_op(Chain chain, EltwiseTileShape shape) {
     static_assert(
         static_cast<uint32_t>(pack_slot) < Chain::stride,
         "pack_slot must be less than Chain::stride (max DEST slot used by chain + 1)");
-
-    if constexpr (pack_reconfig == EltwisePackReconfig::Reconfig) {
-        pack_reconfig_data_format(cb_out);
-    }
 
     // DestReuseOp clobbers the copy_tile unpack MOP (binary_dest_reuse_tiles_init
     // reconfigures the unpacker each call). Two modes:
@@ -45,9 +40,6 @@ ALWI void eltwise_op(Chain chain, EltwiseTileShape shape) {
 
     // Upfront waits for B inputs (broadcast FpuOp / DestReuseOp upfront policies)
     chain_wait_b_upfront(chain, shape);
-
-    // Upfront waits for A inputs (non-streaming FpuOp PolicyA)
-    chain_wait_a_upfront(chain, shape);
 
     const uint32_t total = shape.rows * shape.cols;
 
@@ -87,12 +79,8 @@ ALWI void eltwise_op(Chain chain, EltwiseTileShape shape) {
         cb_push_back(cb_out, total);
     }
 
-    // Upfront pops for B and A (consume-mode policies)
+    // Upfront pops for B (consume-mode policies)
     chain_pop_b_upfront(chain, shape);
-    chain_pop_a_upfront(chain, shape);
-
-    // Reset advancing tile indices in DestReuseOp (and FpuOp WaitUpfront) for reuse
-    chain_reset_tile_idx(chain);
 }
 
 }  // namespace compute_kernel_lib
