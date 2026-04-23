@@ -17,13 +17,12 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t scaler_fp32_bits = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t eps_fp32_bits = get_arg_val<uint32_t>(arg_idx++);
+    (void)get_arg_val<uint32_t>(arg_idx++);  // eps_fp32_bits — now consumed by compute kernel directly.
 
     // CBs with input data / scalar parameters
     constexpr auto cb_input_pass_1 = tt::CBIndex::c_0;
     constexpr auto cb_input_pass_2 = tt::CBIndex::c_1;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_eps = tt::CBIndex::c_3;
     constexpr auto cb_w0 = tt::CBIndex::c_4;
     constexpr auto cb_w1 = tt::CBIndex::c_5;
     constexpr auto cb_w2 = tt::CBIndex::c_6;
@@ -33,7 +32,6 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
     generate_tile_with_uint32_value(cb_scaler, scaler_fp32_bits);
-    generate_tile_with_uint32_value(cb_eps, eps_fp32_bits);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_pass_1);
     constexpr auto input_args = TensorAccessorArgs<2>();
