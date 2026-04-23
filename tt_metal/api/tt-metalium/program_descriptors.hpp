@@ -216,8 +216,9 @@ struct ResolvedRtArgBinding {
 };
 
 // A CB dynamic-address binding resolved to a CB id for direct update.
+// cb_id is CBHandle (uintptr_t) — a 64-bit handle, not an index.
 struct ResolvedCbBinding {
-    uint32_t cb_id = 0;
+    uintptr_t cb_id = 0;
     Buffer* buffer = nullptr;
 };
 
