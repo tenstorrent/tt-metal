@@ -669,21 +669,43 @@ std::map<std::string, std::string> get_block_defines(
 }
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    static constexpr const char* BASE = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/";
+    static constexpr const char* LGAMMA_FAST =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/lgamma_fast_kernel.cpp";
+    static constexpr const char* LGAMMA =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/lgamma_kernel.cpp";
+    static constexpr const char* MISH =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/mish_kernel.cpp";
+    static constexpr const char* TANHSHRINK =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/tanhshrink_kernel.cpp";
+    static constexpr const char* IDENTITY =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_identity_kernel.cpp";
+    static constexpr const char* WHERE_TSS =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/where_tss_kernel.cpp";
+    static constexpr const char* LOGIT =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/logit_kernel.cpp";
+    static constexpr const char* HARDSWISH =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/hardswish_kernel.cpp";
+    static constexpr const char* LOGSIGMOID =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/logsigmoid_kernel.cpp";
+    static constexpr const char* SFPU =
+        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
+    (void)BASE;
     switch (op_type) {
         case UnaryOpType::LGAMMA:
             TT_FATAL(input_dtype.has_value(), "UnaryNg lgamma: missing input dtype for kernel selection.");
             if (input_dtype.value() == DataType::BFLOAT16) {
-                return "lgamma_fast_kernel.cpp";
+                return LGAMMA_FAST;
             }
-            return "lgamma_kernel.cpp";
-        case UnaryOpType::MISH: return "mish_kernel.cpp";
-        case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp";
-        case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
-        case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
-        case UnaryOpType::LOGIT: return "logit_kernel.cpp";
-        case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
-        case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
-        default: return "eltwise_sfpu.cpp";
+            return LGAMMA;
+        case UnaryOpType::MISH: return MISH;
+        case UnaryOpType::TANHSHRINK: return TANHSHRINK;
+        case UnaryOpType::IDENTITY: return IDENTITY;
+        case UnaryOpType::WHERE_TSS: return WHERE_TSS;
+        case UnaryOpType::LOGIT: return LOGIT;
+        case UnaryOpType::HARDSWISH: return HARDSWISH;
+        case UnaryOpType::LOGSIGMOID: return LOGSIGMOID;
+        default: return SFPU;
     }
 }
 

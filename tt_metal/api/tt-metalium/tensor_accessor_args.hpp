@@ -36,6 +36,12 @@ public:
     static TensorAccessorArgs create_dram_interleaved();
     static TensorAccessorArgs create_l1_interleaved();
 
+    // append_to is templated to avoid forcing a single container type on callers, but the
+    // implementation lives in tensor_accessor_args.cpp with explicit instantiations. Only the
+    // following container types are supported; calling with any other type will fail at link time:
+    //   - std::vector<uint32_t>
+    //   - KernelDescriptor::CompileTimeArgs  (ttsl::SmallVector<uint32_t, 16>)
+    //   - KernelDescriptor::CoreRuntimeArgs  (ttsl::SmallVector<uint32_t, 8>)
     template <typename ArgsVec>
     void append_to(ArgsVec& compile_time_args) const;
     template <typename ArgsVec1, typename ArgsVec2>

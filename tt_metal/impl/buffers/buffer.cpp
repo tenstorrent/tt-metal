@@ -387,14 +387,13 @@ Buffer::Buffer(IDevice* device, const Buffer& source, Private) :
     bottom_up_(source.bottom_up_),
     sub_device_id_(std::nullopt),
     owns_data_(false),
+    allocator_(device->allocator_impl().get()),
+    allocation_status_(AllocationStatus::ALLOCATED),
+    address_(source.address_),
     page_size_(source.page_size_),
     shard_spec_(source.shard_spec_),
-    buffer_distribution_spec_(source.buffer_distribution_spec_) {
-    address_ = source.address_;
-    allocation_status_ = AllocationStatus::ALLOCATED;
-    allocator_ = device->allocator_impl().get();
-    unique_id_ = next_unique_id.fetch_add(1);
-}
+    buffer_distribution_spec_(source.buffer_distribution_spec_),
+    unique_id_(next_unique_id.fetch_add(1)) {}
 
 std::shared_ptr<Buffer> Buffer::create_device_view(IDevice* device, const Buffer& source) {
     return std::make_shared<Buffer>(device, source, Private());

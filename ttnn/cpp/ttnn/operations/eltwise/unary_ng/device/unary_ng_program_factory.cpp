@@ -159,9 +159,7 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(
         ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2, unary_defines);
 
-    const std::string compute_path = fmt::format(
-        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+    const std::string_view compute_path = get_compute_kernel_path(ops_chain[0].type(), input.dtype());
 
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;

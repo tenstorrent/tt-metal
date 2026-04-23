@@ -98,8 +98,13 @@ struct ComputeConfigDescriptor {
 };
 
 struct KernelDescriptor {
-    // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
-    // in tt_stl/tt_stl/reflection.hpp:185:23
+    // SmallVector inline sizes — picked to cover the common case without heap allocation
+    // while keeping the overall KernelDescriptor size within the 1312-byte storage_t limit
+    // imposed by the reflection system (see tt_stl/reflection.hpp:185).
+    //   CompileTimeArgs: 16 — typical kernel has 1 CB id + TensorAccessorArgs (~4-10 fields)
+    //   Defines:          4 — most ops have 0-3 #define pairs
+    //   CoreRuntimeArgs:  8 — per-core runtime args typically fit in 2-6 uint32_t
+    // RuntimeArgs stays std::vector: growing its inline size blows the reflection size budget.
     using CompileTimeArgs = ttsl::SmallVector<uint32_t, 16>;
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = ttsl::SmallVector<std::pair<std::string, std::string>, 4>;
