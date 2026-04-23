@@ -101,16 +101,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // Setup dvalid for MATH kernel
+    // dvalid clients for Dest are the producer/consumer set this MATH thread
+    // participates in. The chain MUST match what UNPACK declared, otherwise
+    // the producer will not hand off Dest sections correctly.
     if (unpack_to_dest)
     {
-        // Data flows directly from UNPACK -> Dest -> SFPU -> PACK, bypassing the FPU pipeline.
-        // Chain must match UNPACK's chain: {UNPACK, SFPU, PACK}
+        // Direct path: UNPACK writes Dest, SFPU reads/writes Dest, PACK reads Dest.
+        // No FPU datacopy, so FPU is not in the chain.
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
     else
     {
-        // FPU path: data goes UNPACK -> SrcA -> FPU (MOVA2D) -> Dest -> SFPU -> PACK
+        // FPU path: UNPACK -> SrcA -> FPU datacopy (MOVA2D) -> Dest -> SFPU -> PACK.
+        // Declare the chain both as FPU-producer (for the datacopy handoff)
+        // and SFPU-producer (for the SFPU handoff to PACK).
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -118,18 +122,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
+    // SFPU iterations per face. `_llk_math_eltwise_unary_sfpu_params_`
+    // processes one whole tile per call: for each face in the tile it invokes
+    // `_calculate_abs_(num_sfpu_iterations)`, which advances the Dest row
+    // cursor `num_sfpu_iterations` times (each step covers SFP_ROWS rows,
+    // so num_sfpu_iterations*SFP_ROWS == TEST_FACE_R_DIM rows per face).
+    //
+    // Note: Quasar SFPU only supports VectorMode::RC (the default and only
+    // mode), so iterating over a single face in the per-face loop inside
+    // `_llk_math_eltwise_unary_sfpu_params_` is equivalent to covering the
+    // whole tile. The outer `for (i < TILE_CNT)` below therefore iterates
+    // tile-by-tile, not face-by-face.
     const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
 
     if (!unpack_to_dest)
     {
         // FPU path: datacopy tiles from SrcA to Dest via MOVA2D before SFPU can operate on them.
+        // (This kernel does not use the ELWADD-as-datacopy workaround from WH/BH —
+        //  that worked around an 8-row MOVA2D bug which is not present on Quasar.)
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
 
-        // Datacopy all tiles from SRC to DEST
+        // Datacopy each tile into Dest, honouring the runtime DST_INDEX offset
+        // so MATH writes the same Dest region PACK will later read.
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, i);
+            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
         }
 
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -137,16 +155,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_unary_sfpu_init_();
 
-    // Apply SFPU absolute value (SFPABS instruction) to all tiles
+    // Apply SFPU abs (SFPABS) in-place on Dest for each tile.
+    // Tile index must match the one used by the producer (datacopy above, or
+    // UNPACK-to-Dest), so it is offset by params.DST_INDEX.
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_, i, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_, params.DST_INDEX + i, num_sfpu_iterations);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 
-    // Wait for SFPU, FPU, and MOP to finish their Dest sections.
-    // No REPLAY wait needed because this kernel uses straight-line SFPU execution (no replay buffer).
+    // Idle all execution units this MATH thread has driven before PACK takes
+    // over: SFPU (the abs loop), FPU (datacopy on the !unpack_to_dest path),
+    // and MOP (any macro-op sequences issued from the SFPU helpers).
+    // No wait_replay_idle() because this kernel emits straight-line SFPU
+    // code and does not install a replay buffer.
     wait_sfpu_idle();
     wait_fpu_idle();
     wait_mop_idle();
@@ -169,7 +192,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
-    // Setup dvalid for PACK
+    // Declare the same dvalid client chain that UNPACK/MATH used, seen from
+    // PACK's side. The chain must match on all three threads.
     if (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
