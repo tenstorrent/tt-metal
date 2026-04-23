@@ -31,7 +31,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         tensor_args.tilize_input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(
         tensor_args.tilize_expert_indices_tensor.dtype() == tt::tt_metal::DataType::UINT16,
-        "Indices tensor must be uint32");
+        "Indices tensor must be uint16");
 
     // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
     // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
