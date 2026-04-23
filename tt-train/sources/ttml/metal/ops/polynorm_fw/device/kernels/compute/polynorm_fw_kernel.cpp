@@ -10,6 +10,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sqrt.h"
@@ -26,7 +27,7 @@ constexpr uint32_t num_inner = get_compile_time_arg_val(2);
 constexpr auto cb_input_pass_1 = tt::CBIndex::c_0;
 constexpr auto cb_input_pass_2 = tt::CBIndex::c_1;
 constexpr auto cb_scaler = tt::CBIndex::c_2;
-constexpr auto cb_eps = tt::CBIndex::c_3;
+// c_3 unused (eps is now a compute runtime arg applied via add_unary_tile).
 constexpr auto cb_w0 = tt::CBIndex::c_4;
 constexpr auto cb_w1 = tt::CBIndex::c_5;
 constexpr auto cb_w2 = tt::CBIndex::c_6;
@@ -45,22 +46,20 @@ constexpr auto cb_output = tt::CBIndex::c_10;
 // tile_regs_acquire/commit cycle.
 //
 // Mathematically per channel: inv_rms_k = 1 / sqrt(sum_k * (1/C) + eps).
+// eps is applied via add_unary_tile (SFPU scalar add), avoiding the need for an eps tile in L1.
 //
 // Savings over 3 sequential reduce_sum_to_inv_rms calls (per row):
 //   - 2 fewer tile_regs_acquire/commit/pack cycles
-//   - 2 fewer add/sqrt/recip init sequences
-//   - 1 copy_tile(cb_eps) instead of 3
+//   - 2 fewer sqrt/recip init sequences
 void reduce_sum_pows_to_inv_rms_triplet() {
     cb_wait_front(cb_sum_pows, /*num_tiles=*/3U);
     cb_wait_front(cb_scaler, onetile);
-    cb_wait_front(cb_eps, onetile);
     cb_reserve_back(cb_inv_rms, /*num_tiles=*/3U);
 
     tile_regs_acquire();
     constexpr uint32_t reg_a0 = 0U;  // sum(x^2) → inv_rms(x)
     constexpr uint32_t reg_a1 = 1U;  // sum(x^4) → inv_rms(x^2)
     constexpr uint32_t reg_a2 = 2U;  // sum(x^6) → inv_rms(x^3)
-    constexpr uint32_t reg_eps = 3U;
 
     // Row-reduce the three power sums into reg_a0/reg_a1/reg_a2.
     reconfig_data_format(cb_sum_pows, cb_scaler);
@@ -70,15 +69,12 @@ void reduce_sum_pows_to_inv_rms_triplet() {
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/2U, 0U, reg_a2);
     reduce_uninit();
 
-    // Load eps once and apply to all three accumulators.
-    reconfig_data_format_srca(cb_eps);
-    copy_tile_init(cb_eps);
-    copy_tile(cb_eps, 0, reg_eps);
-
-    add_binary_tile_init();
-    add_binary_tile(reg_a0, reg_eps, reg_a0);
-    add_binary_tile(reg_a1, reg_eps, reg_a1);
-    add_binary_tile(reg_a2, reg_eps, reg_a2);
+    // Add eps directly to each accumulator via SFPU (no eps tile needed).
+    const uint32_t eps_fp32_bits = get_arg_val<uint32_t>(0);
+    binop_with_scalar_tile_init();
+    add_unary_tile(reg_a0, eps_fp32_bits);
+    add_unary_tile(reg_a1, eps_fp32_bits);
+    add_unary_tile(reg_a2, eps_fp32_bits);
 
     // sqrt then reciprocal to produce inv_rms.
     sqrt_tile_init();
@@ -254,7 +250,6 @@ void emit_output_for_row() {
 //   4) consume preweighted coefficients and emit final PolyNorm output tiles
 void kernel_main() {
     cb_wait_front(cb_scaler, onetile);
-    cb_wait_front(cb_eps, onetile);
     cb_wait_front(cb_w0, onetile);
     cb_wait_front(cb_w1, onetile);
     cb_wait_front(cb_w2, onetile);
@@ -272,7 +267,6 @@ void kernel_main() {
     }
 
     cb_pop_front(cb_scaler, onetile);
-    cb_pop_front(cb_eps, onetile);
     cb_pop_front(cb_w0, onetile);
     cb_pop_front(cb_w1, onetile);
     cb_pop_front(cb_w2, onetile);
