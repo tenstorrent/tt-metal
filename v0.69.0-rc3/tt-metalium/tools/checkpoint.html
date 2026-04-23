@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Debug Checkpoints &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/checkpoint.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Device Debug Print" href="device_print.html" />
+    <link rel="prev" title="Kernel Debug Print" href="kernel_print.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/labs/index.html">Lab Exercises</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Debug Checkpoints</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#quick-start">Quick Start</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#single-core-checkpoints">Single-Core Checkpoints</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#usage">Usage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#knobs">Knobs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#how-it-works">How it works</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#global-checkpoints-cross-core">Global Checkpoints (Cross-Core)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id1">Usage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id2">How it works</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#output-format">Output Format</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#standalone-dump-utilities">Standalone Dump Utilities</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#debug-dump-cb-cb-id-num-words"><code class="docutils literal notranslate"><span class="pre">debug_dump_cb(cb_id,</span> <span class="pre">num_words)</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#debug-dump-cb-typed-cb-id-tile-idx"><code class="docutils literal notranslate"><span class="pre">debug_dump_cb_typed(cb_id,</span> <span class="pre">tile_idx)</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#debug-dump-l1-addr-num-words"><code class="docutils literal notranslate"><span class="pre">debug_dump_l1(addr,</span> <span class="pre">num_words)</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#comparison-with-dprint-tensix-dest-regs">Comparison with dprint_tensix_dest_regs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#files">Files</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="device_print.html">Device Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="lightweight_kernel_asserts.html">Lightweight Kernel Asserts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="llk_asserts.html">LLK Asserts</a></li>
+<li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
+<li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="noc_debug_dump.html">NOC Debug Dump</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">Debug Checkpoints</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tools/checkpoint.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="debug-checkpoints">
+<h1>Debug Checkpoints<a class="headerlink" href="#debug-checkpoints" title="Permalink to this heading"></a>
+</h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Tools are only fully supported on source builds.</p>
+</div>
+<section id="quick-start">
+<h2>Quick Start<a class="headerlink" href="#quick-start" title="Permalink to this heading"></a>
+</h2>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># 1. Enable checkpoints + a print backend</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_CHECKPOINT</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="m">0</span>,0
+</pre></div>
+</div>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// 2. Add to EVERY kernel on the core (reader, writer, compute):</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/checkpoint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ... work ...</span>
+<span class="w">    </span><span class="n">DEBUG_CHECKPOINT</span><span class="p">(</span><span class="s">"post_matmul"</span><span class="p">);</span><span class="w">   </span><span class="c1">// all RISCs sync → dump CB state → resume</span>
+<span class="w">    </span><span class="c1">// ... more work ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># 3. Run your program — CB state is printed at each checkpoint</span>
+</pre></div>
+</div>
+<p>For standalone dumps (no barrier needed):</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dump.h"</span>
+
+<span class="n">debug_dump_cb</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">);</span><span class="w">           </span><span class="c1">// CB0 metadata + 8 hex words</span>
+<span class="n">debug_dump_l1</span><span class="p">(</span><span class="mh">0x100000</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">);</span><span class="w">   </span><span class="c1">// 16 words at L1 address</span>
+</pre></div>
+</div>
+</section>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>Debug checkpoints provide synchronized inspection points for fused kernels. When a checkpoint is
+hit, all active RISCs halt together, dump circular buffer state via DPRINT, then proceed in
+unison. Two levels are available:</p>
+<ul class="simple">
+<li><p><strong>Single-core</strong> (<code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT</span></code>): synchronizes all 5 RISCs on one core.</p></li>
+<li><p><strong>Global</strong> (<code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT_GLOBAL</span></code>): synchronizes all RISCs on all tensix cores.</p></li>
+</ul>
+<p>This generalizes <code class="docutils literal notranslate"><span class="pre">dprint_tensix_dest_regs</span></code>, which only synchronizes the three TRISC cores and
+only dumps destination registers.</p>
+</section>
+<section id="enabling">
+<h2>Enabling<a class="headerlink" href="#enabling" title="Permalink to this heading"></a>
+</h2>
+<p><strong>Checkpoints</strong> (synchronized barriers) are enabled with:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_CHECKPOINT</span><span class="o">=</span><span class="m">1</span>
+</pre></div>
+</div>
+<p>Without a print backend, checkpoints act as barriers only (no dump output). To get CB dump
+output, also enable DPRINT or DEVICE_PRINT:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_CHECKPOINT</span><span class="o">=</span><span class="m">1</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="m">0</span>,0
+</pre></div>
+</div>
+<p><strong>Standalone dump utilities</strong> (<code class="docutils literal notranslate"><span class="pre">debug_dump_cb</span></code>, <code class="docutils literal notranslate"><span class="pre">debug_dump_l1</span></code>, etc.) require only DPRINT
+or DEVICE_PRINT — no <code class="docutils literal notranslate"><span class="pre">TT_METAL_CHECKPOINT</span></code> needed:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_DPRINT_CORES</span><span class="o">=</span><span class="m">0</span>,0
+</pre></div>
+</div>
+<p>When neither is set, all dump functions and checkpoint macros are no-ops with zero overhead.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">TT_METAL_CHECKPOINT</span></code> is read at JIT compile time. If you toggle it, clear the kernel
+cache to force recompilation: <code class="docutils literal notranslate"><span class="pre">rm</span> <span class="pre">-rf</span> <span class="pre">~/.cache/tt-metal-cache</span></code></p>
+</div>
+</section>
+<section id="single-core-checkpoints">
+<h2>Single-Core Checkpoints<a class="headerlink" href="#single-core-checkpoints" title="Permalink to this heading"></a>
+</h2>
+<section id="usage">
+<h3>Usage<a class="headerlink" href="#usage" title="Permalink to this heading"></a>
+</h3>
+<p>Include <code class="docutils literal notranslate"><span class="pre">api/debug/checkpoint.h</span></code> in every kernel (reader, writer, and compute) that
+participates in the checkpoint. All active RISCs must call <code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT</span></code> with the same name
+at the corresponding point within the op.</p>
+<p><strong>Compute kernel:</strong></p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/checkpoint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ... stage 1: unpack and compute ...</span>
+
+<span class="w">    </span><span class="n">DEBUG_CHECKPOINT</span><span class="p">(</span><span class="s">"post_unpack"</span><span class="p">);</span><span class="w">  </span><span class="c1">// all RISCs synchronize and dump CB state</span>
+
+<span class="w">    </span><span class="c1">// ... stage 2: pack output ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Reader kernel (NCRISC):</strong></p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/checkpoint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ... read tiles from DRAM into input CB ...</span>
+
+<span class="w">    </span><span class="n">DEBUG_CHECKPOINT</span><span class="p">(</span><span class="s">"post_unpack"</span><span class="p">);</span><span class="w">  </span><span class="c1">// must match the compute kernel's checkpoint name</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Writer kernel (BRISC):</strong></p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/checkpoint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DEBUG_CHECKPOINT</span><span class="p">(</span><span class="s">"post_unpack"</span><span class="p">);</span><span class="w">  </span><span class="c1">// synchronize before consuming output CB</span>
+
+<span class="w">    </span><span class="c1">// ... write tiles from output CB to DRAM ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Every active RISC must call the checkpoint. If a RISC is active but does not call
+<code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT</span></code>, the barrier will hang.</p>
+</section>
+<section id="knobs">
+<h3>Knobs<a class="headerlink" href="#knobs" title="Permalink to this heading"></a>
+</h3>
+<p><code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT_EX</span></code> provides compile-time knobs to control what gets dumped:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">DEBUG_CHECKPOINT_EX</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">num_cbs</span><span class="p">,</span><span class="w"> </span><span class="n">words_per_cb</span><span class="p">,</span><span class="w"> </span><span class="n">dump_dest</span><span class="p">)</span>
+</pre></div>
+</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Parameter</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">name</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">char*</span></code></p></td>
+<td><p>(required)</p></td>
+<td><p>Checkpoint name (string literal). All RISCs must use the same value.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">num_cbs</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">uint8_t</span></code></p></td>
+<td><p>0</p></td>
+<td><p>Number of CBs to dump. 0 means all configured CBs.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">words_per_cb</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">uint16_t</span></code></p></td>
+<td><p>0</p></td>
+<td><p>Number of uint32 words of L1 data to hex-dump per CB. 0 means metadata only.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">dump_dest</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p>false</p></td>
+<td><p>If true, TRISC1 (Math) dumps destination register contents instead of skipping.</p></td>
+</tr>
+</tbody>
+</table>
+<p>Examples:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Dump metadata for all configured CBs</span>
+<span class="n">DEBUG_CHECKPOINT</span><span class="p">(</span><span class="s">"post_matmul"</span><span class="p">);</span>
+
+<span class="c1">// Dump first 4 CBs, 8 words of L1 data each, plus dest registers</span>
+<span class="n">DEBUG_CHECKPOINT_EX</span><span class="p">(</span><span class="s">"pre_pack"</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="how-it-works">
+<h3>How it works<a class="headerlink" href="#how-it-works" title="Permalink to this heading"></a>
+</h3>
+<p><strong>L1 state.</strong> Before each kernel launch, BRISC writes a 20-byte checkpoint struct to
+<code class="docutils literal notranslate"><span class="pre">MEM_LLK_DEBUG_BASE</span></code> in L1 (shared by all RISCs on the core):</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>participant_mask = 0x1F     // bits 0-4: BRISC, NCRISC, TRISC0, TRISC1, TRISC2
+proceed          = 0        // monotonically increasing epoch counter
+arrived[0..4]    = 0        // per-RISC arrival flag (one byte each)
+orchestrator_idx = 0        // lowest active RISC (BRISC)
+</pre></div>
+</div>
+<p><strong>Entry barrier.</strong> Each RISC hits <code class="docutils literal notranslate"><span class="pre">debug_checkpoint_barrier()</span></code> at its own pace:</p>
+<ol class="arabic simple">
+<li><p>Each RISC reads the current <code class="docutils literal notranslate"><span class="pre">proceed</span></code> epoch (0) and computes <code class="docutils literal notranslate"><span class="pre">next_epoch</span> <span class="pre">=</span> <span class="pre">1</span></code>.</p></li>
+<li><p>Each RISC writes <code class="docutils literal notranslate"><span class="pre">arrived[my_idx]</span> <span class="pre">=</span> <span class="pre">1</span></code> — its own byte, no contention with other RISCs.</p></li>
+<li><p>The <strong>orchestrator</strong> (lowest active RISC, typically BRISC) polls all <code class="docutils literal notranslate"><span class="pre">arrived[]</span></code> bytes,
+spinning with <code class="docutils literal notranslate"><span class="pre">invalidate_l1_cache()</span></code> until all match <code class="docutils literal notranslate"><span class="pre">next_epoch</span></code>.</p></li>
+<li><p>All <strong>other RISCs</strong> spin on <code class="docutils literal notranslate"><span class="pre">proceed</span></code>, waiting for it to reach <code class="docutils literal notranslate"><span class="pre">next_epoch</span></code>
+(uses <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code> comparison to handle the case where the orchestrator has already
+advanced to the next barrier).</p></li>
+<li><p>Once the orchestrator sees all arrivals, it sets <code class="docutils literal notranslate"><span class="pre">proceed</span> <span class="pre">=</span> <span class="pre">1</span></code>, releasing everyone.</p></li>
+</ol>
+<p>At this point all RISCs are synchronized — no RISC proceeds until every active RISC has arrived.</p>
+<p><strong>Dump.</strong> CB pointers (<code class="docutils literal notranslate"><span class="pre">rd_ptr</span></code>, <code class="docutils literal notranslate"><span class="pre">wr_ptr</span></code>, <code class="docutils literal notranslate"><span class="pre">tiles_acked</span></code>, <code class="docutils literal notranslate"><span class="pre">tiles_received</span></code>) are
+RISC-specific, so each CB-capable RISC prints its own view:</p>
+<ul class="simple">
+<li><p><strong>BRISC, NCRISC, TRISC0 (Unpack), TRISC2 (Pack)</strong> each print CB metadata prefixed with
+their RISC index (e.g., <code class="docutils literal notranslate"><span class="pre">RISC0</span></code>, <code class="docutils literal notranslate"><span class="pre">RISC2</span></code>). Each sees different pointer values.
+Optionally hex-dumps L1 data at the read pointer.</p></li>
+<li><p><strong>TRISC1 (Math)</strong> prints destination register contents if <code class="docutils literal notranslate"><span class="pre">dump_dest=true</span></code> (only Math can
+access dest regs). Otherwise it prints nothing.</p></li>
+</ul>
+<p><strong>Exit barrier.</strong> Same mechanism with <code class="docutils literal notranslate"><span class="pre">next_epoch</span> <span class="pre">=</span> <span class="pre">2</span></code>. This ensures no RISC moves past the
+checkpoint until every RISC has finished printing — without it, a fast RISC could modify CBs
+before a slow RISC finishes reading them.</p>
+<p><strong>Why per-byte flags (not a shared bitmask).</strong> The original design used
+<code class="docutils literal notranslate"><span class="pre">arrived_mask</span> <span class="pre">|=</span> <span class="pre">(1</span> <span class="pre">&lt;&lt;</span> <span class="pre">my_idx)</span></code> — a read-modify-write on a shared <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code>. If two RISCs
+read the same stale value from L1 cache, they overwrite each other’s bit. Per-byte flags avoid
+this: each RISC writes only <code class="docutils literal notranslate"><span class="pre">arrived[my_idx]</span></code>, a distinct byte. The orchestrator reads all
+bytes but never writes to another RISC’s byte.</p>
+<p><strong>Why an epoch counter (not a simple flag).</strong> If we used a 0/1 flag, the exit barrier would see
+<code class="docutils literal notranslate"><span class="pre">proceed</span></code> already at 1 (from the entry barrier) and skip the wait. The monotonically increasing
+epoch (0 → 1 → 2 → …) ensures each barrier waits for a unique value.</p>
+</section>
+</section>
+<section id="global-checkpoints-cross-core">
+<h2>Global Checkpoints (Cross-Core)<a class="headerlink" href="#global-checkpoints-cross-core" title="Permalink to this heading"></a>
+</h2>
+<p><code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT_GLOBAL</span></code> extends checkpoints to synchronize <strong>all RISCs on all tensix cores</strong>.
+This is needed when a fused kernel spans multiple cores and you want a consistent snapshot of CB
+state across the entire grid.</p>
+<section id="id1">
+<h3>Usage<a class="headerlink" href="#id1" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">DEBUG_CHECKPOINT_GLOBAL</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">sem_id</span><span class="p">,</span><span class="w"> </span><span class="n">barrier_coord_x</span><span class="p">,</span><span class="w"> </span><span class="n">barrier_coord_y</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores</span><span class="p">)</span>
+</pre></div>
+</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Parameter</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">name</span></code></p></td>
+<td><p>Checkpoint name (string literal, for output labeling)</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">sem_id</span></code></p></td>
+<td><p>Semaphore ID allocated by host via <code class="docutils literal notranslate"><span class="pre">CreateSemaphore</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">barrier_coord_x</span></code>, <code class="docutils literal notranslate"><span class="pre">barrier_coord_y</span></code></p></td>
+<td><p>Physical NOC coordinates of the coordinator core for the cross-core barrier.
+These only affect synchronization, not what gets printed.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">num_cores</span></code></p></td>
+<td><p>Total number of cores participating</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Host setup:</strong></p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Allocate semaphore on all participating cores</span>
+<span class="n">CoreRange</span><span class="w"> </span><span class="nf">cores</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span><span class="w">  </span><span class="c1">// 2 cores</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">sem_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">cores</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+
+<span class="c1">// Get coordinator's physical NOC coordinates (for the barrier, not for printing)</span>
+<span class="n">CoreCoord</span><span class="w"> </span><span class="n">barrier_coord</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">});</span>
+
+<span class="c1">// Pass to all kernels as runtime args</span>
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">kernel</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="p">...,</span>
+<span class="w">    </span><span class="n">sem_id</span><span class="p">,</span><span class="w"> </span><span class="n">barrier_coord</span><span class="p">.</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="n">barrier_coord</span><span class="p">.</span><span class="n">y</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p><strong>Kernel usage</strong> (all RISCs on all cores must call with the same args):</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/checkpoint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">sem_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">barrier_coord_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">4</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">barrier_coord_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">5</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_cores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">6</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// ... work ...</span>
+
+<span class="w">    </span><span class="c1">// All cores synchronize here, then each core prints its OWN local CB state</span>
+<span class="w">    </span><span class="n">DEBUG_CHECKPOINT_GLOBAL</span><span class="p">(</span><span class="s">"global_sync"</span><span class="p">,</span><span class="w"> </span><span class="n">sem_id</span><span class="p">,</span><span class="w"> </span><span class="n">barrier_coord_x</span><span class="p">,</span><span class="w"> </span><span class="n">barrier_coord_y</span><span class="p">,</span><span class="w"> </span><span class="n">num_cores</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="id2">
+<h3>How it works<a class="headerlink" href="#id2" title="Permalink to this heading"></a>
+</h3>
+<p>The global checkpoint layers a cross-core NOC semaphore barrier around the single-core
+intra-core barriers described above:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>DEBUG_CHECKPOINT_GLOBAL:
+  ┌─ intra-core barrier ──── all 5 RISCs on THIS core sync ─────┐
+  │  ┌─ cross-core barrier ── BRISC on ALL cores sync ────────┐  │
+  │  │                        (NOC semaphore)                 │  │
+  │  └────────────────────────────────────────────────────────┘  │
+  ├─ intra-core barrier ──── BRISC releases other RISCs ────────┤
+  │                                                              │
+  │  DUMP: each CB-capable RISC prints its CB view                │
+  │                                                              │
+  ├─ intra-core barrier ──── all 5 RISCs finish dumping ────────┤
+  │  ┌─ cross-core barrier ── BRISC on ALL cores sync ────────┐  │
+  │  └────────────────────────────────────────────────────────┘  │
+  └─ intra-core barrier ──── final release ─────────────────────┘
+</pre></div>
+</div>
+<p>The single-core <code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT</span></code> is the same structure but without the cross-core
+barrier steps. Only BRISC participates in the NOC cross-core operations — TRISC and NCRISC
+threads wait via the intra-core barriers that bracket the cross-core phase.</p>
+<p><strong>Step-by-step (example with 2 cores):</strong></p>
+<ol class="arabic">
+<li><p><strong>Intra-core barrier.</strong> Each core runs the single-core barrier independently
+(per-byte <code class="docutils literal notranslate"><span class="pre">arrived[]</span></code> flags + epoch counter at <code class="docutils literal notranslate"><span class="pre">MEM_LLK_DEBUG_BASE</span></code>). After this,
+all 5 RISCs on each core are halted together — but the two cores are NOT yet
+synchronized with each other.</p></li>
+<li>
+<p><strong>Cross-core barrier (BRISC only).</strong> Only BRISC on each core participates. The other
+4 RISCs are blocked at the next intra-core barrier (step 3), waiting for BRISC.</p>
+<ul class="simple">
+<li><p>Both BRISCs atomically increment the <strong>coordinator’s</strong> semaphore via NOC:
+<code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc(coordinator_sem_addr,</span> <span class="pre">1)</span></code>. Both target the same physical L1
+address on the coordinator core. <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code> is a hardware atomic.</p></li>
+<li><p>The semaphore is <strong>monotonic</strong> across global checkpoints — it is never reset
+to 0 between barriers. Each barrier instance waits for its own expected count
+(previous barrier’s target + <code class="docutils literal notranslate"><span class="pre">num_cores</span></code>), which avoids the race where a reset
+could lose increments from a subsequent barrier.</p></li>
+<li><p><strong>Coordinator BRISC:</strong> Its local semaphore IS the one being incremented.
+Calls <code class="docutils literal notranslate"><span class="pre">noc_semaphore_wait_min(local_sem,</span> <span class="pre">expected_count)</span></code> — a local spin, no NOC reads.</p></li>
+<li><p><strong>Non-coordinator BRISC:</strong> Polls the coordinator’s semaphore via
+<code class="docutils literal notranslate"><span class="pre">noc_async_read</span></code> into its own local semaphore copy, checking until the value
+reaches <code class="docutils literal notranslate"><span class="pre">expected_count</span></code>.</p></li>
+</ul>
+<p>The semaphore accumulates monotonically — no reset between barriers. Each barrier
+advances <code class="docutils literal notranslate"><span class="pre">expected_count</span></code> by <code class="docutils literal notranslate"><span class="pre">num_cores</span></code>, so barrier N waits for
+<code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">*</span> <span class="pre">num_cores</span></code>. This avoids the race where a reset could lose increments from
+a subsequent barrier. <code class="docutils literal notranslate"><span class="pre">barrier_coord</span></code> must be the same for all global checkpoints
+in a program.</p>
+</li>
+<li><p><strong>Intra-core barrier.</strong> BRISC has returned from the cross-core barrier. The other
+4 RISCs were spinning here. BRISC’s arrival advances the epoch, releasing them.
+All 10 RISCs (5 per core × 2 cores) are now synchronized.</p></li>
+<li><p><strong>Dump.</strong> Each CB-capable RISC prints its own view of CB metadata (pointers are
+RISC-specific). If <code class="docutils literal notranslate"><span class="pre">dump_dest=true</span></code>, TRISC1 also prints dest registers.</p></li>
+<li><p><strong>Intra-core barrier.</strong> Ensures all RISCs finish printing before any proceeds.</p></li>
+<li><p><strong>Cross-core barrier.</strong> Same mechanism as step 2, with <code class="docutils literal notranslate"><span class="pre">expected_count</span></code> advanced
+to <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">num_cores</span></code>. Ensures all cores finish before any proceeds.</p></li>
+<li><p><strong>Final intra-core barrier.</strong> Releases all RISCs after the cross-core exit barrier.</p></li>
+</ol>
+</section>
+</section>
+<section id="output-format">
+<h2>Output Format<a class="headerlink" href="#output-format" title="Permalink to this heading"></a>
+</h2>
+<p>Each CB-capable RISC prints a header with the checkpoint name and its RISC index:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>=== CKPT post_matmul RISC0 CBs ===
+CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
+CB16 sz=128 rd=2048 wr=2048 ack=0 rcv=0
+=== CKPT post_matmul RISC2 CBs ===
+CB0 sz=128 rd=1024 wr=1024 ack=0 rcv=1
+</pre></div>
+</div>
+<p>When <code class="docutils literal notranslate"><span class="pre">dump_dest=true</span></code>, TRISC1 (Math) also prints destination register contents:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>=== CKPT pre_pack dest regs ===
+...
+</pre></div>
+</div>
+<p>When <code class="docutils literal notranslate"><span class="pre">words_per_cb</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>, L1 data at the read pointer is printed in hex:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
+  [0] 3f800000 40000000 40400000 40800000
+  [4] 40a00000 40c00000 40e00000 41000000
+</pre></div>
+</div>
+<p>The CB metadata fields are:</p>
+<ul class="simple">
+<li><p><strong>sz</strong>: FIFO size (in address-shifted units)</p></li>
+<li><p><strong>rd</strong>: read pointer</p></li>
+<li><p><strong>wr</strong>: write pointer</p></li>
+<li><p><strong>ack</strong>: tiles acked (consumed)</p></li>
+<li><p><strong>rcv</strong>: tiles received (produced)</p></li>
+</ul>
+</section>
+<section id="standalone-dump-utilities">
+<h2>Standalone Dump Utilities<a class="headerlink" href="#standalone-dump-utilities" title="Permalink to this heading"></a>
+</h2>
+<p>In addition to the full checkpoint barrier, standalone dump functions are available for quick
+inspection of individual CBs or arbitrary L1 memory. These can be called from any kernel at any
+point — no barrier or synchronization required. Include <code class="docutils literal notranslate"><span class="pre">api/debug/dump.h</span></code>.</p>
+<section id="debug-dump-cb-cb-id-num-words">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">debug_dump_cb(cb_id,</span> <span class="pre">num_words)</span></code><a class="headerlink" href="#debug-dump-cb-cb-id-num-words" title="Permalink to this heading"></a>
+</h3>
+<p>Prints CB metadata and optionally raw hex data starting at the read pointer. Available on
+BRISC, NCRISC, TRISC0, and TRISC2 (not TRISC1/Math, which cannot access CB interfaces).</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dump.h"</span>
+
+<span class="n">debug_dump_cb</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w">       </span><span class="c1">// CB0 metadata only</span>
+<span class="n">debug_dump_cb</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">);</span><span class="w">    </span><span class="c1">// CB0 metadata + 8 hex words from read pointer</span>
+<span class="n">debug_dump_cb</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span><span class="w">   </span><span class="c1">// CB16 metadata + 4 hex words</span>
+</pre></div>
+</div>
+<p>Output:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>CB0 sz=128 rd=1024 wr=1152 ack=0 rcv=1
+  [0] 3f800000 40000000 40400000 40800000
+  [4] 40a00000 40c00000 40e00000 41000000
+</pre></div>
+</div>
+</section>
+<section id="debug-dump-cb-typed-cb-id-tile-idx">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">debug_dump_cb_typed(cb_id,</span> <span class="pre">tile_idx)</span></code><a class="headerlink" href="#debug-dump-cb-typed-cb-id-tile-idx" title="Permalink to this heading"></a>
+</h3>
+<p>Prints tile data interpreted according to the CB’s data format, showing actual float/int values.
+Uses TileSlice internally. Works with both DPRINT and DEVICE_PRINT.</p>
+<p>Available on TRISC0 (Unpack), TRISC2 (Pack), BRISC, and NCRISC. On BRISC/NCRISC, an additional
+<code class="docutils literal notranslate"><span class="pre">cb_type</span></code> parameter specifies whether the CB is an input or output.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// On TRISC0 (Unpack) or TRISC2 (Pack):</span>
+<span class="n">debug_dump_cb_typed</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w">              </span><span class="c1">// CB0, tile 0, untilized</span>
+
+<span class="c1">// On BRISC or NCRISC (need to specify input vs output):</span>
+<span class="n">debug_dump_cb_typed</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_INPUT_CB</span><span class="p">);</span><span class="w">   </span><span class="c1">// CB0 as input CB</span>
+<span class="n">debug_dump_cb_typed</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">TSLICE_OUTPUT_CB</span><span class="p">);</span><span class="w">  </span><span class="c1">// CB16 as output CB</span>
+</pre></div>
+</div>
+</section>
+<section id="debug-dump-l1-addr-num-words">
+<h3>
+<code class="docutils literal notranslate"><span class="pre">debug_dump_l1(addr,</span> <span class="pre">num_words)</span></code><a class="headerlink" href="#debug-dump-l1-addr-num-words" title="Permalink to this heading"></a>
+</h3>
+<p>Hex-dumps arbitrary L1 memory. Available from all RISCs. Useful for inspecting semaphores,
+scratch space, or any L1 region.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">debug_dump_l1</span><span class="p">(</span><span class="mh">0x100000</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">);</span><span class="w">   </span><span class="c1">// 16 words starting at L1 address 0x100000</span>
+</pre></div>
+</div>
+<p>Output:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>L1[0x100000] 16 words:
+  [0x100000] 3f800000 40000000 40400000 40800000
+  [0x100010] 40a00000 40c00000 40e00000 41000000
+  [0x100020] 41100000 41200000 41300000 41400000
+  [0x100030] 41500000 41600000 41700000 41800000
+</pre></div>
+</div>
+<p>All three functions are no-ops when DPRINT/DEVICE_PRINT is not enabled.</p>
+</section>
+</section>
+<section id="comparison-with-dprint-tensix-dest-regs">
+<h2>Comparison with dprint_tensix_dest_regs<a class="headerlink" href="#comparison-with-dprint-tensix-dest-regs" title="Permalink to this heading"></a>
+</h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Feature</p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">dprint_tensix_dest_regs</span></code></p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT</span></code></p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>RISCs synchronized</p></td>
+<td><p>TRISC0, TRISC1, TRISC2 only</p></td>
+<td><p>All active RISCs (BRISC, NCRISC, TRISC0/1/2)</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>What is dumped</p></td>
+<td><p>Destination register contents</p></td>
+<td><p>CB metadata per RISC (+ optional dest regs via Math, + optional L1 data)</p></td>
+</tr>
+<tr class="row-even">
+<td><p>Callable from</p></td>
+<td><p>Compute kernels only</p></td>
+<td><p>Any kernel, but all active RISCs must participate</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BRISC/NCRISC involvement</p></td>
+<td><p>None</p></td>
+<td><p>Full participation; each CB-capable RISC prints its own CB view</p></td>
+</tr>
+</tbody>
+</table>
+<p>Use <code class="docutils literal notranslate"><span class="pre">dprint_tensix_dest_regs</span></code> when you only need to inspect compute output in dest registers.
+Use <code class="docutils literal notranslate"><span class="pre">DEBUG_CHECKPOINT</span></code> when you need a consistent snapshot of the entire dataflow + compute
+pipeline at a specific point within a large op.</p>
+</section>
+<section id="files">
+<h2>Files<a class="headerlink" href="#files" title="Permalink to this heading"></a>
+</h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>File</p></th>
+<th class="head"><p>Purpose</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/debug/checkpoint.h</span></code></p></td>
+<td><p>Checkpoint API: single-core barrier, cross-core barrier, CB dump, dest reg dump</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/debug/dump.h</span></code></p></td>
+<td><p>Standalone dump utilities: <code class="docutils literal notranslate"><span class="pre">debug_dump_cb</span></code>, <code class="docutils literal notranslate"><span class="pre">debug_dump_cb_typed</span></code>, <code class="docutils literal notranslate"><span class="pre">debug_dump_l1</span></code></p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">tt_metal/jit_build/build.cpp</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_CHECKPOINT</span></code> env var enables <code class="docutils literal notranslate"><span class="pre">-DDEBUG_CHECKPOINT_ENABLED</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">tt_metal/hw/firmware/src/tt-1xx/brisc.cc</span></code></p></td>
+<td><p>Calls <code class="docutils literal notranslate"><span class="pre">debug_checkpoint_init()</span></code> before kernel launch</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="kernel_print.html" class="btn btn-neutral float-left" title="Kernel Debug Print" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="device_print.html" class="btn btn-neutral float-right" title="Device Debug Print" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
