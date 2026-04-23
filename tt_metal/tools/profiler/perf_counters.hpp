@@ -14,9 +14,9 @@ enum PerfCounterType : uint16_t {
     SFPU_COUNTER,
     MATH_COUNTER,
     // TDMA_UNPACK Group
-    MATH_SRC_DATA_READY,        // Req 0: math instrn valid & src_data_ready
-    DATA_HAZARD_STALLS_MOVD2A,  // Req 1: math instrn not stalled by D2A
-    MATH_FIDELITY_STALL,        // Req 2: math instrn valid & fidelity_phases_ongoing
+    MATH_SRC_DATA_READY,
+    DATA_HAZARD_STALLS_MOVD2A,
+    MATH_FIDELITY_STALL,
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_AVAILABLE,
@@ -25,10 +25,9 @@ enum PerfCounterType : uint16_t {
     UNPACK1_BUSY_THREAD0,
     UNPACK0_BUSY_THREAD1,
     UNPACK1_BUSY_THREAD1,
-    // TDMA_UNPACK fidelity-phase instruction counts (grant side)
-    MATH_INSTRN_HF_1_CYCLE,  // grant 258: o_math_instrnbuf_rden & hf_cycles==0
-    MATH_INSTRN_HF_2_CYCLE,  // grant 257: o_math_instrnbuf_rden & hf_cycles==1
-    MATH_INSTRN_HF_4_CYCLE,  // grant 256: o_math_instrnbuf_rden & hf_cycles==3
+    MATH_INSTRN_HF_1_CYCLE,
+    MATH_INSTRN_HF_2_CYCLE,
+    MATH_INSTRN_HF_4_CYCLE,
     // TDMA_PACK Group (3 counters)
     PACKER_DEST_READ_AVAILABLE,
     PACKER_BUSY,
@@ -89,40 +88,37 @@ enum PerfCounterType : uint16_t {
     WAITING_FOR_SFPU_IDLE_0,
     WAITING_FOR_SFPU_IDLE_1,
     WAITING_FOR_SFPU_IDLE_2,
-    // L1 Bank 0 (MUX_CTRL bit 4 = 0, monitors L1 ports 0-7)
-    L1_0_UNPACKER_0,            // Port 0: Unpacker #0
-    L1_0_UNPACKER_1_ECC_PACK1,  // Port 1: Unpacker #1 / ECC / Packer #1
-    L1_0_TDMA_BUNDLE_0_RISC,    // Port 2: TDMA Bundle 0 / RISC / TRISC0
-    L1_0_TDMA_BUNDLE_1_TRISC,   // Port 3: TDMA Bundle 1 / TRISC1 / TRISC2
-    L1_0_NOC_RING0_OUTGOING_0,  // Port 4: NOC Ring 0 Outgoing channel 0
-    L1_0_NOC_RING0_OUTGOING_1,  // Port 5: NOC Ring 0 Outgoing channel 1
-    L1_0_NOC_RING0_INCOMING_0,  // Port 6: NOC Ring 0 Incoming channel 0
-    L1_0_NOC_RING0_INCOMING_1,  // Port 7: NOC Ring 0 Incoming channel 1
-    // L1 Bank 1 (MUX_CTRL bit 4 = 1, monitors L1 ports 8-15)
-    L1_1_TDMA_PACKER_2,         // Port 8: TDMA Packer 2 write
-    L1_1_EXT_UNPACKER_1,        // Port 9: Extended Unpacker interface 1
-    L1_1_EXT_UNPACKER_2,        // Port 10: Extended Unpacker interface 2
-    L1_1_EXT_UNPACKER_3,        // Port 11: Extended Unpacker interface 3
-    L1_1_NOC_RING1_OUTGOING_0,  // Port 12: NOC Ring 1 Outgoing channel 0
-    L1_1_NOC_RING1_OUTGOING_1,  // Port 13: NOC Ring 1 Outgoing channel 1
-    L1_1_NOC_RING1_INCOMING_0,  // Port 14: NOC Ring 1 Incoming channel 0
-    L1_1_NOC_RING1_INCOMING_1,  // Port 15: NOC Ring 1 Incoming channel 1
-    // Blackhole-specific L1 ports (differ from Wormhole at ports 1 and 8)
-    L1_0_UNIFIED_PACKER,  // BH Port 1, mux 0: Unified Packer (WH has Unpacker#1/ECC/Pack1)
-    L1_1_RISC_CORE,       // BH Port 8, mux 1: RISC Core L1 access (WH has TDMA Packer 2)
-    // L1 grant counters (reqif_ready — cycles L1 interface was ready to accept)
-    // Back-pressure = req - grant. Same port order as req counters above.
-    // L1 Bank 0 grants
+    // L1 Bank 0 (mux=0, ports 0-7)
+    L1_0_UNPACKER_0,
+    L1_0_UNPACKER_1_ECC_PACK1,  // port 1: WH only
+    L1_0_TDMA_BUNDLE_0_RISC,
+    L1_0_TDMA_BUNDLE_1_TRISC,
+    L1_0_NOC_RING0_OUTGOING_0,
+    L1_0_NOC_RING0_OUTGOING_1,
+    L1_0_NOC_RING0_INCOMING_0,
+    L1_0_NOC_RING0_INCOMING_1,
+    // L1 Bank 1 (mux=1, ports 8-15)
+    L1_1_TDMA_PACKER_2,  // port 8: WH only
+    L1_1_EXT_UNPACKER_1,
+    L1_1_EXT_UNPACKER_2,
+    L1_1_EXT_UNPACKER_3,
+    L1_1_NOC_RING1_OUTGOING_0,
+    L1_1_NOC_RING1_OUTGOING_1,
+    L1_1_NOC_RING1_INCOMING_0,
+    L1_1_NOC_RING1_INCOMING_1,
+    // BH-specific L1 ports (port 1 and port 8 differ from WH)
+    L1_0_UNIFIED_PACKER,
+    L1_1_RISC_CORE,
+    // L1 grant counters (reqif_ready)
     L1_0_UNPACKER_0_GRANT,
-    L1_0_PORT1_GRANT,  // WH: Unpacker#1/ECC/Pack1, BH: Unified Packer
+    L1_0_PORT1_GRANT,
     L1_0_TDMA_BUNDLE_0_GRANT,
     L1_0_TDMA_BUNDLE_1_GRANT,
     L1_0_NOC_RING0_OUTGOING_0_GRANT,
     L1_0_NOC_RING0_OUTGOING_1_GRANT,
     L1_0_NOC_RING0_INCOMING_0_GRANT,
     L1_0_NOC_RING0_INCOMING_1_GRANT,
-    // L1 Bank 1 grants
-    L1_1_PORT8_GRANT,  // WH: TDMA Packer 2, BH: RISC Core
+    L1_1_PORT8_GRANT,
     L1_1_EXT_UNPACKER_1_GRANT,
     L1_1_EXT_UNPACKER_2_GRANT,
     L1_1_EXT_UNPACKER_3_GRANT,
@@ -130,44 +126,39 @@ enum PerfCounterType : uint16_t {
     L1_1_NOC_RING1_OUTGOING_1_GRANT,
     L1_1_NOC_RING1_INCOMING_0_GRANT,
     L1_1_NOC_RING1_INCOMING_1_GRANT,
-    // === Grant counters (accessed via out_fmt bit 16 = 1) ===
-    // INSTRN_THREAD per-thread total instruction issue counts.
+    // === Grant-side counters (accessed via out_fmt bit 16 = 1) ===
     THREAD_INSTRUCTIONS_0,
     THREAD_INSTRUCTIONS_1,
     THREAD_INSTRUCTIONS_2,
-    // TDMA_UNPACK grant counters: write/port info
-    SRCB_WRITE_ACTUAL,            // srcB writes not blocked by overwrite (grant 259)
-    SRCA_WRITE_NOT_BLOCKED_OVR,   // srcA writes not blocked by overwrite (grant 260)
-    SRCA_WRITE_ACTUAL,            // srcA writes not blocked by port (grant 261)
-    SRCB_WRITE_NOT_BLOCKED_PORT,  // srcB writes not blocked by port (grant 262)
-    SRCA_WRITE_THREAD0,           // srcA writes from thread 0 (grant 263)
-    SRCB_WRITE_THREAD0,           // srcB writes from thread 0 (grant 264)
-    SRCA_WRITE_THREAD1,           // srcA writes from thread 1 (grant 265)
-    SRCB_WRITE_THREAD1,           // srcB writes from thread 1 (grant 266)
-    // TDMA_PACK additional req counters (WH only: PACK_COUNT=4)
-    PACKER_DEST_READ_1,  // Dest accumulator register 1 read request (req 12)
-    PACKER_DEST_READ_2,  // Dest accumulator register 2 read request (req 13)
-    PACKER_DEST_READ_3,  // Dest accumulator register 3 read request (req 14)
-    PACKER_BUSY_0,       // Packer engine 0 busy (req 15)
-    PACKER_BUSY_1,       // Packer engine 1 busy (req 16)
-    PACKER_BUSY_2,       // Packer engine 2 busy (req 17)
-    // TDMA_PACK grant counters: dest read grants and scoreboard stalls
-    DEST_READ_GRANTED_0,           // Dest register 0 read granted (grant 267)
-    DEST_READ_GRANTED_1,           // Dest register 1 read granted (grant 268)
-    DEST_READ_GRANTED_2,           // Dest register 2 read granted (grant 269)
-    DEST_READ_GRANTED_3,           // Dest register 3 read granted (grant 270)
-    MATH_NOT_STALLED_DEST_WR_PORT,  // Math not stalled by dest write port (grant 271)
-    // Note: AVAILABLE_MATH (existing, counter_sel 272) = math not stalled by scoreboard (grant 272)
-    // L1 Bank 4 (BH only, MUX_CTRL[6:4] = 4, monitors misc ports 32-39)
-    L1_4_MISC_PORT_0,  // Port 32: misc interface 0
-    L1_4_MISC_PORT_1,  // Port 33: misc interface 1
-    L1_4_MISC_PORT_2,  // Port 34: misc interface 2
-    L1_4_MISC_PORT_3,  // Port 35: misc interface 3
-    L1_4_MISC_PORT_4,  // Port 36: misc interface 4
-    L1_4_MISC_PORT_5,  // Port 37: misc interface 5
-    L1_4_MISC_PORT_6,  // Port 38: misc interface 6
-    L1_4_MISC_PORT_7,  // Port 39: misc interface 7
-    // L1 Bank 4 grant counters
+    SRCB_WRITE_ACTUAL,
+    SRCA_WRITE_NOT_BLOCKED_OVR,
+    SRCA_WRITE_ACTUAL,
+    SRCB_WRITE_NOT_BLOCKED_PORT,
+    SRCA_WRITE_THREAD0,
+    SRCB_WRITE_THREAD0,
+    SRCA_WRITE_THREAD1,
+    SRCB_WRITE_THREAD1,
+    // TDMA_PACK additional req counters (WH only)
+    PACKER_DEST_READ_1,
+    PACKER_DEST_READ_2,
+    PACKER_DEST_READ_3,
+    PACKER_BUSY_0,
+    PACKER_BUSY_1,
+    PACKER_BUSY_2,
+    DEST_READ_GRANTED_0,
+    DEST_READ_GRANTED_1,
+    DEST_READ_GRANTED_2,
+    DEST_READ_GRANTED_3,
+    MATH_NOT_STALLED_DEST_WR_PORT,
+    // L1 Bank 4 (BH only, mux=4, misc ports 32-39)
+    L1_4_MISC_PORT_0,
+    L1_4_MISC_PORT_1,
+    L1_4_MISC_PORT_2,
+    L1_4_MISC_PORT_3,
+    L1_4_MISC_PORT_4,
+    L1_4_MISC_PORT_5,
+    L1_4_MISC_PORT_6,
+    L1_4_MISC_PORT_7,
     L1_4_MISC_PORT_0_GRANT,
     L1_4_MISC_PORT_1_GRANT,
     L1_4_MISC_PORT_2_GRANT,
@@ -176,7 +167,7 @@ enum PerfCounterType : uint16_t {
     L1_4_MISC_PORT_5_GRANT,
     L1_4_MISC_PORT_6_GRANT,
     L1_4_MISC_PORT_7_GRANT,
-    // L1 Bank 2 (BH only, MUX_CTRL[6:4] = 2, NOC Ring 2 ports 16-23)
+    // L1 Bank 2 (BH only, mux=2, NOC Ring 2 ports 16-23)
     L1_2_NOC_RING2_PORT_0,
     L1_2_NOC_RING2_PORT_1,
     L1_2_NOC_RING2_PORT_2,
@@ -193,7 +184,7 @@ enum PerfCounterType : uint16_t {
     L1_2_NOC_RING2_PORT_5_GRANT,
     L1_2_NOC_RING2_PORT_6_GRANT,
     L1_2_NOC_RING2_PORT_7_GRANT,
-    // L1 Bank 3 (BH only, MUX_CTRL[6:4] = 3, NOC Ring 3 ports 24-31)
+    // L1 Bank 3 (BH only, mux=3, NOC Ring 3 ports 24-31)
     L1_3_NOC_RING3_PORT_0,
     L1_3_NOC_RING3_PORT_1,
     L1_3_NOC_RING3_PORT_2,
@@ -210,10 +201,8 @@ enum PerfCounterType : uint16_t {
     L1_3_NOC_RING3_PORT_5_GRANT,
     L1_3_NOC_RING3_PORT_6_GRANT,
     L1_3_NOC_RING3_PORT_7_GRANT,
-    // Cycles any thread is stalled (OR across threads).
     ANY_THREAD_STALL,
-    // Max enum value must fit in 8 bits (PerfCounter.counter_type is uint32_t:8).
-    // Do not add values beyond 255.
+    // counter_type is a uint32_t:8 bitfield — keep all values below 256.
 };
 static_assert(ANY_THREAD_STALL <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 

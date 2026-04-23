@@ -11,17 +11,10 @@
 // Wormhole-specific perf counter arrays.
 // Included by perf_counters.hpp after PerfCounterType enum is defined.
 
-// FPU bank (2 banks, same on WH and BH):
-//   sel 0 req   = th_fpu_op_valid       (FPU_COUNTER)
-//   sel 1 req   = th_sfpu_op_valid_s1   (SFPU_COUNTER)
-//   sel 257 grant = th_sfpu_op_valid_s1 | th_fpu_op_valid  (MATH_COUNTER)
-// Sel 256 grant is fpu_req_ready — driven but not a useful utilization metric;
-// sel 257 grant counts "any FPU/SFPU op issued" which is what we want.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 
-// WH TDMA_UNPACK: all RTL-live counters including fidelity-phase breakdown.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
@@ -47,7 +40,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 22;
 
-// WH TDMA_PACK: PACK_COUNT=4, 8 req + 6 grant (live in RTL).
+// PACK_COUNT=4 on WH.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
@@ -65,9 +58,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 14;
 
-// Tensix L1 bank 0 counters
-// Tensix L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC
-// Port 1: WH has unpacker#1/ECC/pack1
+// L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unpacker#1/ECC/pack1.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
      {PerfCounterType::L1_0_UNPACKER_1_ECC_PACK1, 1},
@@ -88,8 +79,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
-// Tensix L1 bank 1 (MUX_CTRL[4] = 1): packer/risc, ext unpacker, ring1 NOC
-// Port 8: WH has TDMA packer 2
+// L1 bank 1 (MUX_CTRL[4] = 1): TDMA packer 2, ext unpacker, ring1 NOC.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
     {{PerfCounterType::L1_1_TDMA_PACKER_2, 0},
      {PerfCounterType::L1_1_EXT_UNPACKER_1, 1},
@@ -113,8 +103,7 @@ constexpr size_t NUM_L1_1_COUNTERS = 16;
 // WH: 1-bit L1 mux at MUX_CTRL[4], values 0-1
 constexpr uint32_t L1_MUX_MASK = 0x1 << 4;
 
-// WH does not have L1 banks 2-4 (BH-only, extra mux positions).
-// Empty arrays so perf_counters.hpp is arch-agnostic.
+// BH-only banks; empty arrays keep perf_counters.hpp arch-agnostic.
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_2_counters = {};
 constexpr size_t NUM_L1_2_COUNTERS = 0;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_3_counters = {};
@@ -122,14 +111,8 @@ constexpr size_t NUM_L1_3_COUNTERS = 0;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_4_counters = {};
 constexpr size_t NUM_L1_4_COUNTERS = 0;
 
-// WH INSTRN_THREAD
-// Sel 0-23:  per-thread instruction-type availability (gaps at 9-11 where the
-//            hardware ties the XSEARCH kick to 0)
-// Sel 24-26: per-thread total stall cycles
-// Sel 27-38: shared stall conditions (each replicated 3x; slot 0 read per group)
-// Sel 39-65: per-thread stall reasons (9 types x 3 threads, thread-major)
-// Sel 256, 264, 272: per-thread total instruction issue counts
-// Sel 283:   cycles any thread is stalled
+// WH INSTRN_THREAD: sel gaps at 9-11 (XSEARCH kick tied to 0); shared stall
+// conditions at sels 27/30/33/36 (each replicated 3x, read slot 0 only).
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
@@ -152,21 +135,13 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters =
      {PerfCounterType::PACK_INSTRN_AVAILABLE_0, 21},
      {PerfCounterType::PACK_INSTRN_AVAILABLE_1, 22},
      {PerfCounterType::PACK_INSTRN_AVAILABLE_2, 23},
-     // Sel 24-26: total stall cycles per thread
      {PerfCounterType::THREAD_STALLS_0, 24},
      {PerfCounterType::THREAD_STALLS_1, 25},
      {PerfCounterType::THREAD_STALLS_2, 26},
-     // Sel 27-38: shared stall conditions (broadcast from thread 0; read slot 0 only)
-     {PerfCounterType::WAITING_FOR_SRCA_CLEAR, 27},   // srca_cleared (broadcast)
-     {PerfCounterType::WAITING_FOR_SRCB_CLEAR, 30},   // srcb_cleared (broadcast)
-     {PerfCounterType::WAITING_FOR_SRCA_VALID, 33},   // srca_valid (broadcast)
-     {PerfCounterType::WAITING_FOR_SRCB_VALID, 36},   // srcb_valid (broadcast)
-     // Sel 39-65: per-thread stall reasons — THREAD-MAJOR layout
-     // RTL: generate array [THREAD_COUNT-1:0] with NUM_BANKS=9 per instance.
-     // Sels 39-47 = 9 stall types for thread 0
-     // Sels 48-56 = 9 stall types for thread 1
-     // Sels 57-65 = 9 stall types for thread 2
-     // Order within each thread: thcon, unpack, pack, math, sem_zero, sem_max, move, mmio, sfpu
+     {PerfCounterType::WAITING_FOR_SRCA_CLEAR, 27},
+     {PerfCounterType::WAITING_FOR_SRCB_CLEAR, 30},
+     {PerfCounterType::WAITING_FOR_SRCA_VALID, 33},
+     {PerfCounterType::WAITING_FOR_SRCB_VALID, 36},
      {PerfCounterType::WAITING_FOR_THCON_IDLE_0, 39},
      {PerfCounterType::WAITING_FOR_UNPACK_IDLE_0, 40},
      {PerfCounterType::WAITING_FOR_PACK_IDLE_0, 41},
@@ -194,13 +169,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 59> instrn_counters =
      {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 63},
      {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 64},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 65},
-     // Per-thread total instruction issue counts — see blackhole/hw_counters.h
-     // for the RTL explanation. Per-instance slicing means banks 0, 8, 16 are
-     // the distinct per-thread values.
-     {PerfCounterType::THREAD_INSTRUCTIONS_0, 256},  // instance[0] bank 0
-     {PerfCounterType::THREAD_INSTRUCTIONS_1, 264},  // instance[1] bank 0
-     {PerfCounterType::THREAD_INSTRUCTIONS_2, 272},  // instance[2] bank 0
-     // Any-thread stall count. RTL broadcasts |inst_stall_thread to the shared
-     // stall-condition banks, so their grant sels all alias. We keep just sel 283.
+     {PerfCounterType::THREAD_INSTRUCTIONS_0, 256},
+     {PerfCounterType::THREAD_INSTRUCTIONS_1, 264},
+     {PerfCounterType::THREAD_INSTRUCTIONS_2, 272},
      {PerfCounterType::ANY_THREAD_STALL, 283}}};
 constexpr size_t NUM_INSTRN_COUNTERS = 59;
