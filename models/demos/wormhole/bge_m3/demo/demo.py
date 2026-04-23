@@ -25,7 +25,7 @@ from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 from models.demos.wormhole.bge_m3.tt.model_config import get_padded_sequence_length
 
 DEFAULT_MODEL_NAME = "BAAI/bge-m3"
-DEFAULT_SEQUENCE_LENGTH = 512
+DEFAULT_SEQUENCE_LENGTH = 8192
 DEFAULT_TT_DTYPE = ttnn.bfloat8_b
 
 # PCC gate for full hidden-state tensor vs HF reference (matches PCC tests).
