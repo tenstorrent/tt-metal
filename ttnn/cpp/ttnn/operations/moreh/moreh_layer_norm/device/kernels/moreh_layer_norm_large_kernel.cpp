@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/sfpu_math.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
@@ -314,23 +316,18 @@ void kernel_main() {
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
          */
-        tile_regs_acquire();
-        cb_wait_front(cb_var, onetile);
-        cb_reserve_back(cb_recip_std, onetile);
-
-        add_tiles_init_with_dt(cb_var, cb_eps);
-        add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
-
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_std);
-
-        cb_pop_front(cb_var, onetile);
-        cb_push_back(cb_recip_std, onetile);
-        tile_regs_release();
+        // recip_std = rsqrt(var + eps). cb_var streams (wait/pop 1); cb_eps is
+        // persistent (waited once at top of kernel).
+        compute_kernel_lib::add<
+            compute_kernel_lib::BroadcastDim::NONE,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+            cb_var,
+            cb_eps,
+            cb_recip_std,
+            compute_kernel_lib::BinaryInputBlockShape::single(),
+            compute_kernel_lib::sfpu_chain(
+                compute_kernel_lib::Rsqrt<compute_kernel_lib::Legacy::Off, compute_kernel_lib::Approx::Exact>{}));
 
         cb_wait_front(cb_recip_std, onetile);
         if (rstd_has_value) {
