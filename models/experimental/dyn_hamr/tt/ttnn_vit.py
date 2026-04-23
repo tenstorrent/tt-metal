@@ -46,14 +46,22 @@ def _t(weight: torch.Tensor, device: Any) -> Any:
 
 
 def _t_bfp8(weight: torch.Tensor, device: Any) -> Any:
-    """BFP8 weight tile — half the DRAM bandwidth of bfloat16 with negligible
-    PCC drop on transformer weights.  Bandwidth saving dominates dequant cost
-    when trace replay is active (dequant is pre-compiled into the static program)."""
+    """BFP8 weight tile — half the DRAM bandwidth of bfloat16."""
     return ttnn.from_torch(
         weight.to(torch.bfloat16).contiguous(),
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
+    )
+
+
+def _t_bfp4(weight: torch.Tensor, device: Any) -> Any:
+    """BFP4 weight tile — quarter the DRAM bandwidth of bfloat16."""
+    return ttnn.from_torch(
+        weight.to(torch.bfloat16).contiguous(),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat4_b,
     )
 
 
@@ -162,9 +170,9 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
             },
             "norm2": {"weight": _t(blk.norm2.weight, device), "bias": _t(blk.norm2.bias, device)},
             "mlp": {
-                "fc1_w": _t_bfp8(blk.mlp.fc1.weight.t(), device),
+                "fc1_w": _t_bfp4(blk.mlp.fc1.weight.t(), device),
                 "fc1_b": _t_bias(blk.mlp.fc1.bias, device),
-                "fc2_w": _t_bfp8(blk.mlp.fc2.weight.t(), device),
+                "fc2_w": _t_bfp4(blk.mlp.fc2.weight.t(), device),
                 "fc2_b": _t_bias(blk.mlp.fc2.bias, device),
             },
         })
