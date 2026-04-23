@@ -1,0 +1,167 @@
+2026-04-08 15:08:52.206 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-04-08 15:08:54.740 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-08 15:08:54.795 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 15:08:54.807 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 15:08:54.807 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 15:08:54.912 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-08 15:08:54.915 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 15:08:54.925 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 15:08:54.925 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 15:08:55.029 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 15:08:55.040 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 15:08:55.040 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 15:08:55.131 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:55.132 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:55.132 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:55.508 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:55.509 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:55.509 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:55.870 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:55.871 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:55.871 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:56.232 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:56.233 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:56.233 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:56.597 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:56.598 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:56.598 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:56.960 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:56.960 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:56.960 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:57.307 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:57.308 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:57.308 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:57.652 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 15:08:57.653 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 15:08:57.653 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 15:08:57.998 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-08 15:08:57.998 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-08 15:08:57.998 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-08 15:08:58.003 | info     |             UMD | Starting devices in cluster (cluster.cpp:949)
+2026-04-08 15:08:58.043 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.071 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.112 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.152 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.181 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.222 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.251 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 15:08:58.299 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 3 items / 2 deselected / 1 selected
+
+models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer] 2026-04-08 15:08:59.786 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:config_only:365 - Using config from default location: models/demos/deepseek_v3/reference
+2026-04-08 15:08:59.795 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:get_or_download_model:291 - Using model from shared location: /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:08:59.799 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_check_pretrained_available:456 - ✓ Pretrained weights found at /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:09:00.046 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-08 15:09:00.046 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-08 15:09:00.046 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-08 15:09:00.046 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-08 15:09:00.048 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 15:09:00.056 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 15:09:00.056 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 15:09:00.139 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-08 15:09:00.139 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 15:09:00.139 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 15:09:00.139 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-08 15:09:00.139 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 15:09:00.139 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 15:09:00.139 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-08 15:09:00.139 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-08 15:09:00.139 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-08 15:09:00.139 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.185 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.186 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 15:09:00.293 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-04-08 15:09:02.560 | DEBUG    | conftest:mesh_device:588 - multidevice with 1 devices is created
+2026-04-08 15:09:02.580 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:hf_config:336 - Loaded HF config from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:09:02.652 | INFO     | models.demos.deepseek_v3.utils.lazy_state_dict:__init__:65 - LazyStateDict initialized from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/model.safetensors.index.json (91991 keys across 163 files) in 68.0 ms
+2026-04-08 15:09:02.653 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:state_dict:430 - Loaded state dict from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:09:02.654 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_check_pretrained_available:456 - ✓ Pretrained weights found at /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:09:02.654 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:549 - Loading pretrained transformer weights for 1 layers from: /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:09:02.654 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.embed_tokens.', combined='model.embed_tokens.', num_layers=None
+2026-04-08 15:09:12.586 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.norm.', combined='model.norm.', num_layers=None
+2026-04-08 15:09:12.851 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:566 - Loading layer 0 weights...
+2026-04-08 15:09:12.851 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.0.', combined='model.layers.0.', num_layers=None
+2026-04-08 15:09:15.320 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:611 - Layer 0 loaded (dense)
+2026-04-08 15:09:15.320 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:pretrained_transformer_weights:613 - Loaded pretrained transformer weights for 1 layers
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-08 15:09:16.162 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:164 - Installed 0 gate wrappers (1 total layers)
+2026-04-08 15:09:16.169 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:tokenizer:403 - Loading tokenizer from: /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-08 15:09:16.481 | INFO     | models.demos.deepseek_v3_d_p.utils.transformer_helpers:download_infinitebench_subset:350 - InfiniteBench 'kv_retrieval' already cached at /tmp/deepseek_v3_transformer_inputs/infinitebench_kv_retrieval.json
+2026-04-08 15:09:16.701 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:172 - Input shape: torch.Size([1, 2048]), first 10 tokens: [0, 34939, 1499, 1137, 24313, 31676, 69, 11342, 24, 15]
+2026-04-08 15:09:16.701 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:175 - === Pass 1: Host reference (use_device=False) ===
+2026-04-08 15:09:18.951 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:179 - Host reference done: 3 snapshots, 1 KV layers
+2026-04-08 15:09:18.951 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:182 - === Pass 2: Device gate (use_device=True) ===
+2026-04-08 15:09:21.192 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:186 - Device gate done: 3 snapshots, 1 KV layers
+2026-04-08 15:09:21.383 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:225 - 
+============================================================
+2026-04-08 15:09:21.383 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:226 - Stage                          PCC    Status
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:227 - ------------------------------------------------------------
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:244 - embed                     1.000000      PASS
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:244 - layer_0                   1.000000      PASS
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:244 - norm                      1.000000      PASS
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:244 - layer_0_kv                1.000000      PASS
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:245 - ============================================================
+2026-04-08 15:09:21.384 | INFO     | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:247 - Outputs saved to /localdev/mbezulj/device_gate_outputs
+2026-04-08 15:09:21.384 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_device_gate_monkey_patch:test_device_gate_monkey_patch:248 - Device gate monkey-patch test completed (num_layers=1)
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+19.05s call     models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer]
+2.77s setup    models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer]
+0.59s teardown models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer]
+=========================== short test summary info ============================
+PASSED models/demos/deepseek_v3_d_p/tests/test_device_gate_monkey_patch.py::test_device_gate_monkey_patch[blackhole-1x1-1layer]
+================= 1 passed, 2 deselected, 3 warnings in 27.45s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-04-08 15:09:24.483 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-08 15:09:24.483 | info     |             UMD | Closing devices in cluster (cluster.cpp:961)

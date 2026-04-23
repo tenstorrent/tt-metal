@@ -1,0 +1,73 @@
+2026-04-02 07:04:42.150 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-02 07:04:44.505 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 07:04:44.517 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 07:04:44.517 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 07:04:44.619 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-02 07:04:44.621 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 07:04:44.631 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 07:04:44.631 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 07:04:44.733 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 07:04:44.743 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 07:04:44.743 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 07:04:44.923 | info     |             UMD | Harvesting masks for chip 7 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:44.942 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:44.942 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:45.296 | info     |             UMD | Harvesting masks for chip 0 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:45.315 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:45.315 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:45.658 | info     |             UMD | Harvesting masks for chip 2 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:45.677 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:45.677 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:46.009 | info     |             UMD | Harvesting masks for chip 5 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:46.027 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:46.027 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:46.361 | info     |             UMD | Harvesting masks for chip 3 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:46.380 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:46.380 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:46.714 | info     |             UMD | Harvesting masks for chip 1 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:46.732 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:46.733 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:47.063 | info     |             UMD | Harvesting masks for chip 6 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:47.082 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:47.082 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:47.412 | info     |             UMD | Harvesting masks for chip 4 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 07:04:47.431 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 07:04:47.431 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 07:04:47.760 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:180)
+2026-04-02 07:04:47.760 | info     |             UMD | IOMMU: enabled (cluster.cpp:155)
+2026-04-02 07:04:47.760 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:158)
+2026-04-02 07:04:47.765 | info     |             UMD | Starting devices in cluster (cluster.cpp:951)
+2026-04-02 07:04:47.793 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.816 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.835 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.857 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.877 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.900 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.918 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 07:04:47.953 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+ERROR: not found: /localdev/mbezulj/tt-metal/models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-3200-7168-2048-256-8-2-GateComputeMode.HOST_ALL-True]
+(no match in any of [<Module test_ttnn_moe.py>])
+
+collected 0 items
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== 1 warning in 5.02s ==============================
+2026-04-02 07:04:52.145 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-02 07:04:52.145 | info     |             UMD | Closing devices in cluster (cluster.cpp:962)

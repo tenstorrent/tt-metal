@@ -1,0 +1,137 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-07 18:54:03.202 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-07 18:54:03.214 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-07 18:54:03.214 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-07 18:54:03.315 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-07 18:54:03.317 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-07 18:54:03.328 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-07 18:54:03.328 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-07 18:54:03.430 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-07 18:54:03.440 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-07 18:54:03.440 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-07 18:54:03.529 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:03.530 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:03.530 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:03.895 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:03.896 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:03.896 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:04.259 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:04.260 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:04.260 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:04.609 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:04.610 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:04.610 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:04.959 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:04.960 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:04.960 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:05.309 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:05.310 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:05.310 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:05.658 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:05.659 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:05.659 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:06.009 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-07 18:54:06.010 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-07 18:54:06.010 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-07 18:54:06.359 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-07 18:54:06.359 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-07 18:54:06.359 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-07 18:54:06.364 | info     |             UMD | Starting devices in cluster (cluster.cpp:949)
+2026-04-07 18:54:06.402 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.429 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.459 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.486 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.513 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.542 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.569 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-07 18:54:06.608 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 864 items / 863 deselected / 1 selected
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache] 2026-04-07 18:54:08.401 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-07 18:54:08.401 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-07 18:54:08.403 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-07 18:54:08.410 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-07 18:54:08.410 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-07 18:54:08.492 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-07 18:54:08.492 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-07 18:54:08.492 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-07 18:54:08.492 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-07 18:54:08.492 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-07 18:54:08.492 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-07 18:54:08.492 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-07 18:54:08.492 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-07 18:54:08.492 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-07 18:54:08.492 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.536 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-07 18:54:08.846 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-07 18:54:08.938 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-07 18:54:08.939 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-07 18:54:08.940 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-07 18:54:08.941 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-07 18:54:08.943 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-07 18:54:08.944 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-07 18:54:08.945 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-07 18:54:08.946 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-07 18:54:08.946 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-07 18:54:08.946 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+FAILED
+
+=================================== FAILURES ===================================
+_ test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache] _
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py:315: in test_prefill_transformer
+    pytest.fail(f"PCC below {threshold} at: {msg}")
+E   Failed: PCC below 0.97 at: layer_6: 0.964815; layer_7: 0.965874; layer_8: 0.532819; layer_9: 0.596195; layer_10: 0.675124; layer_11: 0.711275; norm: 0.931117; layer_5_kvpe_kv: 0.946002; layer_6_kvpe_kv: 0.963194; layer_7_kvpe_kv: 0.946127; layer_9_kvpe_kv: 0.955944; layer_10_kvpe_kv: 0.932483; layer_11_kvpe_kv: 0.935764
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+607.32s call     models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache]
+0.96s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache]
+=========================== short test summary info ============================
+FAILED models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_device-12-2048-pcc-kv_retrieval-pretrained-kv_cache] - Failed: PCC below 0.97 at: layer_6: 0.964815; layer_7: 0.965874; layer_8: 0.532819; layer_9: 0.596195; layer_10: 0.675124; layer_11: 0.711275; norm: 0.931117; layer_5_kvpe_kv: 0.946002; layer_6_kvpe_kv: 0.963194; layer_7_kvpe_kv: 0.946127; layer_9_kvpe_kv: 0.955944; layer_10_kvpe_kv: 0.932483; layer_11_kvpe_kv: 0.935764
+========== 1 failed, 863 deselected, 3 warnings in 613.40s (0:10:13) ===========
+2026-04-07 19:04:47.591 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-07 19:04:47.591 | info     |             UMD | Closing devices in cluster (cluster.cpp:961)

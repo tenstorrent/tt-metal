@@ -1,0 +1,879 @@
+2026-04-08 19:59:24.081 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-04-08 19:59:26.463 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-08 19:59:26.518 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 19:59:26.529 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 19:59:26.529 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 19:59:26.629 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-08 19:59:26.631 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 19:59:26.640 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 19:59:26.640 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 19:59:26.741 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 19:59:26.750 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 19:59:26.750 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 19:59:26.839 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:26.839 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:26.839 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:27.204 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:27.205 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:27.205 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:27.569 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:27.570 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:27.570 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:27.922 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:27.923 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:27.923 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:28.271 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:28.271 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:28.271 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:28.620 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:28.621 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:28.621 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:28.969 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:28.970 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:28.970 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:29.316 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-08 19:59:29.317 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-08 19:59:29.317 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-08 19:59:29.664 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-08 19:59:29.664 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-08 19:59:29.664 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-08 19:59:29.669 | info     |             UMD | Starting devices in cluster (cluster.cpp:949)
+2026-04-08 19:59:29.714 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.744 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.783 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.815 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.842 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.872 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.901 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-08 19:59:29.945 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 4 items
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-pcc-kv_cache] 2026-04-08 19:59:31.351 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:config_only:365 - Using config from default location: models/demos/deepseek_v3/reference
+2026-04-08 19:59:31.671 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-08 19:59:31.671 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-08 19:59:31.671 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-08 19:59:31.671 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-08 19:59:31.673 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 19:59:31.681 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 19:59:31.681 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 19:59:31.765 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-08 19:59:31.765 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:31.765 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:31.765 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-08 19:59:31.765 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:31.765 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:31.765 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-08 19:59:31.765 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-08 19:59:31.765 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-08 19:59:31.765 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:31.947 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-08 19:59:32.028 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-08 19:59:32.029 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-08 19:59:32.030 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-08 19:59:32.031 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-08 19:59:32.033 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-08 19:59:32.034 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-08 19:59:32.035 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-08 19:59:32.036 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-08 19:59:32.036 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-08 19:59:32.036 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-08 19:59:32.129 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-08 19:59:32.130 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:92 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-08 19:59:32.130 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:93 - isl_total=1024, isl_per_chip=512, layer_type=dense, layer_idx=0, gate_fallback_mode=None
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-08 19:59:40.879 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:116 - Running torch reference forward...
+2026-04-08 19:59:41.727 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:131 - Torch reference output shape: torch.Size([1, 1024, 7168])
+2026-04-08 19:59:41.727 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:133 - Reference KVPE shape: torch.Size([1, 1, 1024, 576])
+2026-04-08 19:59:41.727 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:70 - Building TtPrefillBlock layer_idx=0 (dense)
+2026-04-08 19:59:41.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 19:59:41.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 19:59:41.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 19:59:41.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 19:59:41.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 19:59:41.729 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 19:59:45.134 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:303 - ✓ Loaded 7 weights in MLA layer 0 to TT device
+2026-04-08 19:59:45.134 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 19:59:45.134 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 19:59:45.134 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 19:59:45.135 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 19:59:45.135 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 19:59:45.135 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 19:59:45.136 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:95 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-08 19:59:45.136 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:96 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 19:59:45.136 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:97 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-08 19:59:45.136 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:101 - Creating weights from provided torch tensors
+2026-04-08 19:59:45.355 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-08 19:59:47.446 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created gate_proj: Shape([7168, 4608])
+2026-04-08 19:59:47.678 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-08 19:59:49.769 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created up_proj: Shape([7168, 4608])
+2026-04-08 19:59:49.994 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-08 19:59:52.184 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created down_proj: Shape([4608, 7168])
+2026-04-08 19:59:52.223 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:171 - Running TtPrefillBlock forward...
+2026-04-08 19:59:52.223 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 19:59:52.236 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 19:59:52.251 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 19:59:52.263 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 19:59:52.583 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 19:59:52.583 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 19:59:52.584 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 19:59:52.584 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 19:59:52.598 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:192 - Forward pass: input shape=Shape([1, 1, 512, 7168]), batch_size=1
+2026-04-08 19:59:52.612 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:214 - After gate_proj matmul: Shape([1, 1, 512, 4608])
+2026-04-08 19:59:52.613 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:224 - After up_proj matmul: Shape([1, 1, 512, 4608])
+2026-04-08 19:59:52.627 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:234 - After SiLU fusion: Shape([1, 1, 512, 4608])
+2026-04-08 19:59:52.641 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:244 - After down_proj matmul: Shape([1, 1, 512, 7168])
+2026-04-08 19:59:52.658 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:257 - After reduce_scatter: Shape([1, 1, 512, 1792])
+2026-04-08 19:59:52.674 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:176 - Forward pass completed successfully
+2026-04-08 19:59:52.675 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:184 - Output shape: [1, 1, 512, 1792] (matches expected)
+2026-04-08 19:59:52.920 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:206 - PCC: 0.999488 (threshold: 0.999)
+2026-04-08 19:59:52.941 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:214 - KVPE cache KV part PCC: 0.999865 (threshold: 0.99)
+2026-04-08 19:59:52.941 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:215 - KVPE cache PE part PCC: 0.999893 (threshold: 0.99)
+2026-04-08 19:59:52.941 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:219 - TtPrefillBlock test passed (layer_type=dense, gate_fallback_mode=None, PCC=0.9995)
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:230 - 
+============================================================
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:231 - Timing Report
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:232 - ============================================================
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   weights_creation: 8599.21 ms
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   torch_reference: 848.03 ms
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_block_creation: 10476.99 ms
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_forward: 451.25 ms
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   pcc_validation: 245.18 ms
+2026-04-08 19:59:52.942 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   total_test_time: 20811.58 ms
+PASSED
+models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-smoke-kv_cache] 2026-04-08 19:59:53.494 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-08 19:59:53.494 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-08 19:59:53.494 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:257)
+2026-04-08 19:59:53.494 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-08 19:59:53.494 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-08 19:59:53.496 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 19:59:53.504 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 19:59:53.504 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 19:59:53.588 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-08 19:59:53.588 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:53.588 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:53.588 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-08 19:59:53.588 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:53.588 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 19:59:53.588 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-08 19:59:53.588 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-08 19:59:53.588 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-08 19:59:53.588 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-08 19:59:53.641 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.646 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.650 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.655 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.659 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.663 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.668 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.673 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 19:59:53.892 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-08 19:59:53.919 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-08 19:59:53.921 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-08 19:59:53.922 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-08 19:59:53.923 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-08 19:59:53.924 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-08 19:59:53.925 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-08 19:59:53.926 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-08 19:59:53.927 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-08 19:59:53.927 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-08 19:59:53.927 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-08 19:59:54.007 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-08 19:59:54.008 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:92 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-08 19:59:54.008 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:93 - isl_total=1024, isl_per_chip=512, layer_type=dense, layer_idx=0, gate_fallback_mode=None
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-08 20:00:02.781 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:70 - Building TtPrefillBlock layer_idx=0 (dense)
+2026-04-08 20:00:02.781 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 20:00:02.781 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:00:02.781 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 20:00:02.781 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 20:00:02.782 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 20:00:02.783 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 20:00:07.166 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:303 - ✓ Loaded 7 weights in MLA layer 0 to TT device
+2026-04-08 20:00:07.167 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 20:00:07.167 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:00:07.167 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 20:00:07.167 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 20:00:07.167 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 20:00:07.168 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 20:00:07.168 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:95 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-08 20:00:07.168 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:96 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:00:07.168 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:97 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-08 20:00:07.168 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:101 - Creating weights from provided torch tensors
+2026-04-08 20:00:07.385 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-08 20:00:09.486 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created gate_proj: Shape([7168, 4608])
+2026-04-08 20:00:09.727 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-08 20:00:11.834 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created up_proj: Shape([7168, 4608])
+2026-04-08 20:00:12.067 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-08 20:00:14.273 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created down_proj: Shape([4608, 7168])
+2026-04-08 20:00:14.313 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:171 - Running TtPrefillBlock forward...
+2026-04-08 20:00:14.313 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 20:00:14.315 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 20:00:14.320 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 20:00:14.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:00:14.410 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 20:00:14.410 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 20:00:14.411 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 20:00:14.411 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:00:14.416 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:192 - Forward pass: input shape=Shape([1, 1, 512, 7168]), batch_size=1
+2026-04-08 20:00:14.422 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:214 - After gate_proj matmul: Shape([1, 1, 512, 4608])
+2026-04-08 20:00:14.422 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:224 - After up_proj matmul: Shape([1, 1, 512, 4608])
+2026-04-08 20:00:14.423 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:234 - After SiLU fusion: Shape([1, 1, 512, 4608])
+2026-04-08 20:00:14.429 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:244 - After down_proj matmul: Shape([1, 1, 512, 7168])
+2026-04-08 20:00:14.436 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:257 - After reduce_scatter: Shape([1, 1, 512, 1792])
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:176 - Forward pass completed successfully
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:184 - Output shape: [1, 1, 512, 1792] (matches expected)
+2026-04-08 20:00:14.437 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:224 - TtPrefillBlock smoke test passed (layer_type=dense, gate_fallback_mode=None)
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:230 - 
+============================================================
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:231 - Timing Report
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:232 - ============================================================
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   weights_creation: 8629.45 ms
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_block_creation: 11512.90 ms
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_forward: 123.62 ms
+2026-04-08 20:00:14.437 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   total_test_time: 20428.87 ms
+PASSED
+models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-pcc-kv_cache] 2026-04-08 20:00:15.020 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-08 20:00:15.020 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-08 20:00:15.020 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:257)
+2026-04-08 20:00:15.020 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-08 20:00:15.020 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-08 20:00:15.022 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 20:00:15.030 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 20:00:15.030 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 20:00:15.121 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-08 20:00:15.121 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 20:00:15.121 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 20:00:15.121 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-08 20:00:15.121 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 20:00:15.121 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 20:00:15.121 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-08 20:00:15.121 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-08 20:00:15.121 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-08 20:00:15.121 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-08 20:00:15.174 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.179 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.184 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.189 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.207 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.207 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.207 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.207 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:00:15.427 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-08 20:00:15.455 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-08 20:00:15.456 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-08 20:00:15.457 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-08 20:00:15.458 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-08 20:00:15.459 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-08 20:00:15.460 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-08 20:00:15.461 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-08 20:00:15.462 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-08 20:00:15.462 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-08 20:00:15.462 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-08 20:00:15.542 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-08 20:00:15.543 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:92 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-08 20:00:15.543 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:93 - isl_total=1024, isl_per_chip=512, layer_type=moe, layer_idx=3, gate_fallback_mode=GateComputeMode.DEVICE
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-08 20:01:32.037 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:116 - Running torch reference forward...
+2026-04-08 20:01:34.803 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:131 - Torch reference output shape: torch.Size([1, 1024, 7168])
+2026-04-08 20:01:34.803 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:133 - Reference KVPE shape: torch.Size([1, 1, 1024, 576])
+2026-04-08 20:01:34.803 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:70 - Building TtPrefillBlock layer_idx=3 (MoE)
+2026-04-08 20:01:34.803 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 20:01:34.803 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:01:34.803 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 20:01:34.803 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 20:01:34.803 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 20:01:34.804 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 20:01:37.899 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:303 - ✓ Loaded 7 weights in MLA layer 3 to TT device
+2026-04-08 20:01:37.899 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 20:01:37.899 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:01:37.899 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 20:01:37.899 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 20:01:37.899 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 20:01:37.900 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 20:01:37.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 256])
+2026-04-08 20:01:37.907 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:162 - Initializing TtMoe
+2026-04-08 20:01:37.907 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:163 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:164 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:165 -   experts_per_chip=32, num_routed_experts=256
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:166 -   num_experts_per_tok=8
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:167 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 256]), dispatch_axis=0
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 256])
+2026-04-08 20:01:37.908 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:102 - RoutedExpert: No optimal program config for given dimensions max_tokens=64emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:110 - Initializing TtRoutedExpert with experts_per_chip=32
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:111 - emb_dim=7168, hidden_dim=2048
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:112 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=256
+2026-04-08 20:01:37.908 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:129 - Creating weights from provided torch tensors (256 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/32 [00:00<?, ?it/s]Torch->TTNN weights per local expert:   3%|▎         | 1/32 [00:05<02:43,  5.28s/it]Torch->TTNN weights per local expert:   6%|▋         | 2/32 [00:10<02:37,  5.25s/it]Torch->TTNN weights per local expert:   9%|▉         | 3/32 [00:15<02:31,  5.22s/it]Torch->TTNN weights per local expert:  12%|█▎        | 4/32 [00:20<02:26,  5.24s/it]Torch->TTNN weights per local expert:  16%|█▌        | 5/32 [00:26<02:21,  5.23s/it]Torch->TTNN weights per local expert:  19%|█▉        | 6/32 [00:31<02:15,  5.22s/it]Torch->TTNN weights per local expert:  22%|██▏       | 7/32 [00:36<02:10,  5.21s/it]Torch->TTNN weights per local expert:  25%|██▌       | 8/32 [00:41<02:06,  5.25s/it]Torch->TTNN weights per local expert:  28%|██▊       | 9/32 [00:47<02:01,  5.26s/it]Torch->TTNN weights per local expert:  31%|███▏      | 10/32 [00:52<01:55,  5.25s/it]Torch->TTNN weights per local expert:  34%|███▍      | 11/32 [00:57<01:49,  5.23s/it]Torch->TTNN weights per local expert:  38%|███▊      | 12/32 [01:02<01:44,  5.24s/it]Torch->TTNN weights per local expert:  41%|████      | 13/32 [01:08<01:40,  5.28s/it]Torch->TTNN weights per local expert:  44%|████▍     | 14/32 [01:13<01:35,  5.30s/it]Torch->TTNN weights per local expert:  47%|████▋     | 15/32 [01:18<01:29,  5.29s/it]Torch->TTNN weights per local expert:  50%|█████     | 16/32 [01:24<01:24,  5.28s/it]Torch->TTNN weights per local expert:  53%|█████▎    | 17/32 [01:29<01:19,  5.31s/it]Torch->TTNN weights per local expert:  56%|█████▋    | 18/32 [01:34<01:14,  5.32s/it]Torch->TTNN weights per local expert:  59%|█████▉    | 19/32 [01:40<01:09,  5.33s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 20/32 [01:45<01:03,  5.30s/it]Torch->TTNN weights per local expert:  66%|██████▌   | 21/32 [01:50<00:57,  5.27s/it]Torch->TTNN weights per local expert:  69%|██████▉   | 22/32 [01:55<00:52,  5.25s/it]Torch->TTNN weights per local expert:  72%|███████▏  | 23/32 [02:01<00:47,  5.24s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 24/32 [02:06<00:41,  5.23s/it]Torch->TTNN weights per local expert:  78%|███████▊  | 25/32 [02:11<00:36,  5.24s/it]Torch->TTNN weights per local expert:  81%|████████▏ | 26/32 [02:16<00:31,  5.23s/it]Torch->TTNN weights per local expert:  84%|████████▍ | 27/32 [02:21<00:26,  5.23s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 28/32 [02:27<00:21,  5.26s/it]Torch->TTNN weights per local expert:  91%|█████████ | 29/32 [02:32<00:15,  5.26s/it]Torch->TTNN weights per local expert:  94%|█████████▍| 30/32 [02:37<00:10,  5.26s/it]Torch->TTNN weights per local expert:  97%|█████████▋| 31/32 [02:43<00:05,  5.28s/it]Torch->TTNN weights per local expert: 100%|██████████| 32/32 [02:48<00:00,  5.30s/it]Torch->TTNN weights per local expert: 100%|██████████| 32/32 [02:48<00:00,  5.26s/it]
+2026-04-08 20:04:26.350 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:95 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-08 20:04:26.350 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:96 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:04:26.350 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:97 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-08 20:04:26.350 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:101 - Creating weights from provided torch tensors
+2026-04-08 20:04:26.362 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-08 20:04:26.576 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created gate_proj: Shape([7168, 512])
+2026-04-08 20:04:26.588 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-08 20:04:26.795 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created up_proj: Shape([7168, 512])
+2026-04-08 20:04:26.807 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-08 20:04:26.999 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created down_proj: Shape([512, 7168])
+2026-04-08 20:04:27.000 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:242 - TtMoe initialization complete
+2026-04-08 20:04:27.021 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:171 - Running TtPrefillBlock forward...
+2026-04-08 20:04:27.021 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 20:04:27.035 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 20:04:27.041 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 20:04:27.041 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:04:27.130 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 20:04:27.131 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 20:04:27.131 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 20:04:27.131 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:04:27.142 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:263 - [TtMoe.forward] INPUT SHAPES:
+2026-04-08 20:04:27.142 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:264 -   x.shape=Shape([1, 512, 1792])
+2026-04-08 20:04:27.160 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:325 - [MoeGate] fallback_mode=device
+2026-04-08 20:04:27.160 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-08 20:04:27.160 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_matmul:266 - [MoeGate] No matmul program config for (512, 1792), using TTNN default
+2026-04-08 20:04:27.202 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-08 20:04:27.202 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-08 20:04:27.203 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_grouped_gate:294 - [MoeGate] _device_grouped_gate: logits.shape=Shape([512, 256]), bias.shape=Shape([512, 256])
+2026-04-08 20:04:27.215 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-08 20:04:27.216 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-08 20:04:27.226 | INFO     | tracy:signpost:44 - MoERoutingSetup
+2026-04-08 20:04:27.233 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:88 - ttnn_top_k_experts_indices.shape=Shape([512, 8])
+2026-04-08 20:04:27.233 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:96 - self.experts_in_dispatch_group.shape=Shape([256])
+2026-04-08 20:04:27.264 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-08 20:04:27.264 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-08 20:04:27.266 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:282 - [TtMoe.forward] expert_token_counts: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0]
+2026-04-08 20:04:27.306 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:303 -   weights.shape=Shape([1, 512, 8])
+2026-04-08 20:04:27.306 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:304 -   indices.shape=Shape([1, 512, 8])
+2026-04-08 20:04:27.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:322 - [TtMoe.forward] x_full (after all_gather) shape: Shape([1, 512, 7168])
+2026-04-08 20:04:27.340 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:330 - [TtMoe.forward] x_full_tiled shape: Shape([1, 512, 7168])
+2026-04-08 20:04:27.340 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:192 - Forward pass: input shape=Shape([1, 512, 7168]), batch_size=1
+2026-04-08 20:04:27.358 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:214 - After gate_proj matmul: Shape([1, 512, 512])
+2026-04-08 20:04:27.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:224 - After up_proj matmul: Shape([1, 512, 512])
+2026-04-08 20:04:27.360 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:234 - After SiLU fusion: Shape([1, 512, 512])
+2026-04-08 20:04:27.375 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:244 - After down_proj matmul: Shape([1, 512, 7168])
+2026-04-08 20:04:27.382 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:257 - After reduce_scatter: Shape([1, 512, 1792])
+2026-04-08 20:04:27.382 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:333 - [TtMoe.forward] Shared expert output shape: Shape([1, 512, 1792])
+2026-04-08 20:04:27.382 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:171 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:172 -   x.shape=Shape([1, 512, 7168])
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:173 -   weights.shape=Shape([1, 512, 8])
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:174 -   indices.shape=Shape([1, 512, 8])
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:175 -   tt_expert_offsets.shape=Shape([1, 256])
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:176 -   tt_expert_dispatch_table.shape=Shape([1, 256])
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:177 - [TtDispatchModule.forward] CONFIG:
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:178 -   dispatch_group_size=2, experts_per_chip=32
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:179 -   num_routed_experts=256, num_experts_per_tok=8
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:180 -   metadata_len=5, max_dispatched_tokens_per_expert=64
+2026-04-08 20:04:27.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:183 -   cluster_axis=0, num_links=1, topology=Topology.Linear
+2026-04-08 20:04:27.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:207 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-04-08 20:04:27.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:208 -   tt_dispatched_buffer.shape=Shape([1, 1, 32, 64, 7168])
+2026-04-08 20:04:27.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:209 -   tt_dispatch_metadata.shape=Shape([1, 1, 32, 64, 5])
+2026-04-08 20:04:27.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:347 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 32, 64, 7168]), metadata=Shape([1, 1, 32, 64, 5])
+2026-04-08 20:04:27.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:357 - [TtMoe.forward] dispatched_buffer_squeezed shape: Shape([32, 64, 7168])
+2026-04-08 20:04:27.411 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:361 - [TtMoe.forward] dispatched_buffer_tiled shape: Shape([32, 64, 7168])
+2026-04-08 20:04:27.411 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:328 - Forward pass: dispatched_buffer shape=Shape([32, 64, 7168])
+2026-04-08 20:04:27.411 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:332 - dispatched_buffer.dtype=DataType.BFLOAT16 typecasting to DataType.BFLOAT8_B
+2026-04-08 20:04:27.422 | INFO     | tracy:signpost:44 - Expert 1/32
+2026-04-08 20:04:27.422 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 0: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 0: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.463 | INFO     | tracy:signpost:44 - Expert 2/32
+2026-04-08 20:04:27.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 1: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 1: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.463 | INFO     | tracy:signpost:44 - Expert 3/32
+2026-04-08 20:04:27.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 2: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.464 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 2: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.464 | INFO     | tracy:signpost:44 - Expert 4/32
+2026-04-08 20:04:27.464 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 3: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.464 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 3: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.465 | INFO     | tracy:signpost:44 - Expert 5/32
+2026-04-08 20:04:27.465 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 4: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.465 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 4: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.465 | INFO     | tracy:signpost:44 - Expert 6/32
+2026-04-08 20:04:27.465 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 5: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.466 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 5: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.466 | INFO     | tracy:signpost:44 - Expert 7/32
+2026-04-08 20:04:27.466 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 6: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.466 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 6: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.466 | INFO     | tracy:signpost:44 - Expert 8/32
+2026-04-08 20:04:27.466 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 7: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.467 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 7: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.467 | INFO     | tracy:signpost:44 - Expert 9/32
+2026-04-08 20:04:27.467 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 8: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.467 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 8: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.467 | INFO     | tracy:signpost:44 - Expert 10/32
+2026-04-08 20:04:27.467 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 9: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.468 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 9: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.468 | INFO     | tracy:signpost:44 - Expert 11/32
+2026-04-08 20:04:27.468 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 10: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.468 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 10: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.469 | INFO     | tracy:signpost:44 - Expert 12/32
+2026-04-08 20:04:27.469 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 11: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.469 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 11: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.469 | INFO     | tracy:signpost:44 - Expert 13/32
+2026-04-08 20:04:27.469 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 12: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.470 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 12: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.470 | INFO     | tracy:signpost:44 - Expert 14/32
+2026-04-08 20:04:27.470 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 13: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.470 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 13: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.470 | INFO     | tracy:signpost:44 - Expert 15/32
+2026-04-08 20:04:27.470 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 14: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.471 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 14: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.471 | INFO     | tracy:signpost:44 - Expert 16/32
+2026-04-08 20:04:27.471 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 15: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.472 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 15: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.472 | INFO     | tracy:signpost:44 - Expert 17/32
+2026-04-08 20:04:27.472 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 16: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.472 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 16: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.472 | INFO     | tracy:signpost:44 - Expert 18/32
+2026-04-08 20:04:27.472 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 17: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.473 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 17: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.473 | INFO     | tracy:signpost:44 - Expert 19/32
+2026-04-08 20:04:27.473 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 18: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.473 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 18: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.474 | INFO     | tracy:signpost:44 - Expert 20/32
+2026-04-08 20:04:27.474 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 19: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.474 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 19: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.474 | INFO     | tracy:signpost:44 - Expert 21/32
+2026-04-08 20:04:27.474 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 20: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.475 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 20: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.475 | INFO     | tracy:signpost:44 - Expert 22/32
+2026-04-08 20:04:27.475 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 21: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.475 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 21: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.475 | INFO     | tracy:signpost:44 - Expert 23/32
+2026-04-08 20:04:27.475 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 22: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.476 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 22: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.476 | INFO     | tracy:signpost:44 - Expert 24/32
+2026-04-08 20:04:27.476 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 23: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.476 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 23: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.476 | INFO     | tracy:signpost:44 - Expert 25/32
+2026-04-08 20:04:27.476 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 24: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.477 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 24: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.477 | INFO     | tracy:signpost:44 - Expert 26/32
+2026-04-08 20:04:27.477 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 25: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 25: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.478 | INFO     | tracy:signpost:44 - Expert 27/32
+2026-04-08 20:04:27.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 26: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 26: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.478 | INFO     | tracy:signpost:44 - Expert 28/32
+2026-04-08 20:04:27.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 27: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 27: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.479 | INFO     | tracy:signpost:44 - Expert 29/32
+2026-04-08 20:04:27.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 28: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 28: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.479 | INFO     | tracy:signpost:44 - Expert 30/32
+2026-04-08 20:04:27.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 29: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.480 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 29: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.480 | INFO     | tracy:signpost:44 - Expert 31/32
+2026-04-08 20:04:27.480 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 30: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.480 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 30: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.481 | INFO     | tracy:signpost:44 - Expert 32/32
+2026-04-08 20:04:27.481 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 31: input shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.481 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 31: output shape Shape([1, 64, 7168])
+2026-04-08 20:04:27.481 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:359 - Final expert_outputs shape: Shape([32, 64, 7168])
+2026-04-08 20:04:27.481 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:364 - [TtMoe.forward] expert_outputs shape: Shape([32, 64, 7168])
+2026-04-08 20:04:27.481 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:370 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 32, 64, 7168])
+2026-04-08 20:04:27.481 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:377 - Typecasting expert_outputs from DataType.BFLOAT8_B to bfloat16 for combine module
+2026-04-08 20:04:27.504 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:380 - [TtMoe.forward] expert_outputs_rm shape: Shape([1, 1, 32, 64, 7168]) expert_outputs_rm.dtype=DataType.BFLOAT16
+2026-04-08 20:04:27.521 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:387 - [TtMoe.forward] combined_output shape: Shape([1, 1, 512, 8, 7168])
+2026-04-08 20:04:27.532 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:401 - [TtMoe.forward] combined_output_tiled shape: Shape([1, 1, 512, 8, 7168])
+2026-04-08 20:04:27.696 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:404 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:04:27.696 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:409 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 512, 1792])
+2026-04-08 20:04:27.696 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:417 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 512, 1792])
+2026-04-08 20:04:27.696 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:421 - [TtMoe.forward] Final output shape: Shape([1, 512, 1792])
+2026-04-08 20:04:27.713 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:176 - Forward pass completed successfully
+2026-04-08 20:04:27.714 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:184 - Output shape: [1, 1, 512, 1792] (matches expected)
+2026-04-08 20:04:27.961 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:206 - PCC: 0.995073 (threshold: 0.98)
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:214 - KVPE cache KV part PCC: 0.999868 (threshold: 0.99)
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:215 - KVPE cache PE part PCC: 0.999896 (threshold: 0.99)
+2026-04-08 20:04:27.975 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:219 - TtPrefillBlock test passed (layer_type=moe, gate_fallback_mode=GateComputeMode.DEVICE, PCC=0.9951)
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:230 - 
+============================================================
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:231 - Timing Report
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:232 - ============================================================
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   weights_creation: 76339.23 ms
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   torch_reference: 2765.55 ms
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_block_creation: 172196.86 ms
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_forward: 692.29 ms
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   pcc_validation: 247.22 ms
+2026-04-08 20:04:27.975 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   total_test_time: 252431.95 ms
+PASSED
+models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-smoke-kv_cache] 2026-04-08 20:04:30.285 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-08 20:04:30.286 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-08 20:04:30.286 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:257)
+2026-04-08 20:04:30.286 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-08 20:04:30.286 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-08 20:04:30.287 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-08 20:04:30.296 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-08 20:04:30.296 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-08 20:04:30.390 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-08 20:04:30.390 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 20:04:30.390 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 20:04:30.390 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-08 20:04:30.390 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-08 20:04:30.390 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-08 20:04:30.390 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-08 20:04:30.390 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-08 20:04:30.390 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-08 20:04:30.390 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-08 20:04:30.444 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.449 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.454 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.458 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.463 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.468 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.472 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.477 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-08 20:04:30.696 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-08 20:04:30.724 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-08 20:04:30.725 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-08 20:04:30.726 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-08 20:04:30.727 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-08 20:04:30.728 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-08 20:04:30.730 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-08 20:04:30.731 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-08 20:04:30.732 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-08 20:04:30.732 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-08 20:04:30.732 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-08 20:04:30.812 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-08 20:04:30.813 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:92 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-08 20:04:30.813 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:93 - isl_total=1024, isl_per_chip=512, layer_type=moe, layer_idx=3, gate_fallback_mode=GateComputeMode.DEVICE
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-08 20:05:48.320 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:70 - Building TtPrefillBlock layer_idx=3 (MoE)
+2026-04-08 20:05:48.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 20:05:48.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:05:48.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 20:05:48.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 20:05:48.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 20:05:48.322 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 20:05:51.733 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:303 - ✓ Loaded 7 weights in MLA layer 3 to TT device
+2026-04-08 20:05:51.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-08 20:05:51.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:05:51.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-08 20:05:51.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-08 20:05:51.734 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-08 20:05:51.734 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-08 20:05:51.735 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 256])
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:162 - Initializing TtMoe
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:163 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:164 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:165 -   experts_per_chip=32, num_routed_experts=256
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:166 -   num_experts_per_tok=8
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:167 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 256]), dispatch_axis=0
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 256])
+2026-04-08 20:05:51.742 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:102 - RoutedExpert: No optimal program config for given dimensions max_tokens=64emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:110 - Initializing TtRoutedExpert with experts_per_chip=32
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:111 - emb_dim=7168, hidden_dim=2048
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:112 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=256
+2026-04-08 20:05:51.742 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:129 - Creating weights from provided torch tensors (256 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/32 [00:00<?, ?it/s]Torch->TTNN weights per local expert:   3%|▎         | 1/32 [00:05<03:04,  5.96s/it]Torch->TTNN weights per local expert:   6%|▋         | 2/32 [00:12<03:00,  6.02s/it]Torch->TTNN weights per local expert:   9%|▉         | 3/32 [00:18<02:54,  6.02s/it]Torch->TTNN weights per local expert:  12%|█▎        | 4/32 [00:24<02:48,  6.02s/it]Torch->TTNN weights per local expert:  16%|█▌        | 5/32 [00:30<02:42,  6.02s/it]Torch->TTNN weights per local expert:  19%|█▉        | 6/32 [00:36<02:36,  6.01s/it]Torch->TTNN weights per local expert:  22%|██▏       | 7/32 [00:42<02:30,  6.02s/it]Torch->TTNN weights per local expert:  25%|██▌       | 8/32 [00:48<02:24,  6.02s/it]Torch->TTNN weights per local expert:  28%|██▊       | 9/32 [00:54<02:18,  6.02s/it]Torch->TTNN weights per local expert:  31%|███▏      | 10/32 [01:00<02:12,  6.02s/it]Torch->TTNN weights per local expert:  34%|███▍      | 11/32 [01:06<02:06,  6.02s/it]Torch->TTNN weights per local expert:  38%|███▊      | 12/32 [01:12<02:00,  6.01s/it]Torch->TTNN weights per local expert:  41%|████      | 13/32 [01:18<01:54,  6.01s/it]Torch->TTNN weights per local expert:  44%|████▍     | 14/32 [01:24<01:48,  6.01s/it]Torch->TTNN weights per local expert:  47%|████▋     | 15/32 [01:30<01:42,  6.02s/it]Torch->TTNN weights per local expert:  50%|█████     | 16/32 [01:36<01:36,  6.03s/it]Torch->TTNN weights per local expert:  53%|█████▎    | 17/32 [01:42<01:30,  6.03s/it]Torch->TTNN weights per local expert:  56%|█████▋    | 18/32 [01:48<01:24,  6.02s/it]Torch->TTNN weights per local expert:  59%|█████▉    | 19/32 [01:54<01:18,  6.03s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 20/32 [02:00<01:12,  6.02s/it]Torch->TTNN weights per local expert:  66%|██████▌   | 21/32 [02:06<01:06,  6.03s/it]Torch->TTNN weights per local expert:  69%|██████▉   | 22/32 [02:12<01:00,  6.03s/it]Torch->TTNN weights per local expert:  72%|███████▏  | 23/32 [02:18<00:54,  6.02s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 24/32 [02:24<00:48,  6.03s/it]Torch->TTNN weights per local expert:  78%|███████▊  | 25/32 [02:30<00:42,  6.03s/it]Torch->TTNN weights per local expert:  81%|████████▏ | 26/32 [02:36<00:36,  6.04s/it]Torch->TTNN weights per local expert:  84%|████████▍ | 27/32 [02:42<00:30,  6.03s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 28/32 [02:48<00:24,  6.04s/it]Torch->TTNN weights per local expert:  91%|█████████ | 29/32 [02:54<00:18,  6.03s/it]Torch->TTNN weights per local expert:  94%|█████████▍| 30/32 [03:00<00:12,  6.03s/it]Torch->TTNN weights per local expert:  97%|█████████▋| 31/32 [03:06<00:06,  6.04s/it]Torch->TTNN weights per local expert: 100%|██████████| 32/32 [03:12<00:00,  6.04s/it]Torch->TTNN weights per local expert: 100%|██████████| 32/32 [03:12<00:00,  6.02s/it]
+2026-04-08 20:09:04.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:95 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-08 20:09:04.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:96 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-08 20:09:04.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:97 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-08 20:09:04.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:101 - Creating weights from provided torch tensors
+2026-04-08 20:09:04.564 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-08 20:09:04.768 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created gate_proj: Shape([7168, 512])
+2026-04-08 20:09:04.779 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-08 20:09:04.987 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created up_proj: Shape([7168, 512])
+2026-04-08 20:09:04.999 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-08 20:09:05.195 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created down_proj: Shape([512, 7168])
+2026-04-08 20:09:05.195 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:242 - TtMoe initialization complete
+2026-04-08 20:09:05.214 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:171 - Running TtPrefillBlock forward...
+2026-04-08 20:09:05.214 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 20:09:05.216 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 20:09:05.221 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 20:09:05.222 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:09:05.311 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-08 20:09:05.311 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-08 20:09:05.311 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-08 20:09:05.312 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:09:05.312 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:263 - [TtMoe.forward] INPUT SHAPES:
+2026-04-08 20:09:05.313 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:264 -   x.shape=Shape([1, 512, 1792])
+2026-04-08 20:09:05.314 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:325 - [MoeGate] fallback_mode=device
+2026-04-08 20:09:05.314 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-08 20:09:05.314 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_matmul:266 - [MoeGate] No matmul program config for (512, 1792), using TTNN default
+2026-04-08 20:09:05.327 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-08 20:09:05.328 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-08 20:09:05.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_grouped_gate:294 - [MoeGate] _device_grouped_gate: logits.shape=Shape([512, 256]), bias.shape=Shape([512, 256])
+2026-04-08 20:09:05.328 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-08 20:09:05.329 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-08 20:09:05.329 | INFO     | tracy:signpost:44 - MoERoutingSetup
+2026-04-08 20:09:05.330 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:88 - ttnn_top_k_experts_indices.shape=Shape([512, 8])
+2026-04-08 20:09:05.330 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:96 - self.experts_in_dispatch_group.shape=Shape([256])
+2026-04-08 20:09:05.336 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-08 20:09:05.336 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-08 20:09:05.338 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:282 - [TtMoe.forward] expert_token_counts: [0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 1024, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1024, 0, 0]
+2026-04-08 20:09:05.341 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:303 -   weights.shape=Shape([1, 512, 8])
+2026-04-08 20:09:05.341 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:304 -   indices.shape=Shape([1, 512, 8])
+2026-04-08 20:09:05.345 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:322 - [TtMoe.forward] x_full (after all_gather) shape: Shape([1, 512, 7168])
+2026-04-08 20:09:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:330 - [TtMoe.forward] x_full_tiled shape: Shape([1, 512, 7168])
+2026-04-08 20:09:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:192 - Forward pass: input shape=Shape([1, 512, 7168]), batch_size=1
+2026-04-08 20:09:05.355 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:214 - After gate_proj matmul: Shape([1, 512, 512])
+2026-04-08 20:09:05.355 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:224 - After up_proj matmul: Shape([1, 512, 512])
+2026-04-08 20:09:05.356 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:234 - After SiLU fusion: Shape([1, 512, 512])
+2026-04-08 20:09:05.361 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:244 - After down_proj matmul: Shape([1, 512, 7168])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:257 - After reduce_scatter: Shape([1, 512, 1792])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:333 - [TtMoe.forward] Shared expert output shape: Shape([1, 512, 1792])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:171 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:172 -   x.shape=Shape([1, 512, 7168])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:173 -   weights.shape=Shape([1, 512, 8])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:174 -   indices.shape=Shape([1, 512, 8])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:175 -   tt_expert_offsets.shape=Shape([1, 256])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:176 -   tt_expert_dispatch_table.shape=Shape([1, 256])
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:177 - [TtDispatchModule.forward] CONFIG:
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:178 -   dispatch_group_size=2, experts_per_chip=32
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:179 -   num_routed_experts=256, num_experts_per_tok=8
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:180 -   metadata_len=5, max_dispatched_tokens_per_expert=64
+2026-04-08 20:09:05.369 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:183 -   cluster_axis=0, num_links=1, topology=Topology.Linear
+2026-04-08 20:09:05.372 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:207 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-04-08 20:09:05.372 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:208 -   tt_dispatched_buffer.shape=Shape([1, 1, 32, 64, 7168])
+2026-04-08 20:09:05.372 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:209 -   tt_dispatch_metadata.shape=Shape([1, 1, 32, 64, 5])
+2026-04-08 20:09:05.372 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:347 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 32, 64, 7168]), metadata=Shape([1, 1, 32, 64, 5])
+2026-04-08 20:09:05.373 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:357 - [TtMoe.forward] dispatched_buffer_squeezed shape: Shape([32, 64, 7168])
+2026-04-08 20:09:05.374 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:361 - [TtMoe.forward] dispatched_buffer_tiled shape: Shape([32, 64, 7168])
+2026-04-08 20:09:05.374 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:328 - Forward pass: dispatched_buffer shape=Shape([32, 64, 7168])
+2026-04-08 20:09:05.374 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:332 - dispatched_buffer.dtype=DataType.BFLOAT16 typecasting to DataType.BFLOAT8_B
+2026-04-08 20:09:05.375 | INFO     | tracy:signpost:44 - Expert 1/32
+2026-04-08 20:09:05.375 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 0: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 0: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.386 | INFO     | tracy:signpost:44 - Expert 2/32
+2026-04-08 20:09:05.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 1: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.387 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 1: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.387 | INFO     | tracy:signpost:44 - Expert 3/32
+2026-04-08 20:09:05.387 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 2: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.388 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 2: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.388 | INFO     | tracy:signpost:44 - Expert 4/32
+2026-04-08 20:09:05.388 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 3: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.388 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 3: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.388 | INFO     | tracy:signpost:44 - Expert 5/32
+2026-04-08 20:09:05.388 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 4: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.389 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 4: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.389 | INFO     | tracy:signpost:44 - Expert 6/32
+2026-04-08 20:09:05.389 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 5: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.389 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 5: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.390 | INFO     | tracy:signpost:44 - Expert 7/32
+2026-04-08 20:09:05.390 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 6: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.390 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 6: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.390 | INFO     | tracy:signpost:44 - Expert 8/32
+2026-04-08 20:09:05.390 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 7: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.391 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 7: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.391 | INFO     | tracy:signpost:44 - Expert 9/32
+2026-04-08 20:09:05.391 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 8: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.391 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 8: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.391 | INFO     | tracy:signpost:44 - Expert 10/32
+2026-04-08 20:09:05.391 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 9: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.392 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 9: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.392 | INFO     | tracy:signpost:44 - Expert 11/32
+2026-04-08 20:09:05.392 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 10: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.392 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 10: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.392 | INFO     | tracy:signpost:44 - Expert 12/32
+2026-04-08 20:09:05.392 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 11: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.393 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 11: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.393 | INFO     | tracy:signpost:44 - Expert 13/32
+2026-04-08 20:09:05.393 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 12: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.393 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 12: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.393 | INFO     | tracy:signpost:44 - Expert 14/32
+2026-04-08 20:09:05.393 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 13: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.394 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 13: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.394 | INFO     | tracy:signpost:44 - Expert 15/32
+2026-04-08 20:09:05.394 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 14: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.394 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 14: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.394 | INFO     | tracy:signpost:44 - Expert 16/32
+2026-04-08 20:09:05.394 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 15: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.395 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 15: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.395 | INFO     | tracy:signpost:44 - Expert 17/32
+2026-04-08 20:09:05.395 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 16: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.395 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 16: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.396 | INFO     | tracy:signpost:44 - Expert 18/32
+2026-04-08 20:09:05.396 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 17: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.396 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 17: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.396 | INFO     | tracy:signpost:44 - Expert 19/32
+2026-04-08 20:09:05.396 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 18: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.397 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 18: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.397 | INFO     | tracy:signpost:44 - Expert 20/32
+2026-04-08 20:09:05.397 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 19: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.397 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 19: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.397 | INFO     | tracy:signpost:44 - Expert 21/32
+2026-04-08 20:09:05.397 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 20: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.398 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 20: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.398 | INFO     | tracy:signpost:44 - Expert 22/32
+2026-04-08 20:09:05.398 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 21: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.398 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 21: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.399 | INFO     | tracy:signpost:44 - Expert 23/32
+2026-04-08 20:09:05.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 22: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 22: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.399 | INFO     | tracy:signpost:44 - Expert 24/32
+2026-04-08 20:09:05.399 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 23: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.400 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 23: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.400 | INFO     | tracy:signpost:44 - Expert 25/32
+2026-04-08 20:09:05.400 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 24: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.400 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 24: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.400 | INFO     | tracy:signpost:44 - Expert 26/32
+2026-04-08 20:09:05.400 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 25: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.401 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 25: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.401 | INFO     | tracy:signpost:44 - Expert 27/32
+2026-04-08 20:09:05.401 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 26: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.401 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 26: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.401 | INFO     | tracy:signpost:44 - Expert 28/32
+2026-04-08 20:09:05.401 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 27: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.402 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 27: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.402 | INFO     | tracy:signpost:44 - Expert 29/32
+2026-04-08 20:09:05.402 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 28: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.402 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 28: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.402 | INFO     | tracy:signpost:44 - Expert 30/32
+2026-04-08 20:09:05.402 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 29: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.403 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 29: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.403 | INFO     | tracy:signpost:44 - Expert 31/32
+2026-04-08 20:09:05.403 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 30: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.403 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 30: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.404 | INFO     | tracy:signpost:44 - Expert 32/32
+2026-04-08 20:09:05.404 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 31: input shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.404 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 31: output shape Shape([1, 64, 7168])
+2026-04-08 20:09:05.404 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:359 - Final expert_outputs shape: Shape([32, 64, 7168])
+2026-04-08 20:09:05.404 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:364 - [TtMoe.forward] expert_outputs shape: Shape([32, 64, 7168])
+2026-04-08 20:09:05.404 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:370 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 32, 64, 7168])
+2026-04-08 20:09:05.404 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:377 - Typecasting expert_outputs from DataType.BFLOAT8_B to bfloat16 for combine module
+2026-04-08 20:09:05.407 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:380 - [TtMoe.forward] expert_outputs_rm shape: Shape([1, 1, 32, 64, 7168]) expert_outputs_rm.dtype=DataType.BFLOAT16
+2026-04-08 20:09:05.410 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:387 - [TtMoe.forward] combined_output shape: Shape([1, 1, 512, 8, 7168])
+2026-04-08 20:09:05.412 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:401 - [TtMoe.forward] combined_output_tiled shape: Shape([1, 1, 512, 8, 7168])
+2026-04-08 20:09:05.528 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:404 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 512, 1792])
+2026-04-08 20:09:05.528 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:409 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 512, 1792])
+2026-04-08 20:09:05.528 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:417 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 512, 1792])
+2026-04-08 20:09:05.529 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:421 - [TtMoe.forward] Final output shape: Shape([1, 512, 1792])
+2026-04-08 20:09:05.530 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:176 - Forward pass completed successfully
+2026-04-08 20:09:05.530 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:184 - Output shape: [1, 1, 512, 1792] (matches expected)
+2026-04-08 20:09:05.530 | SUCCESS  | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:224 - TtPrefillBlock smoke test passed (layer_type=moe, gate_fallback_mode=GateComputeMode.DEVICE)
+2026-04-08 20:09:05.530 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:230 - 
+============================================================
+2026-04-08 20:09:05.530 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:231 - Timing Report
+2026-04-08 20:09:05.530 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:232 - ============================================================
+2026-04-08 20:09:05.530 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   weights_creation: 77362.46 ms
+2026-04-08 20:09:05.531 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_block_creation: 196875.31 ms
+2026-04-08 20:09:05.531 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   tt_forward: 315.90 ms
+2026-04-08 20:09:05.531 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block:234 -   total_test_time: 274717.61 ms
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+275.15s call     models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-smoke-kv_cache]
+252.89s call     models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-pcc-kv_cache]
+21.05s call     models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-pcc-kv_cache]
+20.69s call     models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-smoke-kv_cache]
+1.66s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-pcc-kv_cache]
+0.84s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-pcc-kv_cache]
+0.81s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-smoke-kv_cache]
+0.78s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-pcc-kv_cache]
+0.72s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-smoke-kv_cache]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-smoke-kv_cache]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-smoke-kv_cache]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-pcc-kv_cache]
+=========================== short test summary info ============================
+PASSED models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-pcc-kv_cache]
+PASSED models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-dense-1024-smoke-kv_cache]
+PASSED models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-pcc-kv_cache]
+PASSED models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block[blackhole-mesh-2x4-moe-gate_device-1024-smoke-kv_cache]
+=================== 4 passed, 1 warning in 579.49s (0:09:39) ===================
+2026-04-08 20:09:09.584 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-08 20:09:09.584 | info     |             UMD | Closing devices in cluster (cluster.cpp:961)

@@ -1,0 +1,516 @@
+2026-04-22 22:56:16.217 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-22 22:56:18.710 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:72)
+2026-04-22 22:56:18.722 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:468)
+2026-04-22 22:56:18.722 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:500)
+2026-04-22 22:56:18.812 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:225)
+2026-04-22 22:56:18.814 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:72)
+2026-04-22 22:56:18.824 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:468)
+2026-04-22 22:56:18.824 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:500)
+2026-04-22 22:56:18.912 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:18.919 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:18.919 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:18.955 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:18.962 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:18.962 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:18.998 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:19.005 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:19.005 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:19.041 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:19.048 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:19.048 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:19.084 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:19.091 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:19.091 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:19.126 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:19.134 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:19.134 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:19.169 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:19.177 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:19.177 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:19.212 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-22 22:56:19.219 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:322)
+2026-04-22 22:56:19.219 | info     |             UMD | Allocating sysmem for IOMMU (size: 0x40000000). (silicon_sysmem_manager.cpp:328)
+2026-04-22 22:56:19.255 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-22 22:56:19.255 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-22 22:56:19.255 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-22 22:56:19.260 | info     |             UMD | Starting devices in cluster (cluster.cpp:1017)
+2026-04-22 22:56:19.261 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0xffffffff40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.262 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.263 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.264 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.265 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.266 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.267 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+2026-04-22 22:56:19.268 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:376)
+collected 1 item
+
+models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True] 2026-04-22 22:56:20.806 | DEBUG    | ttnn.device:__init__:150 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-22 22:56:20.806 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-22 22:56:20.806 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-22 22:56:20.806 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-22 22:56:20.808 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:72)
+2026-04-22 22:56:20.816 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:468)
+2026-04-22 22:56:20.816 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:500)
+2026-04-22 22:56:20.892 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-22 22:56:20.892 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-22 22:56:20.892 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-22 22:56:20.892 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-22 22:56:20.892 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-22 22:56:20.892 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-22 22:56:20.892 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1469)
+2026-04-22 22:56:20.892 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1510)
+2026-04-22 22:56:20.892 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1539)
+2026-04-22 22:56:20.892 | info     |          Fabric | Attempt 1: Mapping 1 mesh pair(s) (topology_mapper_utils.cpp:1547)
+2026-04-22 22:56:20.892 | info     |          Fabric | Attempt 1: Mapping mesh 0 -> 0 (topology_mapper_utils.cpp:1554)
+2026-04-22 22:56:20.892 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1686)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:20.934 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7480443082328483327/ (build_env_manager.cpp:260)
+2026-04-22 22:56:21.070 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-22 22:56:21.131 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:413)
+2026-04-22 22:56:21.132 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:413)
+2026-04-22 22:56:21.133 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:413)
+2026-04-22 22:56:21.134 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:413)
+2026-04-22 22:56:21.136 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:413)
+2026-04-22 22:56:21.137 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:413)
+2026-04-22 22:56:21.138 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:413)
+2026-04-22 22:56:21.139 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:413)
+2026-04-22 22:56:21.139 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-22 22:56:21.139 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-22 22:56:21.224 | DEBUG    | conftest:mesh_device:589 - multidevice with 8 devices is created
+2026-04-22 22:56:21.225 | info     |           Metal | Disabling and clearing program cache on MeshDevice 0 (mesh_device.cpp:984)
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:141 - 
+============================================================
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:142 - TtMoe PCC Test
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:143 - ============================================================
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:144 - mesh_shape=MeshShape([4, 2]), num_devices=8
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:145 - dispatch_group_size=4, num_dispatch_groups=2
+2026-04-22 22:56:21.227 | INFO     | tracy:signpost:44 - TtMoe PCC test - mesh MeshShape([4, 2]), seq_len=1600, emb_dim=7168, experts=64
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:155 - experts_per_chip=8, metadata_len=5
+2026-04-22 22:56:21.227 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:156 - max_dispatched_tokens_per_expert=1600
+Creating expert weights:   0%|          | 0/64 [00:00<?, ?it/s]Creating expert weights:   2%|▏         | 1/64 [00:00<00:17,  3.61it/s]Creating expert weights:   3%|▎         | 2/64 [00:00<00:17,  3.57it/s]Creating expert weights:   5%|▍         | 3/64 [00:00<00:17,  3.54it/s]Creating expert weights:   6%|▋         | 4/64 [00:01<00:17,  3.53it/s]Creating expert weights:   8%|▊         | 5/64 [00:01<00:16,  3.52it/s]Creating expert weights:   9%|▉         | 6/64 [00:01<00:16,  3.52it/s]Creating expert weights:  11%|█         | 7/64 [00:01<00:16,  3.51it/s]Creating expert weights:  12%|█▎        | 8/64 [00:02<00:15,  3.52it/s]Creating expert weights:  14%|█▍        | 9/64 [00:02<00:15,  3.53it/s]Creating expert weights:  16%|█▌        | 10/64 [00:02<00:15,  3.53it/s]Creating expert weights:  17%|█▋        | 11/64 [00:03<00:15,  3.53it/s]Creating expert weights:  19%|█▉        | 12/64 [00:03<00:14,  3.53it/s]Creating expert weights:  20%|██        | 13/64 [00:03<00:14,  3.53it/s]Creating expert weights:  22%|██▏       | 14/64 [00:03<00:14,  3.52it/s]Creating expert weights:  23%|██▎       | 15/64 [00:04<00:13,  3.54it/s]Creating expert weights:  25%|██▌       | 16/64 [00:04<00:13,  3.54it/s]Creating expert weights:  27%|██▋       | 17/64 [00:04<00:13,  3.53it/s]Creating expert weights:  28%|██▊       | 18/64 [00:05<00:13,  3.52it/s]Creating expert weights:  30%|██▉       | 19/64 [00:05<00:12,  3.52it/s]Creating expert weights:  31%|███▏      | 20/64 [00:05<00:12,  3.52it/s]Creating expert weights:  33%|███▎      | 21/64 [00:05<00:12,  3.52it/s]Creating expert weights:  34%|███▍      | 22/64 [00:06<00:11,  3.53it/s]Creating expert weights:  36%|███▌      | 23/64 [00:06<00:11,  3.52it/s]Creating expert weights:  38%|███▊      | 24/64 [00:06<00:11,  3.52it/s]Creating expert weights:  39%|███▉      | 25/64 [00:07<00:11,  3.52it/s]Creating expert weights:  41%|████      | 26/64 [00:07<00:10,  3.52it/s]Creating expert weights:  42%|████▏     | 27/64 [00:07<00:10,  3.52it/s]Creating expert weights:  44%|████▍     | 28/64 [00:07<00:10,  3.53it/s]Creating expert weights:  45%|████▌     | 29/64 [00:08<00:09,  3.55it/s]Creating expert weights:  47%|████▋     | 30/64 [00:08<00:09,  3.54it/s]Creating expert weights:  48%|████▊     | 31/64 [00:08<00:09,  3.54it/s]Creating expert weights:  50%|█████     | 32/64 [00:09<00:09,  3.54it/s]Creating expert weights:  52%|█████▏    | 33/64 [00:09<00:08,  3.53it/s]Creating expert weights:  53%|█████▎    | 34/64 [00:09<00:08,  3.52it/s]Creating expert weights:  55%|█████▍    | 35/64 [00:09<00:08,  3.52it/s]Creating expert weights:  56%|█████▋    | 36/64 [00:10<00:07,  3.52it/s]Creating expert weights:  58%|█████▊    | 37/64 [00:10<00:07,  3.53it/s]Creating expert weights:  59%|█████▉    | 38/64 [00:10<00:07,  3.53it/s]Creating expert weights:  61%|██████    | 39/64 [00:11<00:07,  3.53it/s]Creating expert weights:  62%|██████▎   | 40/64 [00:11<00:06,  3.53it/s]Creating expert weights:  64%|██████▍   | 41/64 [00:11<00:06,  3.53it/s]Creating expert weights:  66%|██████▌   | 42/64 [00:11<00:06,  3.55it/s]Creating expert weights:  67%|██████▋   | 43/64 [00:12<00:05,  3.53it/s]Creating expert weights:  69%|██████▉   | 44/64 [00:12<00:05,  3.56it/s]Creating expert weights:  70%|███████   | 45/64 [00:12<00:05,  3.54it/s]Creating expert weights:  72%|███████▏  | 46/64 [00:13<00:05,  3.54it/s]Creating expert weights:  73%|███████▎  | 47/64 [00:13<00:04,  3.54it/s]Creating expert weights:  75%|███████▌  | 48/64 [00:13<00:04,  3.53it/s]Creating expert weights:  77%|███████▋  | 49/64 [00:13<00:04,  3.53it/s]Creating expert weights:  78%|███████▊  | 50/64 [00:14<00:03,  3.53it/s]Creating expert weights:  80%|███████▉  | 51/64 [00:14<00:03,  3.54it/s]Creating expert weights:  81%|████████▏ | 52/64 [00:14<00:03,  3.54it/s]Creating expert weights:  83%|████████▎ | 53/64 [00:15<00:03,  3.54it/s]Creating expert weights:  84%|████████▍ | 54/64 [00:15<00:02,  3.53it/s]Creating expert weights:  86%|████████▌ | 55/64 [00:15<00:02,  3.52it/s]Creating expert weights:  88%|████████▊ | 56/64 [00:15<00:02,  3.54it/s]Creating expert weights:  89%|████████▉ | 57/64 [00:16<00:01,  3.54it/s]Creating expert weights:  91%|█████████ | 58/64 [00:16<00:01,  3.53it/s]Creating expert weights:  92%|█████████▏| 59/64 [00:16<00:01,  3.53it/s]Creating expert weights:  94%|█████████▍| 60/64 [00:16<00:01,  3.52it/s]Creating expert weights:  95%|█████████▌| 61/64 [00:17<00:00,  3.52it/s]Creating expert weights:  97%|█████████▋| 62/64 [00:17<00:00,  3.53it/s]Creating expert weights:  98%|█████████▊| 63/64 [00:17<00:00,  3.53it/s]Creating expert weights: 100%|██████████| 64/64 [00:18<00:00,  3.53it/s]Creating expert weights: 100%|██████████| 64/64 [00:18<00:00,  3.53it/s]
+2026-04-22 22:56:39.647 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:240 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([2, 64])
+2026-04-22 22:56:41.357 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:get_gate_outputs:339 - [get_gate_outputs] OUTPUT SHAPES:
+2026-04-22 22:56:41.358 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:get_gate_outputs:340 -   expert_counter.shape=torch.Size([2, 4, 64])
+2026-04-22 22:56:41.358 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:get_gate_outputs:341 -   expert_offsets.shape=torch.Size([2, 4, 64])
+2026-04-22 22:56:41.358 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:get_gate_outputs:342 -   expert_token_counts.shape=torch.Size([2, 4, 64])
+2026-04-22 22:56:41.775 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:111 - [TorchDispatchModule.forward] INPUT SHAPES:
+2026-04-22 22:56:41.775 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:112 -   x.shape=torch.Size([4, 1600, 7168])
+2026-04-22 22:56:41.775 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:113 -   weights.shape=torch.Size([4, 1600, 8])
+2026-04-22 22:56:41.775 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:114 -   indices.shape=torch.Size([4, 1600, 8])
+2026-04-22 22:56:41.775 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:115 -   expert_offsets.shape=torch.Size([2, 4, 64])
+2026-04-22 22:56:41.776 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:116 - [TorchDispatchModule.forward] CONFIG:
+2026-04-22 22:56:41.776 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:117 -   dispatch_group_size=4, experts_per_chip=8
+2026-04-22 22:56:41.776 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:118 -   num_routed_experts=64, num_experts_per_tok=8
+2026-04-22 22:56:41.776 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:119 -   metadata_len=5, max_dispatched_tokens_per_expert=1600
+2026-04-22 22:56:41.776 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:122 -   num_dispatch_groups=2
+2026-04-22 22:56:44.282 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:180 - [TorchDispatchModule.forward] OUTPUT SHAPES:
+2026-04-22 22:56:44.283 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:181 -   dispatched_buffer.shape=torch.Size([2, 4, 8, 1600, 7168])
+2026-04-22 22:56:44.283 | DEBUG    | models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch:forward:182 -   dispatched_metadata.shape=torch.Size([2, 4, 8, 1600, 5])
+2026-04-22 22:56:48.523 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:232 - Creating TtMoe...
+2026-04-22 22:56:48.524 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:240 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([2, 64])
+2026-04-22 22:56:48.543 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:236 - Initializing TtMoe
+2026-04-22 22:56:48.543 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:237 -   mesh_device.shape=MeshShape([4, 2])
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:238 -   dispatch_group_size=4, num_dispatch_groups=2
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:239 -   experts_per_chip=8, num_routed_experts=64
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:240 -   num_experts_per_tok=8
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:241 -   seq_len_per_chip=1600, emb_dim=7168, hidden_dim=2048
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([2, 64]), dispatch_axis=0
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:236 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:237 - emb_dim=7168, hidden_dim=2048
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:238 - Mesh shape: MeshShape([4, 2]), num_devices=8, total_experts=64
+2026-04-22 22:56:48.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:255 - Creating weights from provided torch tensors (64 experts)
+Expert weights (convert):   0%|          | 0/8 [00:00<?, ?it/s]Expert weights (convert):  12%|█▎        | 1/8 [00:07<00:50,  7.16s/it]Expert weights (convert):  25%|██▌       | 2/8 [00:14<00:43,  7.22s/it]Expert weights (convert):  38%|███▊      | 3/8 [00:21<00:36,  7.27s/it]Expert weights (convert):  50%|█████     | 4/8 [00:29<00:29,  7.29s/it]Expert weights (convert):  62%|██████▎   | 5/8 [00:36<00:21,  7.31s/it]Expert weights (convert):  75%|███████▌  | 6/8 [00:43<00:14,  7.32s/it]Expert weights (convert):  88%|████████▊ | 7/8 [00:51<00:07,  7.32s/it]Expert weights (convert): 100%|██████████| 8/8 [00:58<00:00,  7.32s/it]Expert weights (convert): 100%|██████████| 8/8 [00:58<00:00,  7.30s/it]
+2026-04-22 22:57:47.082 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:192 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-22 22:57:47.083 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:193 - Mesh shape: MeshShape([4, 2]), num_devices=8
+2026-04-22 22:57:47.083 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:194 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-22 22:57:47.083 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:198 - Creating weights from provided torch tensors
+2026-04-22 22:57:47.912 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:316 - TtMoe initialization complete
+2026-04-22 22:57:47.913 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:260 - Running TtMoe forward pass...
+2026-04-22 22:57:47.913 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:337 - [TtMoe.forward] INPUT SHAPES:
+2026-04-22 22:57:47.913 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:338 -   x.shape=Shape([1, 1600, 3584])
+2026-04-22 22:57:47.913 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:464 - [MoeGate] fallback_mode=host_all
+2026-04-22 22:57:47.913 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-22 22:57:48.424 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-22 22:57:48.424 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-22 22:57:48.454 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-22 22:57:48.454 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-22 22:57:48.454 | INFO     | tracy:signpost:44 - MoERoutingSetup
+2026-04-22 22:57:48.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:88 - ttnn_top_k_experts_indices.shape=Shape([1600, 8])
+2026-04-22 22:57:48.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:96 - self.experts_in_dispatch_group.shape=Shape([64])
+2026-04-22 22:57:48.474 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-22 22:57:48.474 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-22 22:57:48.476 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:359 - [TtMoe.forward] expert_token_counts: [828, 880, 738, 880, 761, 875, 871, 785, 741, 886, 831, 732, 694, 744, 633, 698, 787, 778, 834, 788, 782, 804, 783, 781, 761, 837, 782, 733, 715, 809, 798, 740, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 828, 880, 738, 880, 761, 875, 871, 785, 741, 886, 831, 732, 694, 744, 633, 698, 787, 778, 834, 788, 782, 804, 783, 781, 761, 837, 782, 733, 715, 809, 798, 740, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 828, 880, 738, 880, 761, 875, 871, 785, 741, 886, 831, 732, 694, 744, 633, 698, 787, 778, 834, 788, 782, 804, 783, 781, 761, 837, 782, 733, 715, 809, 798, 740, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 828, 880, 738, 880, 761, 875, 871, 785, 741, 886, 831, 732, 694, 744, 633, 698, 787, 778, 834, 788, 782, 804, 783, 781, 761, 837, 782, 733, 715, 809, 798, 740, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 789, 894, 890, 833, 800, 762, 798, 916, 861, 849, 775, 740, 892, 728, 841, 827, 724, 783, 795, 782, 796, 898, 767, 696, 876, 897, 812, 625, 943, 843, 880, 799, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 789, 894, 890, 833, 800, 762, 798, 916, 861, 849, 775, 740, 892, 728, 841, 827, 724, 783, 795, 782, 796, 898, 767, 696, 876, 897, 812, 625, 943, 843, 880, 799, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 789, 894, 890, 833, 800, 762, 798, 916, 861, 849, 775, 740, 892, 728, 841, 827, 724, 783, 795, 782, 796, 898, 767, 696, 876, 897, 812, 625, 943, 843, 880, 799, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 789, 894, 890, 833, 800, 762, 798, 916, 861, 849, 775, 740, 892, 728, 841, 827, 724, 783, 795, 782, 796, 898, 767, 696, 876, 897, 812, 625, 943, 843, 880, 799]
+2026-04-22 22:57:48.489 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:380 -   scores.shape=Shape([1, 1600, 8]) scores.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)
+2026-04-22 22:57:48.489 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:381 -   indices.shape=Shape([1, 1600, 8]) indices.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)
+2026-04-22 22:57:48.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:397 - [TtMoe.forward] x (after all_gather) shape: Shape([1, 1600, 7168])
+2026-04-22 22:57:48.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:404 - [TtMoe.forward] x.shape=Shape([1, 1600, 7168]) x.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)
+2026-04-22 22:57:48.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:308 - Forward pass: input shape=Shape([1, 1600, 7168]), batch_size=1
+2026-04-22 22:57:48.516 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:330 - After gate_proj matmul: Shape([1, 1600, 1024])
+2026-04-22 22:57:48.530 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:340 - After up_proj matmul: Shape([1, 1600, 1024])
+2026-04-22 22:57:48.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:350 - After SiLU fusion: Shape([1, 1600, 1024])
+2026-04-22 22:57:48.557 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:360 - After down_proj matmul: Shape([1, 1600, 7168])
+2026-04-22 22:57:48.569 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:373 - After reduce_scatter: Shape([1, 1600, 3584])
+2026-04-22 22:57:48.569 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:407 - [TtMoe.forward] Shared expert output shape: Shape([1, 1600, 3584])
+2026-04-22 22:57:48.576 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:414 - [TtMoe.forward] x.shape=Shape([1, 1600, 7168]) x.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)
+2026-04-22 22:57:48.576 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:171 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-04-22 22:57:48.576 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:172 -   x.shape=Shape([1, 1600, 7168])
+2026-04-22 22:57:48.576 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:173 -   weights.shape=Shape([1, 1600, 8])
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:174 -   indices.shape=Shape([1, 1600, 8])
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:175 -   tt_expert_offsets.shape=Shape([1, 64])
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:176 -   tt_expert_dispatch_table.shape=Shape([1, 64])
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:177 - [TtDispatchModule.forward] CONFIG:
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:178 -   dispatch_group_size=4, experts_per_chip=8
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:179 -   num_routed_experts=64, num_experts_per_tok=8
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:180 -   metadata_len=5, max_dispatched_tokens_per_expert=1600
+2026-04-22 22:57:48.577 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:183 -   cluster_axis=0, num_links=1, topology=Topology.Linear
+2026-04-22 22:57:48.587 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:207 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-04-22 22:57:48.588 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:208 -   tt_dispatched_buffer.shape=Shape([1, 1, 8, 1600, 7168])
+2026-04-22 22:57:48.588 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:209 -   tt_dispatch_metadata.shape=Shape([1, 1, 8, 1600, 5])
+2026-04-22 22:57:48.588 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:425 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 8, 1600, 7168]), metadata=Shape([1, 1, 8, 1600, 5])
+2026-04-22 22:57:48.594 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:438 - [TtMoe.forward] dispatched_buffer_tiled shape: Shape([8, 1600, 7168])
+2026-04-22 22:57:48.595 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:385 - Forward pass: dispatched_buffer shape=Shape([8, 1600, 7168])
+2026-04-22 22:57:48.595 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:389 - dispatched_buffer.dtype=DataType.BFLOAT16 typecasting to DataType.BFLOAT8_B
+2026-04-22 22:57:48.600 | INFO     | tracy:signpost:44 - Expert 1/8
+2026-04-22 22:57:48.600 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 0: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 0: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.664 | INFO     | tracy:signpost:44 - Expert 2/8
+2026-04-22 22:57:48.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 1: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 1: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.707 | INFO     | tracy:signpost:44 - Expert 3/8
+2026-04-22 22:57:48.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 2: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.748 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 2: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.748 | INFO     | tracy:signpost:44 - Expert 4/8
+2026-04-22 22:57:48.749 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 3: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.791 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 3: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.791 | INFO     | tracy:signpost:44 - Expert 5/8
+2026-04-22 22:57:48.792 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 4: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.833 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 4: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.833 | INFO     | tracy:signpost:44 - Expert 6/8
+2026-04-22 22:57:48.833 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 5: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.880 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 5: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.881 | INFO     | tracy:signpost:44 - Expert 7/8
+2026-04-22 22:57:48.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 6: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.926 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 6: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.926 | INFO     | tracy:signpost:44 - Expert 8/8
+2026-04-22 22:57:48.926 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:403 - Expert 7: input shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:413 - Expert 7: output shape Shape([1, 1600, 7168])
+2026-04-22 22:57:48.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:416 - Final expert_outputs shape: Shape([8, 1600, 7168])
+2026-04-22 22:57:48.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:455 - [TtMoe.forward] expert_outputs shape: Shape([8, 1600, 7168])
+2026-04-22 22:57:48.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:461 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 8, 1600, 7168])
+2026-04-22 22:57:48.974 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:468 - [TtMoe.forward] expert_outputs_rm shape: Shape([1, 1, 8, 1600, 7168]) expert_outputs_rm.dtype=DataType.BFLOAT16
+2026-04-22 22:57:48.982 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:475 - [TtMoe.forward] combined_output shape: Shape([1, 1, 1600, 8, 7168])
+2026-04-22 22:57:49.009 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:492 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 1600, 3584])
+2026-04-22 22:57:49.010 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:497 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 1600, 3584])
+2026-04-22 22:57:49.014 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:505 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 1600, 3584])
+2026-04-22 22:57:49.019 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:509 - [TtMoe.forward] Final output shape: Shape([1, 1600, 3584])
+2026-04-22 22:57:49.021 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:278 - Comparing intermediate outputs...
+2026-04-22 22:57:49.142 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers:log_validation_results:236 - 
+Gate Recall Validation:
+(Columns: gate_indices_recall)
++------+------------------+------------------+
+| Chip | Dispatch Group 0 | Dispatch Group 1 |
++------+------------------+------------------+
+|  0   |        ✅        |        ✅        |
+|  1   |        ✅        |        ✅        |
+|  2   |        ✅        |        ✅        |
+|  3   |        ✅        |        ✅        |
++------+------------------+------------------+
+gate_indices_recall: 4/4 ✅
+2026-04-22 22:57:49.142 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:311 - [gate_indices_recall] PASSED
+2026-04-22 22:57:50.798 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:335 - [shared_output] PASSED - PCC: 0.999506 (threshold: 0.997)
+2026-04-22 22:57:52.465 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:335 - [routed_output] PASSED - PCC: 0.980138 (threshold: 0.9)
+2026-04-22 22:57:54.109 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:335 - [final_output] PASSED - PCC: 0.989220 (threshold: 0.96)
+2026-04-22 22:58:04.193 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=0 count=828
+2026-04-22 22:58:04.198 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=1 count=880
+2026-04-22 22:58:04.201 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=2 count=738
+2026-04-22 22:58:04.205 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=3 count=880
+2026-04-22 22:58:04.208 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=4 count=761
+2026-04-22 22:58:04.212 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=5 count=875
+2026-04-22 22:58:04.215 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=6 count=871
+2026-04-22 22:58:04.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=0 expert_id=7 count=785
+2026-04-22 22:58:04.222 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=0 count=741
+2026-04-22 22:58:04.226 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=1 count=886
+2026-04-22 22:58:04.235 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=2 count=831
+2026-04-22 22:58:04.240 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=3 count=732
+2026-04-22 22:58:04.243 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=4 count=694
+2026-04-22 22:58:04.247 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=5 count=744
+2026-04-22 22:58:04.249 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=6 count=633
+2026-04-22 22:58:04.252 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=1 expert_id=7 count=698
+2026-04-22 22:58:04.256 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=0 count=787
+2026-04-22 22:58:04.259 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=1 count=778
+2026-04-22 22:58:04.263 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=2 count=834
+2026-04-22 22:58:04.266 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=3 count=788
+2026-04-22 22:58:04.270 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=4 count=782
+2026-04-22 22:58:04.274 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=5 count=804
+2026-04-22 22:58:04.277 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=6 count=783
+2026-04-22 22:58:04.280 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=2 expert_id=7 count=781
+2026-04-22 22:58:04.283 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=0 count=761
+2026-04-22 22:58:04.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=1 count=837
+2026-04-22 22:58:04.290 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=2 count=782
+2026-04-22 22:58:04.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=3 count=733
+2026-04-22 22:58:04.296 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=4 count=715
+2026-04-22 22:58:04.300 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=5 count=809
+2026-04-22 22:58:04.303 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=6 count=798
+2026-04-22 22:58:04.306 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer dst_chip_id=3 expert_id=7 count=740
+2026-04-22 22:58:04.310 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=0 count=789
+2026-04-22 22:58:04.314 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=1 count=894
+2026-04-22 22:58:04.318 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=2 count=890
+2026-04-22 22:58:04.321 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=3 count=833
+2026-04-22 22:58:04.325 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=4 count=800
+2026-04-22 22:58:04.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=5 count=762
+2026-04-22 22:58:04.331 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=6 count=798
+2026-04-22 22:58:04.342 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=0 expert_id=7 count=916
+2026-04-22 22:58:04.347 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=0 count=861
+2026-04-22 22:58:04.351 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=1 count=849
+2026-04-22 22:58:04.354 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=2 count=775
+2026-04-22 22:58:04.364 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=3 count=740
+2026-04-22 22:58:04.370 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=4 count=892
+2026-04-22 22:58:04.373 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=5 count=728
+2026-04-22 22:58:04.376 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=6 count=841
+2026-04-22 22:58:04.380 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=1 expert_id=7 count=827
+2026-04-22 22:58:04.383 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=0 count=724
+2026-04-22 22:58:04.387 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=1 count=783
+2026-04-22 22:58:04.390 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=2 count=795
+2026-04-22 22:58:04.393 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=3 count=782
+2026-04-22 22:58:04.396 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=4 count=796
+2026-04-22 22:58:04.401 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=5 count=898
+2026-04-22 22:58:04.404 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=6 count=767
+2026-04-22 22:58:04.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=2 expert_id=7 count=696
+2026-04-22 22:58:04.418 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=0 count=876
+2026-04-22 22:58:04.422 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=1 count=897
+2026-04-22 22:58:04.425 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=2 count=812
+2026-04-22 22:58:04.434 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=3 count=625
+2026-04-22 22:58:04.440 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=4 count=943
+2026-04-22 22:58:04.444 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=5 count=843
+2026-04-22 22:58:04.448 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=6 count=880
+2026-04-22 22:58:04.452 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer dst_chip_id=3 expert_id=7 count=799
+2026-04-22 22:58:04.452 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:379 - [dispatched_buffer] PASSED - 64/64 slots matched
+2026-04-22 22:58:04.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=0 count=828
+2026-04-22 22:58:04.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=1 count=880
+2026-04-22 22:58:04.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=2 count=738
+2026-04-22 22:58:04.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=3 count=880
+2026-04-22 22:58:04.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=4 count=761
+2026-04-22 22:58:04.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=5 count=875
+2026-04-22 22:58:04.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=6 count=871
+2026-04-22 22:58:04.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=0 expert_id=7 count=785
+2026-04-22 22:58:04.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=0 count=741
+2026-04-22 22:58:04.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=1 count=886
+2026-04-22 22:58:04.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=2 count=831
+2026-04-22 22:58:04.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=3 count=732
+2026-04-22 22:58:04.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=4 count=694
+2026-04-22 22:58:04.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=5 count=744
+2026-04-22 22:58:04.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=6 count=633
+2026-04-22 22:58:04.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=1 expert_id=7 count=698
+2026-04-22 22:58:04.715 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=0 count=787
+2026-04-22 22:58:04.715 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=1 count=778
+2026-04-22 22:58:04.715 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=2 count=834
+2026-04-22 22:58:04.716 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=3 count=788
+2026-04-22 22:58:04.716 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=4 count=782
+2026-04-22 22:58:04.716 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=5 count=804
+2026-04-22 22:58:04.716 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=6 count=783
+2026-04-22 22:58:04.717 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=2 expert_id=7 count=781
+2026-04-22 22:58:04.717 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=0 count=761
+2026-04-22 22:58:04.717 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=1 count=837
+2026-04-22 22:58:04.718 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=2 count=782
+2026-04-22 22:58:04.718 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=3 count=733
+2026-04-22 22:58:04.718 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=4 count=715
+2026-04-22 22:58:04.718 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=5 count=809
+2026-04-22 22:58:04.719 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=6 count=798
+2026-04-22 22:58:04.719 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 0 Metadata dst_chip_id=3 expert_id=7 count=740
+2026-04-22 22:58:04.719 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=0 count=789
+2026-04-22 22:58:04.720 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=1 count=894
+2026-04-22 22:58:04.720 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=2 count=890
+2026-04-22 22:58:04.720 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=3 count=833
+2026-04-22 22:58:04.720 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=4 count=800
+2026-04-22 22:58:04.721 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=5 count=762
+2026-04-22 22:58:04.721 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=6 count=798
+2026-04-22 22:58:04.721 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=0 expert_id=7 count=916
+2026-04-22 22:58:04.722 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=0 count=861
+2026-04-22 22:58:04.722 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=1 count=849
+2026-04-22 22:58:04.722 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=2 count=775
+2026-04-22 22:58:04.722 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=3 count=740
+2026-04-22 22:58:04.723 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=4 count=892
+2026-04-22 22:58:04.723 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=5 count=728
+2026-04-22 22:58:04.723 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=6 count=841
+2026-04-22 22:58:04.724 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=1 expert_id=7 count=827
+2026-04-22 22:58:04.724 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=0 count=724
+2026-04-22 22:58:04.724 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=1 count=783
+2026-04-22 22:58:04.724 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=2 count=795
+2026-04-22 22:58:04.725 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=3 count=782
+2026-04-22 22:58:04.725 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=4 count=796
+2026-04-22 22:58:04.725 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=5 count=898
+2026-04-22 22:58:04.726 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=6 count=767
+2026-04-22 22:58:04.726 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=2 expert_id=7 count=696
+2026-04-22 22:58:04.726 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=0 count=876
+2026-04-22 22:58:04.727 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=1 count=897
+2026-04-22 22:58:04.727 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=2 count=812
+2026-04-22 22:58:04.727 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=3 count=625
+2026-04-22 22:58:04.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=4 count=943
+2026-04-22 22:58:04.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=5 count=843
+2026-04-22 22:58:04.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=6 count=880
+2026-04-22 22:58:04.728 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_metadata:929 - ✅ 1 Metadata dst_chip_id=3 expert_id=7 count=799
+2026-04-22 22:58:04.729 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:379 - [dispatch_metadata] PASSED - 64/64 slots matched
+2026-04-22 22:58:16.424 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=0 count=828
+2026-04-22 22:58:16.548 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=1 count=880
+2026-04-22 22:58:16.650 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=2 count=738
+2026-04-22 22:58:16.773 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=3 count=880
+2026-04-22 22:58:16.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=4 count=761
+2026-04-22 22:58:17.003 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=5 count=875
+2026-04-22 22:58:17.125 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=6 count=871
+2026-04-22 22:58:17.238 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=0 expert_id=7 count=785
+2026-04-22 22:58:17.342 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=0 count=741
+2026-04-22 22:58:17.465 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=1 count=886
+2026-04-22 22:58:17.583 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=2 count=831
+2026-04-22 22:58:17.684 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=3 count=732
+2026-04-22 22:58:17.785 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=4 count=694
+2026-04-22 22:58:17.893 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=5 count=744
+2026-04-22 22:58:17.985 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=6 count=633
+2026-04-22 22:58:18.086 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=1 expert_id=7 count=698
+2026-04-22 22:58:18.198 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=0 count=787
+2026-04-22 22:58:18.310 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=1 count=778
+2026-04-22 22:58:18.428 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=2 count=834
+2026-04-22 22:58:18.538 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=3 count=788
+2026-04-22 22:58:18.647 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=4 count=782
+2026-04-22 22:58:18.766 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=5 count=804
+2026-04-22 22:58:18.878 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=6 count=783
+2026-04-22 22:58:18.986 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=2 expert_id=7 count=781
+2026-04-22 22:58:19.094 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=0 count=761
+2026-04-22 22:58:19.213 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=1 count=837
+2026-04-22 22:58:19.322 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=2 count=782
+2026-04-22 22:58:19.423 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=3 count=733
+2026-04-22 22:58:19.523 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=4 count=715
+2026-04-22 22:58:19.638 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=5 count=809
+2026-04-22 22:58:19.751 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=6 count=798
+2026-04-22 22:58:19.855 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 0 buffer_pcc dst_chip_id=3 expert_id=7 count=740
+2026-04-22 22:58:19.969 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=0 count=789
+2026-04-22 22:58:20.096 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=1 count=894
+2026-04-22 22:58:20.217 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=2 count=890
+2026-04-22 22:58:20.334 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=3 count=833
+2026-04-22 22:58:20.448 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=4 count=800
+2026-04-22 22:58:20.557 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=5 count=762
+2026-04-22 22:58:20.673 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=6 count=798
+2026-04-22 22:58:20.801 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=0 expert_id=7 count=916
+2026-04-22 22:58:20.920 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=0 count=861
+2026-04-22 22:58:21.040 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=1 count=849
+2026-04-22 22:58:21.151 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=2 count=775
+2026-04-22 22:58:21.258 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=3 count=740
+2026-04-22 22:58:21.388 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=4 count=892
+2026-04-22 22:58:21.495 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=5 count=728
+2026-04-22 22:58:21.618 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=6 count=841
+2026-04-22 22:58:21.738 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=1 expert_id=7 count=827
+2026-04-22 22:58:21.843 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=0 count=724
+2026-04-22 22:58:21.959 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=1 count=783
+2026-04-22 22:58:22.078 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=2 count=795
+2026-04-22 22:58:22.192 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=3 count=782
+2026-04-22 22:58:22.309 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=4 count=796
+2026-04-22 22:58:22.439 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=5 count=898
+2026-04-22 22:58:22.549 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=6 count=767
+2026-04-22 22:58:22.646 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=2 expert_id=7 count=696
+2026-04-22 22:58:22.776 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=0 count=876
+2026-04-22 22:58:22.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=1 count=897
+2026-04-22 22:58:23.020 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=2 count=812
+2026-04-22 22:58:23.113 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=3 count=625
+2026-04-22 22:58:23.248 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=4 count=943
+2026-04-22 22:58:23.365 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=5 count=843
+2026-04-22 22:58:23.491 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=6 count=880
+2026-04-22 22:58:23.605 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.validation_helpers:validate_dispatch_data:698 - ✅ 1 buffer_pcc dst_chip_id=3 expert_id=7 count=799
+2026-04-22 22:58:23.605 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:379 - [expert_outputs] PASSED - 64/64 slots matched
+2026-04-22 22:58:23.606 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:388 -   combined_output tt shape: Shape([1, 1, 1600, 8, 7168])
+2026-04-22 22:58:23.606 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:389 -   combined_output torch shape: torch.Size([4, 1600, 8, 7168])
+2026-04-22 22:59:04.227 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers:log_validation_results:236 - 
+Combined Output Validation:
+(Columns: combine output)
++------+------------------+------------------+
+| Chip | Dispatch Group 0 | Dispatch Group 1 |
++------+------------------+------------------+
+|  0   |        ✅        |        ✅        |
+|  1   |        ✅        |        ✅        |
+|  2   |        ✅        |        ✅        |
+|  3   |        ✅        |        ✅        |
++------+------------------+------------------+
+combine output: 51200/51200 ✅
+2026-04-22 22:59:04.227 | INFO     | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:420 - [combined_output] PASSED - 51200/51200 slots matched (PCC >= 0.95)
+2026-04-22 22:59:04.227 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers:log_validation_results:236 - 
+Sparse Tensor Validation Results:
+(Columns: dispatched_buffer | dispatch_metadata | expert_outputs)
++------+------------------+------------------+
+| Chip | Dispatch Group 0 | Dispatch Group 1 |
++------+------------------+------------------+
+|  0   |      ✅✅✅      |      ✅✅✅      |
+|  1   |      ✅✅✅      |      ✅✅✅      |
+|  2   |      ✅✅✅      |      ✅✅✅      |
+|  3   |      ✅✅✅      |      ✅✅✅      |
++------+------------------+------------------+
+dispatched_buffer: 64/64 ✅ | dispatch_metadata: 64/64 ✅ | expert_outputs: 64/64 ✅
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:444 - Note: Final PCC expected to be low until full pipeline is enabled
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:450 - 
+============================================================
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:451 - TtMoe PCC Test PASSED!
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:452 - ============================================================
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - weights_creation: 18409.55 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - input_creation: 1055.04 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - torch_moe_creation: 101.02 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - torch_forward: 7718.86 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - tt_moe_creation: 59389.85 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - tt_forward: 1107.91 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - pcc_validation: 75206.45 ms
+2026-04-22 22:59:04.228 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:454 - test_ttnn_moe: 163002.38 ms
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+165.14s call     models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+0.69s setup    models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+=========================== short test summary info ============================
+PASSED models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+=================== 1 passed, 1 warning in 167.71s (0:02:47) ===================
+2026-04-22 22:59:08.365 | info     |    BuildKernels | JIT cache stats: 298/298 hits (100.0%) [298 cached, 1693 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-04-22 22:59:08.365 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-04-22 22:59:08.365 | info     |    BuildKernels | JIT telemetry [dependencies_up_to_date]: count=596, total=1004.812ms, min=0.035ms, max=11.949ms, mean=1.686ms (build_cache_telemetry.cpp:246)
+2026-04-22 22:59:08.365 | info     |    BuildKernels | JIT telemetry [JitBuildState::build]: count=298, total=1038.330ms, min=0.998ms, max=12.471ms, mean=3.484ms (build_cache_telemetry.cpp:246)
+2026-04-22 22:59:08.365 | info     |    BuildKernels | JIT telemetry [jit_build]: count=190, total=815.483ms, min=1.006ms, max=12.487ms, mean=4.292ms (build_cache_telemetry.cpp:246)
+2026-04-22 22:59:08.413 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:508)
+2026-04-22 22:59:08.413 | info     |             UMD | Closing devices in cluster (cluster.cpp:1029)

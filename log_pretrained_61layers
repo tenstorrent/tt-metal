@@ -1,0 +1,329 @@
+2026-04-06 14:45:21.412 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-04-06 14:45:23.753 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-06 14:45:23.849 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 14:45:23.861 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 14:45:23.861 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 14:45:23.967 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-06 14:45:23.969 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 14:45:23.979 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 14:45:23.979 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 14:45:24.083 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 14:45:24.093 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 14:45:24.093 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 14:45:24.184 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:24.185 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:24.185 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:24.550 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:24.551 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:24.551 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:24.907 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:24.908 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:24.908 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:25.257 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:25.257 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:25.257 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:25.606 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:25.607 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:25.607 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:25.955 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:25.956 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:25.956 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:26.303 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:26.304 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:26.304 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:26.653 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 14:45:26.653 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 14:45:26.653 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 14:45:26.988 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-06 14:45:26.988 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-06 14:45:26.988 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-06 14:45:26.993 | info     |             UMD | Starting devices in cluster (cluster.cpp:949)
+2026-04-06 14:45:27.027 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.055 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.084 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.114 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.135 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.165 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.192 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 14:45:27.233 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 864 items / 863 deselected / 1 selected
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer[blackhole-mesh-2x4-e256_cf32_host-61-1024-pcc-json_prompts-pretrained-kv_cache] 2026-04-06 14:45:28.730 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:config_only:365 - Using config from default location: models/demos/deepseek_v3/reference
+2026-04-06 14:45:28.739 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:get_or_download_model:291 - Using model from shared location: /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 14:45:28.742 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_check_pretrained_available:456 - ✓ Pretrained weights found at /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 14:45:28.753 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:hf_config:336 - Loaded HF config from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 14:45:28.804 | INFO     | models.demos.deepseek_v3.utils.lazy_state_dict:__init__:65 - LazyStateDict initialized from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/model.safetensors.index.json (91991 keys across 163 files) in 46.8 ms
+2026-04-06 14:45:28.805 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:state_dict:430 - Loaded state dict from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 14:45:29.000 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-06 14:45:29.000 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-06 14:45:29.000 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-06 14:45:29.000 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-06 14:45:29.002 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 14:45:29.009 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 14:45:29.009 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 14:45:29.088 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-06 14:45:29.088 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-06 14:45:29.088 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-06 14:45:29.088 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-06 14:45:29.088 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-06 14:45:29.088 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-06 14:45:29.088 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-06 14:45:29.088 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-06 14:45:29.088 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-06 14:45:29.088 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-06 14:45:29.126 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.132 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.132 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.132 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.132 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.132 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.132 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.139 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 14:45:29.249 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.250 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.251 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.253 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.254 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.256 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.257 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.258 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.260 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.261 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.262 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.265 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.266 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.267 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.269 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:106)
+2026-04-06 14:45:29.270 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-06 14:45:29.363 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-06 14:45:29.364 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-06 14:45:29.366 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-06 14:45:29.367 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-06 14:45:29.368 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-06 14:45:29.369 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-06 14:45:29.370 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-06 14:45:29.371 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-06 14:45:29.371 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-06 14:45:29.371 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-06 14:45:29.464 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-06 14:45:29.467 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer:151 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-06 14:45:29.468 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer:152 - isl_total=1024, isl_per_chip=512, num_layers=61, n_routed_experts=256, capacity_factor=32, gate_fallback_mode=GateComputeMode.HOST_ALL, input_source=json_prompts, pcc_validation=True, weights=pretrained
+2026-04-06 14:45:29.468 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:537 - Loading pretrained transformer weights for 61 layers
+2026-04-06 14:45:29.468 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.embed_tokens.', combined='model.embed_tokens.', num_layers=None
+2026-04-06 14:45:29.613 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.norm.', combined='model.norm.', num_layers=None
+2026-04-06 14:45:29.622 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 0 weights...
+2026-04-06 14:45:29.622 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.0.', combined='model.layers.0.', num_layers=None
+2026-04-06 14:45:30.032 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 0 loaded (dense)
+2026-04-06 14:45:30.032 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 1 weights...
+2026-04-06 14:45:30.032 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.1.', combined='model.layers.1.', num_layers=None
+2026-04-06 14:45:30.446 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 1 loaded (dense)
+2026-04-06 14:45:30.446 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 2 weights...
+2026-04-06 14:45:30.446 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.2.', combined='model.layers.2.', num_layers=None
+2026-04-06 14:45:30.864 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 2 loaded (dense)
+2026-04-06 14:45:30.864 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 3 weights...
+2026-04-06 14:45:30.864 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.3.', combined='model.layers.3.', num_layers=None
+2026-04-06 14:45:39.520 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 3 loaded (MoE)
+2026-04-06 14:45:39.520 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 4 weights...
+2026-04-06 14:45:39.520 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.4.', combined='model.layers.4.', num_layers=None
+2026-04-06 14:45:48.579 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 4 loaded (MoE)
+2026-04-06 14:45:48.580 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 5 weights...
+2026-04-06 14:45:48.580 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.5.', combined='model.layers.5.', num_layers=None
+2026-04-06 14:45:57.639 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 5 loaded (MoE)
+2026-04-06 14:45:57.639 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 6 weights...
+2026-04-06 14:45:57.639 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.6.', combined='model.layers.6.', num_layers=None
+2026-04-06 14:46:06.220 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 6 loaded (MoE)
+2026-04-06 14:46:06.220 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 7 weights...
+2026-04-06 14:46:06.220 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.7.', combined='model.layers.7.', num_layers=None
+2026-04-06 14:46:14.868 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 7 loaded (MoE)
+2026-04-06 14:46:14.869 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 8 weights...
+2026-04-06 14:46:14.869 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.8.', combined='model.layers.8.', num_layers=None
+2026-04-06 14:46:46.772 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 8 loaded (MoE)
+2026-04-06 14:46:46.772 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 9 weights...
+2026-04-06 14:46:46.772 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.9.', combined='model.layers.9.', num_layers=None
+2026-04-06 14:47:20.043 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 9 loaded (MoE)
+2026-04-06 14:47:20.043 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 10 weights...
+2026-04-06 14:47:20.043 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.10.', combined='model.layers.10.', num_layers=None
+2026-04-06 14:47:53.376 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 10 loaded (MoE)
+2026-04-06 14:47:53.377 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 11 weights...
+2026-04-06 14:47:53.377 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.11.', combined='model.layers.11.', num_layers=None
+2026-04-06 14:48:24.893 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 11 loaded (MoE)
+2026-04-06 14:48:24.893 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 12 weights...
+2026-04-06 14:48:24.893 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.12.', combined='model.layers.12.', num_layers=None
+2026-04-06 14:48:57.565 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 12 loaded (MoE)
+2026-04-06 14:48:57.565 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 13 weights...
+2026-04-06 14:48:57.565 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.13.', combined='model.layers.13.', num_layers=None
+2026-04-06 14:49:32.736 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 13 loaded (MoE)
+2026-04-06 14:49:32.736 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 14 weights...
+2026-04-06 14:49:32.736 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.14.', combined='model.layers.14.', num_layers=None
+2026-04-06 14:50:05.180 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 14 loaded (MoE)
+2026-04-06 14:50:05.181 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 15 weights...
+2026-04-06 14:50:05.181 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.15.', combined='model.layers.15.', num_layers=None
+2026-04-06 14:50:42.987 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 15 loaded (MoE)
+2026-04-06 14:50:42.987 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 16 weights...
+2026-04-06 14:50:42.987 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.16.', combined='model.layers.16.', num_layers=None
+2026-04-06 14:51:14.767 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 16 loaded (MoE)
+2026-04-06 14:51:14.767 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 17 weights...
+2026-04-06 14:51:14.767 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.17.', combined='model.layers.17.', num_layers=None
+2026-04-06 14:51:48.835 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 17 loaded (MoE)
+2026-04-06 14:51:48.835 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 18 weights...
+2026-04-06 14:51:48.835 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.18.', combined='model.layers.18.', num_layers=None
+2026-04-06 14:52:22.441 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 18 loaded (MoE)
+2026-04-06 14:52:22.442 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 19 weights...
+2026-04-06 14:52:22.442 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.19.', combined='model.layers.19.', num_layers=None
+2026-04-06 14:52:56.077 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 19 loaded (MoE)
+2026-04-06 14:52:56.078 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 20 weights...
+2026-04-06 14:52:56.078 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.20.', combined='model.layers.20.', num_layers=None
+2026-04-06 14:53:29.583 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 20 loaded (MoE)
+2026-04-06 14:53:29.583 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 21 weights...
+2026-04-06 14:53:29.583 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.21.', combined='model.layers.21.', num_layers=None
+2026-04-06 14:54:04.025 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 21 loaded (MoE)
+2026-04-06 14:54:04.025 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 22 weights...
+2026-04-06 14:54:04.025 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.22.', combined='model.layers.22.', num_layers=None
+2026-04-06 14:54:36.542 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 22 loaded (MoE)
+2026-04-06 14:54:36.542 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 23 weights...
+2026-04-06 14:54:36.543 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.23.', combined='model.layers.23.', num_layers=None
+2026-04-06 14:55:11.403 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 23 loaded (MoE)
+2026-04-06 14:55:11.404 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 24 weights...
+2026-04-06 14:55:11.404 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.24.', combined='model.layers.24.', num_layers=None
+2026-04-06 14:55:44.709 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 24 loaded (MoE)
+2026-04-06 14:55:44.710 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 25 weights...
+2026-04-06 14:55:44.710 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.25.', combined='model.layers.25.', num_layers=None
+2026-04-06 14:56:19.709 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 25 loaded (MoE)
+2026-04-06 14:56:19.709 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 26 weights...
+2026-04-06 14:56:19.709 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.26.', combined='model.layers.26.', num_layers=None
+2026-04-06 14:56:54.170 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 26 loaded (MoE)
+2026-04-06 14:56:54.198 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 27 weights...
+2026-04-06 14:56:54.198 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.27.', combined='model.layers.27.', num_layers=None
+2026-04-06 14:57:28.232 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 27 loaded (MoE)
+2026-04-06 14:57:28.233 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 28 weights...
+2026-04-06 14:57:28.233 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.28.', combined='model.layers.28.', num_layers=None
+2026-04-06 14:58:00.960 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 28 loaded (MoE)
+2026-04-06 14:58:00.960 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 29 weights...
+2026-04-06 14:58:00.960 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.29.', combined='model.layers.29.', num_layers=None
+2026-04-06 14:58:37.863 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 29 loaded (MoE)
+2026-04-06 14:58:37.863 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 30 weights...
+2026-04-06 14:58:37.863 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.30.', combined='model.layers.30.', num_layers=None
+2026-04-06 14:59:13.328 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 30 loaded (MoE)
+2026-04-06 14:59:13.329 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 31 weights...
+2026-04-06 14:59:13.329 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.31.', combined='model.layers.31.', num_layers=None
+2026-04-06 14:59:49.828 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 31 loaded (MoE)
+2026-04-06 14:59:49.829 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 32 weights...
+2026-04-06 14:59:49.829 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.32.', combined='model.layers.32.', num_layers=None
+2026-04-06 15:00:31.535 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 32 loaded (MoE)
+2026-04-06 15:00:31.536 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 33 weights...
+2026-04-06 15:00:31.536 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.33.', combined='model.layers.33.', num_layers=None
+2026-04-06 15:01:07.364 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 33 loaded (MoE)
+2026-04-06 15:01:07.364 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 34 weights...
+2026-04-06 15:01:07.365 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.34.', combined='model.layers.34.', num_layers=None
+2026-04-06 15:01:43.005 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 34 loaded (MoE)
+2026-04-06 15:01:43.006 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 35 weights...
+2026-04-06 15:01:43.006 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.35.', combined='model.layers.35.', num_layers=None
+2026-04-06 15:02:18.243 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 35 loaded (MoE)
+2026-04-06 15:02:18.243 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 36 weights...
+2026-04-06 15:02:18.243 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.36.', combined='model.layers.36.', num_layers=None
+2026-04-06 15:02:53.052 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 36 loaded (MoE)
+2026-04-06 15:02:53.053 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 37 weights...
+2026-04-06 15:02:53.053 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.37.', combined='model.layers.37.', num_layers=None
+2026-04-06 15:03:29.496 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 37 loaded (MoE)
+2026-04-06 15:03:29.496 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 38 weights...
+2026-04-06 15:03:29.496 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.38.', combined='model.layers.38.', num_layers=None
+2026-04-06 15:04:03.574 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 38 loaded (MoE)
+2026-04-06 15:04:03.575 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 39 weights...
+2026-04-06 15:04:03.575 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.39.', combined='model.layers.39.', num_layers=None
+2026-04-06 15:04:39.603 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 39 loaded (MoE)
+2026-04-06 15:04:39.603 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 40 weights...
+2026-04-06 15:04:39.604 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.40.', combined='model.layers.40.', num_layers=None
+2026-04-06 15:05:13.597 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 40 loaded (MoE)
+2026-04-06 15:05:13.598 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 41 weights...
+2026-04-06 15:05:13.598 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.41.', combined='model.layers.41.', num_layers=None
+2026-04-06 15:05:50.473 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 41 loaded (MoE)
+2026-04-06 15:05:50.473 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 42 weights...
+2026-04-06 15:05:50.473 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.42.', combined='model.layers.42.', num_layers=None
+2026-04-06 15:06:25.981 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 42 loaded (MoE)
+2026-04-06 15:06:25.982 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 43 weights...
+2026-04-06 15:06:25.982 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.43.', combined='model.layers.43.', num_layers=None
+2026-04-06 15:07:02.213 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 43 loaded (MoE)
+2026-04-06 15:07:02.214 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 44 weights...
+2026-04-06 15:07:02.214 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.44.', combined='model.layers.44.', num_layers=None
+2026-04-06 15:07:35.549 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 44 loaded (MoE)
+2026-04-06 15:07:35.550 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 45 weights...
+2026-04-06 15:07:35.550 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.45.', combined='model.layers.45.', num_layers=None
+2026-04-06 15:08:10.827 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 45 loaded (MoE)
+2026-04-06 15:08:10.827 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 46 weights...
+2026-04-06 15:08:10.827 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.46.', combined='model.layers.46.', num_layers=None
+2026-04-06 15:08:45.385 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 46 loaded (MoE)
+2026-04-06 15:08:45.385 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 47 weights...
+2026-04-06 15:08:45.386 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.47.', combined='model.layers.47.', num_layers=None
+2026-04-06 15:09:21.784 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 47 loaded (MoE)
+2026-04-06 15:09:21.784 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 48 weights...
+2026-04-06 15:09:21.785 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.48.', combined='model.layers.48.', num_layers=None
+2026-04-06 15:09:55.345 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 48 loaded (MoE)
+2026-04-06 15:09:55.345 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 49 weights...
+2026-04-06 15:09:55.346 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.49.', combined='model.layers.49.', num_layers=None
+2026-04-06 15:10:43.624 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 49 loaded (MoE)
+2026-04-06 15:10:43.625 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 50 weights...
+2026-04-06 15:10:43.625 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.50.', combined='model.layers.50.', num_layers=None
+2026-04-06 15:11:19.242 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 50 loaded (MoE)
+2026-04-06 15:11:19.242 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 51 weights...
+2026-04-06 15:11:19.242 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.51.', combined='model.layers.51.', num_layers=None
+2026-04-06 15:11:53.222 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 51 loaded (MoE)
+2026-04-06 15:11:53.222 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 52 weights...
+2026-04-06 15:11:53.222 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.52.', combined='model.layers.52.', num_layers=None
+2026-04-06 15:12:27.879 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 52 loaded (MoE)
+2026-04-06 15:12:27.879 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 53 weights...
+2026-04-06 15:12:27.879 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.53.', combined='model.layers.53.', num_layers=None
+2026-04-06 15:13:04.315 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 53 loaded (MoE)
+2026-04-06 15:13:04.315 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 54 weights...
+2026-04-06 15:13:04.316 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.54.', combined='model.layers.54.', num_layers=None
+2026-04-06 15:13:39.969 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 54 loaded (MoE)
+2026-04-06 15:13:39.969 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 55 weights...
+2026-04-06 15:13:39.969 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.55.', combined='model.layers.55.', num_layers=None
+2026-04-06 15:14:13.994 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 55 loaded (MoE)
+2026-04-06 15:14:13.994 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 56 weights...
+2026-04-06 15:14:13.994 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.56.', combined='model.layers.56.', num_layers=None
+2026-04-06 15:14:48.528 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 56 loaded (MoE)
+2026-04-06 15:14:48.528 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 57 weights...
+2026-04-06 15:14:48.528 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.57.', combined='model.layers.57.', num_layers=None
+2026-04-06 15:15:23.194 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 57 loaded (MoE)
+2026-04-06 15:15:23.194 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 58 weights...
+2026-04-06 15:15:23.195 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.58.', combined='model.layers.58.', num_layers=None
+2026-04-06 15:15:58.281 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 58 loaded (MoE)
+2026-04-06 15:15:58.282 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 59 weights...
+2026-04-06 15:15:58.282 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.59.', combined='model.layers.59.', num_layers=None
+2026-04-06 15:16:33.163 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 59 loaded (MoE)
+2026-04-06 15:16:33.163 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 60 weights...
+2026-04-06 15:16:33.164 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.60.', combined='model.layers.60.', num_layers=None
+2026-04-06 15:17:08.481 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 60 loaded (MoE)
+2026-04-06 15:17:08.482 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:601 - Loaded pretrained transformer weights for 61 layers
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.

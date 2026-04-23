@@ -1,0 +1,421 @@
+2026-04-02 11:56:32.385 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-02 11:56:34.850 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 11:56:34.863 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 11:56:34.863 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 11:56:34.970 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-02 11:56:34.972 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 11:56:34.982 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 11:56:34.982 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 11:56:35.091 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 11:56:35.101 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 11:56:35.101 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 11:56:35.285 | info     |             UMD | Harvesting masks for chip 7 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:35.305 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:35.305 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:35.667 | info     |             UMD | Harvesting masks for chip 0 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:35.686 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:35.686 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:36.047 | info     |             UMD | Harvesting masks for chip 2 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:36.065 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:36.065 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:36.410 | info     |             UMD | Harvesting masks for chip 5 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:36.429 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:36.429 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:36.771 | info     |             UMD | Harvesting masks for chip 3 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:36.790 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:36.790 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:37.130 | info     |             UMD | Harvesting masks for chip 1 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:37.149 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:37.149 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:37.479 | info     |             UMD | Harvesting masks for chip 6 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:37.498 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:37.498 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:37.829 | info     |             UMD | Harvesting masks for chip 4 tensix: 0xc0 dram: 0x0 eth: 0x120 pcie: 0x2 l2cpu: 0x0 (cluster.cpp:325)
+2026-04-02 11:56:37.848 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-02 11:56:37.848 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-02 11:56:38.180 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:180)
+2026-04-02 11:56:38.180 | info     |             UMD | IOMMU: enabled (cluster.cpp:155)
+2026-04-02 11:56:38.180 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:158)
+2026-04-02 11:56:38.185 | info     |             UMD | Starting devices in cluster (cluster.cpp:951)
+2026-04-02 11:56:38.223 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.247 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.273 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.299 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.323 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.352 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.371 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-02 11:56:38.414 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 1 item
+
+models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-3200-7168-2048-256-8-2-GateComputeMode.DEVICE-False] 2026-04-02 11:56:40.109 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-02 11:56:40.110 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-02 11:56:40.110 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:330)
+2026-04-02 11:56:40.110 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:392)
+2026-04-02 11:56:40.112 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:69)
+2026-04-02 11:56:40.121 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:471)
+2026-04-02 11:56:40.121 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:503)
+2026-04-02 11:56:40.213 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-02 11:56:40.213 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-02 11:56:40.213 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-02 11:56:40.213 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-02 11:56:40.213 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-02 11:56:40.213 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-02 11:56:40.213 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-02 11:56:40.213 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-02 11:56:40.213 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-02 11:56:40.213 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-02 11:56:40.254 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.254 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.255 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.255 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.255 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.255 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.255 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.254 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/6745986192171285359/ (build_env_manager.cpp:259)
+2026-04-02 11:56:40.385 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-02 11:56:40.457 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:400)
+2026-04-02 11:56:40.458 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:400)
+2026-04-02 11:56:40.460 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:400)
+2026-04-02 11:56:40.461 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:400)
+2026-04-02 11:56:40.464 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:400)
+2026-04-02 11:56:40.465 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:400)
+2026-04-02 11:56:40.466 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:400)
+2026-04-02 11:56:40.467 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:400)
+2026-04-02 11:56:40.467 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-02 11:56:40.467 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-02 11:56:40.557 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-02 11:56:40.559 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:142 - 
+============================================================
+2026-04-02 11:56:40.559 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:143 - TtMoe PCC Test
+2026-04-02 11:56:40.559 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:144 - ============================================================
+2026-04-02 11:56:40.559 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:145 - mesh_shape=MeshShape([4, 2]), num_devices=8
+2026-04-02 11:56:40.559 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:146 - dispatch_group_size=4, num_dispatch_groups=2
+2026-04-02 11:56:40.559 | INFO     | tracy:signpost:44 - TtMoe PCC test - mesh MeshShape([4, 2]), seq_len=3200, emb_dim=7168, experts=256
+2026-04-02 11:56:40.559 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:156 - experts_per_chip=32, metadata_len=5
+2026-04-02 11:56:40.560 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:157 - max_dispatched_tokens_per_expert=800
+2026-04-02 11:56:40.601 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([2, 256])
+2026-04-02 11:56:42.684 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:245 - Creating TtMoe...
+2026-04-02 11:56:42.685 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([2, 256])
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([4, 2])
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=4, num_dispatch_groups=2
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=32, num_routed_experts=256
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=3200, emb_dim=7168, hidden_dim=2048
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([2, 256]), dispatch_axis=0
+2026-04-02 11:56:42.706 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-02 11:56:42.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 256])
+2026-04-02 11:56:42.707 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:94 - RoutedExpert: No optimal program config for given dimensions max_tokens=800emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-02 11:56:42.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:102 - Initializing TtRoutedExpert with experts_per_chip=32
+2026-04-02 11:56:42.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:103 - emb_dim=7168, hidden_dim=2048
+2026-04-02 11:56:42.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:104 - Mesh shape: MeshShape([4, 2]), num_devices=8, total_experts=256
+2026-04-02 11:56:42.707 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:144 - Creating random weights (replicated across devices)
+Creating random TTNN weights per chip:   0%|          | 0/32 [00:00<?, ?it/s]2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_0_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_0_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_0_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_1_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_1_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_1_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_2_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_2_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_2_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_3_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_3_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_3_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_4_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_4_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_4_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_5_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_5_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_5_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_6_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_6_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_6_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_7_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_7_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_7_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_8_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_8_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_8_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_9_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_9_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_9_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_10_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_10_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_10_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_11_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_11_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_11_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_12_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_12_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_12_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_13_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_13_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.710 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_13_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_14_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_14_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_14_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_15_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_15_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_15_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_16_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_16_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_16_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_17_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_17_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_17_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_18_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_18_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_18_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.711 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_19_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_19_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_19_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_20_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_20_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_20_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_21_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_21_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_21_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_22_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_22_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_22_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_23_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_23_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_23_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_24_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_24_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.712 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_24_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_25_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_25_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_25_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_26_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_26_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_26_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_27_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_27_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_27_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_28_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_28_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_28_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_29_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_29_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_29_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_30_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.713 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_30_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_30_down with shape (2048, 7168) on device DRAM
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_31_gate with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_31_up with shape (7168, 2048) on device DRAM
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_create_random_weight:236 - Allocating uninitialized weight expert_31_down with shape (2048, 7168) on device DRAM
+Creating random TTNN weights per chip: 100%|██████████| 32/32 [00:00<00:00, 5460.00it/s]
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([4, 2]), num_devices=8
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-02 11:56:42.714 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:103 - Creating random sharded weights
+2026-04-02 11:56:42.794 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-02 11:56:42.875 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 1024])
+2026-04-02 11:56:42.958 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-02 11:56:43.014 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 1024])
+2026-04-02 11:56:43.097 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-02 11:56:43.117 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([1024, 7168])
+2026-04-02 11:56:43.121 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-02 11:56:43.122 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:271 - Running TtMoe forward pass...
+2026-04-02 11:56:43.122 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:249 - [TtMoe.forward] INPUT SHAPES:
+2026-04-02 11:56:43.122 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:250 -   x.shape=Shape([1, 3200, 3584])
+2026-04-02 11:56:43.140 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:312 - [MoeGate] fallback_mode=device
+2026-04-02 11:56:43.141 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-02 11:56:43.141 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_matmul:254 - [MoeGate] No matmul program config for (3200, 3584), using TTNN default
+2026-04-02 11:56:43.186 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-02 11:56:43.186 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-02 11:56:43.200 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-02 11:56:43.200 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-02 11:56:43.211 | INFO     | tracy:signpost:44 - MoERoutingSetup
+2026-04-02 11:56:43.218 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:88 - ttnn_top_k_experts_indices.shape=Shape([3200, 8])
+2026-04-02 11:56:43.218 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:96 - self.experts_in_dispatch_group.shape=Shape([256])
+2026-04-02 11:56:43.250 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-02 11:56:43.251 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-02 11:56:43.294 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:282 -   weights.shape=Shape([1, 3200, 8])
+2026-04-02 11:56:43.294 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:283 -   indices.shape=Shape([1, 3200, 8])
+2026-04-02 11:56:43.316 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:301 - [TtMoe.forward] x_full (after all_gather) shape: Shape([1, 3200, 7168])
+2026-04-02 11:56:43.329 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:309 - [TtMoe.forward] x_full_tiled shape: Shape([1, 3200, 7168])
+2026-04-02 11:56:43.330 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:176 - Forward pass: input shape=Shape([1, 3200, 7168]), batch_size=1
+2026-04-02 11:56:43.353 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:198 - After gate_proj matmul: Shape([1, 3200, 1024])
+2026-04-02 11:56:43.353 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:208 - After up_proj matmul: Shape([1, 3200, 1024])
+2026-04-02 11:56:43.367 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:218 - After SiLU fusion: Shape([1, 3200, 1024])
+2026-04-02 11:56:43.390 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:228 - After down_proj matmul: Shape([1, 3200, 7168])
+2026-04-02 11:56:43.412 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:241 - After reduce_scatter: Shape([1, 3200, 3584])
+2026-04-02 11:56:43.412 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:312 - [TtMoe.forward] Shared expert output shape: Shape([1, 3200, 3584])
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:171 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:172 -   x.shape=Shape([1, 3200, 7168])
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:173 -   weights.shape=Shape([1, 3200, 8])
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:174 -   indices.shape=Shape([1, 3200, 8])
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:175 -   tt_expert_offsets.shape=Shape([1, 256])
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:176 -   tt_expert_dispatch_table.shape=Shape([1, 256])
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:177 - [TtDispatchModule.forward] CONFIG:
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:178 -   dispatch_group_size=4, experts_per_chip=32
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:179 -   num_routed_experts=256, num_experts_per_tok=8
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:180 -   metadata_len=5, max_dispatched_tokens_per_expert=800
+2026-04-02 11:56:43.413 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:183 -   cluster_axis=0, num_links=1, topology=Topology.Linear
+2026-04-02 11:56:43.429 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:207 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-04-02 11:56:43.430 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:208 -   tt_dispatched_buffer.shape=Shape([1, 1, 32, 800, 7168])
+2026-04-02 11:56:43.430 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:209 -   tt_dispatch_metadata.shape=Shape([1, 1, 32, 800, 5])
+2026-04-02 11:56:43.430 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:326 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 32, 800, 7168]), metadata=Shape([1, 1, 32, 800, 5])
+2026-04-02 11:56:43.430 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:336 - [TtMoe.forward] dispatched_buffer_squeezed shape: Shape([32, 800, 7168])
+2026-04-02 11:56:43.441 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:340 - [TtMoe.forward] dispatched_buffer_tiled shape: Shape([32, 800, 7168])
+2026-04-02 11:56:43.441 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:308 - Forward pass: dispatched_buffer shape=Shape([32, 800, 7168])
+2026-04-02 11:56:43.441 | INFO     | tracy:signpost:44 - Expert 1/32
+2026-04-02 11:56:43.449 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 0: input shape Shape([800, 7168])
+2026-04-02 11:56:43.495 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 0: output shape Shape([800, 7168])
+2026-04-02 11:56:43.495 | INFO     | tracy:signpost:44 - Expert 2/32
+2026-04-02 11:56:43.496 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 1: input shape Shape([800, 7168])
+2026-04-02 11:56:43.497 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 1: output shape Shape([800, 7168])
+2026-04-02 11:56:43.497 | INFO     | tracy:signpost:44 - Expert 3/32
+2026-04-02 11:56:43.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 2: input shape Shape([800, 7168])
+2026-04-02 11:56:43.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 2: output shape Shape([800, 7168])
+2026-04-02 11:56:43.498 | INFO     | tracy:signpost:44 - Expert 4/32
+2026-04-02 11:56:43.499 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 3: input shape Shape([800, 7168])
+2026-04-02 11:56:43.500 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 3: output shape Shape([800, 7168])
+2026-04-02 11:56:43.500 | INFO     | tracy:signpost:44 - Expert 5/32
+2026-04-02 11:56:43.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 4: input shape Shape([800, 7168])
+2026-04-02 11:56:43.502 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 4: output shape Shape([800, 7168])
+2026-04-02 11:56:43.502 | INFO     | tracy:signpost:44 - Expert 6/32
+2026-04-02 11:56:43.503 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 5: input shape Shape([800, 7168])
+2026-04-02 11:56:43.503 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 5: output shape Shape([800, 7168])
+2026-04-02 11:56:43.503 | INFO     | tracy:signpost:44 - Expert 7/32
+2026-04-02 11:56:43.504 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 6: input shape Shape([800, 7168])
+2026-04-02 11:56:43.505 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 6: output shape Shape([800, 7168])
+2026-04-02 11:56:43.505 | INFO     | tracy:signpost:44 - Expert 8/32
+2026-04-02 11:56:43.506 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 7: input shape Shape([800, 7168])
+2026-04-02 11:56:43.507 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 7: output shape Shape([800, 7168])
+2026-04-02 11:56:43.507 | INFO     | tracy:signpost:44 - Expert 9/32
+2026-04-02 11:56:43.508 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 8: input shape Shape([800, 7168])
+2026-04-02 11:56:43.508 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 8: output shape Shape([800, 7168])
+2026-04-02 11:56:43.508 | INFO     | tracy:signpost:44 - Expert 10/32
+2026-04-02 11:56:43.509 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 9: input shape Shape([800, 7168])
+2026-04-02 11:56:43.510 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 9: output shape Shape([800, 7168])
+2026-04-02 11:56:43.510 | INFO     | tracy:signpost:44 - Expert 11/32
+2026-04-02 11:56:43.511 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 10: input shape Shape([800, 7168])
+2026-04-02 11:56:43.512 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 10: output shape Shape([800, 7168])
+2026-04-02 11:56:43.512 | INFO     | tracy:signpost:44 - Expert 12/32
+2026-04-02 11:56:43.513 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 11: input shape Shape([800, 7168])
+2026-04-02 11:56:43.513 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 11: output shape Shape([800, 7168])
+2026-04-02 11:56:43.513 | INFO     | tracy:signpost:44 - Expert 13/32
+2026-04-02 11:56:43.514 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 12: input shape Shape([800, 7168])
+2026-04-02 11:56:43.515 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 12: output shape Shape([800, 7168])
+2026-04-02 11:56:43.515 | INFO     | tracy:signpost:44 - Expert 14/32
+2026-04-02 11:56:43.516 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 13: input shape Shape([800, 7168])
+2026-04-02 11:56:43.516 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 13: output shape Shape([800, 7168])
+2026-04-02 11:56:43.517 | INFO     | tracy:signpost:44 - Expert 15/32
+2026-04-02 11:56:43.518 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 14: input shape Shape([800, 7168])
+2026-04-02 11:56:43.518 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 14: output shape Shape([800, 7168])
+2026-04-02 11:56:43.518 | INFO     | tracy:signpost:44 - Expert 16/32
+2026-04-02 11:56:43.519 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 15: input shape Shape([800, 7168])
+2026-04-02 11:56:43.520 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 15: output shape Shape([800, 7168])
+2026-04-02 11:56:43.520 | INFO     | tracy:signpost:44 - Expert 17/32
+2026-04-02 11:56:43.521 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 16: input shape Shape([800, 7168])
+2026-04-02 11:56:43.521 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 16: output shape Shape([800, 7168])
+2026-04-02 11:56:43.521 | INFO     | tracy:signpost:44 - Expert 18/32
+2026-04-02 11:56:43.522 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 17: input shape Shape([800, 7168])
+2026-04-02 11:56:43.523 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 17: output shape Shape([800, 7168])
+2026-04-02 11:56:43.523 | INFO     | tracy:signpost:44 - Expert 19/32
+2026-04-02 11:56:43.524 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 18: input shape Shape([800, 7168])
+2026-04-02 11:56:43.524 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 18: output shape Shape([800, 7168])
+2026-04-02 11:56:43.525 | INFO     | tracy:signpost:44 - Expert 20/32
+2026-04-02 11:56:43.526 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 19: input shape Shape([800, 7168])
+2026-04-02 11:56:43.526 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 19: output shape Shape([800, 7168])
+2026-04-02 11:56:43.526 | INFO     | tracy:signpost:44 - Expert 21/32
+2026-04-02 11:56:43.527 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 20: input shape Shape([800, 7168])
+2026-04-02 11:56:43.528 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 20: output shape Shape([800, 7168])
+2026-04-02 11:56:43.528 | INFO     | tracy:signpost:44 - Expert 22/32
+2026-04-02 11:56:43.529 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 21: input shape Shape([800, 7168])
+2026-04-02 11:56:43.529 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 21: output shape Shape([800, 7168])
+2026-04-02 11:56:43.529 | INFO     | tracy:signpost:44 - Expert 23/32
+2026-04-02 11:56:43.530 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 22: input shape Shape([800, 7168])
+2026-04-02 11:56:43.531 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 22: output shape Shape([800, 7168])
+2026-04-02 11:56:43.531 | INFO     | tracy:signpost:44 - Expert 24/32
+2026-04-02 11:56:43.532 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 23: input shape Shape([800, 7168])
+2026-04-02 11:56:43.533 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 23: output shape Shape([800, 7168])
+2026-04-02 11:56:43.533 | INFO     | tracy:signpost:44 - Expert 25/32
+2026-04-02 11:56:43.534 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 24: input shape Shape([800, 7168])
+2026-04-02 11:56:43.534 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 24: output shape Shape([800, 7168])
+2026-04-02 11:56:43.534 | INFO     | tracy:signpost:44 - Expert 26/32
+2026-04-02 11:56:43.535 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 25: input shape Shape([800, 7168])
+2026-04-02 11:56:43.536 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 25: output shape Shape([800, 7168])
+2026-04-02 11:56:43.536 | INFO     | tracy:signpost:44 - Expert 27/32
+2026-04-02 11:56:43.537 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 26: input shape Shape([800, 7168])
+2026-04-02 11:56:43.537 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 26: output shape Shape([800, 7168])
+2026-04-02 11:56:43.538 | INFO     | tracy:signpost:44 - Expert 28/32
+2026-04-02 11:56:43.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 27: input shape Shape([800, 7168])
+2026-04-02 11:56:43.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 27: output shape Shape([800, 7168])
+2026-04-02 11:56:43.539 | INFO     | tracy:signpost:44 - Expert 29/32
+2026-04-02 11:56:43.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 28: input shape Shape([800, 7168])
+2026-04-02 11:56:43.541 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 28: output shape Shape([800, 7168])
+2026-04-02 11:56:43.541 | INFO     | tracy:signpost:44 - Expert 30/32
+2026-04-02 11:56:43.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 29: input shape Shape([800, 7168])
+2026-04-02 11:56:43.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 29: output shape Shape([800, 7168])
+2026-04-02 11:56:43.542 | INFO     | tracy:signpost:44 - Expert 31/32
+2026-04-02 11:56:43.543 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 30: input shape Shape([800, 7168])
+2026-04-02 11:56:43.544 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 30: output shape Shape([800, 7168])
+2026-04-02 11:56:43.544 | INFO     | tracy:signpost:44 - Expert 32/32
+2026-04-02 11:56:43.545 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:326 - Expert 31: input shape Shape([800, 7168])
+2026-04-02 11:56:43.546 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:335 - Expert 31: output shape Shape([800, 7168])
+2026-04-02 11:56:43.553 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:345 - Final expert_outputs shape: Shape([32, 800, 7168])
+2026-04-02 11:56:43.553 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:343 - [TtMoe.forward] expert_outputs shape: Shape([32, 800, 7168])
+2026-04-02 11:56:43.553 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:349 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 32, 800, 7168])
+2026-04-02 11:56:43.564 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:356 - [TtMoe.forward] expert_outputs_rm shape: Shape([1, 1, 32, 800, 7168]) expert_outputs_rm.dtype=DataType.BFLOAT16
+2026-04-02 11:56:43.652 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:363 - [TtMoe.forward] combined_output shape: Shape([1, 1, 3200, 8, 7168])
+2026-04-02 11:56:43.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:377 - [TtMoe.forward] combined_output_tiled shape: Shape([1, 1, 3200, 8, 7168])
+2026-04-02 11:56:44.397 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:380 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 3200, 3584])
+2026-04-02 11:56:44.397 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:385 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 3200, 3584])
+2026-04-02 11:56:44.408 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:393 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 3200, 3584])
+2026-04-02 11:56:44.421 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:397 - [TtMoe.forward] Final output shape: Shape([1, 3200, 3584])
+2026-04-02 11:56:44.422 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:280 - run_pcc_check=False, skipping PCC validation
+2026-04-02 11:56:44.422 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:282 - input_creation: 2080.30 ms
+2026-04-02 11:56:44.422 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:282 - tt_moe_creation: 437.79 ms
+2026-04-02 11:56:44.422 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:282 - tt_forward: 1299.52 ms
+2026-04-02 11:56:44.422 | DEBUG    | models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe:test_ttnn_moe:282 - test_ttnn_moe: 3863.93 ms
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+3.88s call     models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-3200-7168-2048-256-8-2-GateComputeMode.DEVICE-False]
+0.73s setup    models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-3200-7168-2048-256-8-2-GateComputeMode.DEVICE-False]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-3200-7168-2048-256-8-2-GateComputeMode.DEVICE-False]
+=========================== short test summary info ============================
+PASSED models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-mesh-4x2-3200-7168-2048-256-8-2-GateComputeMode.DEVICE-False]
+========================= 1 passed, 1 warning in 9.64s =========================
+2026-04-02 11:56:47.097 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-02 11:56:47.097 | info     |             UMD | Closing devices in cluster (cluster.cpp:962)

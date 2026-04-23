@@ -1,0 +1,1091 @@
+2026-04-04 08:02:26.825 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-04 08:02:29.224 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+2026-04-04 08:02:29.241 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-04 08:02:29.253 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-04 08:02:29.253 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-04 08:02:29.360 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-04 08:02:29.362 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-04 08:02:29.372 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-04 08:02:29.372 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-04 08:02:29.478 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-04 08:02:29.488 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-04 08:02:29.488 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-04 08:02:29.581 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:29.582 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:29.582 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:29.952 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:29.953 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:29.953 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:30.312 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:30.313 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:30.313 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:30.661 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:30.662 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:30.662 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:31.008 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:31.009 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:31.009 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:31.347 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:31.348 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:31.348 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:31.684 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:31.685 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:31.685 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:32.019 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-04 08:02:32.019 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-04 08:02:32.019 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-04 08:02:32.353 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-04 08:02:32.353 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-04 08:02:32.353 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-04 08:02:32.358 | info     |             UMD | Starting devices in cluster (cluster.cpp:949)
+2026-04-04 08:02:32.394 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.416 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.445 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.467 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.487 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.515 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.534 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-04 08:02:32.578 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 4 items / 2 deselected / 2 selected
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc] 2026-04-04 08:02:34.046 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:config_only:328 - Using config from default location: models/demos/deepseek_v3/reference
+2026-04-04 08:02:34.057 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:tokenizer:366 - Loading tokenizer from: /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-04 08:02:34.678 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-04 08:02:34.678 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-04 08:02:34.678 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-04 08:02:34.678 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-04 08:02:34.680 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-04 08:02:34.688 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-04 08:02:34.688 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-04 08:02:34.770 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-04 08:02:34.770 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-04 08:02:34.770 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-04 08:02:34.770 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-04 08:02:34.770 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-04 08:02:34.770 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-04 08:02:34.770 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-04 08:02:34.770 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-04 08:02:34.770 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-04 08:02:34.770 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:34.816 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:02:35.143 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-04 08:02:35.235 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-04 08:02:35.236 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-04 08:02:35.238 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-04 08:02:35.239 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-04 08:02:35.240 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-04 08:02:35.242 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-04 08:02:35.243 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-04 08:02:35.244 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-04 08:02:35.244 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-04 08:02:35.244 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-04 08:02:35.336 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-04 08:02:35.337 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:612 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-04 08:02:35.337 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:613 - isl_total=1024, isl_per_chip=512, num_layers=6, n_routed_experts=64, capacity_factor=4, gate_fallback_mode=GateComputeMode.HOST_ALL
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-04 08:03:38.598 | INFO     | models.demos.deepseek_v3.demo.demo:load_prompts_from_json:376 - Loaded 512 prompts from 'models/demos/deepseek_v3/demo/test_prompts.json'
+2026-04-04 08:03:38.627 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:633 - Tokenized input shape: torch.Size([1, 1024]), first 10 tokens: [0, 128803, 4823, 1687, 4495, 5602, 5425, 27890, 1522, 33]
+2026-04-04 08:03:38.627 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:639 - Running HF reference forward...
+2026-04-04 08:03:45.120 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:642 - HF reference output shape: torch.Size([1, 1024, 7168])
+2026-04-04 08:03:45.120 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:65 - Building TtPrefillTransformer with 6 layers, seq_len=1024
+2026-04-04 08:03:45.120 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:__init__:72 - Initializing TtParallelEmbedding: vocab_size=129280, emb_dim=7168, mesh_shape=MeshShape([2, 4]), tp_factor=4
+2026-04-04 08:03:51.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:_create_weight_from_torch:116 - Created sharded weight: Shape([129280, 1792])
+2026-04-04 08:03:51.539 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 0/6...
+2026-04-04 08:03:51.540 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=0 (dense)
+2026-04-04 08:03:51.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:03:51.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:03:51.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:03:51.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:03:51.540 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:03:51.543 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:03:54.966 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 0 to TT device
+2026-04-04 08:03:54.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:03:54.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:03:54.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:03:54.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:03:54.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:03:54.969 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:03:54.970 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-04 08:03:54.970 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:03:54.970 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:03:54.970 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:03:55.186 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:03:57.271 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 4608])
+2026-04-04 08:03:57.507 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:03:59.591 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 4608])
+2026-04-04 08:03:59.815 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-04 08:04:01.979 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([4608, 7168])
+2026-04-04 08:04:01.998 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 1/6...
+2026-04-04 08:04:01.998 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=1 (dense)
+2026-04-04 08:04:01.998 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:01.998 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:01.998 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:01.998 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:01.998 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:02.001 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:05.344 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 1 to TT device
+2026-04-04 08:04:05.345 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:05.345 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:05.345 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:05.345 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:05.345 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-04 08:04:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:04:05.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:04:05.560 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:04:07.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 4608])
+2026-04-04 08:04:07.886 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:04:09.969 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 4608])
+2026-04-04 08:04:10.192 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-04 08:04:12.366 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([4608, 7168])
+2026-04-04 08:04:12.386 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 2/6...
+2026-04-04 08:04:12.386 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=2 (dense)
+2026-04-04 08:04:12.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:12.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:12.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:12.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:12.386 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:12.387 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:15.791 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 2 to TT device
+2026-04-04 08:04:15.791 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:15.791 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:15.791 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:15.791 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:15.791 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:15.794 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:15.795 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-04 08:04:15.795 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:15.795 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:04:15.795 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:04:16.015 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:04:18.123 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 4608])
+2026-04-04 08:04:18.360 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:04:20.452 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 4608])
+2026-04-04 08:04:20.675 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-04 08:04:22.858 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([4608, 7168])
+2026-04-04 08:04:22.877 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 3/6...
+2026-04-04 08:04:22.877 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=3 (MoE)
+2026-04-04 08:04:22.877 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:22.877 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:22.877 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:22.877 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:22.877 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:22.880 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:26.328 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 3 to TT device
+2026-04-04 08:04:26.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:26.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:26.329 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:26.329 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:26.329 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:26.330 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:26.330 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 64])
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=8, num_routed_experts=64
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 64]), dispatch_axis=0
+2026-04-04 08:04:26.338 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-04 08:04:26.339 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-04 08:04:26.339 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:97 - RoutedExpert: No optimal program config for given dimensions max_tokens=512emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-04 08:04:26.339 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:105 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-04 08:04:26.339 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:106 - emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:26.339 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:107 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=64
+2026-04-04 08:04:26.339 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:124 - Creating weights from provided torch tensors (64 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/8 [00:00<?, ?it/s]Torch->TTNN weights per local expert:  12%|█▎        | 1/8 [00:01<00:08,  1.16s/it]Torch->TTNN weights per local expert:  25%|██▌       | 2/8 [00:02<00:07,  1.21s/it]Torch->TTNN weights per local expert:  38%|███▊      | 3/8 [00:03<00:06,  1.26s/it]Torch->TTNN weights per local expert:  50%|█████     | 4/8 [00:05<00:05,  1.27s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 5/8 [00:06<00:03,  1.27s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 6/8 [00:07<00:02,  1.27s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 7/8 [00:08<00:01,  1.26s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:09<00:00,  1.24s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:09<00:00,  1.25s/it]
+2026-04-04 08:04:36.317 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:36.317 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:36.317 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:04:36.317 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:04:36.331 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:04:36.366 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 512])
+2026-04-04 08:04:36.378 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:04:36.424 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 512])
+2026-04-04 08:04:36.436 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-04 08:04:36.477 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([512, 7168])
+2026-04-04 08:04:36.477 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-04 08:04:36.478 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 4/6...
+2026-04-04 08:04:36.478 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=4 (MoE)
+2026-04-04 08:04:36.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:36.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:36.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:36.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:36.478 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:36.481 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:39.627 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 4 to TT device
+2026-04-04 08:04:39.628 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:39.628 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:39.628 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:39.628 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:39.628 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:39.631 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:39.632 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 64])
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=8, num_routed_experts=64
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 64]), dispatch_axis=0
+2026-04-04 08:04:39.636 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-04 08:04:39.637 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-04 08:04:39.637 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:97 - RoutedExpert: No optimal program config for given dimensions max_tokens=512emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-04 08:04:39.637 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:105 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-04 08:04:39.637 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:106 - emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:39.637 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:107 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=64
+2026-04-04 08:04:39.637 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:124 - Creating weights from provided torch tensors (64 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/8 [00:00<?, ?it/s]Torch->TTNN weights per local expert:  12%|█▎        | 1/8 [00:01<00:08,  1.20s/it]Torch->TTNN weights per local expert:  25%|██▌       | 2/8 [00:02<00:07,  1.22s/it]Torch->TTNN weights per local expert:  38%|███▊      | 3/8 [00:03<00:06,  1.26s/it]Torch->TTNN weights per local expert:  50%|█████     | 4/8 [00:04<00:04,  1.24s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 5/8 [00:06<00:03,  1.24s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 6/8 [00:07<00:02,  1.23s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 7/8 [00:08<00:01,  1.25s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:09<00:00,  1.27s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:09<00:00,  1.25s/it]
+2026-04-04 08:04:49.629 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:49.630 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:49.630 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:04:49.630 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:04:49.646 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:04:49.684 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 512])
+2026-04-04 08:04:49.696 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:04:49.743 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 512])
+2026-04-04 08:04:49.755 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([512, 7168])
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-04 08:04:49.797 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 5/6...
+2026-04-04 08:04:49.797 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=5 (MoE)
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:49.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:49.800 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:52.875 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 5 to TT device
+2026-04-04 08:04:52.875 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:04:52.875 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:04:52.875 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:04:52.875 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:04:52.876 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:04:52.876 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:04:52.877 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 64])
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=8, num_routed_experts=64
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 64]), dispatch_axis=0
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-04 08:04:52.881 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:97 - RoutedExpert: No optimal program config for given dimensions max_tokens=512emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:105 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:106 - emb_dim=7168, hidden_dim=2048
+2026-04-04 08:04:52.881 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:107 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=64
+2026-04-04 08:04:52.882 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:124 - Creating weights from provided torch tensors (64 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/8 [00:00<?, ?it/s]Torch->TTNN weights per local expert:  12%|█▎        | 1/8 [00:01<00:08,  1.23s/it]Torch->TTNN weights per local expert:  25%|██▌       | 2/8 [00:02<00:07,  1.27s/it]Torch->TTNN weights per local expert:  38%|███▊      | 3/8 [00:03<00:06,  1.29s/it]Torch->TTNN weights per local expert:  50%|█████     | 4/8 [00:05<00:05,  1.25s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 5/8 [00:06<00:03,  1.23s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 6/8 [00:07<00:02,  1.25s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 7/8 [00:08<00:01,  1.28s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:10<00:00,  1.28s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:10<00:00,  1.27s/it]
+2026-04-04 08:05:03.010 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-04 08:05:03.010 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:05:03.010 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:05:03.010 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:05:03.022 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:05:03.059 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 512])
+2026-04-04 08:05:03.070 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:05:03.118 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 512])
+2026-04-04 08:05:03.132 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([512, 7168])
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:05:03.173 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:05:03.176 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:05:03.176 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:112 - TtPrefillTransformer construction complete (6 layers)
+2026-04-04 08:05:03.177 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:677 - Running TtPrefillTransformer forward...
+2026-04-04 08:05:03.182 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:forward:141 - Forward: token_ids shape=Shape([1, 1, 512])
+2026-04-04 08:05:03.194 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:forward:150 - Output: embeddings shape=Shape([1, 512, 1792])
+2026-04-04 08:05:03.194 | INFO     | tracy:signpost:44 - forward_layer_0_start
+2026-04-04 08:05:03.194 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:150 - Forward pass: input shape=Shape([1, 512, 1792])
+2026-04-04 08:05:03.194 | critical |          Always | TT_THROW: ShapeBase[] index out of range. 3 not in [-4, 3) (assert.hpp:104)
+FAILED2026-04-04 08:05:03.352 | INFO     | conftest:pytest_runtest_teardown:1114 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7}
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-smoke] 2026-04-04 08:05:03.649 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-04 08:05:03.649 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-04 08:05:03.649 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:257)
+2026-04-04 08:05:03.649 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-04 08:05:03.649 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-04 08:05:03.651 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-04 08:05:03.659 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-04 08:05:03.659 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-04 08:05:03.748 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-04 08:05:03.748 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-04 08:05:03.748 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-04 08:05:03.748 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-04 08:05:03.748 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-04 08:05:03.748 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-04 08:05:03.748 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-04 08:05:03.748 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-04 08:05:03.748 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-04 08:05:03.748 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-04 08:05:03.805 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.811 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.815 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.821 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.825 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.830 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.834 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:03.839 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-04 08:05:04.060 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-04 08:05:04.088 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-04 08:05:04.090 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-04 08:05:04.091 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-04 08:05:04.092 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-04 08:05:04.094 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-04 08:05:04.095 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-04 08:05:04.096 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-04 08:05:04.097 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-04 08:05:04.097 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-04 08:05:04.097 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-04 08:05:04.177 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-04 08:05:04.178 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:612 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-04 08:05:04.178 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:613 - isl_total=1024, isl_per_chip=512, num_layers=6, n_routed_experts=64, capacity_factor=4, gate_fallback_mode=GateComputeMode.HOST_ALL
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-04 08:06:07.476 | INFO     | models.demos.deepseek_v3.demo.demo:load_prompts_from_json:376 - Loaded 512 prompts from 'models/demos/deepseek_v3/demo/test_prompts.json'
+2026-04-04 08:06:07.485 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:633 - Tokenized input shape: torch.Size([1, 1024]), first 10 tokens: [0, 128803, 4823, 1687, 4495, 5602, 5425, 27890, 1522, 33]
+2026-04-04 08:06:07.486 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:65 - Building TtPrefillTransformer with 6 layers, seq_len=1024
+2026-04-04 08:06:07.486 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:__init__:72 - Initializing TtParallelEmbedding: vocab_size=129280, emb_dim=7168, mesh_shape=MeshShape([2, 4]), tp_factor=4
+2026-04-04 08:06:13.553 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:_create_weight_from_torch:116 - Created sharded weight: Shape([129280, 1792])
+2026-04-04 08:06:13.554 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 0/6...
+2026-04-04 08:06:13.554 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=0 (dense)
+2026-04-04 08:06:13.554 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:13.554 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:13.554 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:13.554 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:13.554 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:13.555 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:16.965 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 0 to TT device
+2026-04-04 08:06:16.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:16.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:16.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:16.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:16.966 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:16.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:16.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-04 08:06:16.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:16.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:06:16.967 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:06:17.178 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:06:19.287 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 4608])
+2026-04-04 08:06:19.517 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:06:21.633 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 4608])
+2026-04-04 08:06:21.856 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-04 08:06:24.065 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([4608, 7168])
+2026-04-04 08:06:24.084 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 1/6...
+2026-04-04 08:06:24.084 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=1 (dense)
+2026-04-04 08:06:24.084 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:24.084 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:24.084 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:24.084 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:24.085 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:24.085 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:27.458 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 1 to TT device
+2026-04-04 08:06:27.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:27.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:27.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:27.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:27.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:27.459 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:27.459 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-04 08:06:27.459 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:27.459 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:06:27.459 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:06:27.670 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:06:29.834 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 4608])
+2026-04-04 08:06:30.064 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:06:32.155 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 4608])
+2026-04-04 08:06:32.375 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-04 08:06:34.554 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([4608, 7168])
+2026-04-04 08:06:34.574 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 2/6...
+2026-04-04 08:06:34.574 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=2 (dense)
+2026-04-04 08:06:34.574 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:34.574 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:34.574 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:34.574 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:34.574 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:34.575 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:37.957 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 2 to TT device
+2026-04-04 08:06:37.958 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:37.958 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:37.958 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:37.958 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:37.958 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:37.959 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:37.959 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=18432
+2026-04-04 08:06:37.959 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:37.959 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:06:37.959 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:06:38.167 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:06:40.261 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 4608])
+2026-04-04 08:06:40.491 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 18432])
+2026-04-04 08:06:42.589 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 4608])
+2026-04-04 08:06:42.812 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([18432, 7168])
+2026-04-04 08:06:44.989 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([4608, 7168])
+2026-04-04 08:06:45.007 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 3/6...
+2026-04-04 08:06:45.008 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=3 (MoE)
+2026-04-04 08:06:45.008 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:45.008 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:45.008 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:45.008 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:45.008 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:45.009 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:48.456 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 3 to TT device
+2026-04-04 08:06:48.456 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:06:48.456 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:06:48.457 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:06:48.457 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:06:48.457 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:06:48.457 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:06:48.458 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 64])
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=8, num_routed_experts=64
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 64]), dispatch_axis=0
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-04 08:06:48.462 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-04 08:06:48.463 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:97 - RoutedExpert: No optimal program config for given dimensions max_tokens=512emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-04 08:06:48.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:105 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-04 08:06:48.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:106 - emb_dim=7168, hidden_dim=2048
+2026-04-04 08:06:48.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:107 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=64
+2026-04-04 08:06:48.463 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:124 - Creating weights from provided torch tensors (64 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/8 [00:00<?, ?it/s]Torch->TTNN weights per local expert:  12%|█▎        | 1/8 [00:01<00:11,  1.70s/it]Torch->TTNN weights per local expert:  25%|██▌       | 2/8 [00:03<00:10,  1.71s/it]Torch->TTNN weights per local expert:  38%|███▊      | 3/8 [00:05<00:08,  1.70s/it]Torch->TTNN weights per local expert:  50%|█████     | 4/8 [00:06<00:06,  1.70s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 5/8 [00:08<00:05,  1.70s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 6/8 [00:10<00:03,  1.70s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 7/8 [00:11<00:01,  1.71s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:13<00:00,  1.71s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:13<00:00,  1.71s/it]
+2026-04-04 08:07:02.117 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:02.117 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:02.117 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:07:02.117 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:07:02.139 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:07:02.175 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 512])
+2026-04-04 08:07:02.186 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:07:02.232 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 512])
+2026-04-04 08:07:02.244 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([512, 7168])
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-04 08:07:02.286 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 4/6...
+2026-04-04 08:07:02.286 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=4 (MoE)
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:07:02.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:07:02.287 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:07:05.663 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 4 to TT device
+2026-04-04 08:07:05.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:07:05.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:05.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:07:05.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:07:05.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:07:05.665 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:07:05.665 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 64])
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=8, num_routed_experts=64
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 64]), dispatch_axis=0
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-04 08:07:05.669 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:97 - RoutedExpert: No optimal program config for given dimensions max_tokens=512emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-04 08:07:05.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:105 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-04 08:07:05.670 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:106 - emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:05.670 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:107 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=64
+2026-04-04 08:07:05.670 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:124 - Creating weights from provided torch tensors (64 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/8 [00:00<?, ?it/s]Torch->TTNN weights per local expert:  12%|█▎        | 1/8 [00:01<00:12,  1.73s/it]Torch->TTNN weights per local expert:  25%|██▌       | 2/8 [00:03<00:10,  1.73s/it]Torch->TTNN weights per local expert:  38%|███▊      | 3/8 [00:05<00:08,  1.72s/it]Torch->TTNN weights per local expert:  50%|█████     | 4/8 [00:06<00:06,  1.72s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 5/8 [00:08<00:05,  1.73s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 6/8 [00:10<00:03,  1.73s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 7/8 [00:12<00:01,  1.73s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:13<00:00,  1.73s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:13<00:00,  1.73s/it]
+2026-04-04 08:07:19.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:19.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:19.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:07:19.479 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:07:19.502 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:07:19.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 512])
+2026-04-04 08:07:19.550 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:07:19.597 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 512])
+2026-04-04 08:07:19.609 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-04 08:07:19.650 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([512, 7168])
+2026-04-04 08:07:19.650 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-04 08:07:19.651 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:80 - Building layer 5/6...
+2026-04-04 08:07:19.651 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:64 - Building TtPrefillBlock layer_idx=5 (MoE)
+2026-04-04 08:07:19.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:07:19.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:19.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:07:19.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:07:19.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:07:19.651 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:07:23.048 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:286 - ✓ Loaded 7 weights in MLA layer 5 to TT device
+2026-04-04 08:07:23.048 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:07:23.048 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:23.048 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:07:23.048 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:07:23.048 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:07:23.049 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:07:23.050 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 64])
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:152 - Initializing TtMoe
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:153 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:154 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:155 -   experts_per_chip=8, num_routed_experts=64
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:156 -   num_experts_per_tok=8
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:157 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 64]), dispatch_axis=0
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 64])
+2026-04-04 08:07:23.054 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:97 - RoutedExpert: No optimal program config for given dimensions max_tokens=512emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:105 - Initializing TtRoutedExpert with experts_per_chip=8
+2026-04-04 08:07:23.054 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:106 - emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:23.055 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:107 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=64
+2026-04-04 08:07:23.055 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:124 - Creating weights from provided torch tensors (64 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/8 [00:00<?, ?it/s]Torch->TTNN weights per local expert:  12%|█▎        | 1/8 [00:01<00:12,  1.73s/it]Torch->TTNN weights per local expert:  25%|██▌       | 2/8 [00:03<00:10,  1.71s/it]Torch->TTNN weights per local expert:  38%|███▊      | 3/8 [00:05<00:08,  1.71s/it]Torch->TTNN weights per local expert:  50%|█████     | 4/8 [00:06<00:06,  1.71s/it]Torch->TTNN weights per local expert:  62%|██████▎   | 5/8 [00:08<00:05,  1.71s/it]Torch->TTNN weights per local expert:  75%|███████▌  | 6/8 [00:10<00:03,  1.70s/it]Torch->TTNN weights per local expert:  88%|████████▊ | 7/8 [00:11<00:01,  1.71s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:13<00:00,  1.71s/it]Torch->TTNN weights per local expert: 100%|██████████| 8/8 [00:13<00:00,  1.71s/it]
+2026-04-04 08:07:36.732 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:86 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-04 08:07:36.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:87 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:36.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:88 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-04 08:07:36.733 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:92 - Creating weights from provided torch tensors
+2026-04-04 08:07:36.755 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:07:36.790 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created gate_proj: Shape([7168, 512])
+2026-04-04 08:07:36.801 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-04 08:07:36.847 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created up_proj: Shape([7168, 512])
+2026-04-04 08:07:36.859 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:127 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:143 - Created down_proj: Shape([512, 7168])
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:228 - TtMoe initialization complete
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:85 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:86 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:87 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:91 - Creating weight from provided torch tensor
+2026-04-04 08:07:36.901 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:113 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-04 08:07:36.902 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:130 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-04 08:07:36.902 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer:__init__:112 - TtPrefillTransformer construction complete (6 layers)
+2026-04-04 08:07:36.902 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_prefill_transformer_tokenized:677 - Running TtPrefillTransformer forward...
+2026-04-04 08:07:36.907 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:forward:141 - Forward: token_ids shape=Shape([1, 1, 512])
+2026-04-04 08:07:36.909 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:forward:150 - Output: embeddings shape=Shape([1, 512, 1792])
+2026-04-04 08:07:36.909 | INFO     | tracy:signpost:44 - forward_layer_0_start
+2026-04-04 08:07:36.909 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:150 - Forward pass: input shape=Shape([1, 512, 1792])
+2026-04-04 08:07:36.909 | critical |          Always | TT_THROW: ShapeBase[] index out of range. 3 not in [-4, 3) (assert.hpp:104)
+FAILED2026-04-04 08:07:36.940 | INFO     | conftest:pytest_runtest_teardown:1114 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7}
+
+
+=================================== FAILURES ===================================
+_ test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc] _
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py:678: in test_prefill_transformer_tokenized
+    tt_output = transformer(tt_tokens)
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+models/demos/deepseek_v3_d_p/tt/moe/tt_prefill_transformer.py:130: in forward
+    h = layer(h, rope_tensors)
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+models/demos/deepseek_v3_d_p/tt/moe/tt_prefill_block.py:180: in forward
+    attn_norm_out = self.attn_norm(x)
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py:158: in forward
+    tt_stats = ttnn.rms_norm_pre_all_gather(
+ttnn/ttnn/decorators.py:473: in __call__
+    result = self.function(*function_args, **function_kwargs)
+E   RuntimeError: TT_THROW @ /localdev/mbezulj/tt-metal/tt_metal/common/shape_base.cpp:16: tt::exception
+E   info:
+E   ShapeBase[] index out of range. 3 not in [-4, 3)
+E   backtrace:
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(+0xa309ea) [0x70d3c06309ea]
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/libtt_metal.so(+0x8ab6e4) [0x70d3bf4ab6e4]
+E    --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::compute_output_specs(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+E    --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::create_output_tensors(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim36LayerNormPreAllGatherDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x147) [0x70d3c12ece17]
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim25layer_norm_pre_all_gatherERKN2tt8tt_metal6TensorERKSt8optionalIS3_ENS0_24LayerNormDistributedTypeERKS6_INS2_8DataTypeEERKNS_19ComputeKernelConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKS6_IbE+0x9f) [0x70d3c12e9faf]
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn23rms_norm_pre_all_gatherERKN2tt8tt_metal6TensorENS1_8DataTypeERKSt8optionalIS3_ES6_IKNS_19ComputeKernelConfigEERKS6_IKSt7variantIJNS_4prim29LayerNormDefaultProgramConfigENSE_38LayerNormShardedMultiCoreProgramConfigEEEERKS6_INS1_12MemoryConfigEERKS6_IbE+0x160) [0x70d3c1393250]
+E    --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x390735) [0x70d3c1990735]
+E    --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x267ba5) [0x70d3c1867ba5]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x12f3e) [0x5b780ffff64e]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x5b7810022e59]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x5b780fff5034]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+_ test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-smoke] _
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py:678: in test_prefill_transformer_tokenized
+    tt_output = transformer(tt_tokens)
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+models/demos/deepseek_v3_d_p/tt/moe/tt_prefill_transformer.py:130: in forward
+    h = layer(h, rope_tensors)
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+models/demos/deepseek_v3_d_p/tt/moe/tt_prefill_block.py:180: in forward
+    attn_norm_out = self.attn_norm(x)
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py:158: in forward
+    tt_stats = ttnn.rms_norm_pre_all_gather(
+ttnn/ttnn/decorators.py:473: in __call__
+    result = self.function(*function_args, **function_kwargs)
+E   RuntimeError: TT_THROW @ /localdev/mbezulj/tt-metal/tt_metal/common/shape_base.cpp:16: tt::exception
+E   info:
+E   ShapeBase[] index out of range. 3 not in [-4, 3)
+E   backtrace:
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(+0xa309ea) [0x70d3c06309ea]
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/libtt_metal.so(+0x8ab6e4) [0x70d3bf4ab6e4]
+E    --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::compute_output_specs(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+E    --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::create_output_tensors(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim36LayerNormPreAllGatherDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x147) [0x70d3c12ece17]
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim25layer_norm_pre_all_gatherERKN2tt8tt_metal6TensorERKSt8optionalIS3_ENS0_24LayerNormDistributedTypeERKS6_INS2_8DataTypeEERKNS_19ComputeKernelConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKS6_IbE+0x9f) [0x70d3c12e9faf]
+E    --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn23rms_norm_pre_all_gatherERKN2tt8tt_metal6TensorENS1_8DataTypeERKSt8optionalIS3_ES6_IKNS_19ComputeKernelConfigEERKS6_IKSt7variantIJNS_4prim29LayerNormDefaultProgramConfigENSE_38LayerNormShardedMultiCoreProgramConfigEEEERKS6_INS1_12MemoryConfigEERKS6_IbE+0x160) [0x70d3c1393250]
+E    --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x390735) [0x70d3c1990735]
+E    --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x267ba5) [0x70d3c1867ba5]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x12f3e) [0x5b780ffff64e]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x5b7810022e59]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x5b780fff5034]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+E    --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc]
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+152.73s call     models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-smoke]
+147.86s call     models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc]
+1.29s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc]
+0.82s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-smoke]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-smoke]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc]
+=========================== short test summary info ============================
+FAILED models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-pcc] - RuntimeError: TT_THROW @ /localdev/mbezulj/tt-metal/tt_metal/common/shape_base.cpp:16: tt::exception
+info:
+ShapeBase[] index out of range. 3 not in [-4, 3)
+backtrace:
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(+0xa309ea) [0x70d3c06309ea]
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/libtt_metal.so(+0x8ab6e4) [0x70d3bf4ab6e4]
+ --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::compute_output_specs(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+ --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::create_output_tensors(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim36LayerNormPreAllGatherDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x147) [0x70d3c12ece17]
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim25layer_norm_pre_all_gatherERKN2tt8tt_metal6TensorERKSt8optionalIS3_ENS0_24LayerNormDistributedTypeERKS6_INS2_8DataTypeEERKNS_19ComputeKernelConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKS6_IbE+0x9f) [0x70d3c12e9faf]
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn23rms_norm_pre_all_gatherERKN2tt8tt_metal6TensorENS1_8DataTypeERKSt8optionalIS3_ES6_IKNS_19ComputeKernelConfigEERKS6_IKSt7variantIJNS_4prim29LayerNormDefaultProgramConfigENSE_38LayerNormShardedMultiCoreProgramConfigEEEERKS6_INS1_12MemoryConfigEERKS6_IbE+0x160) [0x70d3c1393250]
+ --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x390735) [0x70d3c1990735]
+ --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x267ba5) [0x70d3c1867ba5]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x12f3e) [0x5b780ffff64e]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x5b7810022e59]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x5b780fff5034]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+FAILED models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_prefill_transformer_tokenized[blackhole-mesh-2x4-experts64_gate_host-6-1024-smoke] - RuntimeError: TT_THROW @ /localdev/mbezulj/tt-metal/tt_metal/common/shape_base.cpp:16: tt::exception
+info:
+ShapeBase[] index out of range. 3 not in [-4, 3)
+backtrace:
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(+0xa309ea) [0x70d3c06309ea]
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/libtt_metal.so(+0x8ab6e4) [0x70d3bf4ab6e4]
+ --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::compute_output_specs(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+ --- ttnn::prim::LayerNormPreAllGatherDeviceOperation::create_output_tensors(ttnn::prim::LayerNormPreAllGatherParams const&, ttnn::prim::LayerNormPreAllGatherInputs const&)
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim36LayerNormPreAllGatherDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x147) [0x70d3c12ece17]
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim25layer_norm_pre_all_gatherERKN2tt8tt_metal6TensorERKSt8optionalIS3_ENS0_24LayerNormDistributedTypeERKS6_INS2_8DataTypeEERKNS_19ComputeKernelConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKS6_IbE+0x9f) [0x70d3c12e9faf]
+ --- /localdev/mbezulj/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn23rms_norm_pre_all_gatherERKN2tt8tt_metal6TensorENS1_8DataTypeERKSt8optionalIS3_ES6_IKNS_19ComputeKernelConfigEERKS6_IKSt7variantIJNS_4prim29LayerNormDefaultProgramConfigENSE_38LayerNormShardedMultiCoreProgramConfigEEEERKS6_INS1_12MemoryConfigEERKS6_IbE+0x160) [0x70d3c1393250]
+ --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x390735) [0x70d3c1990735]
+ --- /localdev/mbezulj/tt-metal/ttnn/ttnn/_ttnn.so(+0x267ba5) [0x70d3c1867ba5]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x12f3e) [0x5b780ffff64e]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2733ef) [0x5b780ff993ef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x96) [0x5b7810094be6]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x5b7810022e59]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x5b780fff5034]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x5b780fff687c]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x5b780fff0778]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd0b9) [0x5b78100230b9]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x273350) [0x5b780ff99350]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyObject_Call_Prepend+0x115) [0x5b7810094c65]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x3a2b46) [0x5b78100c8b46]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(+0x2fd2a2) [0x5b78100232a2]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x5b780fff05ff]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x5b780fff4c17]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x5b780fff6aef]
+ --- /localdev/mbezulj/tt-metal/python_env/bin/python3(_PyFunction_Vectorcall+0x202) [0x5b780ff97352]
+=========== 2 failed, 2 deselected, 3 warnings in 307.75s (0:05:07) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-04-04 08:07:42.614 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-04 08:07:42.614 | info     |             UMD | Closing devices in cluster (cluster.cpp:961)

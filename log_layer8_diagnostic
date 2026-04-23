@@ -1,0 +1,515 @@
+2026-04-06 19:03:18.803 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mbezulj/.cache/ttnn,model_cache_path=/home/mbezulj/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-04-06 19:03:21.609 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/mbezulj/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mbezulj/tt-metal
+configfile: pytest.ini
+plugins: split-0.10.0, cov-7.0.0, benchmark-5.1.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0, dash-2.15.0, anyio-4.13.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-04-06 19:03:21.679 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 19:03:21.691 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 19:03:21.691 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 19:03:21.791 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:224)
+2026-04-06 19:03:21.793 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 19:03:21.802 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 19:03:21.802 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 19:03:21.902 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 19:03:21.912 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 19:03:21.912 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 19:03:22.001 | info     |             UMD | Harvesting masks for Chip 7: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:22.002 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:22.002 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:22.360 | info     |             UMD | Harvesting masks for Chip 0: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:22.361 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:22.361 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:22.708 | info     |             UMD | Harvesting masks for Chip 2: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:22.709 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:22.709 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:23.054 | info     |             UMD | Harvesting masks for Chip 5: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:23.055 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:23.055 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:23.403 | info     |             UMD | Harvesting masks for Chip 3: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:23.404 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:23.404 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:23.748 | info     |             UMD | Harvesting masks for Chip 1: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:23.749 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:23.749 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:24.095 | info     |             UMD | Harvesting masks for Chip 6: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:24.095 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:24.096 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:24.434 | info     |             UMD | Harvesting masks for Chip 4: Tensix: 0xc0 DRAM: 0x0 ETH: 0x120 PCIe: 0x2 L2CPU: 0x0 (cluster.cpp:283)
+2026-04-06 19:03:24.435 | info     |             UMD | Initializing iommu for sysmem (size: 0x40000000). (silicon_sysmem_manager.cpp:275)
+2026-04-06 19:03:24.435 | info     |             UMD | Allocating sysmem without hugepages (size: 0x40000000). (silicon_sysmem_manager.cpp:281)
+2026-04-06 19:03:24.768 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:183)
+2026-04-06 19:03:24.768 | info     |             UMD | IOMMU: enabled (cluster.cpp:157)
+2026-04-06 19:03:24.768 | info     |             UMD | KMD version: 2.7.0 (cluster.cpp:160)
+2026-04-06 19:03:24.773 | info     |             UMD | Starting devices in cluster (cluster.cpp:949)
+2026-04-06 19:03:24.798 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.827 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.853 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.882 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.905 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.933 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.960 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x40000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+2026-04-06 19:03:24.997 | info     |             UMD | Mapped sysmem without hugepages to IOVA 0x80000000; NOC address 0x1000000000000000 (silicon_sysmem_manager.cpp:329)
+collected 1 item
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block_layer8_diagnostic[blackhole-mesh-2x4-1024-layer8] 2026-04-06 19:03:26.509 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:get_or_download_model:291 - Using model from shared location: /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 19:03:26.523 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:hf_config:336 - Loaded HF config from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 19:03:26.590 | INFO     | models.demos.deepseek_v3.utils.lazy_state_dict:__init__:65 - LazyStateDict initialized from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/model.safetensors.index.json (91991 keys across 163 files) in 62.9 ms
+2026-04-06 19:03:26.591 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:state_dict:430 - Loaded state dict from /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 19:03:26.592 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:_check_pretrained_available:456 - ✓ Pretrained weights found at /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+2026-04-06 19:03:26.807 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-04-06 19:03:26.807 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-04-06 19:03:26.807 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:332)
+2026-04-06 19:03:26.807 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:394)
+2026-04-06 19:03:26.809 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:71)
+2026-04-06 19:03:26.816 | info     |             UMD | Established firmware bundle version: 19.7.0 (topology_discovery.cpp:484)
+2026-04-06 19:03:26.816 | info     |             UMD | Firmware bundle version 19.7.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:516)
+2026-04-06 19:03:26.895 | info     |          Fabric | TopologyMapper: Logical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1474)
+2026-04-06 19:03:26.895 | info     |          Fabric | 
+=== Logical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-06 19:03:26.895 | info     |          Fabric | 
+=== Logical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-06 19:03:26.895 | info     |          Fabric | TopologyMapper: Physical Multi-Mesh Adjacency Map: (topology_mapper.cpp:1485)
+2026-04-06 19:03:26.895 | info     |          Fabric | 
+=== Physical Mesh-Level Graph Adjacency Map ===
+Total nodes: 1
+Degree histogram: {0:1}
+ (topology_solver.tpp:91)
+2026-04-06 19:03:26.895 | info     |          Fabric | 
+=== Physical Mesh 0 Internal Graph Adjacency Map ===
+Total nodes: 8
+Degree histogram: {2:4, 3:4}
+ (topology_solver.tpp:91)
+2026-04-06 19:03:26.896 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1446)
+2026-04-06 19:03:26.896 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1487)
+2026-04-06 19:03:26.896 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1516)
+2026-04-06 19:03:26.896 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1656)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:26.945 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mbezulj/tt-metal/tt_metal/pre-compiled/7331978613823494427/ (build_env_manager.cpp:259)
+2026-04-06 19:03:27.079 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-04-06 19:03:27.178 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:412)
+2026-04-06 19:03:27.180 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:412)
+2026-04-06 19:03:27.181 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:412)
+2026-04-06 19:03:27.182 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:412)
+2026-04-06 19:03:27.183 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:412)
+2026-04-06 19:03:27.184 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:412)
+2026-04-06 19:03:27.185 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:412)
+2026-04-06 19:03:27.186 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:412)
+2026-04-06 19:03:27.187 | info     |           Metal | Fabric initialized on 8 devices (fabric_firmware_initializer.cpp:173)
+2026-04-06 19:03:27.187 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:48)
+2026-04-06 19:03:27.278 | DEBUG    | conftest:mesh_device:588 - multidevice with 8 devices is created
+2026-04-06 19:03:27.380 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:329 - Loaded cached reference: input shape=torch.Size([1, 1024, 7168]), output shape=torch.Size([1, 1024, 7168])
+2026-04-06 19:03:27.380 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:330 - Reference KVPE shape: torch.Size([1, 1, 1024, 576])
+2026-04-06 19:03:27.380 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:537 - Loading pretrained transformer weights for 9 layers
+2026-04-06 19:03:27.380 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.embed_tokens.', combined='model.embed_tokens.', num_layers=None
+2026-04-06 19:03:30.628 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.norm.', combined='model.norm.', num_layers=None
+2026-04-06 19:03:30.679 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 0 weights...
+2026-04-06 19:03:30.679 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.0.', combined='model.layers.0.', num_layers=None
+2026-04-06 19:03:31.185 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 0 loaded (dense)
+2026-04-06 19:03:31.186 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 1 weights...
+2026-04-06 19:03:31.186 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.1.', combined='model.layers.1.', num_layers=None
+2026-04-06 19:03:31.622 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 1 loaded (dense)
+2026-04-06 19:03:31.622 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 2 weights...
+2026-04-06 19:03:31.622 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.2.', combined='model.layers.2.', num_layers=None
+2026-04-06 19:03:32.202 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 2 loaded (dense)
+2026-04-06 19:03:32.203 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 3 weights...
+2026-04-06 19:03:32.203 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.3.', combined='model.layers.3.', num_layers=None
+2026-04-06 19:03:51.670 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 3 loaded (MoE)
+2026-04-06 19:03:51.670 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 4 weights...
+2026-04-06 19:03:51.670 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.4.', combined='model.layers.4.', num_layers=None
+2026-04-06 19:04:05.169 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 4 loaded (MoE)
+2026-04-06 19:04:05.169 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 5 weights...
+2026-04-06 19:04:05.169 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.5.', combined='model.layers.5.', num_layers=None
+2026-04-06 19:04:16.451 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 5 loaded (MoE)
+2026-04-06 19:04:16.451 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 6 weights...
+2026-04-06 19:04:16.451 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.6.', combined='model.layers.6.', num_layers=None
+2026-04-06 19:04:30.002 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 6 loaded (MoE)
+2026-04-06 19:04:30.003 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 7 weights...
+2026-04-06 19:04:30.003 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.7.', combined='model.layers.7.', num_layers=None
+2026-04-06 19:04:39.783 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 7 loaded (MoE)
+2026-04-06 19:04:39.783 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:554 - Loading layer 8 weights...
+2026-04-06 19:04:39.783 | DEBUG    | models.demos.deepseek_v3.utils.lazy_state_dict:view_with_prefix:151 - LazyStateDict view created: base_prefix='', add_prefix='model.layers.8.', combined='model.layers.8.', num_layers=None
+2026-04-06 19:04:56.007 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:599 - Layer 8 loaded (MoE)
+2026-04-06 19:04:56.007 | INFO     | models.demos.deepseek_v3_d_p.tests.conftest:load_pretrained_transformer_weights:601 - Loaded pretrained transformer weights for 9 layers
+DeepseekV3Model has generative capabilities, as `prepare_inputs_for_generation` is explicitly defined. However, it doesn't directly inherit from `GenerationMixin`. From 👉v4.50👈 onwards, `PreTrainedModel` will NOT inherit from `GenerationMixin`, and this model will lose the ability to call `generate` and other related functions.
+  - If you're using `trust_remote_code=True`, you can get rid of this warning by loading the model with an auto class. See https://huggingface.co/docs/transformers/en/model_doc/auto#auto-classes
+  - If you are the owner of the model architecture code, please modify your model class such that it inherits from `GenerationMixin` (after `PreTrainedModel`, otherwise you'll get an exception).
+  - If you are not the owner of the model architecture class, please contact the model code owner to update it.
+2026-04-06 19:05:38.045 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:372 - HF post-attention intermediate shape: torch.Size([1, 1024, 7168])
+2026-04-06 19:05:38.049 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:394 - mesh_shape=[2, 4], sp_factor=2, tp_factor=4
+2026-04-06 19:05:38.049 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:395 - layer_idx=8, isl_total=1024, isl_per_chip=512
+2026-04-06 19:05:38.049 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block:__init__:68 - Building TtPrefillBlock layer_idx=8 (MoE)
+2026-04-06 19:05:38.050 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-06 19:05:38.050 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-06 19:05:38.050 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-06 19:05:38.050 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-06 19:05:38.050 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-06 19:05:38.053 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.attn_norm_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 56, 32])
+2026-04-06 19:05:38.053 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-06 19:05:38.246 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.q_a_layernorm_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 48, 32])
+2026-04-06 19:05:38.248 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.kv_a_layernorm_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 16, 32])
+2026-04-06 19:05:38.252 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.q_a_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1792, 1536])
+2026-04-06 19:05:38.257 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.q_b_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1536, 6144])
+2026-04-06 19:05:38.260 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.kv_a_proj_with_mqa_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1792, 576])
+2026-04-06 19:05:38.262 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.wkv_b1_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 32, 128, 512])
+2026-04-06 19:05:38.265 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.wkv_b2_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 32, 512, 128])
+2026-04-06 19:05:38.278 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.mla.o_proj_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([4096, 7168])
+2026-04-06 19:05:38.278 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:_load_weights:303 - ✓ Loaded 7 weights in MLA layer 8 to TT device
+2026-04-06 19:05:38.278 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:92 - Initializing TtDistributedRmsNorm with emb_dim=7168, epsilon=1e-06
+2026-04-06 19:05:38.278 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:93 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-06 19:05:38.278 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:94 - CCL config: cluster_axis=1, num_links=1, topology=Topology.Linear
+2026-04-06 19:05:38.278 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:98 - Creating weight from provided torch tensor
+2026-04-06 19:05:38.279 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:120 - Weight reshaped from torch.Size([7168]) to torch.Size([1, 1, 224, 32])
+2026-04-06 19:05:38.280 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.ffn_norm_weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 56, 32])
+2026-04-06 19:05:38.280 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:144 - Created sharded weight: Shape([1, 1, 56, 32])
+2026-04-06 19:05:38.281 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:230 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 256])
+2026-04-06 19:05:38.284 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.gate.weight_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1792, 256])
+2026-04-06 19:05:38.286 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.gate.bias_sp512_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([512, 256])
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:158 - Initializing TtMoe
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:159 -   mesh_device.shape=MeshShape([2, 4])
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:160 -   dispatch_group_size=2, num_dispatch_groups=4
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:161 -   experts_per_chip=32, num_routed_experts=256
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:162 -   num_experts_per_tok=8
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:163 -   seq_len_per_chip=512, emb_dim=7168, hidden_dim=2048
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:120 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 256]), dispatch_axis=0
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:127 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-04-06 19:05:38.293 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:141 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 256])
+2026-04-06 19:05:38.294 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:102 - RoutedExpert: No optimal program config for given dimensions max_tokens=64emb_dim=7168hidden_dim=2048, using defaults.
+2026-04-06 19:05:38.294 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:110 - Initializing TtRoutedExpert with experts_per_chip=32
+2026-04-06 19:05:38.294 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:111 - emb_dim=7168, hidden_dim=2048
+2026-04-06 19:05:38.294 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:112 - Mesh shape: MeshShape([2, 4]), num_devices=8, total_experts=256
+2026-04-06 19:05:38.294 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:129 - Creating weights from provided torch tensors (256 experts)
+Torch->TTNN weights per local expert:   0%|          | 0/32 [00:00<?, ?it/s]2026-04-06 19:05:38.504 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_0_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:38.716 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_0_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:38.928 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_0_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:   3%|▎         | 1/32 [00:00<00:20,  1.54it/s]2026-04-06 19:05:39.143 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_1_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:39.353 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_1_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:39.553 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_1_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:   6%|▋         | 2/32 [00:01<00:19,  1.57it/s]2026-04-06 19:05:39.764 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_2_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:40.004 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_2_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:40.220 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_2_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:   9%|▉         | 3/32 [00:01<00:18,  1.54it/s]2026-04-06 19:05:40.433 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_3_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:40.644 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_3_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:40.858 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_3_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  12%|█▎        | 4/32 [00:02<00:18,  1.55it/s]2026-04-06 19:05:41.075 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_4_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:41.288 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_4_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:41.501 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_4_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  16%|█▌        | 5/32 [00:03<00:17,  1.55it/s]2026-04-06 19:05:41.713 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_5_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:41.926 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_5_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:42.140 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_5_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  19%|█▉        | 6/32 [00:03<00:16,  1.56it/s]2026-04-06 19:05:42.358 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_6_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:42.568 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_6_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:42.781 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_6_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  22%|██▏       | 7/32 [00:04<00:16,  1.56it/s]2026-04-06 19:05:43.016 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_7_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:43.228 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_7_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:43.450 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_7_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  25%|██▌       | 8/32 [00:05<00:15,  1.54it/s]2026-04-06 19:05:43.664 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_8_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:43.875 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_8_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:44.091 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_8_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  28%|██▊       | 9/32 [00:05<00:14,  1.54it/s]2026-04-06 19:05:44.303 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_9_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:44.519 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_9_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:44.735 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_9_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  31%|███▏      | 10/32 [00:06<00:14,  1.55it/s]2026-04-06 19:05:44.952 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_10_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:45.167 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_10_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:45.386 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_10_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  34%|███▍      | 11/32 [00:07<00:13,  1.54it/s]2026-04-06 19:05:45.603 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_11_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:45.815 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_11_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:46.045 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_11_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  38%|███▊      | 12/32 [00:07<00:13,  1.54it/s]2026-04-06 19:05:46.258 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_12_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:46.472 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_12_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:46.693 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_12_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  41%|████      | 13/32 [00:08<00:12,  1.54it/s]2026-04-06 19:05:46.909 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_13_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:47.127 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_13_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:47.332 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_13_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  44%|████▍     | 14/32 [00:09<00:11,  1.55it/s]2026-04-06 19:05:47.548 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_14_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:47.778 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_14_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:47.995 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_14_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  47%|████▋     | 15/32 [00:09<00:11,  1.53it/s]2026-04-06 19:05:48.197 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_15_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:48.410 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_15_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:48.635 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_15_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  50%|█████     | 16/32 [00:10<00:10,  1.54it/s]2026-04-06 19:05:48.851 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_16_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:49.062 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_16_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:49.280 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_16_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  53%|█████▎    | 17/32 [00:11<00:09,  1.54it/s]2026-04-06 19:05:49.495 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_17_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:49.707 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_17_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:49.930 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_17_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  56%|█████▋    | 18/32 [00:11<00:09,  1.54it/s]2026-04-06 19:05:50.160 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_18_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:50.371 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_18_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:50.586 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_18_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  59%|█████▉    | 19/32 [00:12<00:08,  1.54it/s]2026-04-06 19:05:50.801 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_19_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:51.038 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_19_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:51.253 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_19_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  62%|██████▎   | 20/32 [00:12<00:07,  1.53it/s]2026-04-06 19:05:51.469 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_20_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:51.681 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_20_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:51.897 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_20_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  66%|██████▌   | 21/32 [00:13<00:07,  1.53it/s]2026-04-06 19:05:52.116 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_21_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:52.329 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_21_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:52.546 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_21_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  69%|██████▉   | 22/32 [00:14<00:06,  1.54it/s]2026-04-06 19:05:52.760 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_22_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:52.973 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_22_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:53.194 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_22_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  72%|███████▏  | 23/32 [00:14<00:05,  1.54it/s]2026-04-06 19:05:53.410 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_23_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:53.624 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_23_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:53.840 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_23_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  75%|███████▌  | 24/32 [00:15<00:05,  1.54it/s]2026-04-06 19:05:54.078 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_24_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:54.285 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_24_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:54.501 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_24_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  78%|███████▊  | 25/32 [00:16<00:04,  1.53it/s]2026-04-06 19:05:54.727 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_25_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:54.941 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_25_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:55.148 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_25_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  81%|████████▏ | 26/32 [00:16<00:03,  1.54it/s]2026-04-06 19:05:55.379 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_26_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:55.592 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_26_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:55.809 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_26_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  84%|████████▍ | 27/32 [00:17<00:03,  1.53it/s]2026-04-06 19:05:56.024 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_27_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:56.239 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_27_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:56.458 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_27_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  88%|████████▊ | 28/32 [00:18<00:02,  1.53it/s]2026-04-06 19:05:56.675 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_28_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:56.876 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_28_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:57.106 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_28_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  91%|█████████ | 29/32 [00:18<00:01,  1.54it/s]2026-04-06 19:05:57.321 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_29_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:57.540 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_29_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:57.754 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_29_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  94%|█████████▍| 30/32 [00:19<00:01,  1.54it/s]2026-04-06 19:05:57.955 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_30_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:58.179 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_30_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:58.392 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_30_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert:  97%|█████████▋| 31/32 [00:20<00:00,  1.55it/s]2026-04-06 19:05:58.610 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_31_gate_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:58.822 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_31_up_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 7168, 2048])
+2026-04-06 19:05:59.054 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.routed_expert.local_31_down_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 7168])
+Torch->TTNN weights per local expert: 100%|██████████| 32/32 [00:20<00:00,  1.54it/s]Torch->TTNN weights per local expert: 100%|██████████| 32/32 [00:20<00:00,  1.54it/s]
+2026-04-06 19:05:59.071 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:95 - Initializing TtSharedExpert with emb_dim=7168, hidden_dim=2048
+2026-04-06 19:05:59.072 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:96 - Mesh shape: MeshShape([2, 4]), num_devices=8
+2026-04-06 19:05:59.072 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:97 - CCL config: num_links=1, topology=Topology.Linear
+2026-04-06 19:05:59.072 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:101 - Creating weights from provided torch tensors
+2026-04-06 19:05:59.083 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight gate_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-06 19:05:59.088 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.shared_expert.gate_proj_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([7168, 512])
+2026-04-06 19:05:59.088 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created gate_proj: Shape([7168, 512])
+2026-04-06 19:05:59.098 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight up_proj with dims=(None, -1), shape=torch.Size([7168, 2048])
+2026-04-06 19:05:59.103 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.shared_expert.up_proj_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([7168, 512])
+2026-04-06 19:05:59.104 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created up_proj: Shape([7168, 512])
+2026-04-06 19:05:59.115 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:141 - Creating sharded weight down_proj with dims=(None, -2), shape=torch.Size([2048, 7168])
+2026-04-06 19:05:59.121 | DEBUG    | core:as_tensor:676 - Loaded cache for /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528/tensor_cache_bh_8dev/2x4/layer_8.shared_expert.down_proj_dtype_BFLOAT16_layout_TILE.tensorbin of shape Shape([512, 7168])
+2026-04-06 19:05:59.121 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:_to_sharded_ttnn:159 - Created down_proj: Shape([512, 7168])
+2026-04-06 19:05:59.121 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:238 - TtMoe initialization complete
+2026-04-06 19:05:59.146 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:434 - Running TtPrefillBlock forward with return_intermediates=True...
+2026-04-06 19:05:59.147 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-06 19:05:59.176 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-06 19:05:59.195 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-06 19:05:59.207 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-06 19:06:00.275 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:164 - Forward pass: input shape=Shape([1, 1, 512, 1792])
+2026-04-06 19:06:00.275 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:177 - Pre-all-gather stats shape: Shape([1, 1, 512, 32])
+2026-04-06 19:06:00.276 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:192 - Gathered stats shape: Shape([1, 1, 512, 128])
+2026-04-06 19:06:00.276 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:204 - Output shape: Shape([1, 1, 512, 1792])
+2026-04-06 19:06:00.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:259 - [TtMoe.forward] INPUT SHAPES:
+2026-04-06 19:06:00.286 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:260 -   x.shape=Shape([1, 512, 1792])
+2026-04-06 19:06:00.305 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:325 - [MoeGate] fallback_mode=host_all
+2026-04-06 19:06:00.305 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-06 19:06:00.382 | INFO     | tracy:signpost:44 - moe_gate_linear
+2026-04-06 19:06:00.383 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-06 19:06:00.391 | INFO     | tracy:signpost:44 - moe_gate_grouped_gate
+2026-04-06 19:06:00.392 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-06 19:06:00.392 | INFO     | tracy:signpost:44 - MoERoutingSetup
+2026-04-06 19:06:00.400 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:88 - ttnn_top_k_experts_indices.shape=Shape([512, 8])
+2026-04-06 19:06:00.401 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:96 - self.experts_in_dispatch_group.shape=Shape([256])
+2026-04-06 19:06:00.434 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-06 19:06:00.434 | INFO     | tracy:signpost:44 - moe_gate_calculate_dispatch_offsets
+2026-04-06 19:06:00.435 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:278 - [TtMoe.forward] expert_token_counts: [1, 1, 70, 14, 257, 1, 5, 240, 186, 0, 299, 1, 34, 1, 1, 5, 58, 20, 281, 20, 60, 5, 18, 10, 98, 5, 6, 23, 0, 28, 3, 6, 4, 30, 0, 3, 78, 19, 0, 0, 237, 81, 11, 7, 0, 8, 1, 32, 3, 35, 34, 29, 0, 0, 33, 35, 42, 54, 71, 7, 33, 32, 16, 37, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 70, 14, 257, 1, 5, 240, 186, 0, 299, 1, 34, 1, 1, 5, 58, 20, 281, 20, 60, 5, 18, 10, 98, 5, 6, 23, 0, 28, 3, 6, 4, 30, 0, 3, 78, 19, 0, 0, 237, 81, 11, 7, 0, 8, 1, 32, 3, 35, 34, 29, 0, 0, 33, 35, 42, 54, 71, 7, 33, 32, 16, 37, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 159, 3, 0, 1, 56, 6, 41, 0, 0, 1, 4, 56, 2, 2, 12, 0, 169, 0, 0, 0, 3, 0, 33, 27, 0, 0, 1, 21, 0, 3, 31, 8, 2, 2, 23, 1, 2, 14, 2, 1, 3, 32, 0, 1, 0, 0, 0, 0, 0, 0, 71, 2, 4, 2, 3, 24, 1, 0, 32, 1, 9, 36, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 159, 3, 0, 1, 56, 6, 41, 0, 0, 1, 4, 56, 2, 2, 12, 0, 169, 0, 0, 0, 3, 0, 33, 27, 0, 0, 1, 21, 0, 3, 31, 8, 2, 2, 23, 1, 2, 14, 2, 1, 3, 32, 0, 1, 0, 0, 0, 0, 0, 0, 71, 2, 4, 2, 3, 24, 1, 0, 32, 1, 9, 36, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 0, 1, 0, 3, 169, 4, 3, 1, 3, 38, 8, 132, 3, 197, 20, 1, 34, 1, 80, 0, 118, 27, 1, 3, 382, 4, 5, 13, 7, 18, 66, 81, 53, 58, 12, 14, 28, 276, 1, 12, 226, 0, 140, 0, 65, 30, 0, 120, 0, 40, 36, 5, 21, 2, 1, 3, 112, 21, 37, 2, 48, 57, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 0, 1, 0, 3, 169, 4, 3, 1, 3, 38, 8, 132, 3, 197, 20, 1, 34, 1, 80, 0, 118, 27, 1, 3, 382, 4, 5, 13, 7, 18, 66, 81, 53, 58, 12, 14, 28, 276, 1, 12, 226, 0, 140, 0, 65, 30, 0, 120, 0, 40, 36, 5, 21, 2, 1, 3, 112, 21, 37, 2, 48, 57, 31, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 0, 1, 2, 0, 1, 32, 3, 0, 5, 34, 32, 0, 0, 59, 0, 2, 10, 1, 1, 0, 10, 2, 35, 9, 30, 0, 6, 0, 364, 31, 11, 1, 0, 0, 61, 3, 0, 12, 64, 21, 24, 185, 42, 14, 0, 64, 47, 41, 2, 10, 1, 1, 67, 4, 0, 0, 3, 154, 87, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 0, 1, 2, 0, 1, 32, 3, 0, 5, 34, 32, 0, 0, 59, 0, 2, 10, 1, 1, 0, 10, 2, 35, 9, 30, 0, 6, 0, 364, 31, 11, 1, 0, 0, 61, 3, 0, 12, 64, 21, 24, 185, 42, 14, 0, 64, 47, 41, 2, 10, 1, 1, 67, 4, 0, 0, 3, 154, 87, 4, 0, 0]
+2026-04-06 19:06:00.467 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:299 -   weights.shape=Shape([1, 512, 8])
+2026-04-06 19:06:00.467 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:300 -   indices.shape=Shape([1, 512, 8])
+2026-04-06 19:06:00.486 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:318 - [TtMoe.forward] x_full (after all_gather) shape: Shape([1, 512, 7168])
+2026-04-06 19:06:00.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:326 - [TtMoe.forward] x_full_tiled shape: Shape([1, 512, 7168])
+2026-04-06 19:06:00.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:192 - Forward pass: input shape=Shape([1, 512, 7168]), batch_size=1
+2026-04-06 19:06:00.517 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:214 - After gate_proj matmul: Shape([1, 512, 512])
+2026-04-06 19:06:00.518 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:224 - After up_proj matmul: Shape([1, 512, 512])
+2026-04-06 19:06:00.534 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:234 - After SiLU fusion: Shape([1, 512, 512])
+2026-04-06 19:06:00.548 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:244 - After down_proj matmul: Shape([1, 512, 7168])
+2026-04-06 19:06:00.564 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:257 - After reduce_scatter: Shape([1, 512, 1792])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:329 - [TtMoe.forward] Shared expert output shape: Shape([1, 512, 1792])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:171 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:172 -   x.shape=Shape([1, 512, 7168])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:173 -   weights.shape=Shape([1, 512, 8])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:174 -   indices.shape=Shape([1, 512, 8])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:175 -   tt_expert_offsets.shape=Shape([1, 256])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:176 -   tt_expert_dispatch_table.shape=Shape([1, 256])
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:177 - [TtDispatchModule.forward] CONFIG:
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:178 -   dispatch_group_size=2, experts_per_chip=32
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:179 -   num_routed_experts=256, num_experts_per_tok=8
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:180 -   metadata_len=5, max_dispatched_tokens_per_expert=64
+2026-04-06 19:06:00.565 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:183 -   cluster_axis=0, num_links=1, topology=Topology.Linear
+2026-04-06 19:06:01.796 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:207 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-04-06 19:06:01.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:208 -   tt_dispatched_buffer.shape=Shape([1, 1, 32, 64, 7168])
+2026-04-06 19:06:01.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:209 -   tt_dispatch_metadata.shape=Shape([1, 1, 32, 64, 5])
+2026-04-06 19:06:01.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:343 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 32, 64, 7168]), metadata=Shape([1, 1, 32, 64, 5])
+2026-04-06 19:06:01.797 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:353 - [TtMoe.forward] dispatched_buffer_squeezed shape: Shape([32, 64, 7168])
+2026-04-06 19:06:01.810 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:357 - [TtMoe.forward] dispatched_buffer_tiled shape: Shape([32, 64, 7168])
+2026-04-06 19:06:01.810 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:328 - Forward pass: dispatched_buffer shape=Shape([32, 64, 7168])
+2026-04-06 19:06:01.811 | INFO     | tracy:signpost:44 - Expert 1/32
+2026-04-06 19:06:01.811 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 0: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.432 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 0: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.432 | INFO     | tracy:signpost:44 - Expert 2/32
+2026-04-06 19:06:03.432 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 1: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.433 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 1: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.433 | INFO     | tracy:signpost:44 - Expert 3/32
+2026-04-06 19:06:03.433 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 2: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.434 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 2: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.434 | INFO     | tracy:signpost:44 - Expert 4/32
+2026-04-06 19:06:03.434 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 3: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.434 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 3: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.434 | INFO     | tracy:signpost:44 - Expert 5/32
+2026-04-06 19:06:03.434 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 4: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.435 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 4: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.435 | INFO     | tracy:signpost:44 - Expert 6/32
+2026-04-06 19:06:03.435 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 5: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.436 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 5: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.436 | INFO     | tracy:signpost:44 - Expert 7/32
+2026-04-06 19:06:03.436 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 6: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.436 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 6: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.436 | INFO     | tracy:signpost:44 - Expert 8/32
+2026-04-06 19:06:03.437 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 7: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.437 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 7: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.437 | INFO     | tracy:signpost:44 - Expert 9/32
+2026-04-06 19:06:03.437 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 8: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.438 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 8: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.438 | INFO     | tracy:signpost:44 - Expert 10/32
+2026-04-06 19:06:03.438 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 9: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.439 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 9: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.439 | INFO     | tracy:signpost:44 - Expert 11/32
+2026-04-06 19:06:03.439 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 10: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.439 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 10: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.439 | INFO     | tracy:signpost:44 - Expert 12/32
+2026-04-06 19:06:03.439 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 11: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.440 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 11: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.440 | INFO     | tracy:signpost:44 - Expert 13/32
+2026-04-06 19:06:03.440 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 12: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.441 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 12: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.441 | INFO     | tracy:signpost:44 - Expert 14/32
+2026-04-06 19:06:03.441 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 13: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.441 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 13: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.441 | INFO     | tracy:signpost:44 - Expert 15/32
+2026-04-06 19:06:03.442 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 14: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.442 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 14: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.442 | INFO     | tracy:signpost:44 - Expert 16/32
+2026-04-06 19:06:03.442 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 15: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.443 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 15: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.443 | INFO     | tracy:signpost:44 - Expert 17/32
+2026-04-06 19:06:03.443 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 16: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.443 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 16: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.443 | INFO     | tracy:signpost:44 - Expert 18/32
+2026-04-06 19:06:03.443 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 17: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.444 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 17: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.444 | INFO     | tracy:signpost:44 - Expert 19/32
+2026-04-06 19:06:03.444 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 18: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.445 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 18: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.445 | INFO     | tracy:signpost:44 - Expert 20/32
+2026-04-06 19:06:03.445 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 19: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.445 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 19: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.445 | INFO     | tracy:signpost:44 - Expert 21/32
+2026-04-06 19:06:03.445 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 20: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.446 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 20: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.446 | INFO     | tracy:signpost:44 - Expert 22/32
+2026-04-06 19:06:03.446 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 21: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.447 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 21: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.447 | INFO     | tracy:signpost:44 - Expert 23/32
+2026-04-06 19:06:03.447 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 22: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.447 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 22: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.447 | INFO     | tracy:signpost:44 - Expert 24/32
+2026-04-06 19:06:03.447 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 23: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.448 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 23: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.448 | INFO     | tracy:signpost:44 - Expert 25/32
+2026-04-06 19:06:03.448 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 24: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.450 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 24: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.450 | INFO     | tracy:signpost:44 - Expert 26/32
+2026-04-06 19:06:03.450 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 25: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.450 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 25: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.451 | INFO     | tracy:signpost:44 - Expert 27/32
+2026-04-06 19:06:03.451 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 26: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.451 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 26: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.451 | INFO     | tracy:signpost:44 - Expert 28/32
+2026-04-06 19:06:03.451 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 27: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.452 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 27: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.452 | INFO     | tracy:signpost:44 - Expert 29/32
+2026-04-06 19:06:03.452 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 28: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.453 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 28: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.453 | INFO     | tracy:signpost:44 - Expert 30/32
+2026-04-06 19:06:03.453 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 29: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.453 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 29: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.453 | INFO     | tracy:signpost:44 - Expert 31/32
+2026-04-06 19:06:03.453 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 30: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.454 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 30: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.454 | INFO     | tracy:signpost:44 - Expert 32/32
+2026-04-06 19:06:03.454 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:346 - Expert 31: input shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.454 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:356 - Expert 31: output shape Shape([1, 64, 7168])
+2026-04-06 19:06:03.454 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:_bh_forward_impl:359 - Final expert_outputs shape: Shape([32, 64, 7168])
+2026-04-06 19:06:03.455 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:360 - [TtMoe.forward] expert_outputs shape: Shape([32, 64, 7168])
+2026-04-06 19:06:03.455 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:366 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 32, 64, 7168])
+2026-04-06 19:06:03.468 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:373 - [TtMoe.forward] expert_outputs_rm shape: Shape([1, 1, 32, 64, 7168]) expert_outputs_rm.dtype=DataType.BFLOAT16
+2026-04-06 19:06:03.485 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:380 - [TtMoe.forward] combined_output shape: Shape([1, 1, 512, 8, 7168])
+2026-04-06 19:06:03.498 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:394 - [TtMoe.forward] combined_output_tiled shape: Shape([1, 1, 512, 8, 7168])
+2026-04-06 19:06:03.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:397 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 512, 1792])
+2026-04-06 19:06:03.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:402 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 512, 1792])
+2026-04-06 19:06:03.664 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:410 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 512, 1792])
+2026-04-06 19:06:03.665 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:414 - [TtMoe.forward] Final output shape: Shape([1, 512, 1792])
+2026-04-06 19:06:03.683 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:440 - Forward pass completed successfully
+2026-04-06 19:06:04.067 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:451 - Post-attention PCC: 0.996612
+2026-04-06 19:06:04.192 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:455 - Final output PCC:   0.991134
+2026-04-06 19:06:04.206 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:467 - KVPE KV part PCC:   0.999875
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:468 - KVPE PE part PCC:   0.999950
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:473 - 
+============================================================
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:474 - Layer 8 Diagnostic Summary
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:475 - ============================================================
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:476 -   Metric                            PCC
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:477 -   ----------------------------------------
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:478 -   Post-attention residual      0.996612
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:479 -   Final output (attn+MoE)      0.991134
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:480 -   KVPE cache (KV part)         0.999875
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:481 -   KVPE cache (PE part)         0.999950
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:482 - ============================================================
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:486 - DIAGNOSIS: Layer 8 itself is accurate. The PCC cliff in the transformer is caused by accumulated input error (hypothesis B).
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:509 - 
+============================================================
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:510 - Timing Report
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:511 - ============================================================
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:513 -   load_cached_reference: 100.76 ms
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:513 -   hf_post_attn_reference: 130665.18 ms
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:513 -   tt_block_creation: 21072.11 ms
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:513 -   tt_forward: 4537.08 ms
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:513 -   pcc_validation: 523.13 ms
+2026-04-06 19:06:04.207 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_block:test_prefill_block_layer8_diagnostic:513 -   total_test_time: 156928.33 ms
+PASSED
+
+=============================== warnings summary ===============================
+python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /localdev/mbezulj/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/mbezulj/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+174.73s call     models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block_layer8_diagnostic[blackhole-mesh-2x4-1024-layer8]
+0.77s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block_layer8_diagnostic[blackhole-mesh-2x4-1024-layer8]
+0.01s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block_layer8_diagnostic[blackhole-mesh-2x4-1024-layer8]
+=========================== short test summary info ============================
+PASSED models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_prefill_block_layer8_diagnostic[blackhole-mesh-2x4-1024-layer8]
+=================== 1 passed, 1 warning in 180.40s (0:03:00) ===================
+2026-04-06 19:06:24.720 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:478)
+2026-04-06 19:06:24.720 | info     |             UMD | Closing devices in cluster (cluster.cpp:961)
