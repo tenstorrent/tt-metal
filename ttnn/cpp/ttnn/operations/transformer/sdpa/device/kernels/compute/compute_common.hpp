@@ -1744,19 +1744,8 @@ void sdpa_inner_loop(
             // is needed by compute (reader/writer do the full (nb, nq, q_chunk) decomposition to
             // fetch the right Q/K/V). Mirrors the RING branch's internal remap pattern.
             // Zigzag sub-mode is carried as compile-time arg 33 (see program factory).
-            //
-            // Ring proxy DOWN: decompose against q_num_chunks/2 and shift into the heavy Q half.
-            // Keeps compute's q_chunk aligned with reader/writer under the same proxy case.
-            constexpr bool _flat_use_zigzag = get_compile_time_arg_val(33) == 1;
-#if defined(SDPA_RING_PROXY_DOWN)
-            const uint32_t _proxy_q_num_effective = q_num_chunks / 2;
-            const uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
-#else
-            const uint32_t _proxy_q_num_effective = q_num_chunks;
-            const uint32_t _proxy_q_chunk_offset = 0;
-#endif
-            q_chunk = remap_q_index(q_iter, _proxy_q_num_effective, _flat_use_zigzag) % _proxy_q_num_effective +
-                      _proxy_q_chunk_offset;
+            constexpr bool flat_use_zigzag = get_compile_time_arg_val(33) == 1;
+            q_chunk = proxy_q_chunk(q_iter, q_num_chunks, flat_use_zigzag, sdpa_proxy_mode);
 #elif defined BALANCED_Q_PARALLEL
             uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
             if (q_iter < q_chunk_div_2) {             // bottom half

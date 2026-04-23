@@ -87,3 +87,65 @@ decompose_flat_q_index(uint32_t linear_index, uint32_t num_q_chunks, uint32_t NQ
         /*q_chunk=*/flat % num_q_chunks,
     };
 }
+
+/**
+ * Single-chip ring-iter proxy case (kernel-side; values mirror
+ * ttnn::operations::transformer::RingProxyCase).
+ *
+ * - None: regular SDPA (full Q × full K).
+ * - Up:   K-loop capped at k_num_chunks/2 (reader/compute); full Q range assigned.
+ * - Down: only the heavy Q half assigned; decomposition runs against q_num_chunks/2 and
+ *         shifts q_chunk up by q_num_chunks/2.
+ */
+enum class RingProxyMode : uint8_t { None = 0, Up = 1, Down = 2 };
+
+/**
+ * Effective Q chunk count + offset for a given proxy mode.
+ *
+ * DOWN halves the assigned Q chunk space and points at the upper half. UP and None keep the
+ * full range at offset 0 (UP's K-loop cap is applied separately at the K-iteration site).
+ */
+struct ProxyQRange {
+    uint32_t q_num_effective;
+    uint32_t q_chunk_offset;
+};
+
+FORCE_INLINE constexpr ProxyQRange proxy_q_range(uint32_t q_num_chunks, RingProxyMode proxy) {
+    if (proxy == RingProxyMode::Down) {
+        return {q_num_chunks / 2, q_num_chunks / 2};
+    }
+    return {q_num_chunks, 0};
+}
+
+/**
+ * Decompose a flat index into (nb, nq, q_chunk) honoring the proxy mode. The returned
+ * q_chunk is already shifted into the range the actual Q/K/V tensors live in, so callers
+ * can feed it straight into tile-index math.
+ */
+FORCE_INLINE FlatQIndex decompose_flat_q_index_with_proxy(
+    uint32_t linear_index, uint32_t q_num_chunks, uint32_t NQH, bool use_zigzag, RingProxyMode proxy) {
+    const ProxyQRange range = proxy_q_range(q_num_chunks, proxy);
+    const FlatQIndex flat = decompose_flat_q_index(linear_index, range.q_num_effective, NQH, use_zigzag);
+    return {flat.nb, flat.nq, flat.q_chunk + range.q_chunk_offset};
+}
+
+/**
+ * Compute-side flat q_chunk lookup. Equivalent to the q_chunk field of
+ * decompose_flat_q_index_with_proxy, but skips the (nb, nq) split — compute only needs
+ * q_chunk for causal masking; reader/writer are the ones that fetch tensor tiles.
+ */
+FORCE_INLINE uint32_t proxy_q_chunk(uint32_t q_iter, uint32_t q_num_chunks, bool use_zigzag, RingProxyMode proxy) {
+    const ProxyQRange range = proxy_q_range(q_num_chunks, proxy);
+    return remap_q_index(q_iter, range.q_num_effective, use_zigzag) % range.q_num_effective + range.q_chunk_offset;
+}
+
+// Compile-time proxy mode gated by SDPA_RING_PROXY_{UP,DOWN} defines the host emits when
+// program_config.ring_proxy_case is Up/Down. Defined once here so all three kernels
+// (reader/writer/compute) share one source of truth.
+#if defined(SDPA_RING_PROXY_DOWN)
+constexpr RingProxyMode sdpa_proxy_mode = RingProxyMode::Down;
+#elif defined(SDPA_RING_PROXY_UP)
+constexpr RingProxyMode sdpa_proxy_mode = RingProxyMode::Up;
+#else
+constexpr RingProxyMode sdpa_proxy_mode = RingProxyMode::None;
+#endif

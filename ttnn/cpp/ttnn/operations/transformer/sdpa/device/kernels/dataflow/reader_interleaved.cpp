@@ -301,33 +301,25 @@ void kernel_main() {
         // is_causal=false but keeps the same restrictions), so chunked page_table and attention_sink reads
         // are skipped, and mask_batch_offset is recomputed per (nb) change below.
         //
-        // Ring proxy (single-chip): DOWN assigns only the heavy Q half by decomposing against
-        // q_num_chunks/2 and shifting q_chunk up by q_num_chunks/2. UP keeps all Q chunks but caps
-        // the K loop further below. None: identity.
-#if defined(SDPA_RING_PROXY_DOWN)
-        constexpr uint32_t _proxy_q_num_effective = q_num_chunks / 2;
-        constexpr uint32_t _proxy_q_chunk_offset = q_num_chunks / 2;
-#else
-        constexpr uint32_t _proxy_q_num_effective = q_num_chunks;
-        constexpr uint32_t _proxy_q_chunk_offset = 0;
-#endif
+        // decompose_flat_q_index_with_proxy returns q_chunk already shifted into the heavy half for
+        // DOWN; UP caps the K-loop further below.
         uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
         uint32_t mask_batch_offset = 0;
         // q_iter_local resets at every (batch, head) transition so chain forwarding/receive
         // guards (`q_iter_local < next_core_q_chunks`) count slots within the current head only.
-        // For straddling cores whose range spans multiple heads, this is off from _gq.
+        // For straddling cores whose range spans multiple heads, this is off from gq.
         uint32_t q_iter_local_counter = 0;
         uint32_t prev_head_id_flat = static_cast<uint32_t>(-1);
-        for (uint32_t _gq = 0; _gq < global_q_count; ++_gq) {
-            const auto _decoded =
-                decompose_flat_q_index(global_q_start + _gq, _proxy_q_num_effective, NQH, flat_use_zigzag);
-            const uint32_t nb = _decoded.nb;
-            const uint32_t nq = _decoded.nq;
-            const uint32_t q_iter = _gq;
-            const uint32_t _cur_head_id = nb * NQH + nq;
-            if (_cur_head_id != prev_head_id_flat) {
+        for (uint32_t gq = 0; gq < global_q_count; ++gq) {
+            const auto decoded = decompose_flat_q_index_with_proxy(
+                global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
+            const uint32_t nb = decoded.nb;
+            const uint32_t nq = decoded.nq;
+            const uint32_t q_iter = gq;
+            const uint32_t cur_head_id = nb * NQH + nq;
+            if (cur_head_id != prev_head_id_flat) {
                 q_iter_local_counter = 0;
-                prev_head_id_flat = _cur_head_id;
+                prev_head_id_flat = cur_head_id;
             } else {
                 q_iter_local_counter++;
             }
@@ -344,7 +336,7 @@ void kernel_main() {
             }
             {
                 {
-                    uint32_t q_chunk = _decoded.q_chunk + _proxy_q_chunk_offset;
+                    uint32_t q_chunk = decoded.q_chunk;
 #else
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {

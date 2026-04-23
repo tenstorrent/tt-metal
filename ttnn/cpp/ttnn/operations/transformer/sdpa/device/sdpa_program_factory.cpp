@@ -424,8 +424,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Flat-distribution per-core assignments (only used when flatten_work is true).
     // Evenly split total_q_chunks across cores. With zigzag sub-mode (causal + even num_q_chunks),
     // distribute in pairs so every core gets balanced light/heavy work after linear_to_zigzag remap.
-    // DOWN proxy: only the heavy Q half is assigned to cores; UP / none: all Q chunks assigned.
-    const uint32_t total_q_chunks = B * NQH * (is_proxy_down ? (q_num_chunks / 2) : q_num_chunks);
+    // DOWN proxy: only the heavy Q half is assigned to cores; UP / none: all Q chunks assigned. This
+    // mirrors proxy_q_range(q_num_chunks, proxy).q_num_effective kernel-side so host and kernels
+    // agree on the per-head slot count.
+    const uint32_t q_num_effective = is_proxy_down ? (q_num_chunks / 2) : q_num_chunks;
+    const uint32_t total_q_chunks = B * NQH * q_num_effective;
     const bool flat_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
     uint32_t base_chunks_per_core = 0;
     uint32_t cores_doing_extra = 0;
@@ -921,10 +924,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (chain_enabled) {
         head_segments.resize(total_heads);
 
-        // DOWN proxy maps only the heavy Q half; decompose against the effective size so that
-        // (nb, nq) agree with the reader/writer/compute decomposition (see reader_interleaved.cpp
-        // _proxy_q_num_effective).  UP proxy and non-proxy use full q_num_chunks.
-        const uint32_t q_num_effective = is_proxy_down ? (q_num_chunks / 2) : q_num_chunks;
+        // q_num_effective is defined alongside total_q_chunks above; it matches
+        // proxy_q_range(...).q_num_effective in the kernel helper, so (nb, nq) here agree with the
+        // decomposition the reader/writer/compute kernels run.
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
         log_debug(tt::LogOp, "Total heads (B * NQH): {}", total_heads);
