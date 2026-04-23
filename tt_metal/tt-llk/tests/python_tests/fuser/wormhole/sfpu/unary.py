@@ -102,7 +102,7 @@ class UnarySfpu(Sfpu):
         return (
             f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
             f"test_utils::call_unary_sfpu_operation<"
-            f"ckernel::DstSync::SyncHalf, {dest_acc}, "
+            f"dest_sync{stage}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
             f">({self.dest_idx}, math_format{stage}, {self.fill_const_value});\n"
         )

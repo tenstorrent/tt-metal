@@ -189,7 +189,7 @@ void call_unary_sfpu_operation(
             dst_index,
             vector_mode,
             10,
-            static_cast<std::uint32_t>(1.0f / 10.0f));
+            (1.0f / 10.0f));
     }
     else if constexpr (OPERATION == SfpuType::cosine)
     {
