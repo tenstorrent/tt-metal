@@ -403,6 +403,8 @@ void kernel_main() {
         const uint32_t pre_local = noc_nonposted_atomics_acked[my_noc_index];
         const uint32_t pre_niu = NOC_STATUS_READ_REG(my_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
         DPRINT << "DBG18881 dispatch_s: pre-poll local_atomics_acked=" << pre_local
+               << "upstream_noc_index=" << (uint32_t)upstream_noc_index
+               << "my_noc_index=" << (uint32_t)my_noc_index
                << " niu_atomic_resp=" << pre_niu << ENDL();
     }
     uint32_t handoff_val;
