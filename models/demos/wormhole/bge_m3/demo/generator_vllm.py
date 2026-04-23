@@ -168,20 +168,24 @@ class BgeM3ForEmbedding:
                 padded_batch_size,
                 pad_value=0,
             ),
-            "token_type_ids": _pad_batch_tensor(
-                _pad_tensor(token_type_ids, padded_seq_len, pad_value=0),
-                padded_batch_size,
-                pad_value=0,
-            )
-            if token_type_ids is not None
-            else None,
-            "position_ids": _pad_batch_tensor(
-                _pad_tensor(position_ids, padded_seq_len, pad_value=self.tokenizer.pad_token_id),
-                padded_batch_size,
-                pad_value=self.tokenizer.pad_token_id,
-            )
-            if position_ids is not None
-            else None,
+            "token_type_ids": (
+                _pad_batch_tensor(
+                    _pad_tensor(token_type_ids, padded_seq_len, pad_value=0),
+                    padded_batch_size,
+                    pad_value=0,
+                )
+                if token_type_ids is not None
+                else None
+            ),
+            "position_ids": (
+                _pad_batch_tensor(
+                    _pad_tensor(position_ids, padded_seq_len, pad_value=self.tokenizer.pad_token_id),
+                    padded_batch_size,
+                    pad_value=self.tokenizer.pad_token_id,
+                )
+                if position_ids is not None
+                else None
+            ),
         }
 
         return padded_inputs
@@ -364,10 +368,8 @@ class BgeM3ForEmbedding:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
-        # Element-wise multiply only: avoid column-broadcast [..., D] * [..., 1] in binary_ng.
-        # On Wormhole that broadcast can select an SFPU col-bcast compute kernel whose source
-        # file is not shipped in some builds; expanding the mask matches PyTorch semantics and
-        # uses the no-broadcast multiply path (same numerics as torch; Blackhole unchanged).
+        # ``ttnn.expand`` before multiply: column-broadcast in binary_ng on Wormhole can pick an
+        # SFPU col-bcast kernel not shipped in all builds; numerics still match PyTorch.
         target_shape = tuple(colbert_tt.shape)
         mask_expanded = ttnn.expand(mask_tt, target_shape)
         ttnn.deallocate(mask_tt)

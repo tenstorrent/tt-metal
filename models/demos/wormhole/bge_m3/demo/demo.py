@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-BGE-M3 demo tests: create_tt_model path, vLLM-style generator path, and throughput benchmark.
-
-Kept in sync with ``demo.py`` patterns; uses standard ASCII whitespace only (NBSP breaks linters).
+BGE-M3 demo tests: ``create_tt_model`` parity, vLLM-style ``BgeM3ForEmbedding``, and prefill
+throughput (``BgeM3PerformantRunner``: trace + two command queues, overlapping H2D and compute).
 """
 
 import math
@@ -48,19 +47,9 @@ inputs = [
 ]
 
 
-# ----------------------------------------------------------------------
-# Trace + 2-command-queue benchmark runner
-# ----------------------------------------------------------------------
-# The non-traced ``BgeM3ForEmbedding`` path is dispatch-bound on Wormhole: every encoder
-# forward pays per-op Python/dispatch overhead, and per-call ``ttnn.from_torch`` allocates
-# fresh input buffers. ``BgeM3PerformantRunner`` removes that overhead by:
-#   1. Pre-allocating persistent device input tensors and refreshing them via
-#      ``ttnn.copy_host_to_device_tensor``.
-#   2. Capturing the full encoder forward once with ``ttnn.begin_trace_capture`` and
-#      replaying it via ``ttnn.execute_trace``.
-#   3. Overlapping host->device input copies (CQ 1) with compute (CQ 0) using event
-#      handshakes.
-# Pattern mirrors ``models/demos/sentence_bert/runner/performant_runner.py``.
+# ``BgeM3ForEmbedding`` without tracing is dispatch-heavy on Wormhole; the runner pre-allocates
+# device I/O, captures one encoder forward (``ttnn.begin_trace_capture`` / ``execute_trace``),
+# and overlaps H2D (CQ1) with compute (CQ0). See ``models/demos/sentence_bert/runner/performant_runner.py``.
 
 # Wormhole encoder mask uses the same large-negative additive value as the model's
 # internal builder (see ``BgeM3Model._ADDITIVE_MASKED_VALUE``).
@@ -83,8 +72,8 @@ class BgeM3PerformantRunner:
         self.device = device
         self.batch_size = batch_size
         self.sequence_length = sequence_length
-
-        del model_location_generator  # Resolution happens inside the generator (HF cache).
+        # Checkpoint resolution uses ``model_name``; optional ``model_location_generator`` is unused here.
+        _ = model_location_generator
 
         self.generator = BgeM3ForEmbedding(
             device=device,
@@ -223,12 +212,7 @@ class BgeM3PerformantRunner:
         out = self._model_forward()
         ttnn.deallocate(out)
 
-        # Pass 3: capture. Persistent ``self.*_dev`` buffers stay alive for the runner's
-        # lifetime; the trace records reads from those fixed addresses, and ``run()``
-        # updates them in place via CQ-1 H2D copies between trace replays. No staging
-        # tensors / post-capture ``allocate_tensor_on_device`` round-trip needed (those are
-        # only required when the model's input is sharded and an in-trace reshard
-        # materializes it, like sentence_bert).
+        # Pass 3: capture. ``self.*_dev`` are fixed; ``run()`` only H2D-updates them between replays.
         ttnn.wait_for_event(1, self.op_event)
         self._h2d_all()
         self.write_event = ttnn.record_event(self.device, 1)

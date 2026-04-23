@@ -2,35 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Compute-kernel defaults for BGE-M3.
+Compute-kernel and activation-memory policy for the BGE-M3 encoder on TTNN.
 
-- **Matmul + SDPA:** **HiFi4 + FP32 dest acc + L1 packer acc** on **Blackhole and Wormhole** so full-model
-  PCC stays **> 0.94** at **S8192** (and ~0.99 on BH). Wormhole used to default to HiFi2 for stability,
-  but HiFi2 drifts to ~0.85 PCC at long sequence; HiFi4 aligns WH with the BH numerics path.
-- **LayerNorm:** HiFi4 + FP32 on all archs (matches ``ttnn`` layer_norm defaults in Metal).
-- ``max_seq_len`` on kernel helpers is kept for API compatibility / future tuning; fidelity does not
-  downgrade on Wormhole by sequence length.
+- **Matmul / SDPA:** HiFi2 on archs that are not Blackhole or Wormhole; **HiFi4** with FP32 dest acc on
+  Blackhole and Wormhole (Wormhole previously used HiFi2, which drifts on long sequence).
+- **LayerNorm:** HiFi4 + FP32 on all archs (aligned with ttnn layer_norm in Metal).
+- **Activations:** ``bge_m3_linear_activation_memory_config`` (and MLP ``Wi`` via
+  ``bge_m3_mlp_wi_output_memory_config`` on Wormhole) pick L1 vs DRAM from ``max_seq_len`` and
+  ``max_batch_size * max_seq_len``. Do not use mixed L1/DRAM envelopes across matmul, SDPA, LayerNorm, MLP,
+  and attention WO, or Wormhole can OOM or fail circular-buffer validation. MLP fuses GELU with
+  ``ttnn.linear(..., activation="gelu")`` on Wi.
 
-NOTE: Do not combine smaller SDPA K tiles with disabled FP32 matmul dest acc (previously ~0.2 PCC).
+- **Caveat:** Do not combine smaller SDPA K-tiles with FP32 matmul dest acc disabled (historically ~0.2 PCC).
+- **Attention (encoder):** Q chunk 128, K from (256, 128) dividing ``seq_len``,
+  ``exp_approx_mode`` for 128-aligned lengths; linears use ``bge_m3_matmul_*`` / core grid helpers.
+- **Short ``sequence_length`` (e.g. 32):** ``bge_m3_matmul_core_grid`` may cap height to four rows only for
+  single batch; multi-batch short runs use the full grid. Wormhole may set ``packer_l1_acc=False`` on
+  matmul, SDPA, and layernorm for single-batch short ``max_seq_len`` (see ``_wormhole_use_fast_packer_offload``).
 
-**MLP:** the encoder MLP uses ``ttnn.linear(..., activation="gelu")`` on the Wi projection so GELU fuses
-into the matmul (fewer device ops / less DRAM traffic than a separate ``ttnn.gelu``).
-
-**Perf:** ``bge_m3_linear_activation_memory_config`` selects **L1 vs DRAM** for encoder activations (matmul,
-SDPA, LayerNorm, MLP, attention WO) using ``max_seq_len`` and ``max_batch_size * max_seq_len`` (threshold
-``BGE_M3_L1_LINEAR_MAX_SEQ_LEN``). **Do not** use L1 for large batch×seq on only some of these: mixed layouts
-hit L1 bank OOM or ``validate_circular_buffer_region`` (``program.cpp:1145``) on Wormhole. **MLP Wi** may
-force DRAM for mid-seq; see ``bge_m3_mlp_wi_output_memory_config``.
-
-Encoder SDPA follows : **Q chunk = 128**, **K** = largest of ``(256, 128)`` dividing ``seq_len``,
-with ``exp_approx_mode=True`` for 128-aligned lengths (short S32/S64 use flexible smaller tiles and
-``exp_approx_mode=False``). Matmul linears use ``bge_m3_matmul_*`` program config.
-
-**S32 / short ``runtime sequence_length``:** matmul ``core_grid`` row count is **capped at four** (full width)
-only when ``batch_size <= 1`` (single-batch S32: one-tile ``M``, full 8-row grid is mostly idle). For
-``batch_size > 1``, the **full** compute grid is used so multi-batch S32 (e.g. batch 25) gets better
-device utilization; this does not change batch 1. ``packer_l1_acc=False`` on Wormhole only for **single-batch**
-short ``max_seq_len`` (``max_batch_size <= 1``); multi-batch S32 uses ``packer_l1_acc=True`` like longer seq.
+``max_qkv_mm_chunk_seq_len`` / ``max_wo_mm_chunk_seq_len`` return 8192 (chunk ceiling); ``max_seq_len`` on
+the compute helpers is for API compatibility and Wormhole packer policy, not a fidelity downgrade.
 """
 
 from __future__ import annotations
@@ -194,12 +185,7 @@ def bge_m3_sdpa_compute_kernel_config(
     max_seq_len: int | None = None,
     max_batch_size: int | None = None,
 ) -> ttnn.WormholeComputeKernelConfig:
-    """Return the compute kernel config for scaled dot-product attention (SDPA) in BGE-M3.
-
-    **Blackhole** and **Wormhole** use **HiFi4**, matching matmul fidelity for end-to-end PCC.
-
-    Same ``packer_l1_acc`` policy as ``bge_m3_matmul_compute_kernel_config`` (single-batch short-seq only).
-    """
+    """SDPA compute config: same HiFi2/HiFi4 and ``packer_l1_acc`` rules as ``bge_m3_matmul_compute_kernel_config``."""
     if ttnn_is_blackhole(mesh_device) or is_wormhole_family_device(mesh_device):
         sdpa_fidelity = ttnn.MathFidelity.HiFi4
     else:
@@ -222,12 +208,7 @@ def bge_m3_layernorm_compute_kernel_config(
     max_seq_len: int | None = None,
     max_batch_size: int | None = None,
 ) -> ttnn.WormholeComputeKernelConfig:
-    """Return the compute kernel config for LayerNorm in BGE-M3 on the given mesh device.
-
-    Matches ``ttnn`` layer_norm defaults in Metal (``layernorm.cpp``): HiFi4, FP32 dest acc.
-
-    Same ``packer_l1_acc`` policy as matmul (single-batch short-seq only).
-    """
+    """LayerNorm: HiFi4 + FP32 dest acc; ``packer_l1_acc`` matches ``bge_m3_matmul_compute_kernel_config``."""
     packer_l1_acc = True
     if not ttnn_is_blackhole(mesh_device) and is_wormhole_family_device(mesh_device):
         if _wormhole_use_fast_packer_offload(max_seq_len, max_batch_size):
