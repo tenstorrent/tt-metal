@@ -795,23 +795,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_PROFILE_PERF_COUNTERS
-        // Enables Performance Counter profiling using a bitfield to select counter groups.
+        // Bitfield selecting perf counter groups. Only one L1 bank bit may be set per run.
         // Default: 0 (disabled)
-        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=value
-        //
-        // Valid values (bitfield):
-        //   1   (1 << 0) - FPU counters
-        //   2   (1 << 1) - PACK counters
-        //   4   (1 << 2) - UNPACK counters
-        //   8   (1 << 3) - L1 bank 0 counters (ring0 NOC, L1 arbitration)
-        //   16  (1 << 4) - L1 bank 1 counters (ring1 NOC, TDMA extended)
-        //   32  (1 << 5) - INSTRN (instruction) counters
-        //   64  (1 << 6) - L1 bank 2 counters (BH only: NOC Ring 2)
-        //   128 (1 << 7) - L1 bank 3 counters (BH only: NOC Ring 3)
-        //   256 (1 << 8) - L1 bank 4 counters (BH only: misc ports)
-        //   47  (0x2F)   - Recommended: fpu|pack|unpack|l1_0|instrn
-        //
-        // Multiple groups can be OR'd together. Only one L1 bank may be set per run (shared hardware mux).
+        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=47
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {

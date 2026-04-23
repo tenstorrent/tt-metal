@@ -409,8 +409,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t counter_sel = counters[i].second;
         uint32_t expected_mode = counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
         cntl_reg[1] = expected_mode;
-        // Readback poll: completes once the hardware acks the new mux select, so
-        // the output registers reflect this counter. Required for correct MMIO ordering.
+        // Readback poll: MMIO fence for the mux select.
         while (cntl_reg[1] != expected_mode);
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
@@ -450,8 +449,7 @@ void stop_perf_counter() {
     }
 };
 
-// Flush perf counter body to DRAM. No header is written — finish_profiler writes
-// the sentinel once the BRISC-FW scope closes; host treats the body as pre-sentinel TS_DATA.
+// Body-only flush; finish_profiler writes the header sentinel later.
 __attribute__((noinline)) void perf_counter_flush() {
 #if defined(COMPILE_FOR_BRISC)
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
@@ -502,8 +500,7 @@ __attribute__((noinline)) void perf_counter_flush() {
 #endif
 }
 
-// Called from BRISC after wait_ncrisc_trisc(). Flushes L1 to DRAM before each group (from 2nd
-// onward) so the buffer has room.
+// Called from BRISC; flushes L1 to DRAM between groups.
 void read_perf_counters() {
     bool first_group = true;
     for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {

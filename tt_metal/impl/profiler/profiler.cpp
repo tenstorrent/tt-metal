@@ -1548,8 +1548,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             std::set<tracy::TTDeviceMarker>& device_markers_for_core_risc = device_markers_for_core[riscType];
 
-            // perf_counter_flush emits TS_DATA before the header sentinel; buffer and attach
-            // once the run starts. The 4-slot TS_DATA stride is also skipped here.
+            // perf_counter_flush emits pre-sentinel TS_DATA; buffer until a run starts.
             struct PreSentinelMarker {
                 uint32_t timer_id;
                 uint64_t timestamp;
