@@ -267,6 +267,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
             (uint32_t)input_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
+            (uint32_t)input_dram_buffer->aligned_page_size(),
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -276,6 +277,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
             (uint32_t)output_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
+            (uint32_t)output_dram_buffer->aligned_page_size(),
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -435,7 +437,8 @@ bool reader_datacopy_writer(
         {
             (uint32_t)input_dram_byte_address,
             0,
-            num_tiles_per_thread
+            num_tiles_per_thread,
+            (uint32_t)input_dram_buffer->aligned_page_size(),
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -444,7 +447,8 @@ bool reader_datacopy_writer(
         {
             (uint32_t)output_dram_byte_address,
             0,
-            num_tiles_per_thread
+            num_tiles_per_thread,
+            (uint32_t)output_dram_buffer->aligned_page_size(),
         });
 
     auto blocking = device->arch() == ARCH::QUASAR;

@@ -161,14 +161,12 @@ std::vector<float> unpack_mxfp4_tiles_into_float_vec(
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     auto word_counts = tt::tt_metal::mx::compute_tile_word_counts(tile_HW, l1_alignment, kMxFp4Params);
     uint32_t exp_count = word_counts.exp_count;
-    uint32_t exp_bytes = word_counts.exp_bytes;
     uint32_t exp_words = word_counts.exp_words;
     uint32_t elem_words = word_counts.elem_words;
 
-    uint32_t tile_size_bytes = exp_bytes + (elem_words * 4);
-    uint32_t total_bytes = mxfp4_tiles.size() * 4;
-    TT_ASSERT(total_bytes % tile_size_bytes == 0, "Input size must be a multiple of MXFP4 tile size");
-    uint32_t num_tiles = total_bytes / tile_size_bytes;
+    uint32_t tile_size_words = exp_words + elem_words;
+    TT_ASSERT(mxfp4_tiles.size() % tile_size_words == 0, "Input size must be a multiple of MXFP4 tile size");
+    uint32_t num_tiles = mxfp4_tiles.size() / tile_size_words;
 
     std::vector<float> output;
     output.resize(num_tiles * tile_HW);

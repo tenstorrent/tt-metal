@@ -105,7 +105,7 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::Bfp4_b: return (128 * 4) + (16 * 4);
         case DataFormat::Bfp8:
         case DataFormat::Bfp8_b: return (256 * 4) + (16 * 4);
-        case DataFormat::MxFp4: return (1024 / 2) + 32;
+        case DataFormat::MxFp4: return (1024 / 2) + 32;  // 544 bytes: 32 scales (1 per 32-elem block) + 512 data
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (1024 * 2);
         case DataFormat::Float32: return (1024 * 4);
