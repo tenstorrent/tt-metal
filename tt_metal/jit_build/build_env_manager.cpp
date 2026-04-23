@@ -263,11 +263,24 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
 }
 
-std::filesystem::path BuildEnvManager::get_firmware_binary_path(
+std::string BuildEnvManager::get_firmware_binary_path(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
     const auto& env = get_device_build_env(device_id).build_env;
     const auto& state = get_firmware_build_state(device_id, programmable_core, processor_class, processor_id);
-    return env.get_firmware_binary_root() / state.get_target_full_path();
+    return env.get_firmware_binary_root() + state.get_target_full_path();
+}
+
+std::string BuildEnvManager::get_kernel_binary_path(
+    ChipId device_id,
+    uint32_t programmable_core,
+    uint32_t processor_class,
+    int processor_id,
+    const std::string& binary_root,
+    const std::string& kernel_full_name) {
+    const auto& state = get_kernel_build_state(device_id, programmable_core, processor_class, processor_id);
+    auto path = std::filesystem::path(binary_root) / kernel_full_name;
+    path += state.get_target_full_path();
+    return path.string();
 }
 
 // Get build environment info for all devices

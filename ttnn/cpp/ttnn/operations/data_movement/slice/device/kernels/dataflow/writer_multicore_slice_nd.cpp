@@ -88,7 +88,7 @@ void kernel_main() {
         uint32_t global_output_row = start_row_for_this_core + local_row;
 
         // Calculate output address for this row
-        uint64_t output_row_noc_addr = get_noc_addr(global_output_row, s0);
+        uint64_t output_row_noc_addr = s0.get_noc_addr(global_output_row);
 
         // Write the complete row to output tensor
         noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
