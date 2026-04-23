@@ -20,7 +20,7 @@ inline void _llk_math_eltwise_ternary_sfpu_params_(
     int vector_mode = static_cast<int>(VectorMode::RC),
     Args&&... args)
 {
-    _llk_math_eltwise_ternary_sfpu_start_<DST_SYNC_MODE>(0); // Reuse same sync primitive
+    _llk_math_eltwise_ternary_sfpu_start_(0); // Reuse same sync primitive
 
     if (vector_mode == static_cast<int>(VectorMode::R))
     {
