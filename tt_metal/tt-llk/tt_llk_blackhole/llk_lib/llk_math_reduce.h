@@ -96,50 +96,23 @@ inline void reduce_row_perform_transpose()
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, LO16_STAGE + 12);
 
-        // Phase 3 (v5): write transposed lo16 to face lo16 rows via SFPSTORE HI16_ONLY.
-        // Phase 2 hi wrote transposed hi16 to face hi16 rows (and zeroed lo16 as side
-        // effect of write_dst32b(adj_row, data<<16)). We now need to fill face lo16 rows
-        // with transposed lo16 from LO16_STAGE.
-        // - SFPLOAD HI16_ONLY from scratch: reads 16-bit lo16 value, puts it in LReg[31:16].
-        // - SFPSTORE HI16_ONLY to face lo16 row: writes LReg[31:16] as 16-bit to
-        //   Dst16b[Adj16(dst_row)][col]. Since Dst16b half-writes use Adj16 (not Adj32),
-        //   they target a single physical row — do NOT disturb the hi16 at adj_row.
-        // For D=0 (tile 0), face lo16 physical rows are {8, 9, 12, 13, 24, 25, 28, 29} via
-        // Adj32 mapping: Adj32(R)+8 for R in {0,1,4,5,8,9,12,13}. These are SFPU-accessible
-        // and (under Adj16=identity) directly reachable via SFPSTORE dst_row values
-        // {8, 10, 12, 14, 24, 26, 28, 30}.
-        //
-        // NOTE: This version assumes D=0 (single-tile reduce at dst_index=0). For D≠0
-        // the face lo16 physical rows are at Adj32(D+R)+8, which doesn't scale linearly
-        // with D — runtime DstRWC setup would be required for general D.
-        //
-        // Total Phase 3 = 16 SFPU ops (vs 24 in v4). Grand total: 32 SFPU ops.
+        // Phase 3: write transposed lo16 to face lo16 rows via SFPSTORE HI16_ONLY.
+        // Two recorded 2-op templates (slot 0: dst_base=8; slot 2: dst_base=16), each
+        // replayed 4×. ADDR_MOD_7 on SFPSTORE advances SFPU DstRWC by 2 per iter.
+        // Slot 0 covers dst={8,10,12,14} with DstRWC 0..6; slot 2 covers dst={24,26,28,30}
+        // with DstRWC 8..14. Src base=LO16_STAGE gives src=144..158.
+        // 8 replay triggers vs previous 16 inline ops.
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-
-        // face fp32 rows 0, 1 lo16 at physical {8, 9}
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 0);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 8);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 2);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 10);
-
-        // face fp32 rows 4, 5 lo16 at physical {12, 13}
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 4);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 12);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 6);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 14);
-
-        // face fp32 rows 8, 9 lo16 at physical {24, 25}
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 8);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 24);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 10);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 26);
-
-        // face fp32 rows 12, 13 lo16 at physical {28, 29}
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 12);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 28);
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE + 14);
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, 30);
-
+#pragma GCC unroll 4
+        for (std::uint32_t i = 0; i < 4; i++)
+        {
+            lltt::replay(0, 2);
+        }
+#pragma GCC unroll 4
+        for (std::uint32_t i = 0; i < 4; i++)
+        {
+            lltt::replay(2, 2);
+        }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
     }
     else
@@ -391,8 +364,27 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // v5: Phase 3 is inlined with explicit imm values (SFPSTORE HI16_ONLY for lo16
-        // write). No replay body to record, no ADDR_MOD_7 advance needed.
+        // Phase 3 replay: advance SFPU DstRWC by 2 per iter via ADDR_MOD_7 on SFPSTORE.
+        // SFPLOAD uses ADDR_MOD_0 (no advance) — both ops in an iter share the same DstRWC.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_7);
+
+        // Record two 2-op templates for Phase 3:
+        //   Slot 0: dst base = 8, covers dst={8,10,12,14} (DstRWC 0..6)
+        //   Slot 2: dst base = 16, covers dst={24,26,28,30} (DstRWC 8..14)
+        // SFPLOAD base=LO16_STAGE, DstRWC=0..14 gives src=144..158.
+        constexpr std::uint32_t LO16_STAGE_REPLAY = 144;
+        lltt::record<lltt::NoExec>(0, 2);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE_REPLAY);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, 8);
+
+        lltt::record<lltt::NoExec>(2, 2);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_0, LO16_STAGE_REPLAY);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, 16);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
