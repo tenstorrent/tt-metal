@@ -21,8 +21,8 @@ void bind_rotary_embedding_hf(nb::module_& mod) {
         Applies HuggingFace-style rotary position embedding to input tensor.
 
         This operation supports both prefill and decode modes:
-        - Prefill: input [1, num_heads, seq_len, head_dim], cos/sin [1, 1, seq_len, head_dim]
-        - Decode: input [1, batch, num_heads, head_dim], cos/sin [1, batch, 1, head_dim]
+        - Prefill: input [batch_size=1, num_heads, seq_len, head_dim], cos/sin [1, 1, seq_len, head_dim]
+        - Decode: input [seq_len=1, batch, num_heads, head_dim], cos/sin [1, batch, 1, head_dim]
 
         In decode mode, each batch element can have a different position (different cos/sin values).
 
