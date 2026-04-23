@@ -301,44 +301,75 @@ class MoEGate(AbstractModule):
         in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
         in0_core_range = [ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted]
         in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+        batch_size_per_iter = 32
         in0_shard_spec = ttnn.ShardSpec(
             grid=in0_core_range_set,
-            shard_shape=(x.shape[2], x.shape[3]),
+            shard_shape=(batch_size_per_iter, x.shape[3]),
             shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
         input_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
         )
         x = ttnn.view(x, (1, x.shape[2], x.shape[3]))
-        x = ttnn.repeat(x, (12, 1, 1))
-        x = ttnn.to_memory_config(x, input_sharded_mem_config)
+        padding_shape = (batch_size_per_iter - x.shape[1] % batch_size_per_iter) % batch_size_per_iter
+        if padding_shape > 0:
+            x = ttnn.pad(x, padding=((0, 0), (0, padding_shape), (0, 0)), value=0.0)
 
-        ttnn.experimental.deepseek.moe.moe_gate_mm(
-            x,
-            w_tensor=weight_tensor,
-            output_tensor=output_tensor,
-            layer_id=1,
-            column_id=1,
-        )
         if mode == "prefill":
-            output_list.append(output_tensor)
-            output = ttnn.stack(output_list, 1)
-        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        for start_index in range(0, x.shape[1], batch_size_per_iter):
+            x_chunk = x[:, start_index : start_index + batch_size_per_iter, :]
+            if mode == "prefill":
+                x_chunk = ttnn.to_memory_config(x_chunk, ttnn.L1_MEMORY_CONFIG)
+            x_chunk = ttnn.repeat(x_chunk, (12, 1, 1))
+            x_chunk = ttnn.to_memory_config(x_chunk, input_sharded_mem_config)
+
+            ttnn.experimental.deepseek.moe.moe_gate_mm(
+                x_chunk,
+                w_tensor=weight_tensor,
+                output_tensor=output_tensor,
+                layer_id=1,
+                column_id=1,
+            )
+            ttnn.deallocate(x_chunk)
+
+            if mode == "prefill":
+                output_list.append(ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG))
+        if mode == "decode":
+            output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        else:
+            output_tensor = ttnn.concat(output_list, 0)
+            output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        output_tensor = ttnn.view(output_tensor, (-1, batch_size_per_iter, output_tensor.shape[-1]))
         assert SEND_CORES == (0, 3, 6, 9), "SEND_CORES should be (0, 3, 6, 9)"
-        weight_tensor = ttnn.reshape(output_tensor, (output_tensor.shape[0], 4, -1))
-        valid_indices = weight_tensor.shape[2] // 3
-        weight_tensor = weight_tensor[:, :, valid_indices:]
-        f1_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], -1, ttnn.TILE_SIZE))[3, :, :16]
-        f2_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], -1, ttnn.TILE_SIZE))[4, :, :16]
-        topk_experts_weights = ttnn.concat([f1_scores, f2_scores], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        topk_experts_weights = ttnn.transpose(topk_experts_weights, 0, 1)
-        topk_experts_indices = ttnn.transpose(output_tensor[8:16, -32:], 0, 1)
+        weight_tensor = ttnn.reshape(output_tensor, (output_tensor.shape[0], batch_size_per_iter, 4, -1))
+        valid_indices = weight_tensor.shape[-1] // 3
+        weight_tensor = weight_tensor[:, :, :, valid_indices:]
+        f1_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], weight_tensor.shape[1], -1, ttnn.TILE_SIZE))[
+            :, 3, :, :16
+        ]
+        f2_scores = ttnn.reshape(weight_tensor, (weight_tensor.shape[0], weight_tensor.shape[1], -1, ttnn.TILE_SIZE))[
+            :, 4, :, :16
+        ]
+        topk_experts_weights = ttnn.concat(
+            [f1_scores, f2_scores],
+            dim=-1,
+            memory_config=ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        topk_experts_weights = ttnn.transpose(topk_experts_weights, -1, -2)
+        topk_experts_indices = ttnn.transpose(output_tensor[:, 8:16, -32:], -1, -2)
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
-        topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, *topk_experts_indices.shape))
+        topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, -1, topk_experts_indices.shape[-1]))
         topk_experts_indices = ttnn.bitwise_right_shift(topk_experts_indices, 7)
         # or ttnn.logical_right_shift(topk_experts_indices, 7)
-        topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, *topk_experts_weights.shape))
-
+        topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, -1, topk_experts_weights.shape[-1]))
+        if padding_shape > 0:
+            output_tensor = output_tensor[:-padding_shape, :]
+        if mode == "prefill":
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
+            topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, ttnn.DRAM_MEMORY_CONFIG)
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
         return topk_experts_weights, topk_experts_indices
 
     @classmethod
