@@ -586,19 +586,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 
 
 def run_matmul_2d_multiple_output_blocks_per_core(
-    device,
-    b,
-    m,
-    k,
-    n,
-    has_bias,
-    grid_size,
-    in0_sharded,
-    out_sharded,
-    num_out_block_h,
-    num_out_block_w,
-    transpose_mcast,
-    bias_layout="broadcast",
+    device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast
 ):
     if in0_sharded or out_sharded:
         fuse_batch = True
@@ -616,12 +604,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
 
     in0_shape = [b, 1, m, k]
     in1_shape = [b, 1, k, n]
-    if bias_layout == "broadcast":
-        bias_shape = [1, 1, 1, n]
-    elif bias_layout == "full_mn":
-        bias_shape = [1, 1, m, n]
-    else:
-        raise ValueError(f"Unknown bias_layout: {bias_layout}")
+    bias_shape = [1, 1, n]
 
     if transpose_mcast:
         in0_block_w = k // grid_size[1] // 32
@@ -666,8 +649,10 @@ def run_matmul_2d_multiple_output_blocks_per_core(
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
         bias_t = ttnn.from_torch(
-            bias,
+            bias_padded,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -802,28 +787,11 @@ def test_matmul_2d_multiple_output_blocks_per_core(
 
 
 def run_matmul_2d_tiny_tile(
-    device,
-    m,
-    k,
-    n,
-    has_bias,
-    grid_size,
-    tile_h,
-    tile_w,
-    in0_sharded,
-    out_sharded,
-    in1_dtype,
-    transpose_tile,
-    bias_layout="broadcast",
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
-    if bias_layout == "broadcast":
-        bias_shape = [1, 1, 1, n]
-    elif bias_layout == "full_mn":
-        bias_shape = [1, 1, m, n]
-    else:
-        raise ValueError(f"Unknown bias_layout: {bias_layout}")
+    bias_shape = [1, 1, n]
 
     in0_block_w = k // grid_size[0] // 32
     out_block_h = m // grid_size[1] // tile_h
@@ -861,8 +829,10 @@ def run_matmul_2d_tiny_tile(
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_t = ttnn.from_torch(
-            bias,
+            bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -985,28 +955,11 @@ def test_matmul_2d_tiny_tile(
 
 
 def run_matmul_1d_tiny_tile(
-    device,
-    m,
-    k,
-    n,
-    has_bias,
-    grid_size,
-    tile_h,
-    tile_w,
-    in0_sharded,
-    out_sharded,
-    in1_dtype,
-    transpose_tile,
-    bias_layout="broadcast",
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
-    if bias_layout == "broadcast":
-        bias_shape = [1, 1, 1, n]
-    elif bias_layout == "full_mn":
-        bias_shape = [1, 1, m, n]
-    else:
-        raise ValueError(f"Unknown bias_layout: {bias_layout}")
+    bias_shape = [1, 1, n]
 
     num_cores = grid_size[0] * grid_size[1]
 
@@ -1046,8 +999,10 @@ def run_matmul_1d_tiny_tile(
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_t = ttnn.from_torch(
-            bias,
+            bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -1120,98 +1075,6 @@ def run_matmul_1d_tiny_tile(
         frobenius_threshold=0.001 * k,
         pcc_threshold=0.999,
         check_ulp=False,
-    )
-
-
-def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h):
-    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, True) and is_llk_assert_enabled():
-        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
-
-
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
-@pytest.mark.parametrize(
-    "m,k,n,tile_h,tile_w,transpose_tile",
-    [
-        (32, 32, 32, 32, 32, False),
-        (16, 32, 32, 16, 32, False),
-    ],
-)
-@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
-def test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile(mesh_device, m, k, n, tile_h, tile_w, transpose_tile):
-    """Fused bias [1,1,M,N] on MatmulMultiCoreReuseMultiCastProgramConfig (2D mcast tiny tile)."""
-    _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h)
-    torch.manual_seed(0)
-    grid_1 = (1, 1)
-    run_matmul_2d_tiny_tile(
-        mesh_device,
-        m,
-        k,
-        n,
-        True,
-        grid_1,
-        tile_h,
-        tile_w,
-        True,
-        True,
-        ttnn.bfloat16,
-        transpose_tile,
-        bias_layout="full_mn",
-    )
-
-
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
-@pytest.mark.parametrize(
-    "m,k,n,tile_h,tile_w,transpose_tile",
-    [
-        (32, 32, 32, 32, 32, False),
-        (16, 32, 32, 16, 32, False),
-    ],
-)
-@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
-def test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile(mesh_device, m, k, n, tile_h, tile_w, transpose_tile):
-    """Fused bias [1,1,M,N] on MatmulMultiCoreReuseMultiCast1DProgramConfig (1D mcast tiny tile)."""
-    _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h)
-    torch.manual_seed(0)
-    grid_1 = (1, 1)
-    run_matmul_1d_tiny_tile(
-        mesh_device,
-        m,
-        k,
-        n,
-        True,
-        grid_1,
-        tile_h,
-        tile_w,
-        True,
-        True,
-        ttnn.bfloat16,
-        transpose_tile,
-        bias_layout="full_mn",
-    )
-
-
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
-@pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
-@pytest.mark.parametrize("transpose_mcast", [False, True])
-@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
-def test_linear_fused_non_broadcast_bias_2d_mesh_multiple_blocks(mesh_device, transpose_mcast, m, k, n):
-    """Fused bias [1,1,M,N] on mesh 2D multi-block MatmulMultiCoreReuseMultiCastProgramConfig."""
-    torch.manual_seed(0)
-    grid_1 = (1, 1)
-    run_matmul_2d_multiple_output_blocks_per_core(
-        mesh_device,
-        1,
-        m,
-        k,
-        n,
-        True,
-        grid_1,
-        False,
-        False,
-        1,
-        1,
-        transpose_mcast,
-        bias_layout="full_mn",
     )
 
 

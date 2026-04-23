@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <tuple>
 #include <fmt/core.h>
@@ -12,6 +13,13 @@
 #include "tt-metalium/hal.hpp"
 
 namespace ttnn::operations::sliding_window {
+
+// Values are part of the serialized program-cache key via SlidingWindowConfig::to_string().
+// Keep existing values stable; only append new modes.
+enum class PaddingMode : uint8_t {
+    Zeros = 0,
+    Replicate = 1,
+};
 
 struct ParallelConfig {
     CoreRangeSet grid;
@@ -61,6 +69,7 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
+    PaddingMode padding_mode = PaddingMode::Zeros;
 
     std::string to_string() const;
     bool has_parallel_config() const;
