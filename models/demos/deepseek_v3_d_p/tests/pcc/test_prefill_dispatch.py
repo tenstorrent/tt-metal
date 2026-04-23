@@ -15,8 +15,11 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    MAX_PAYLOAD_SIZE_BH,
+    MAX_PAYLOAD_SIZE_WH,
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
@@ -88,9 +91,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
-        (32, 7168, 16, 4, 2),
+        pytest.param(32, 7168, 16, 4, 2, True, id="pcc"),
+        pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -239,6 +243,106 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
             id="mesh-2x4",
         ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="perf-linear-8-1link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="perf-linear-8-2link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-linear-8-1link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-linear-8-2link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="perf-ring-8-1link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="perf-ring-8-2link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-ring-8-1link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-ring-8-2link-14k",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -255,6 +359,7 @@ def test_ttnn_dispatch(
     topology,
     use_predictable_data,
     verbose,
+    run_pcc_check,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
     torch.manual_seed(42)
@@ -383,6 +488,11 @@ def test_ttnn_dispatch(
     tt_dispatched, tt_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
+
+    if not run_pcc_check:
+        ttnn.synchronize_device(mesh_device)
+        logger.debug("Skipping PCC validation (run_pcc_check=False)")
+        return
 
     # Run torch reference for all EP ranks at once
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
