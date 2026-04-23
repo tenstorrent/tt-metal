@@ -6,6 +6,7 @@
 #include "timestamp.hpp"
 
 #define ARGS(X)                     \
+    X(uint32_t, iter_l1_address)    \
     X(uint32_t, num_bytes_per_send) \
     X(uint32_t, transfer_size)      \
     X(uint32_t, transfer_count)     \
@@ -15,14 +16,20 @@
 
 void kernel_main() {
     ARG_INIT(ARGS);
+    volatile uint32_t* iter = (volatile uint32_t*)iter_l1_address;
+    volatile uint32_t* sendbuf = (volatile uint32_t*)send_l1_address;
+
+    sendbuf[0] = *iter = 0;
 
     uint64_t start = timestamp();
     for (uint32_t i = 0; i < transfer_count; i++) {
+        sendbuf[0] = i;
         eth_send_bytes(send_l1_address, recv_l1_address, transfer_size, num_bytes_per_send, num_bytes_per_send >> 4);
 
         eth_wait_for_bytes(transfer_size);
         eth_receiver_done();
         eth_wait_for_receiver_done();
+        *iter = i;
     }
     uint64_t delta = timestamp() - start;
 
