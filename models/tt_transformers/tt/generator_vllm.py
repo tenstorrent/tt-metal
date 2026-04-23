@@ -22,7 +22,13 @@ from vllm.model_executor.models.mistral3 import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalDataDict
-from vllm.multimodal.profiling import BaseDummyInputsBuilder
+
+try:
+    from vllm.multimodal.profiling import BaseDummyInputsBuilder
+except ModuleNotFoundError:
+    # Newer vLLM releases moved multimodal dummy input helpers under
+    # vllm.multimodal.processing.
+    from vllm.multimodal.processing import BaseDummyInputsBuilder
 
 import ttnn
 from models.common.llama_models import create_vision_mask
@@ -551,7 +557,77 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(**kwargs)
+        """Route vLLM prefill through `prefill_forward_text`, extracting
+        image features from the multi-modal kwargs that the TT worker packs
+        into ``images``.
+
+        The vLLM HF multi-modal processor preprocesses PIL images into a
+        ``MultiModalKwargs`` dict keyed by tensor field names (``pixel_values``,
+        ``num_crops``). ``tt_model_runner`` forwards that dict (per-user) via
+        the ``images`` kwarg. ``TtGemmaModel.prepare_inputs_prefill`` runs the
+        vision tower and scatters image features into the token embeddings
+        when it receives ``pixel_values``.
+
+        Two things must happen here so the image features actually land in the
+        model inputs:
+
+        1. Convert ``images=[MultiModalKwargs_per_user, ...]`` into
+           ``pixel_values=[tensor_per_user, ...]`` so the base
+           ``prefill_forward_text`` can index pixel_values per user.
+        2. Force ``enable_trace=False`` for prefill. The captured prefill
+           trace in the base ``Transformer`` is text-only (it goes through
+           ``prepare_prefill_inputs_trace`` which sets ``trace_enabled=True``
+           in ``prepare_inputs_prefill`` and skips the vision-scatter branch).
+           For accurate image output we need the non-trace path, which
+           invokes ``compute_vision_token`` and masked-scatters the features
+           into the token embeddings.
+        """
+        images = kwargs.pop("images", None)
+        pixel_values_per_user = None
+        if images is not None:
+            collected = []
+            has_any = False
+            for img in images:
+                if img is None:
+                    collected.append(None)
+                    continue
+                if isinstance(img, Image):
+                    collected.append(img)
+                    has_any = True
+                    continue
+                if hasattr(img, "__contains__") and "pixel_values" in img:
+                    pv = img["pixel_values"]
+                    if not isinstance(pv, torch.Tensor) and hasattr(pv, "data"):
+                        pv = pv.data
+                    collected.append(pv)
+                    has_any = True
+                else:
+                    collected.append(None)
+            if has_any:
+                pixel_values_per_user = collected
+
+        if pixel_values_per_user is None:
+            return super().prefill_forward_text(**kwargs)
+
+        kwargs["pixel_values"] = pixel_values_per_user
+        kwargs["enable_trace"] = False
+
+        # Batched prefill collapses all users into a single call to
+        # `prepare_inputs_prefill` with pt_tokens of shape (batch, S) and only
+        # picks `pixel_values[0]`, which both misroutes images to user 0 and
+        # breaks `special_image_mask.expand_as(tokens_embd)` in
+        # TtGemmaModel.prepare_inputs_prefill (tokens_embd is flattened to
+        # (1, batch*S, dim) while the mask keeps its per-user shape).
+        # Force per-user prefill so each user's pixel_values is correctly
+        # indexed and scattered into its own token embeddings.
+        saved_flags = [getattr(ma, "disable_batched_prefill", False) for ma in self.model_args]
+        for ma in self.model_args:
+            ma.disable_batched_prefill = True
+        try:
+            return super().prefill_forward_text(**kwargs)
+        finally:
+            for ma, prev in zip(self.model_args, saved_flags):
+                ma.disable_batched_prefill = prev
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
