@@ -269,6 +269,15 @@ def test_sdpa_decode_paged_partial_mask_parametric(device, cur_pos, block_size, 
     )
     tt_cur_pos = ttnn.Tensor(torch.tensor([cur_pos] * B, dtype=torch.int32), ttnn.int32).to(device)
 
+    # Cap cores per head to 3 so num_tree_reduction_rounds stays within
+    # MAX_TREE_REDUCTION_ROUNDS=6 on Galaxy (72 effective cores per chip).
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        q_chunk_size=nh,
+        k_chunk_size=block_size,
+        max_cores_per_head_batch=3,
+    )
+
     tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
@@ -276,6 +285,7 @@ def test_sdpa_decode_paged_partial_mask_parametric(device, cur_pos, block_size, 
         cur_pos_tensor=tt_cur_pos,
         page_table_tensor=tt_page_table,
         scale=scale,
+        program_config=program_config,
         memory_config=dram,
     )
     tt_out_torch = ttnn.to_torch(tt_out)
