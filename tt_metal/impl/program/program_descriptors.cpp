@@ -213,6 +213,19 @@ static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& cor
     kd.runtime_args.emplace_back(core, std::move(values));
 }
 
+template <typename Range>
+static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& args) {
+    kd.common_runtime_args.reserve(args.size());
+    for (const auto& arg : args) {
+        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
+            kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), *buf});
+            kd.common_runtime_args.push_back((*buf)->address());
+        } else {
+            kd.common_runtime_args.push_back(std::get<uint32_t>(arg));
+        }
+    }
+}
+
 void KernelDescriptor::emplace_runtime_args(
     const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
     emplace_runtime_args_impl(*this, core, args);
@@ -220,6 +233,14 @@ void KernelDescriptor::emplace_runtime_args(
 
 void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, RTArgList args) {
     emplace_runtime_args_impl(*this, core, args.items_);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
+    emplace_common_runtime_args_impl(*this, args);
+}
+
+void KernelDescriptor::emplace_common_runtime_args(RTArgList args) {
+    emplace_common_runtime_args_impl(*this, args.items_);
 }
 
 // Pack (kernel_idx, core.x, core.y, arg_idx) into a single uint64_t for O(1) set lookup.
@@ -236,6 +257,10 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
     // the push_back(buf->address()) mistake.
     std::unordered_set<uint64_t> registered_positions;
     std::unordered_set<uint32_t> registered_addresses;
+
+    // Sentinel used to key common (non-per-core) arg positions in registered_positions.
+    // Real device cores have small coordinates; 0xFF,0xFF is never a valid logical core.
+    static constexpr CoreCoord kCommonArgSentinel{0xFF, 0xFF};
 
     for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
         for (const auto& b : desc.kernels[k].buffer_bindings) {
@@ -260,9 +285,27 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
             registered_positions.insert(rt_binding_key(k, b.core, b.arg_idx));
             registered_addresses.insert(b.buffer->address());
         }
+
+        for (const auto& b : desc.kernels[k].common_buffer_bindings) {
+            auto& data = GetCommonRuntimeArgs(program, k);
+
+            TT_FATAL(
+                b.arg_idx < data.size() && data[b.arg_idx] == b.buffer->address(),
+                "CommonBufferBinding for kernel {} arg[{}]: stored value {:#x} "
+                "does not match buffer->address() {:#x}. Wrong arg_idx in common_buffer_bindings, "
+                "or arg was written without using emplace_common_runtime_args().",
+                k,
+                b.arg_idx,
+                b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
+                b.buffer->address());
+
+            result.rt_args.push_back({&data, b.arg_idx, b.buffer});
+            registered_positions.insert(rt_binding_key(k, kCommonArgSentinel, b.arg_idx));
+            registered_addresses.insert(b.buffer->address());
+        }
     }
 
-    // Scan every runtime arg on every kernel/core.  If an arg's value matches a registered
+    // Scan every per-core and common runtime arg.  If an arg's value matches a registered
     // buffer's address but no binding was declared at that position, the factory called
     // push_back(buf->address()) instead of push_back(buf).  On cache hits the fast path
     // would skip that arg and leave it stale.
@@ -284,6 +327,20 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
                             i,
                             args[i]);
                     }
+                }
+            }
+            const auto& common = desc.kernels[k].common_runtime_args;
+            for (uint32_t i = 0; i < static_cast<uint32_t>(common.size()); ++i) {
+                if (registered_addresses.count(common[i]) &&
+                    !registered_positions.count(rt_binding_key(k, kCommonArgSentinel, i))) {
+                    TT_FATAL(
+                        false,
+                        "Kernel {} common arg[{}]={:#x} matches a registered buffer address "
+                        "but no CommonBufferBinding was declared at this position. "
+                        "Use emplace_common_runtime_args() with Buffer* instead of uint32_t.",
+                        k,
+                        i,
+                        common[i]);
                 }
             }
         }
