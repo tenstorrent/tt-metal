@@ -287,7 +287,6 @@ def create_single_galaxy_deepseek_pipeline_configuration(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             persistent_mode=lm_head_persistent_mode,
-            host_loopback=host_loopback,
         )
 
     return PipelineConfiguration(
@@ -616,36 +615,26 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
-        import os
+
         _rank = int(ttnn.distributed_context_get_rank())
-        print(f"[setup_and_run] rank={_rank} entering barrier before configure_block", flush=True)
         self.barrier()  # Synchronize before socket creation — stage 0 may be slow due to weight loading
         logger.info("Configuring block")
-        print(f"[setup_and_run] rank={_rank} calling configure_block", flush=True)
         self.configure_block()
-        print(f"[setup_and_run] rank={_rank} configure_block done", flush=True)
 
         logger.info("Setting up")
-        print(f"[setup_and_run] rank={_rank} calling setup", flush=True)
         self.setup()
-        print(f"[setup_and_run] rank={_rank} setup done, entering barrier", flush=True)
         logger.info("Pipeline setup complete, waiting for all stages to complete...")
         self.barrier()
 
         logger.info("Starting pipeline")
-        print(f"[setup_and_run] rank={_rank} calling start_pipeline", flush=True)
         self.start_pipeline()
-        print(f"[setup_and_run] rank={_rank} start_pipeline done, entering barrier", flush=True)
         logger.info("Pipeline started, waiting for all stages to complete...")
         self.barrier()
 
         logger.info("Starting compute")
-        print(f"[setup_and_run] rank={_rank} calling start_compute", flush=True)
         self.start_compute()
-        print(f"[setup_and_run] rank={_rank} start_compute done, entering barrier", flush=True)
         logger.info("Compute started, waiting for all stages to complete...")
         self.barrier()
-        print(f"[setup_and_run] rank={_rank} ALL DONE", flush=True)
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         if self._pipeline_block is None:

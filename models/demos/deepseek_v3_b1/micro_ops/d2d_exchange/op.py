@@ -291,11 +291,9 @@ class SocketInterface:
 
         if self.local_socket:
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
-            print(f"[SocketInterface] create_socket_pair LOCAL send={send_core_coord} recv={recv_core_coord} fifo={socket_fifo_size}", flush=True)
             self.internal_socket_pair = ttnn.create_socket_pair(
                 sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
-            print(f"[SocketInterface] create_socket_pair LOCAL done", flush=True)
         else:
             same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
             if same_mesh:
@@ -305,7 +303,6 @@ class SocketInterface:
                     sender_rank=sender_mesh.get_rank(),
                     receiver_rank=receiver_mesh.get_rank(),
                 )
-                print(f"[SocketInterface] MeshSocket same_mesh send_rank={sender_mesh.get_rank()} recv_rank={receiver_mesh.get_rank()} send={send_core_coord} recv={recv_core_coord} fifo={socket_fifo_size}", flush=True)
             else:
                 socket_config = ttnn.SocketConfig(
                     connections=[socket_connection],
@@ -313,9 +310,7 @@ class SocketInterface:
                     sender_mesh_id=sender_mesh.get_mesh_id(),
                     receiver_mesh_id=receiver_mesh.get_mesh_id(),
                 )
-                print(f"[SocketInterface] MeshSocket cross_mesh send_mesh={sender_mesh.get_mesh_id()} recv_mesh={receiver_mesh.get_mesh_id()} send={send_core_coord} recv={recv_core_coord} fifo={socket_fifo_size}", flush=True)
             self.internal_socket = ttnn.MeshSocket(self.mesh_device, socket_config)
-            print(f"[SocketInterface] MeshSocket done", flush=True)
 
         if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:
             termination_semaphore_core_range = ttnn.CoreRangeSet(

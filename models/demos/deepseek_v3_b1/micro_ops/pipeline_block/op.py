@@ -287,7 +287,6 @@ class PipelineBlock:
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
         assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
         assert host_io_placement is not None, "host_io_placement must be provided to first pipeline stage"
-        print(f"[_init_first_stage] stage={self.my_stage_idx} initialize_loopback={self.initialize_loopback} up_page={upstream_d2d_socket_page_size} down_page={downstream_d2d_socket_page_size} up_fifo={upstream_d2d_socket_fifo_size} down_fifo={downstream_d2d_socket_fifo_size} d2h_page={d2h_socket_page_size} d2h_fifo={d2h_socket_fifo_size}", flush=True)
 
         h2d_device_coord = pipeline_config[self.my_stage_idx].entry_node_coord
         embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
@@ -382,8 +381,6 @@ class PipelineBlock:
         assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to last pipeline stage"
         assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to last pipeline stage"
         assert d2h_socket_fifo_size >= d2h_socket_page_size
-        print(f"[_init_last_stage_with_d2h] stage={self.my_stage_idx} up_page={upstream_d2d_socket_page_size} down_page={downstream_d2d_socket_page_size} d2h_page={d2h_socket_page_size} d2h_fifo={d2h_socket_fifo_size}", flush=True)
-
         # For no_loopback the C++ placeholder sets exit_node_coord = entry_node_coord, so
         # d2h_device_coord ends up on the same chip as the entry recv kernel.  Use
         # host_io_placement.d2h_core (rather than pipeline_core_coord) so the D2H kernel
@@ -454,7 +451,6 @@ class PipelineBlock:
         exit_upstream_page_size=None,
         forward_metadata_size_bytes=0,
     ):
-        print(f"[_init_forwarding_stage] stage={self.my_stage_idx} up_page={upstream_d2d_socket_page_size} down_page={downstream_d2d_socket_page_size} has_exit={self.has_exit}", flush=True)
         prev_stage = self.my_stage_idx - 1
         ps = self._stages[prev_stage]
         self.entry_socket_interface = SocketInterface(
@@ -631,33 +627,19 @@ class PipelineBlock:
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def run(self):
-        print(f"[PipelineBlock.run] stage={self.my_stage_idx} is_pipeline_start={self.is_pipeline_start} is_last_stage={self.is_last_stage} initialize_loopback={self.initialize_loopback} has_exit={self.has_exit} loopback_mode={self._loopback_mode}", flush=True)
         if self.parallel_devices:
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} dispatching parallel device programs", flush=True)
             self._dispatch_parallel_device_programs()
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} parallel device programs done", flush=True)
         elif self.is_pipeline_start:
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} running host_io", flush=True)
             self.host_io.run()
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} running exit_socket_interface", flush=True)
             self.exit_socket_interface.run()
             if self.initialize_loopback:
-                print(f"[PipelineBlock.run] stage={self.my_stage_idx} running entry_socket_interface (loopback)", flush=True)
                 self.entry_socket_interface.run()
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} pipeline_start done", flush=True)
         else:
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} running entry_socket_interface", flush=True)
             self.entry_socket_interface.run()
-            print(f"[PipelineBlock.run] stage={self.my_stage_idx} entry done", flush=True)
             if self.has_exit:
-                print(f"[PipelineBlock.run] stage={self.my_stage_idx} running exit_socket_interface", flush=True)
                 self.exit_socket_interface.run()
-                print(f"[PipelineBlock.run] stage={self.my_stage_idx} exit done", flush=True)
             if self.host_io is not None:
-                print(f"[PipelineBlock.run] stage={self.my_stage_idx} running host_io", flush=True)
                 self.host_io.run()
-                print(f"[PipelineBlock.run] stage={self.my_stage_idx} host_io done", flush=True)
-        print(f"[PipelineBlock.run] stage={self.my_stage_idx} DONE", flush=True)
 
     def terminate(self):
         ttnn.distributed_context_barrier()

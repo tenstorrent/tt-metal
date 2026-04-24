@@ -145,19 +145,15 @@ class HostInterface:
                         sender_mesh_id=sender_mesh.get_mesh_id(),
                         receiver_mesh_id=receiver_mesh.get_mesh_id(),
                     )
-                    print(f"[HostInterface] MeshSocket downstream cross-mesh send_mesh={sender_mesh.get_mesh_id()} recv_mesh={receiver_mesh.get_mesh_id()}", flush=True)
                     self.downstream_mesh_socket = ttnn.MeshSocket(self.mesh_device, downstream_socket_config)
-                    print(f"[HostInterface] MeshSocket downstream done", flush=True)
                 else:
                     downstream_socket_config = ttnn.SocketConfig(
                         [downstream_socket_connection],
                         socket_memory_config,
                     )
-                    print(f"[HostInterface] create_socket_pair downstream h2d_mesh_core={self.h2d_mesh_core_coord} h2d_downstream={self.h2d_downstream_core} fifo={core_to_core_socket_buffer_size}", flush=True)
                     self.downstream_socket_pair = ttnn.create_socket_pair(
                         self.mesh_device, self.mesh_device, downstream_socket_config
                     )
-                    print(f"[HostInterface] create_socket_pair downstream done", flush=True)
 
             if self.d2h_socket and self.d2h_upstream_core is not None:
                 upstream_socket_connection = ttnn.SocketConnection(
@@ -168,11 +164,9 @@ class HostInterface:
                     [upstream_socket_connection],
                     socket_memory_config,
                 )
-                print(f"[HostInterface] create_socket_pair upstream d2h_upstream={self.d2h_upstream_core} d2h_mesh_core={self.d2h_mesh_core_coord} fifo={core_to_core_socket_buffer_size}", flush=True)
                 self.upstream_socket_pair = ttnn.create_socket_pair(
                     self.mesh_device, self.mesh_device, upstream_socket_config
                 )
-                print(f"[HostInterface] create_socket_pair upstream done", flush=True)
 
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:
