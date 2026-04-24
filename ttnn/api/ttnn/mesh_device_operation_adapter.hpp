@@ -17,6 +17,7 @@
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::device_operation {
 
@@ -219,6 +220,18 @@ public:
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
+        // Enumerate all Buffer* reachable from tensor_args and tensor_return_value,
+        // in a stable field-declaration order via reflection.  Used to map buffer
+        // bindings to indices that survive across calls without storing raw pointers.
+        static std::vector<tt::tt_metal::Buffer*> collect_tensor_buffers(
+            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+            std::vector<tt::tt_metal::Buffer*> buffers;
+            auto collect = [&buffers](const Tensor& t) { buffers.push_back(t.buffer()); };
+            ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_args);
+            ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_return_value);
+            return buffers;
+        }
+
         static tt::tt_metal::ProgramDescriptor invoke_create_descriptor(
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
@@ -247,7 +260,8 @@ public:
 
                 auto desc = invoke_create_descriptor(attrs, tensor_args, tensor_return_value, resources);
                 tt::tt_metal::Program program{desc};
-                auto resolved = tt::tt_metal::resolve_bindings(program, desc);
+                auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
+                auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
                 mesh_workload.add_program(range, std::move(program));
                 shared_variables[range] =
                     shared_variables_t{.resources = std::move(resources), .resolved_bindings = std::move(resolved)};
@@ -263,9 +277,10 @@ public:
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
                 if (!sv.resolved_bindings.empty()) {
-                    // Fast path: factory declared buffer args via emplace_runtime_args().
-                    // Patch the cached program directly — no create_descriptor() call.
-                    tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings);
+                    // Fast path: patch only the buffer positions using current tensor addresses.
+                    // No create_descriptor() call — tensor_buffers enumeration is O(n_tensors).
+                    auto current_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
+                    tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
                 } else {
                     // Slow path: full descriptor rebuild + bulk copy.
                     // Used by factories that have not yet adopted emplace_runtime_args().
