@@ -611,6 +611,37 @@ void Device::quiesce_and_restart_fabric_workers() {
 
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
 
+    // Diagnostic entry snapshot (#42429): read every active ERISC channel's edm_status_address
+    // BEFORE any phase runs.  This lets us distinguish "prior test left channels in bad state"
+    // vs "failing test caused the problem" — per Neil's request.
+    {
+        const auto router_sync_addr_diag =
+            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        const auto& soc_desc_entry = env_impl.get_cluster().get_soc_desc(this->id());
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+            "{} active ERISC channel(s), edm_status_addr=0x{:08x}",
+            this->id(),
+            active_channels.size(),
+            router_sync_addr_diag);
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_lc_diag = soc_desc_entry.get_eth_core_for_channel(
+                eth_chan_id, CoordSystem::LOGICAL);
+            std::vector<uint32_t> diag_buf(1, 0U);
+            detail::ReadFromDeviceL1(
+                this, eth_lc_diag, router_sync_addr_diag, 4, diag_buf, CoreType::ETH);
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                "eth_chan {} (logical={}) edm_status=0x{:08x}",
+                this->id(),
+                eth_chan_id,
+                eth_lc_diag.str(),
+                diag_buf[0]);
+        }
+    }
+
     // Phase 1: Send IMMEDIATELY_TERMINATE to each MUX worker core
     // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
     if (has_tensix_mux) {
@@ -945,6 +976,22 @@ void Device::quiesce_and_restart_fabric_workers() {
     //
     // ETH cores must NOT have deassert_risc_reset_at_core called here — their BRISC was not
     // halted in Phase 2 (resetting ERISC tears down the ETH PHY link on WH).
+    //
+    // FIX P pre-compute (#42429): The handshake address is the same for all ETH channels on a
+    // device (each ETH core's local L1 at this offset).  Non-MMIO devices need host MAGIC
+    // injection after relaunch (see FIX P block below).  Pre-clear handshake_addr+0 and +16
+    // before write_launch_msg so that FIX P's poll on scratch[0]==0xAA reliably detects the
+    // CURRENT invocation of init_handshake_info() and not stale data from the prior run.
+    // configure_fabric_cores() does NOT clear the handshake region (only clears edm_status,
+    // termination_signal, and sync addresses), so stale 0xAA can persist across restarts.
+    const uint32_t fix_p_handshake_addr = !this->is_mmio_capable()
+        ? static_cast<uint32_t>(
+              builder_ctx
+                  .get_fabric_router_config(
+                      tt::tt_fabric::FabricTensixConfig::DISABLED,
+                      static_cast<tt::tt_fabric::eth_chan_directions>(0))
+                  .handshake_addr)
+        : 0U;
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
         CoreType core_type = hal.get_core_type(pct_idx);
         if (core_type != CoreType::ETH) {
@@ -981,6 +1028,17 @@ void Device::quiesce_and_restart_fabric_workers() {
                 }
             }
 
+            // FIX P pre-clear (#42429): zero handshake_addr+0 (local_value) and
+            // handshake_addr+16 (scratch[0]) before the launch message so FIX P's poll
+            // for scratch[0]==0xAA unambiguously detects the NEW init_handshake_info() run.
+            if (fix_p_handshake_addr != 0U) {
+                std::vector<uint32_t> zero_buf(1, 0U);
+                detail::WriteToDeviceL1(
+                    this, logical_core, fix_p_handshake_addr, zero_buf, CoreType::ETH);
+                detail::WriteToDeviceL1(
+                    this, logical_core, fix_p_handshake_addr + 16U, zero_buf, CoreType::ETH);
+            }
+
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
@@ -994,6 +1052,172 @@ void Device::quiesce_and_restart_fabric_workers() {
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
+    }
+
+    // FIX P (#42429): Inject MAGIC handshake value to unblock Device 4's ERISC receiver loop.
+    //
+    // Background: On T3K, non-MMIO Device 4 uses the RECEIVER side of the EDM handshake
+    // (lower chip_id == sender, higher == receiver).  After FIX O re-launched its ERISC
+    // channels, the firmware calls init_handshake_info() (sets scratch[0]=0xAA, local_value=0)
+    // then spins in fabric_receiver_side_handshake() waiting for local_value==0xAA.  The
+    // sender side (MMIO devices 0-3) early-returns from quiesce_and_restart_fabric_workers()
+    // (their get_num_fabric_initialized_routers==0) and never sends MAGIC.  On Wormhole there
+    // is no TERMINATE escape in the receiver loop, so Device 4 spins forever, status stays
+    // at STARTED (0xa0b0c0d0), and Phase 5 throws:
+    //   "Fabric health check failed — 4 ERISC channel(s) not at READY_FOR_TRAFFIC (0xa0b0c0d0)"
+    //
+    // Fix: the host injects MAGIC (0xAA) directly into each channel's local_value field
+    // (handshake_addr+0) AFTER confirming that init_handshake_info() has run on that channel
+    // (detected by polling scratch[0]=handshake_addr+16 == 0xAA).  The pre-clear of both
+    // fields in FIX O (above) ensures this poll cannot false-positive on stale data from the
+    // prior run (configure_fabric_cores() does NOT zero the handshake region).
+    //
+    // After MAGIC injection, each receiver exits the handshake loop and sets
+    // REMOTE_HANDSHAKE_COMPLETE.  The firmware's multi-ERISC local-sync phase then runs:
+    // subordinate channels notify the master, which writes LOCAL_HANDSHAKE_COMPLETE.  The
+    // host then writes READY_FOR_TRAFFIC to the master channel (master distributes to all
+    // subordinates via notify_subordinate_routers), replicating wait_for_fabric_router_sync().
+    if (!this->is_mmio_capable() && fix_p_handshake_addr != 0U) {
+        // MAGIC_HANDSHAKE_VALUE from tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp
+        constexpr uint32_t kMagicHandshakeValue = 0xAAU;
+        constexpr uint32_t kInitDetectTimeoutMs = 2000;
+        constexpr uint32_t kSyncTimeoutMs = 5000;
+        constexpr uint32_t kSpinLimit = 64U;
+
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} FIX P: injecting MAGIC handshake "
+            "to {} active ERISC channel(s) (handshake_addr=0x{:08x})",
+            this->id(),
+            active_channels.size(),
+            fix_p_handshake_addr);
+
+        // Step 1: For each active non-dead channel, wait for init_handshake_info() then inject MAGIC.
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            if (quiesce_health.newly_dead_channels.count(eth_chan_id) ||
+                fabric_pre_dead_channels_.count(eth_chan_id)) {
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} FIX P: skipping dead channel {}",
+                    this->id(),
+                    eth_chan_id);
+                continue;
+            }
+
+            const auto eth_logical_core =
+                soc_desc_q.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+            // Poll handshake_addr+16 (scratch[0]) until 0xAA — confirms init_handshake_info()
+            // ran and the receiver loop is spinning.  This avoids the race where we inject
+            // MAGIC before init_handshake_info clears local_value to 0.
+            std::vector<uint32_t> scratch_buf(1, 0U);
+            bool init_detected = false;
+            const auto init_start = std::chrono::steady_clock::now();
+            uint32_t spin_ctr = 0U;
+            while (true) {
+                detail::ReadFromDeviceL1(
+                    this,
+                    eth_logical_core,
+                    fix_p_handshake_addr + 16U,
+                    4,
+                    scratch_buf,
+                    CoreType::ETH);
+                if (scratch_buf[0] == kMagicHandshakeValue) {
+                    init_detected = true;
+                    break;
+                }
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - init_start)
+                                         .count();
+                if (elapsed > kInitDetectTimeoutMs) {
+                    break;
+                }
+                if (++spin_ctr >= kSpinLimit) {
+                    spin_ctr = 0U;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            }
+            if (!init_detected) {
+                TT_THROW(
+                    "quiesce_and_restart_fabric_workers: Device {} FIX P: timeout ({}ms) waiting "
+                    "for init_handshake_info() on ETH channel {} — scratch[0]=0x{:08x}, ERISC "
+                    "may not have started. (#42429)",
+                    this->id(),
+                    kInitDetectTimeoutMs,
+                    eth_chan_id,
+                    scratch_buf[0]);
+            }
+
+            // Inject MAGIC into local_value (handshake_addr+0) — exits the receiver loop.
+            std::vector<uint32_t> magic_buf(1, kMagicHandshakeValue);
+            detail::WriteToDeviceL1(this, eth_logical_core, fix_p_handshake_addr, magic_buf, CoreType::ETH);
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} FIX P: injected MAGIC to ETH "
+                "channel {} (logical core {})",
+                this->id(),
+                eth_chan_id,
+                eth_logical_core.str());
+        }
+
+        // Step 2: Wait for master channel to reach LOCAL_HANDSHAKE_COMPLETE (multi-ERISC local
+        // sync is complete — all subordinates notified master via NOC).
+        const auto master_chan = builder_ctx.get_fabric_master_router_chan(this->id());
+        const auto master_logical_core =
+            soc_desc_q.get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
+
+        const auto [sync_addr, sync_status] = builder_ctx.get_fabric_router_sync_address_and_status();
+
+        std::vector<uint32_t> sync_buf(1, 0U);
+        const auto sync_start = std::chrono::steady_clock::now();
+        uint32_t sync_spin = 0U;
+        while (true) {
+            detail::ReadFromDeviceL1(this, master_logical_core, sync_addr, 4, sync_buf, CoreType::ETH);
+            if (sync_buf[0] == sync_status) {
+                break;
+            }
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - sync_start)
+                                     .count();
+            if (elapsed > kSyncTimeoutMs) {
+                TT_THROW(
+                    "quiesce_and_restart_fabric_workers: Device {} FIX P: timeout ({}ms) waiting "
+                    "for LOCAL_HANDSHAKE_COMPLETE on master ETH channel {} "
+                    "(status=0x{:08x}, expected=0x{:08x}). (#42429)",
+                    this->id(),
+                    kSyncTimeoutMs,
+                    master_chan,
+                    sync_buf[0],
+                    sync_status);
+            }
+            if (++sync_spin >= kSpinLimit) {
+                sync_spin = 0U;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+        }
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} FIX P: master chan {} reached "
+            "LOCAL_HANDSHAKE_COMPLETE (0x{:08x}), writing READY_FOR_TRAFFIC",
+            this->id(),
+            master_chan,
+            sync_buf[0]);
+
+        // Step 3: Write READY_FOR_TRAFFIC to master channel — master firmware distributes
+        // this to all subordinate channels via notify_subordinate_routers(), matching the
+        // behaviour of FabricFirmwareInitializer::wait_for_fabric_router_sync().
+        auto ready_sig = builder_ctx.get_fabric_router_ready_address_and_signal();
+        if (ready_sig) {
+            std::vector<uint32_t> ready_buf(1, static_cast<uint32_t>(ready_sig->second));
+            detail::WriteToDeviceL1(
+                this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
+        }
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} FIX P: READY_FOR_TRAFFIC written "
+            "to master chan {} — all ERISC channels should now be unblocked",
+            this->id(),
+            master_chan);
     }
 
     // Phase 4: Wait for each MUX core to reach READY_FOR_TRAFFIC before returning.
