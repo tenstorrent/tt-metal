@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import pytest
 import ttnn
@@ -11,7 +12,9 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from itertools import product
 from models.common.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+TEST_PADDING_VALUE = -42
 pytestmark = pytest.mark.use_module_device
 
 
@@ -22,6 +25,7 @@ pytestmark = pytest.mark.use_module_device
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
         torch.Size([1, 128, 14, 14]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize(
@@ -45,6 +49,7 @@ def test_batch_norm_tests(
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if (check_mean)
@@ -98,29 +103,27 @@ def test_batch_norm_tests(
         eps=eps,
         momentum=momentum,
     )
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
     if training:
         channels = input_shapes[1]
         if check_mean:
-            comp_BN_running_mean = compare_results_batch_norm(
-                [tt_updated_mean], [mean_data.view(1, channels, 1, 1)], stats=True
-            )  # Check Updated running mean
-        else:
-            if tt_updated_mean is None:
-                comp_BN_running_mean = True
-            else:
-                comp_BN_running_mean = False
+            assert_numeric_metrics(
+                mean_data.view(1, channels, 1, 1),
+                tt_updated_mean,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+                check_pcc=False,
+            )
         if check_var:
-            comp_BN_running_var = compare_results_batch_norm(
-                [tt_updated_var], [var_data.view(1, channels, 1, 1)], stats=True
-            )  # Check Updated running var
-        else:
-            if tt_updated_var is None:
-                comp_BN_running_var = True
-            else:
-                comp_BN_running_var = False
-        comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
-    assert comp_BN_Output
+            assert_numeric_metrics(
+                var_data.view(1, channels, 1, 1),
+                tt_updated_var,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+                check_pcc=False,
+            )
 
 
 @pytest.mark.parametrize("eps", [1.0, 1e-05])
@@ -149,6 +152,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias else None
 
     input_tensor_tt = ttnn.from_torch(input_tensor_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_tt = ttnn.fill_implicit_tile_padding(input_tensor_tt, TEST_PADDING_VALUE)
     batch_mean_tt = ttnn.from_torch(batch_mean_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     batch_var_tt = ttnn.from_torch(batch_var_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     weight_tt = (
@@ -161,9 +165,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     )
     tt_out = ttnn.to_torch(result_tt)
 
-    status_1 = torch.allclose(result_torch, tt_out, atol=1e-10, rtol=1e-5)
-    status_2 = compare_results_batch_norm([result_torch], [tt_out])
-    assert status_2 and status_1
+    assert_numeric_metrics(result_torch, tt_out, pcc_threshold=0.99, rtol=1e-5, atol=1e-10, frobenius_threshold=0.01)
 
 
 @pytest.mark.parametrize(
@@ -172,6 +174,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize(
@@ -192,6 +195,7 @@ def test_batch_norm_fp32(
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
         if (check_mean)
@@ -235,10 +239,7 @@ def test_batch_norm_fp32(
         training=training,
         eps=eps,
     )
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result]) and torch.allclose(
-        torch_result, tt_output, atol=1e-6, rtol=1e-3
-    )
-    assert comp_BN_Output
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=1e-3, atol=1e-6, frobenius_threshold=0.05)
 
 
 @pytest.mark.parametrize(
@@ -247,6 +248,7 @@ def test_batch_norm_fp32(
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize(
@@ -268,6 +270,7 @@ def test_batch_norm_fp32(
 @pytest.mark.parametrize("momentum", [0.0, 0.5])
 def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if (check_mean) else (None, None)
     )
@@ -307,44 +310,57 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
         eps=eps,
         momentum=momentum,
     )
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])  # Check BN Result
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
     if training:
         channels = input_shapes[1]
         if check_mean:
-            comp_BN_running_mean = compare_results_batch_norm(
-                [tt_updated_mean], [mean_data.view(1, channels, 1, 1)], stats=True
-            )  # Check Updated running mean
-        else:
-            if tt_updated_mean is None:
-                comp_BN_running_mean = True
-            else:
-                comp_BN_running_mean = False
+            assert_numeric_metrics(
+                mean_data.view(1, channels, 1, 1),
+                tt_updated_mean,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+                check_pcc=False,
+            )
         if check_var:
-            comp_BN_running_var = compare_results_batch_norm(
-                [tt_updated_var], [var_data.view(1, channels, 1, 1)], stats=True
-            )  # Check Updated running var
-        else:
-            if tt_updated_var is None:
-                comp_BN_running_var = True
-            else:
-                comp_BN_running_var = False
-        comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
-
-    assert comp_BN_Output
+            assert_numeric_metrics(
+                var_data.view(1, channels, 1, 1),
+                tt_updated_var,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+                check_pcc=False,
+            )
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([1, 16, 32, 64]),
+        torch.Size([4, 2, 64, 32]),
+        torch.Size([1, 128, 14, 14]),
+        torch.Size([2, 16, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
-def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
+@pytest.mark.parametrize("prealloc_out_mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, prealloc_out_mem_config, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
+    output_tensor = None
+    if prealloc_out_mem_config is not None:
+        output_tensor = ttnn.from_torch(
+            torch.zeros(input_shapes, dtype=in_data.dtype),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=prealloc_out_mem_config,
+        )
 
     grid_size = ttnn.CoreGrid(y=1, x=8)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
@@ -357,23 +373,28 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
         pytest.xfail("Input tensors to batch norm must be interleaved")
 
     tt_output_tensor_on_device = ttnn.batch_norm(
-        input_tensor, running_mean=mean_tensor, running_var=var_tensor, memory_config=sharded_mem_config
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        memory_config=sharded_mem_config,
+        output=output_tensor,
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
-    assert comp_BN_Output
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 def test_batch_norm_qid_Default(input_shapes, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
 
@@ -382,47 +403,48 @@ def test_batch_norm_qid_Default(input_shapes, device):
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
-    assert comp_BN_Output
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     [
         torch.Size([3, 2, 32, 32]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 def test_batch_norm_qid(input_shapes, device):
     N, H, W, C = input_shapes
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 2, 20, device)
 
     tt_output_tensor_on_device = ttnn.batch_norm(input_tensor, running_mean=mean_tensor, running_var=var_tensor)
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
-    assert comp_BN_Output
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     [
         torch.Size([2, 3, 120, 120]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 def test_batch_norm_output_Default(input_shapes, device):
     N, H, W, C = input_shapes
     _, tt_output_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
     var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
 
     ttnn.batch_norm(input_tensor, running_mean=mean_tensor, running_var=var_tensor, queue_id=0, output=tt_output_tensor)
     tt_output = ttnn.to_torch(tt_output_tensor)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
-    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
-    assert comp_BN_Output
+    assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
 @pytest.mark.parametrize(
@@ -430,6 +452,7 @@ def test_batch_norm_output_Default(input_shapes, device):
     [
         # Training mode PCC ordering is unreliable. Keep `input_shapes[1] >= 14` to avoid this test failure.
         torch.Size([3, 17, 47, 32]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize(
@@ -445,6 +468,10 @@ def test_batch_norm_output_Default(input_shapes, device):
     "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
+    if input_dtype == "float32" and os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip(
+            "Skipping float32 batch_norm compute_config on ttsim - fp16a untested functionality (ttsim-private issue #324)"
+        )
     N, H, W, C = input_shapes
     torch.manual_seed(0)
 
@@ -452,6 +479,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     torch_input_tensor, tt_input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=input_dtype
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
     torch_mean_tensor, tt_mean_tensor = data_gen_with_range_batch_norm(
         input_shapes, 4, 10, device, testing_dtype=param_dtype
     )
@@ -546,6 +574,7 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     "input_shapes",
     [
         torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 8, 24, 42]),
     ],
 )
 @pytest.mark.parametrize("use_output_tensor", [False, True])
@@ -586,6 +615,7 @@ def test_batch_norm_mixed_precision(
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     mean_data, mean_tensor = (
         data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype2)
         if (check_mean)

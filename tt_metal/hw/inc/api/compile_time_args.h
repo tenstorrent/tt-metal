@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,9 @@
 
 #include <array>
 #include <cstdint>
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
 #include <string_view>
+#endif
 
 template <class T, class... Ts>
 FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {

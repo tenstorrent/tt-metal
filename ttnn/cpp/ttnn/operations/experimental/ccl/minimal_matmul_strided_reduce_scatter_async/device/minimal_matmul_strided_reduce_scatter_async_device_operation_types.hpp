@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,6 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const std::optional<uint32_t> chunk_width_in_mm_blocks;
 
     const CoreCoord reduce_scatter_core_grid_offset;
-    const std::vector<tt::tt_metal::IDevice*> devices;
 };
 
 struct MinimalMatmulStridedReduceScatterAsyncInputs {

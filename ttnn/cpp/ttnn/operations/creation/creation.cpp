@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -373,8 +373,17 @@ Tensor empty_like(
     DataType dtype_value = dtype.value_or(tensor.dtype());
     MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
     MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
+
+    std::optional<tt::tt_metal::TensorTopology> topology = std::nullopt;
+    if (is_device_tensor(tensor) &&
+        device_ptr->shape().mesh_size() == tensor.tensor_topology().distribution_shape().mesh_size()) {
+        topology = tensor.tensor_topology();
+    }
+
     return create_device_tensor(
-        TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)), device_ptr);
+        TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+        device_ptr,
+        std::move(topology));
 }
 
 Tensor arange(

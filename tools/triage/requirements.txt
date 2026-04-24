@@ -1,2 +1,6 @@
 pycapnp==2.0.0
-tt-exalens==0.3.13
+mpi4py>=4.1.1
+# tt-exalens 0.3.17 pins tt-umd==0.9.5.dev260424 (a prerelease); listing tt-umd explicitly is what
+# tells uv to allow the prerelease for the transitive resolution.
+tt-umd==0.9.5.dev260424; platform_machine == "x86_64"
+tt-exalens==0.3.17; platform_machine == "x86_64"

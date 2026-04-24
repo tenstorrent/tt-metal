@@ -1,11 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -13,6 +10,7 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -22,30 +20,18 @@
 // then read another Wt tiles of mask for the next batch
 
 void calc_numeric_stable(
-    uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_bcast_scaler_obj(cb_bcast_scaler);
-    experimental::CircularBuffer cb_max_obj(cb_max);
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
+    auto cb_in_obj = experimental::CircularBuffer(cb_in);
+    auto cb_max_obj = experimental::CircularBuffer(cb_max);
+    auto cb_out_obj = experimental::CircularBuffer(cb_out);
 
     // calculate max val per row
-    tile_regs_acquire();
-    reconfig_data_format(cb_in, cb_bcast_scaler);
-    cb_max_obj.reserve_back(1);
-    cb_bcast_scaler_obj.wait_front(1);
-    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(cb_in, cb_bcast_scaler, cb_max);
-    for (uint32_t wt = 0; wt < Wt; wt++) {
-        cb_in_obj.wait_front(wt + 1);
-        constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW, ENABLE_FP32_DEST_ACC>(
-            cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
-    }
-    reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_in);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_max);
-    tile_regs_release();
-    cb_max_obj.push_back(1);
+    compute_kernel_lib::reduce<
+        PoolType::MAX,
+        ReduceDim::REDUCE_ROW,
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -88,7 +74,8 @@ void kernel_main() {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_13;
     constexpr auto cb_fused_scale = tt::CBIndex::c_3;
     constexpr auto cb_fused_attn = tt::CBIndex::c_4;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
@@ -97,7 +84,8 @@ void kernel_main() {
     constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_11;
-    experimental::CircularBuffer cb_bcast_scaler_obj(cb_bcast_scaler);
+    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
     experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
     experimental::CircularBuffer cb_fused_attn_obj(cb_fused_attn);
     experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
@@ -115,7 +103,8 @@ void kernel_main() {
 #endif
     experimental::CircularBuffer cb_x_obj(cb_x);
 
-    cb_bcast_scaler_obj.wait_front(1);  // comes from the reader
+    cb_max_scaler_obj.wait_front(1);  // comes from the reader
+    cb_sum_scaler_obj.wait_front(1);  // comes from the reader
 
 #if FUSED_SCALE_MASK
     cb_fused_scale_obj.wait_front(1);
@@ -193,7 +182,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable(Wt, ndst, cb_x, cb_bcast_scaler, cb_max, cb_exps);
+        calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
 #endif
 
 #ifdef CAUSAL_MASK
@@ -210,7 +199,7 @@ void kernel_main() {
         }
 #endif  // CAUSAL_MASK
 
-        reconfig_data_format(cb_exps, cb_bcast_scaler);
+        reconfig_data_format(cb_exps, cb_sum_scaler);
 #else
         reconfig_data_format(cb_in0, cb_in0);
         pack_reconfig_data_format(cb_exps);
@@ -252,14 +241,14 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_x, cb_bcast_scaler, cb_max, cb_exps);
+            calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
 #endif
 
         } else {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_in0, cb_bcast_scaler, cb_max, cb_exps);
+            calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
 #else
             for (uint32_t wt = 0; wt < Wt; wt += ndst) {
                 tile_regs_acquire();
@@ -283,32 +272,21 @@ void kernel_main() {
             }
 #endif
         }
-
-        reconfig_data_format(cb_exps, cb_bcast_scaler);
 #endif
 
-        tile_regs_acquire();
-        cb_recipsumexps_obj.reserve_back(onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
-
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_exps_obj.wait_front(wt + 1);        // must be a cumulative wait for correctness
-            constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
-                /*iCB=*/cb_exps,
-                /*icb_scaler=*/cb_bcast_scaler,
-                /*itile=*/wt,
-                /*itile_scaler=*/bcast_scaler0,
-                /*idst0=*/dst0);
-        }
-        reduce_uninit<ENABLE_FP32_DEST_ACC>(cb_exps);
-        recip_tile_init();
-        recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_recipsumexps);
-        tile_regs_release();
-        cb_recipsumexps_obj.push_back(1);
+        // SUM reduce with reciprocal post-processing (1/sum)
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t) {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
 
         cb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 
@@ -336,6 +314,6 @@ void kernel_main() {
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);
     }  // NCHt loop
-    // cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
+    // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this
     // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
 }

@@ -1,10 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -35,7 +38,11 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::CircularBuffer cb_padding(tt::CBIndex::c_1);
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -57,19 +64,18 @@ void kernel_main() {
         } else {
             linear_tile_index = i;
         }
-        cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(linear_tile_index, s, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb.reserve_back(onetile);
+        noc.async_read(s, cb, tile_bytes, {.page_id = linear_tile_index}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb.push_back(onetile);
     }
     if constexpr (needs_padding) {
         // Add padding
-        cb_reserve_back(tt::CBIndex::c_1, 1);
-        uint32_t l1_write_addr = get_write_ptr(tt::CBIndex::c_1);
+        cb_padding.reserve_back(1);
+        uint32_t l1_write_addr = cb_padding.get_write_ptr();
         // Fill with padding value
         // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
-        cb_push_back(tt::CBIndex::c_1, 1);
+        cb_padding.push_back(1);
     }
 }

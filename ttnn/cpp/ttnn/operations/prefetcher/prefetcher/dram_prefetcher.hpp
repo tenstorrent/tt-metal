@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,8 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/decorators.hpp"
-
 #include <tt-metalium/global_circular_buffer.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "api/compute/transpose_wh.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
@@ -18,6 +19,9 @@ void kernel_main() {
 
     transpose_wh_init(cb_id_in, cb_id_out);
 
+    experimental::CircularBuffer cb_in(cb_id_in);
+    experimental::CircularBuffer cb_out(cb_id_out);
+
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh
     // - transpose_wh each tile
@@ -25,8 +29,8 @@ void kernel_main() {
     uint32_t tile_idx = 0;
     uint32_t tile_idx_N = 0;
 
-    cb_wait_front(cb_id_in, NHtWt);
-    cb_reserve_back(cb_id_out, NHtWt);
+    cb_in.wait_front(NHtWt);
+    cb_out.reserve_back(NHtWt);
     for (uint32_t n = 0; n < N; ++n) {
         tile_idx = tile_idx_N;
         for (uint32_t w = 0; w < Wt; ++w) {
@@ -43,6 +47,6 @@ void kernel_main() {
         }
         tile_idx_N += HtWt;
     }
-    cb_push_back(cb_id_out, NHtWt);
-    cb_pop_front(cb_id_in, NHtWt);
+    cb_out.push_back(NHtWt);
+    cb_in.pop_front(NHtWt);
 }

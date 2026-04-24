@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -96,7 +96,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        bool is_mock = descriptor_.cluster().get_target_device_type() == tt::TargetDevice::Mock;
+        bool is_mock = descriptor_.cluster().is_mock_or_emulated();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr =

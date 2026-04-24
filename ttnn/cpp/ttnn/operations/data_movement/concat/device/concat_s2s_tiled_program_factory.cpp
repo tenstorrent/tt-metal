@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,16 +19,8 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     using namespace tt::tt_metal;
 
     const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
-    const uint32_t dim = operation_attributes.dim;
     const unsigned int groups = operation_attributes.groups;
     Tensor& output = tensor_return_value;
-    // If we end up here for concat with more than 2 tensors on any other dim we should have
-    // taken another path
-    TT_FATAL(dim == 3, "Sharded concat with tiled inputs only supports dim=3 (was {})", dim);
-    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors (was {})", input_tensors.size());
-    TT_FATAL(input_tensors[0].shard_spec().has_value(), "Input tensor 0 must be sharded");
-    TT_FATAL(input_tensors[1].shard_spec().has_value(), "Input tensor 1 must be sharded");
-    TT_FATAL(output.shard_spec().has_value(), "Output must be sharded");
 
     TT_FATAL(
         input_tensors[0].logical_shape()[-1] == input_tensors[0].padded_shape()[-1],
@@ -119,11 +111,12 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     const uint32_t tile_size = tt::tile_size(data_format);
 
     const uint32_t num_input_tensors = input_tensors.size();
-    std::vector<CBHandle> cb_inputs(num_input_tensors);
+    std::vector<CBHandle> cb_inputs;
+    cb_inputs.reserve(num_input_tensors);
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const Tensor& input_tensor = input_tensors.at(idx);
         const uint32_t total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
-        cb_inputs[idx] = create_cb_from_tensor(idx, input_tensor, total_num_tiles);
+        cb_inputs.push_back(create_cb_from_tensor(idx, input_tensor, total_num_tiles));
     }
 
     const uint32_t cb_output_id = cb_inputs.size();
@@ -211,7 +204,7 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         "height_sharded_width_concat_two_tensors.cpp",
         all_cores,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
                                 data_format == tt::DataFormat::UInt32,
             .math_approx_mode = false,

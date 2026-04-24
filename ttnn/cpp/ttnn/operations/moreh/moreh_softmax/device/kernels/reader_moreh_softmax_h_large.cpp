@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     // Runtime args
@@ -17,23 +18,27 @@ void kernel_main() {
     // Constants
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_mask = tt::CBIndex::c_1;
-    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
 
     // Ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t src_in_tile_bytes = get_tile_size(cb_in);
 
     // Input tensor
     constexpr bool is_fp32 = get_compile_time_arg_val(0) == 1;
     constexpr auto in_args = TensorAccessorArgs<1>();
-    const auto src_in = TensorAccessor(in_args, src_addr, src_in_tile_bytes);
+    const auto src_in = TensorAccessor(in_args, src_addr);
 
-    // Generate scaler and mask tiles
+    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_COL>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+
+    // Generate mask tile
     if (is_fp32) {
-        generate_bcast_scaler<uint32_t>(cb_scaler, scaler);
         generate_mask_h<uint32_t>(cb_mask, mask_h);
     } else {
-        generate_bcast_scaler<uint16_t>(cb_scaler, scaler);
         generate_mask_h<uint16_t>(cb_mask, mask_h);
     }
 

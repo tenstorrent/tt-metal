@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -117,7 +117,6 @@ struct InspectorSettings {
     bool serialize_on_dispatch_timeout = true;
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
-    std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
 template <typename T>
@@ -207,6 +206,8 @@ class RunTimeOptions {
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
 
+    bool checkpoint_enabled = false;
+
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
     // should remain the same size as normal, unlike with null_kernels.
@@ -271,6 +272,9 @@ class RunTimeOptions {
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
+
+    // Feature flag to register Blackhole DRAM programmable cores in the HAL on silicon.
+    bool enable_blackhole_dram_programmable_cores = false;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
@@ -340,6 +344,13 @@ class RunTimeOptions {
 
     // Use new DEVICE_PRINT system instead of legacy DPRINT
     bool use_device_print = false;
+
+    // Enable hybrid lockstep + per-core L1 allocator mode
+    bool allocator_mode_hybrid = false;
+
+    // Disable shared memory tracking for tt-smi
+    bool shm_tracking_disabled = false;
+    bool shm_verbose = false;
 
 public:
     RunTimeOptions();
@@ -424,6 +435,11 @@ public:
 
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
+    bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_verbose() const { return shm_verbose; }
+
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
     const std::filesystem::path& get_inspector_log_path() const { return inspector_settings.log_path; }
@@ -435,9 +451,6 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const {
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
-    }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
     bool get_inspector_capture_tensor_specs() const { return inspector_settings.capture_tensor_specs; }
     void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
@@ -579,6 +592,9 @@ public:
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
+    void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
+    bool get_checkpoint_enabled() const { return checkpoint_enabled; }
+
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
 
@@ -625,7 +641,7 @@ public:
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) && !profiler_enabled;
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
@@ -648,6 +664,8 @@ public:
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
+    bool get_enable_blackhole_dram_programmable_cores() const { return enable_blackhole_dram_programmable_cores; }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }

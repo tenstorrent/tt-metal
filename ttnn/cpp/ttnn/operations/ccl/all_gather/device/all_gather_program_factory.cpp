@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,14 +31,17 @@ AllGatherDeviceOperation::AllGatherProgram::create_mesh_workload(
 
     // Create semaphores internally (internalized global semaphores)
     // 2 semaphores used for within op synchronizations (forward and backward links)
+    auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
+                                                                            : tt::tt_metal::BufferType::L1;
     std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
     };
 
     // 1 barrier semaphore used to ensure that all the buffers are allocated
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
-    auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0);
+    auto barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevice_ids);
 
     for (const auto& coord : tensor_coords.coords()) {

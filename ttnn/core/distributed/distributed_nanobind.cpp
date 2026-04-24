@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -293,11 +293,11 @@ void py_module(nb::module_& mod) {
                CoreCoord: The compute grid size of the first device in the device mesh.
        )doc")
         .def_prop_ro(
-          "core_grid",
-          [](const MeshDevice& device) {
-            const auto& sz = device.compute_with_storage_grid_size();
-            return ttnn::CoreGrid(sz.x, sz.y);
-          })
+            "core_grid",
+            [](const MeshDevice& device) {
+                const auto& sz = device.compute_with_storage_grid_size();
+                return ttnn::CoreGrid(sz.x, sz.y);
+            })
         .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,
@@ -524,37 +524,7 @@ void py_module(nb::module_& mod) {
                     >>> print(f"Number of optimal worker cores: {len(worker_cores)}")
                     >>> for i, core in enumerate(worker_cores):
                     ...     print(f"DRAM bank {i} -> worker core ({core.x}, {core.y})")
-            )doc")
-        .def(
-            "get_worker_noc_hop_distance",
-            [](MeshDevice& self, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
-                return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                    &self, logical_src, logical_dst, noc);
-            },
-            nb::arg("logical_src"),
-            nb::arg("logical_dst"),
-            nb::arg("noc"),
-            R"doc(
-                Returns the hop distance between two logical worker coordinates on a given NOC.
-
-                This API is experimental and may evolve into a stable Device API in the future.
-
-                Args:
-                    logical_src (CoreCoord): The source logical coordinate.
-                    logical_dst (CoreCoord): The destination logical coordinate.
-                    noc (NOC): The NOC to use (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
-
-                Returns:
-                    int: The hop distance between the two coordinates on the given NOC.
-
-                Example:
-                    >>> device = ttnn.open_device(device_id=0)
-                    >>> src = ttnn.CoreCoord(0, 0)
-                    >>> dst = ttnn.CoreCoord(2, 3)
-                    >>> noc0_distance = device.get_worker_noc_hop_distance(src, dst, ttnn.NOC.NOC_0)
-                    >>> noc1_distance = device.get_worker_noc_hop_distance(src, dst, ttnn.NOC.NOC_1)
             )doc");
-
     auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
@@ -665,10 +635,19 @@ void py_module(nb::module_& mod) {
                col_dim Optional[int]: The column dimension to shard / replicate over.
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
                )doc")
-        .def("__repr__", [](const MeshMapperConfig& config) {
-            std::ostringstream str;
-            str << config;
-            return str.str();
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig& config) {
+                std::ostringstream str;
+                str << config;
+                return str.str();
+            })
+        .def_prop_ro("placements", [](const MeshMapperConfig& config) -> nb::list {
+            nb::list result;
+            for (const auto& p : config.placements) {
+                std::visit([&result](const auto& v) { result.append(nb::cast(v, nb::rv_policy::copy)); }, p);
+            }
+            return result;
         });
     auto py_mesh_composer_config = static_cast<nb::class_<MeshComposerConfig>>(mod.attr("MeshComposerConfig"));
     py_mesh_composer_config
@@ -713,7 +692,14 @@ void py_module(nb::module_& mod) {
 
     auto py_distributed_host_buffer = static_cast<nb::class_<DistributedHostBuffer>>(mod.attr("DistributedHostBuffer"));
     py_distributed_host_buffer.def("is_local", &DistributedHostBuffer::is_local, nb::arg("coord"))
-        .def("shape", &DistributedHostBuffer::shape, nb::rv_policy::reference_internal);
+        .def("shape", &DistributedHostBuffer::shape, nb::rv_policy::reference_internal)
+        .def(
+            "get_shard",
+            &DistributedHostBuffer::get_shard,
+            nb::arg("coord"),
+            R"doc(
+            Returns the HostBuffer shard at the given coordinate, or None if not local/populated.
+        )doc");
 
     auto py_tensor_topology = static_cast<nb::class_<TensorTopology>>(mod.attr("TensorTopology"));
     py_tensor_topology
@@ -1034,6 +1020,65 @@ void py_module(nb::module_& mod) {
         )doc");
 
     auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
+    m_experimental.def(
+        "get_worker_noc_hop_distance",
+        [](MeshDevice& mesh_device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
+            return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                &mesh_device, logical_src, logical_dst, noc);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_src"),
+        nb::arg("logical_dst"),
+        nb::arg("noc"),
+        R"doc(
+            Hop distance between two logical worker coordinates on the given NOC.
+
+            When ``mesh_device`` spans multiple chips, use the overload that takes
+            ``mesh_coord`` so the query targets a specific mesh slot.
+
+            Experimental API; may change.
+
+            Args:
+                mesh_device (MeshDevice): Unit mesh or mesh whose devices share identical worker topology.
+                logical_src (CoreCoord): Source logical coordinate.
+                logical_dst (CoreCoord): Destination logical coordinate.
+                noc (NOC): ``ttnn.NOC.NOC_0`` or ``ttnn.NOC.NOC_1``.
+
+            Returns:
+                int: Hop count on the selected NOC.
+        )doc");
+    m_experimental.def(
+        "get_worker_noc_hop_distance",
+        [](MeshDevice& mesh_device,
+           const MeshCoordinate& mesh_coord,
+           const CoreCoord& logical_src,
+           const CoreCoord& logical_dst,
+           NOC noc) {
+            return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                &mesh_device, mesh_coord, logical_src, logical_dst, noc);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("mesh_coord"),
+        nb::arg("logical_src"),
+        nb::arg("logical_dst"),
+        nb::arg("noc"),
+        R"doc(
+            Hop distance on a specific mesh device at ``mesh_coord``.
+
+            Use this for multi-device meshes (``mesh_device.get_num_devices() > 1``).
+
+            Experimental API; may change.
+
+            Args:
+                mesh_device (MeshDevice): Mesh device.
+                mesh_coord (MeshCoordinate): Coordinate of the chip to query.
+                logical_src (CoreCoord): Source logical coordinate on that chip.
+                logical_dst (CoreCoord): Destination logical coordinate on that chip.
+                noc (NOC): ``ttnn.NOC.NOC_0`` or ``ttnn.NOC.NOC_1``.
+
+            Returns:
+                int: Hop count on the selected NOC.
+        )doc");
     ttnn::pipeline_module::bind_blitz_decode_pipeline(m_experimental);
 }
 

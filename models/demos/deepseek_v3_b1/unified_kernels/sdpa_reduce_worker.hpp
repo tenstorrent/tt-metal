@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -248,6 +248,7 @@ ALWI void sdpa_tail_streaming(
         pack_untilize_uninit(cb_l_out);
     } else {
         bool acquire_regs = !normalize;
+        pack_block_contiguous_init(cb_l_out);
         for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
             cb_wait_front(cb_l1, (chunk + 1) * block_size);
             cb_wait_front(cb_l2, (chunk + 1) * block_size);
@@ -273,6 +274,8 @@ ALWI void sdpa_forward_data(
     uint32_t cb_l_out,
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
+    // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
+    PACK((llk_pack_mop_config<false, false>(cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
@@ -285,22 +288,20 @@ ALWI void sdpa_forward_data(
     tile_regs_release();
 
     cb_push_back(cb_cur_max_sum, 1);
-
+    pack_block_contiguous_init(cb_l_out);
     for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
         cb_reserve_back(cb_l_out, block_size);
 
         uint32_t tile_index = chunk * block_size;
+        tile_regs_acquire();
         for (uint32_t i = 0; i < block_size; i++) {
-            tile_regs_acquire();
             copy_tile(cb_l1, tile_index + i, i);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(i, cb_l_out);
-            tile_regs_release();
         }
-
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_block_contiguous(0, cb_l_out, block_size);
+        tile_regs_release();
         cb_push_back(cb_l_out, block_size);
     }
 }
@@ -528,7 +529,7 @@ struct SdpaReduceWorker {
         uint32_t r1_recv_buffer_addr;
         uint32_t r2_recv_buffer_addr;
         // Position args (only meaningful when position_enabled CTArg is set)
-        uint32_t pos_addr;
+        uint32_t global_pos;
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
         uint32_t r2_neighbor_r1_neighbor_idx;
@@ -561,7 +562,7 @@ struct SdpaReduceWorker {
 
     // Compute args (TRISC): position validity for SDPA reduction
     struct ComputeArgs {
-        uint32_t pos_addr;
+        uint32_t global_pos;
         uint32_t device_idx;
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
@@ -585,6 +586,12 @@ struct SdpaReduceWorker {
             writer_impl(args);
 #elif defined(COMPILE_FOR_TRISC)
             compute_impl(args);
+#endif
+        }
+
+        void set_global_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t global_pos) {
+#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
+            args.global_pos = global_pos;
 #endif
         }
 
@@ -624,8 +631,7 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (CTArgs::position_enabled) {
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                uint32_t position_id = pos_ptr[0];
+                uint32_t position_id = args.global_pos;
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
                 r2_neighbor_r1_valid = (position_id >= args.r2_neighbor_device_idx * chunk) ||
@@ -767,7 +773,7 @@ struct SdpaReduceWorker {
 
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);
-            exp_tile_init<EXP_APPROX_MODE, false>();
+            exp_tile_init<EXP_APPROX_MODE>();
 
             bool local_valid = true;
             bool r1_neighbor_valid = true;
@@ -785,8 +791,7 @@ struct SdpaReduceWorker {
                 r1_neighbor_device_idx = args.r1_neighbor_device_idx;
                 r2_neighbor_device_idx = args.r2_neighbor_device_idx;
 
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                position_id = pos_ptr[0];
+                position_id = args.global_pos;
 
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 local_valid = (position_id >= device_idx * chunk);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,8 @@
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_io.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -202,12 +203,30 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    // Returns a writer object which holds a pointer to a static tlb
-    // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
-    // traversals
-    umd::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    /**
+     * Returns a pointer to the static TLB window associated with the given target.
+     *
+     * Ownership:
+     *   - The returned TlbWindow is owned and managed by the underlying driver.
+     *   - Callers must not delete, free, or otherwise take ownership of the pointer.
+     *
+     * Lifetime:
+     *   - The pointer remains valid for as long as the underlying driver/device
+     *     context for this Cluster instance remains initialized and the static TLB
+     *     configuration is not torn down by the driver.
+     *   - Callers may cache the pointer, but must ensure they do not use it after
+     *     the Cluster/driver has been destroyed or the device has been deinitialized.
+     *
+     * Concurrency:
+     *   - The driver may return the same TlbWindow instance across multiple calls
+     *     (i.e., this is typically a cached/static window).
+     *   - It is safe to share the pointer across threads for read-only operations.
+     *   - If callers perform operations that mutate the TlbWindow or its underlying
+     *     mappings, they must provide appropriate external synchronization.
+     */
+    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_writer(target.chip, target_coord);
+        return driver_->get_static_tlb_window(target.chip, target_coord);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
@@ -337,6 +356,11 @@ public:
 
     tt::TargetDevice get_target_device_type() const { return this->target_type_; }
 
+    /// Returns true if target device is Mock or Emulated (both skip firmware/dispatch).
+    bool is_mock_or_emulated() const {
+        return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
+    }
+
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
@@ -348,6 +372,7 @@ public:
 
     bool is_worker_core(const CoreCoord& core, ChipId chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, ChipId chip_id) const;
+    bool is_dram_core(const CoreCoord& core, ChipId chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
@@ -424,6 +449,7 @@ private:
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_hw_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> frequent_retrain_cores_;

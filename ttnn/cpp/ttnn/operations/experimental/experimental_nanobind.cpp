@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,9 +63,15 @@
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -124,6 +130,8 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_group_attn_matmul(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
+    deepseek_prefill::detail::bind_post_combine_reduce(mod);
+    deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
@@ -151,8 +159,12 @@ void py_module(nb::module_& mod) {
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
+    deepseek_prefill::detail::bind_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_extract(mod);
+    deepseek_prefill::detail::bind_insert(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
+    fusion::detail::bind_fusion_dispatch_op(mod);
 }
 
 }  // namespace ttnn::operations::experimental

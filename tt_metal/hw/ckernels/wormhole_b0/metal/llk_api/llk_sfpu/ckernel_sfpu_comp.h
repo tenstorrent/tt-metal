@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_is_fp16_zero.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
 

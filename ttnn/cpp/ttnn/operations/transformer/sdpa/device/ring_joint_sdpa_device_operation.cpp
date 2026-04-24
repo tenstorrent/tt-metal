@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -319,7 +319,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
@@ -334,9 +334,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t cat_Sq = N_local + L;
     const uint32_t cat_Sk = N_global + L;
 
-    // Single attention pass over concatenated dimensions, non-causal
+    // Single attention pass over concatenated dimensions
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
-        B, NQH, cat_Sq, cat_Sk, DH, DV, false, fidelity, grid.x * grid.y);
+        B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, grid.x * grid.y);
 
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
@@ -373,7 +373,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+
+    log_debug(
+        tt::LogOp,
+        "Launching RingJointSDPA with core_allocation_strategy {}",
+        enchantum::to_string(core_allocation_strategy));
 
     /**
      * Create RingAttentionAllGatherAsync struct.

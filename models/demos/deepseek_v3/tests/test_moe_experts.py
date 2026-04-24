@@ -1,9 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -51,14 +52,44 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
     """
     parts = module_path.split(".")
     base_path = ".".join(parts[:-1])
+    container_name = base_path.split(".")[-1]
     s, e = module_path.split(".")[-1].split("-")
     s, e = int(s), int(e)
+    stacked_prefix = ".".join(parts[:-2] + ["experts_stacked"]) + "."
+    stacked_state_dict = sub_state_dict(state_dict, stacked_prefix)
+    stacked_projection_names = ("gate_proj.weight", "down_proj.weight", "up_proj.weight")
+    present_stacked_projection_names = tuple(name for name in stacked_projection_names if name in stacked_state_dict)
+
     out_state_dict = {}
+    if present_stacked_projection_names:
+        if present_stacked_projection_names != stacked_projection_names:
+            missing_projection_names = sorted(set(stacked_projection_names) - set(present_stacked_projection_names))
+            raise ValueError(
+                "Checkpoint mixes stacked and legacy expert weights in reference model setup: "
+                f"missing stacked projections {missing_projection_names} under '{stacked_prefix}'"
+            )
+
+        for projection_name in stacked_projection_names:
+            stacked_weight = stacked_state_dict[projection_name]
+            if stacked_weight.ndim != 3:
+                raise ValueError(
+                    f"Expected stacked expert weight '{stacked_prefix}{projection_name}' to have rank 3, "
+                    f"got {stacked_weight.ndim}"
+                )
+            if stacked_weight.shape[0] <= e:
+                raise ValueError(
+                    f"Expected stacked expert weight '{stacked_prefix}{projection_name}' to contain expert {e}, "
+                    f"got {stacked_weight.shape[0]} experts"
+                )
+            for expert_idx in range(s, e + 1):
+                out_state_dict[f"{container_name}.{expert_idx}.{projection_name}"] = stacked_weight[expert_idx]
+        return out_state_dict
+
     for i in range(s, e + 1):
         module_path_i = f"{base_path}.{i}"
         state_dict_i = sub_state_dict(state_dict, module_path_i + ".")
         for k, v in state_dict_i.items():
-            k_ = f"{base_path.split('.')[-1]}.{i}.{k}"
+            k_ = f"{container_name}.{i}.{k}"
             out_state_dict[k_] = v
 
     return out_state_dict
@@ -104,16 +135,17 @@ def test_forward_pass(
     torch_input = torch.randn(1, 1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     if weight_type == "random":
-        state_dict = reference_model.state_dict()
+        tt_state_dict = reference_model.state_dict()
     else:
         assert weight_type == "real"
-        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
-        reference_model.load_state_dict(state_dict)
+        reference_state_dict = create_combined_state_dict(module_path, model_path, state_dict)
+        tt_state_dict = sub_state_dict(state_dict, ".".join(module_path.split(".")[:-2]) + ".")
+        reference_model.load_state_dict(reference_state_dict)
 
     weight_config = get_test_weight_config(
         TTExperts,
         hf_config,
-        (state_dict,),
+        (tt_state_dict,),
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
@@ -148,7 +180,8 @@ def test_forward_pass(
 
     from models.common.utility_functions import comp_pcc
 
-    min_pcc = 0.98
+    required_pcc = 0.975  # slightly lower after moving to quantize-then-transpose
+    min_pcc = float("inf")
     passed = True
 
     for chunk_idx in range(num_chunks):
@@ -178,7 +211,7 @@ def test_forward_pass(
         if chunk_ref_output.shape != tt_output_chunk_torch.shape:
             chunk_ref_output = chunk_ref_output.unsqueeze(0)
 
-        chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=0.98)
+        chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=required_pcc)
 
         min_pcc = min(min_pcc, chunk_pcc)
         if not chunk_passed:
@@ -191,7 +224,92 @@ def test_forward_pass(
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
 
-    assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < 0.98"
+    assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < {required_pcc}"
+
+
+def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    class _FakeMeshDevice:
+        shape = (1, 1)
+
+        def get_num_devices(self) -> int:
+            return 1
+
+    class _ViewableStateDict(dict):
+        def view_with_prefix(self, prefix: str, num_layers: int | None = None):
+            return {k[len(prefix) :]: v for k, v in self.items() if k.startswith(prefix)}
+
+    state_dict = _ViewableStateDict(
+        {
+            "experts_stacked.gate_proj.weight": torch.arange(12, dtype=torch.bfloat16).reshape(2, 2, 3),
+            "experts.0.gate_proj.weight": torch.ones((2, 3), dtype=torch.bfloat16),
+            "experts.1.gate_proj.weight": torch.full((2, 3), 2.0, dtype=torch.bfloat16),
+            "experts.0.down_proj.weight": torch.ones((2, 3), dtype=torch.bfloat16),
+            "experts.1.down_proj.weight": torch.full((2, 3), 2.0, dtype=torch.bfloat16),
+            "experts.0.up_proj.weight": torch.ones((2, 3), dtype=torch.bfloat16),
+            "experts.1.up_proj.weight": torch.full((2, 3), 2.0, dtype=torch.bfloat16),
+        }
+    )
+
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.get_dequantized_tensor",
+        lambda state_dict, key, dtype=None: state_dict[key],
+    )
+    monkeypatch.setattr(
+        "models.demos.deepseek_v3.tt.experts.shard_and_save",
+        lambda path, tensor, *args, **kwargs: tensor,
+    )
+    monkeypatch.setattr(TTExperts, "_warned_legacy_expert_checkpoint", False)
+
+    with pytest.raises(ValueError, match="mixes stacked and legacy expert weights"):
+        TTExperts.convert_weights(
+            SimpleNamespace(n_routed_experts=2),
+            (state_dict,),
+            tmp_path,
+            _FakeMeshDevice(),
+        )
+
+
+def test_create_combined_state_dict_uses_stacked_expert_weights():
+    class _ViewableStateDict(dict):
+        def view_with_prefix(self, prefix: str, num_layers: int | None = None):
+            return {k[len(prefix) :]: v for k, v in self.items() if k.startswith(prefix)}
+
+    state_dict = _ViewableStateDict(
+        {
+            "model.layers.3.mlp.experts_stacked.gate_proj.weight": torch.arange(24, dtype=torch.bfloat16).reshape(
+                3, 2, 4
+            ),
+            "model.layers.3.mlp.experts_stacked.down_proj.weight": torch.arange(24, 48, dtype=torch.bfloat16).reshape(
+                3, 2, 4
+            ),
+            "model.layers.3.mlp.experts_stacked.up_proj.weight": torch.arange(48, 72, dtype=torch.bfloat16).reshape(
+                3, 2, 4
+            ),
+        }
+    )
+
+    combined_state_dict = create_combined_state_dict("model.layers.3.mlp.experts.1-2", Path("."), state_dict)
+
+    assert set(combined_state_dict) == {
+        "experts.1.gate_proj.weight",
+        "experts.1.down_proj.weight",
+        "experts.1.up_proj.weight",
+        "experts.2.gate_proj.weight",
+        "experts.2.down_proj.weight",
+        "experts.2.up_proj.weight",
+    }
+    assert torch.equal(
+        combined_state_dict["experts.1.gate_proj.weight"],
+        state_dict["model.layers.3.mlp.experts_stacked.gate_proj.weight"][1],
+    )
+    assert torch.equal(
+        combined_state_dict["experts.2.down_proj.weight"],
+        state_dict["model.layers.3.mlp.experts_stacked.down_proj.weight"][2],
+    )
+    assert torch.equal(
+        combined_state_dict["experts.2.up_proj.weight"],
+        state_dict["model.layers.3.mlp.experts_stacked.up_proj.weight"][2],
+    )
 
 
 if __name__ == "__main__":

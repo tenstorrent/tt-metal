@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -188,10 +188,11 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
     const auto tilize_output_tensor = create_device_tensor(output_specs[3], device);
 
     // Re-perceive tilize output tensor as RM for output[4] (same buffer, different layout view)
-    const auto& output_storage = tilize_output_tensor.device_storage();
-    const auto& output_spec = output_specs[4];
-    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
-    const ttnn::Tensor output_tensor(output_storage, output_spec, output_topology);
+    const auto output_tensor =
+        tt::tt_metal::unchecked_reinterpret_layout(tilize_output_tensor, tt::tt_metal::Layout::ROW_MAJOR);
+    TT_FATAL(
+        output_tensor.tensor_spec() == output_specs[4],
+        "Reinterpreted tensor spec does not match expected output_specs[4]");
 
     return {
         create_device_tensor(output_specs[0], device),
@@ -200,32 +201,34 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
         tilize_output_tensor,
         output_tensor};
 }
+}  // namespace ttnn::operations::experimental::moe_gpt
 
-std::tuple<MoEGPTDeviceOperation::operation_attributes_t, MoEGPTDeviceOperation::tensor_args_t>
-MoEGPTDeviceOperation::invoke(
-    const Tensor& input_tensor,
-    const Tensor& expert_indices,
-    const Tensor& expert_scores,
-    const Tensor& expert_mapping,
-    const Tensor& w0_w1_tensor,
-    const Tensor& w2_tensor,
+namespace ttnn::prim {
+std::vector<ttnn::Tensor> moe_gpt(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_indices,
+    const ttnn::Tensor& expert_scores,
+    const ttnn::Tensor& expert_mapping,
+    const ttnn::Tensor& w0_w1_tensor,
+    const ttnn::Tensor& w2_tensor,
     uint32_t output_height_shard_dim,
     uint32_t output_width_shard_dim,
     uint32_t hidden_size,
     std::optional<uint32_t> cluster_axis) {
-    return {
-        operation_attributes_t{
-            .output_height_shard_dim = output_height_shard_dim,
-            .output_width_shard_dim = output_width_shard_dim,
-            .hidden_size = hidden_size,
-            .cluster_axis = cluster_axis},
-        tensor_args_t{
-            .input_tensor = input_tensor,
-            .expert_indices = expert_indices,
-            .expert_scores = expert_scores,
-            .expert_mapping = expert_mapping,
-            .w0_w1_tensor = w0_w1_tensor,
-            .w2_tensor = w2_tensor}};
+    using OperationType = ttnn::operations::experimental::moe_gpt::MoEGPTDeviceOperation;
+    OperationType::operation_attributes_t operation_attributes{
+        .output_height_shard_dim = output_height_shard_dim,
+        .output_width_shard_dim = output_width_shard_dim,
+        .hidden_size = hidden_size,
+        .cluster_axis = cluster_axis};
+    OperationType::tensor_args_t tensor_args{
+        .input_tensor = input_tensor,
+        .expert_indices = expert_indices,
+        .expert_scores = expert_scores,
+        .expert_mapping = expert_mapping,
+        .w0_w1_tensor = w0_w1_tensor,
+        .w2_tensor = w2_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::moe_gpt
+}  // namespace ttnn::prim

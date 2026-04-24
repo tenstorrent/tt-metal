@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "moe_gpt_device_operation_types.hpp"
 #include "moe_gpt_program_factory.hpp"
 
@@ -46,6 +44,15 @@ struct MoEGPTDeviceOperation {
 }  // namespace ttnn::operations::experimental::moe_gpt
 
 namespace ttnn::prim {
-constexpr auto moe_gpt =
-    ttnn::register_operation<"ttnn::prim::moe_gpt", ttnn::operations::experimental::moe_gpt::MoEGPTDeviceOperation>();
-}  // namespace ttnn::prim
+std::vector<ttnn::Tensor> moe_gpt(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_indices,
+    const ttnn::Tensor& expert_scores,
+    const ttnn::Tensor& expert_mapping,
+    const ttnn::Tensor& w0_w1_tensor,
+    const ttnn::Tensor& w2_tensor,
+    uint32_t output_height_shard_dim = 4,
+    uint32_t output_width_shard_dim = 3,
+    uint32_t hidden_size = 2880,
+    std::optional<uint32_t> cluster_axis = std::nullopt);
+}

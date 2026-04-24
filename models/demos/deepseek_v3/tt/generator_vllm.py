@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -56,19 +56,15 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 "DEEPSEEK_V3_HF_MODEL is not set. Set the environment variable or initialize via the demo "
                 "entrypoint with an explicit --model-path."
             )
-        if not cache_dir:
-            raise ValueError(
-                "DEEPSEEK_V3_CACHE is not set. Set the environment variable or initialize via the demo "
-                "entrypoint with an explicit --cache-dir."
-            )
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
             model_path=Path(model_path),
-            cache_dir=Path(cache_dir),
+            cache_dir=Path(cache_dir) if cache_dir else None,
             tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
         )
 
         return model
@@ -190,7 +186,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
-            batch_size_per_row=USERS_PER_ROW,
             enable_trace=enable_trace,
             page_table=page_tables,
             sample_on_device=sample_on_device,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     MultiBarrierSpec,
     _BuildResult,
     _NOOP_OP,
+    _SemaphoreSpec,
     _core_range_set_to_coords,
     _core_ranges_key,
     _coords_to_core_range_set,
@@ -228,7 +229,8 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     """Merge multiple _BuildResults into one.
 
     Combines ProgramDescriptors, deduplicates input tensors (by identity),
-    concatenates output tensors, and unions semaphore refs.
+    concatenates output tensors, unions semaphore refs, and merges source maps
+    with CB index offsets.
     """
     if len(results) == 1:
         return results[0]
@@ -251,11 +253,32 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     # Union semaphore refs
     all_semaphores = tuple(ref for r in results for ref in r.semaphores)
 
+    # Concatenate semaphore specs and addresses
+    all_sem_specs = tuple(spec for r in results for spec in r.sem_specs)
+    all_sem_addrs = tuple(addr for r in results for addr in r.sem_addrs)
+
     # Concatenate kernel labels
     all_labels = tuple(label for r in results for label in r.kernel_labels)
 
     # Concatenate kernel_phase_map (order matches merge_program_descriptors)
     all_kpm = tuple(entry for r in results for entry in r.kernel_phase_map)
+
+    # Merge source maps with CB index offsets.
+    # merge_program_descriptors concatenates CBs, so later results' CB
+    # indices need to be offset by the cumulative count from prior results.
+    cb_offset = 0
+    all_cb_src: List = []
+    all_gcb_src: List = []
+    all_rebind_src: List = []
+    all_output_src: List = []
+    for r in results:
+        for merged_idx, op, orig_idx in r.cb_source_map:
+            all_cb_src.append((merged_idx + cb_offset, op, orig_idx))
+        for merged_idx, op, orig_idx in r.global_cb_source_map:
+            all_gcb_src.append((merged_idx + cb_offset, op, orig_idx))
+        all_rebind_src.extend(r.rebind_source_map)
+        all_output_src.extend(r.output_source_map)
+        cb_offset += len(r.descriptor.cbs)
 
     return _BuildResult(
         descriptor=merged_desc,
@@ -264,6 +287,12 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
         semaphores=all_semaphores,
         kernel_labels=all_labels,
         kernel_phase_map=all_kpm,
+        cb_source_map=all_cb_src,
+        rebind_source_map=all_rebind_src,
+        global_cb_source_map=all_gcb_src,
+        output_source_map=all_output_src,
+        sem_specs=all_sem_specs,
+        sem_addrs=all_sem_addrs,
     )
 
 
@@ -317,10 +346,20 @@ class OpGraphBuilder:
         """
         from models.experimental.ops.descriptors.fusion.fusion import FusedOp
 
+        if self._built:
+            raise ValueError("Already built")
+
+        # Single node with no children — return FusedOp wrapping the original op.
+        if not self._root.children:
+            self._built = True
+            op = self._root.op
+            return FusedOp(op=op)
+
         r = self._build_internal(device)
         return FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
             semaphores=r.semaphores,
+            sem_specs=r.sem_specs,
         )
 
     def _build_internal(self, device: Any = None) -> _BuildResult:
@@ -366,6 +405,16 @@ class OpGraphBuilder:
         reset_done_addr = ttnn.get_global_semaphore_address(sem_reset_done)
         all_sem_refs = [sem_compute_done, sem_writer_done, sem_reset_done]
 
+        # Collect semaphore specs (allocation blueprints) and current
+        # addresses in matching order.  Used post-build to compute
+        # semaphore address slots for ephemeral patching at dispatch time.
+        sem_specs = [
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+        ]
+        sem_addrs = [compute_done_addr, writer_done_addr, reset_done_addr]
+
         # Pre-allocate barrier configs for each unique (release, arrive) scope
         # pair across all groups.  Groups sharing a release scope MUST use the
         # same arrive/release GlobalSemaphore L1 addresses so that cores
@@ -383,6 +432,9 @@ class OpGraphBuilder:
                         device, release_scope, arrive_ranges=arrive_scope
                     )
                     all_sem_refs.extend(segment_cache[cache_key]._sem_refs)
+                    for sem_ref in segment_cache[cache_key]._sem_refs:
+                        sem_specs.append(_SemaphoreSpec(core_ranges=release_scope, initial_value=0))
+                        sem_addrs.append(ttnn.get_global_semaphore_address(sem_ref))
 
         # When there are multiple groups (branching tree), phases may have
         # different native core ranges than the group's range (e.g. stem
@@ -438,7 +490,13 @@ class OpGraphBuilder:
         _restore_cb_state(saved_all_cb_state)
         _verify_cb_restore(saved_all_cb_state)
 
-        return _merge_build_results(results)
+        merged = _merge_build_results(results)
+        # Attach semaphore specs and addresses collected at this level
+        # (the group-level _BuildResults have duplicated sem refs via
+        # shared_sem_refs — specs/addrs are authoritative here).
+        merged.sem_specs = tuple(sem_specs)
+        merged.sem_addrs = tuple(sem_addrs)
+        return merged
 
     @staticmethod
     def _kernel_variant_key(op: OpDescriptor, coord: Tuple[int, int]) -> tuple:
@@ -763,44 +821,8 @@ class OpGraphBuilder:
 # =============================================================================
 
 
-def build_op_graph(
-    root_phases: List[OpDescriptor],
-    children: List[OpNode],
-    device: Any = None,
-):
-    """Build a fused descriptor for a tree topology.
-
-    Convenience wrapper around :class:`OpGraphBuilder`.  Converts
-    ``root_phases`` into a chain of nodes, attaches ``children`` to
-    the last root-phase node, then builds.
-
-    Args:
-        root_phases: Phases that run before the tree splits.  Converted
-            into a chain of OpNode objects.
-        children: Subtrees to attach to the last root-phase node.
-        device: Optional device for GlobalSemaphore allocation.
-            If *None*, auto-extracted from the first tensor found
-            in the tree's OpDescriptors.
-
-    Returns:
-        A single self-contained FusedOp suitable for
-        ``result.launch()``.
-    """
-    if not root_phases:
-        raise ValueError("root_phases cannot be empty")
-    # Last root phase gets children attached
-    last = OpNode(root_phases[-1], children=list(children))
-    node = last
-    for desc in reversed(root_phases[:-1]):
-        node = OpNode(desc, children=[node])
-    return OpGraphBuilder(node).build(device)
-
-
 __all__ = [
     "OpNode",
     "CoreGroup",
     "OpGraphBuilder",
-    "build_op_graph",
-    "_extract_device_from_tree",
-    "_merge_build_results",
 ]

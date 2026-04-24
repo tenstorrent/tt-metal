@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include <cstring>
-#define REDUCE_OP (PoolType::SUM)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -20,6 +18,7 @@
 #include "api/compute/pack.h"
 #include "ckernel_sfpu.h"
 #include "api/compute/tilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
@@ -154,36 +153,14 @@ template <
     uint32_t rows,
     uint32_t cols>
 void reduce_c() {
-    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
-    // Precondition: scale_cb has 1 produced
-    // Precondition: out_cb has rows free
-    // Postcondition: in0_cb has rows*cols produced
-    // Precondition: scale_cb has 1 produced
+    // Postcondition: in0_cb has rows*cols produced (WaitUpfrontNoPop — tiles not consumed)
     // Postcondition: out_cb has rows produced
-    reconfig_data_format(in0_cb, scale_cb);
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
-
-    constexpr uint32_t reduce_dst_idx = 0;
-
-    for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        }
-
-        cb_reserve_back(out_cb, 1);
-        pack_reconfig_data_format(out_cb);
-        pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
-    }
-
-    reduce_uninit();
+    compute_kernel_lib::reduce<
+        pool_type,
+        reduce_dim,
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        in0_cb, scale_cb, out_cb, compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
@@ -312,7 +289,7 @@ void top_k() {
         reconfig_data_format_srca(input_transposed_cb_index);
         transpose_wh_init_short(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
-        cb_wait_front(input_transposed_cb_index, Kt);
+        cb_wait_front(input_transposed_cb_index, Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(values_cb_index, 1);
@@ -321,14 +298,13 @@ void top_k() {
             cb_push_back(values_cb_index, 1);
             release_dst();
         }
-        cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_transposed_cb_index, Wt);
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
         transpose_wh_init_short(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
-        cb_wait_front(index_transposed_cb_index, Kt);
+        cb_wait_front(index_transposed_cb_index, Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(output_ind_cb_index, 1);
@@ -337,7 +313,6 @@ void top_k() {
             cb_push_back(output_ind_cb_index, 1);
             release_dst();
         }
-        cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_transposed_cb_index, Wt);
     }
     sfpu::_init_sfpu_config_reg();
@@ -382,17 +357,18 @@ void kernel_main() {
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
 
     constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(9);
-    constexpr uint32_t Ht = get_compile_time_arg_val(10);
-    constexpr uint32_t Wt = get_compile_time_arg_val(11);
-    constexpr uint32_t logWt = get_compile_time_arg_val(12);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
-    constexpr uint32_t seed = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_local_vals = get_compile_time_arg_val(15);
-    constexpr uint32_t temp_cb_index = get_compile_time_arg_val(16);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
+    constexpr uint32_t scaler_max_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t scaler_sum_cb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(10);
+    constexpr uint32_t Ht = get_compile_time_arg_val(11);
+    constexpr uint32_t Wt = get_compile_time_arg_val(12);
+    constexpr uint32_t logWt = get_compile_time_arg_val(13);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(14);
+    constexpr uint32_t seed = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_local_vals = get_compile_time_arg_val(16);
+    constexpr uint32_t temp_cb_index = get_compile_time_arg_val(17);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(18);
     generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;
@@ -422,10 +398,10 @@ void kernel_main() {
     add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
     mul_block_bcast_scalar_inplace<values_cb_index, temp_cb_index, Ht * Kt>();
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scaler_max_cb_index, cb_cur_max, Ht, Kt>();
 
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scaler_sum_cb_index, cb_cur_sum, Ht, Kt>();
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols(values_cb_index, cb_cur_sum, cb_local_vals, Ht, Kt);
 }

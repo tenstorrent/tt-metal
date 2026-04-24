@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -211,7 +211,12 @@ void MetalContext::initialize(
 
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
-        inspector_data_ = Inspector::initialize();
+        std::optional<int> rank;
+        const auto& distributed_context = global_distributed_context();
+        if (*(distributed_context.size()) > 1) {
+            rank = *distributed_context.rank();
+        }
+        inspector_data_ = Inspector::initialize(rank);
         // Set fw_compile_hash for Inspector RPC build environment info
         Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
     }
@@ -232,6 +237,17 @@ void MetalContext::initialize(
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        if (!rtoptions().get_use_device_print()) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT is deprecated and will be removed in a future release. "
+                "Please migrate to DEVICE_PRINT by:\n"
+                "  1. Replace #include \"api/debug/dprint.h\" with #include \"api/debug/device_print.h\" in your "
+                "kernels\n"
+                "  2. Replace DPRINT << ... << ENDL() with DEVICE_PRINT(\"...\\n\", args)\n"
+                "  3. Set TT_METAL_DEVICE_PRINT=1 to enable the new DEVICE_PRINT system\n"
+                "For more information, see the DEVICE_PRINT documentation.");
+        }
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(*this->env_, num_hw_cqs, dispatch_core_config_);
@@ -272,7 +288,7 @@ void MetalContext::initialize(
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
-        get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        !get_cluster().is_mock_or_emulated()) {
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
@@ -319,14 +335,14 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (!get_cluster().is_mock_or_emulated()) {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
         rtoptions().set_disable_dma_ops(false);
     }
 
-    if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!get_cluster().is_mock_or_emulated()) {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();

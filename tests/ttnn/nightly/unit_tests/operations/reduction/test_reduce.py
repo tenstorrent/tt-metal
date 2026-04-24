@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_level_defaults):
+    torch.manual_seed(0)
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:

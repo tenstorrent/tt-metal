@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,15 +30,15 @@ void kernel_main() {
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     // mean
     const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
 
     // rstd
     const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     constexpr uint32_t onetile = 1;
 

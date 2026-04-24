@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ from ttnn.operations.activations import get_golden_function_for_activation
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
+PaddingMode = ttnn._ttnn.operations.conv.PaddingMode
 
 # TODO: Remove Conv2dSliceConfig and update all relevant models & tests
 Conv2dSliceConfig = ttnn._ttnn.operations.sliding_window.Op2DSliceConfig
