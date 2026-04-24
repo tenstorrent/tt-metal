@@ -35,7 +35,6 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
     try:
         import ttnn
 
-        # Get core count from device
         grid_size = device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
 
@@ -51,8 +50,7 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
 
         captured_graph = ttnn.graph.end_graph_capture()
 
-        # Use per-core API (new, recommended)
-        per_core_usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, num_cores)
+        per_core_usage = ttnn.graph.extract_resource_usage_per_core(captured_graph)
 
         # Also get device-level peak memory for comparison
         peak_l1_memory_device = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)

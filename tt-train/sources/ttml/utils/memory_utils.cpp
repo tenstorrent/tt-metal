@@ -87,7 +87,7 @@ L1UsagePerCore get_l1_usage(const std::string& name) {
     if (it == traces.end()) {
         throw std::runtime_error(fmt::format("MemoryUsageTracker: Trace '{}' not found", name));
     }
-    return ttnn::graph::extract_resource_usage_per_core(it->second, 1);
+    return ttnn::graph::extract_resource_usage_per_core(it->second);
 }
 
 std::vector<std::pair<std::string, L1UsagePerCore>> get_l1_usage_all() {

@@ -157,15 +157,13 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     }  // end of outer graph capture
 
     // extract memory footprint from the trace
-    auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
     const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(op_trace, interleaved_storage_cores);
+        extract_resource_usage_per_core(op_trace);
 
     size_t l1_output_buffer_per_core = 0;
     for (const auto& output : outputs) {
         if (!output.buffer()->is_dram()) {
-            l1_output_buffer_per_core +=
-                extract_l1_output_buffer_allocation_size_per_core(output, interleaved_storage_cores);
+            l1_output_buffer_per_core += extract_l1_output_buffer_allocation_size_per_core(output);
         }
     }
 

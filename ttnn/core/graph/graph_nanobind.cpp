@@ -258,23 +258,20 @@ void py_graph_module(nb::module_& m) {
 
     m.def(
         "extract_resource_usage_per_core",
-        [](const nb::object& py_trace, size_t interleaved_storage_cores) {
+        [](const nb::object& py_trace) {
             auto json_module = nb::module_::import_("json");
             auto trace_str = std::string{nb::str(json_module.attr("dumps")(py_trace)).c_str()};
             nlohmann::json trace = nlohmann::json::parse(trace_str);
-            return extract_resource_usage_per_core(trace, interleaved_storage_cores);
+            return extract_resource_usage_per_core(trace);
         },
         R"doc(
         Extract resource usage per core from graph trace.
 
-        This function calculates the worst-case peak memory usage per core, accounting for
-        how buffers are distributed across cores. This is more accurate than total memory
-        usage for devices with distributed memory architectures.
+        This function calculates the worst-case peak memory usage per core by reading
+        the per-bank allocation size recorded in the trace at capture time.
 
         Args:
             trace: Captured graph trace from end_graph_capture()
-            interleaved_storage_cores: Number of cores used for interleaved storage.
-                                       Typically grid_size.x * grid_size.y
 
         Returns:
             PeakMemoryUsagePerCore: Object with three fields:
@@ -283,15 +280,12 @@ void py_graph_module(nb::module_& m) {
                 - peak_total: Peak total memory (CB + L1) per core (bytes)
 
         Example:
-            >>> grid_size = device.compute_with_storage_grid_size()
-            >>> cores = grid_size.x * grid_size.y
-            >>> usage = ttnn.graph.extract_resource_usage_per_core(graph, cores)
+            >>> usage = ttnn.graph.extract_resource_usage_per_core(graph)
             >>> print(f"Peak per core: {usage.peak_total:,} bytes")
             >>> if usage.peak_total > 256 * 1024:
             ...     print("Warning: Exceeds 256KB L1 per core!")
         )doc",
-        nb::arg("trace"),
-        nb::arg("interleaved_storage_cores"));
+        nb::arg("trace"));
 
     m.def(
         "is_graph_capture_active",
