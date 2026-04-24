@@ -272,7 +272,14 @@ class Transformer(LightweightModule):
         return hidden_states
 
     def prepare_prefill_inputs_trace(
-        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
+        self,
+        tokens,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        batch_size=1,
+        user_id=0,
+        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -282,16 +289,23 @@ class Transformer(LightweightModule):
             tokens,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             trace_enabled=True,
             batch_size=batch_size,
             user_id=user_id,
         )
         return host_inputs
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(
+        self,
+        tokens,
+        tt_page_table,
+        tt_chunk_page_table,
+        tt_chunk_start_idx,
+    ):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table
+        return tt_tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def prepare_inputs_prefill(
         self,
@@ -299,6 +313,7 @@ class Transformer(LightweightModule):
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
+        chunk_start_idx=None,
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
@@ -409,12 +424,24 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
+        if chunk_start_idx is not None:
+            chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
+            tt_chunk_start_idx = ttnn.from_torch(
+                chunk_start_idx_tensor,
+                device=device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_start_idx = None
+
         return (
             tokens if trace_enabled else tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
+            tt_chunk_start_idx,
         )
 
     def prepare_inputs_decode(self, *inputs):

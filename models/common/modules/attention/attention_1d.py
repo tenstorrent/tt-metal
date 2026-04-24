@@ -486,15 +486,27 @@ class Attention1D(LightweightModule):
         # - Non-paged + Chunked: chunked_sdpa requires page_table
         # - sliding_window + Chunked: chunked_sdpa does not implement window masking
         if chunk_start_idx is not None:
-            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_sdpa,
-                input_tensor_k=keys,
-                input_tensor_v=values,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
-                program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
-            )
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_sdpa,
+                    input_tensor_k=keys,
+                    input_tensor_v=values,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=None,
+                    chunk_start_idx_tensor=chunk_start_idx,
+                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    program_config=cfg.prefill_sdpa_prg_config(seq_len, 0),
+                )
+            else:
+                attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_sdpa,
+                    input_tensor_k=keys,
+                    input_tensor_v=values,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
+                )
         else:
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_sdpa,

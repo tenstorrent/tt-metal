@@ -51,6 +51,21 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
+def _get_max_blocks_prefill(kv_cache) -> int:
+    first_cache_tensor = kv_cache[0][0]
+    return int(first_cache_tensor.shape[0])
+
+
+def _pad_or_create_page_table(table, target_blocks: int):
+    if table is not None:
+        num_pad = target_blocks - table.shape[1]
+        if num_pad > 0:
+            padding = torch.zeros(1, num_pad, dtype=torch.int32)
+            return torch.cat([table, padding], dim=-1)
+        return table
+    return torch.ones(1, target_blocks, dtype=torch.int32) * -1
+
+
 class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -222,21 +237,29 @@ class Generator(WarmupForwardMixin):
         self,
         prefill_ids,
         page_table=None,
+        chunk_page_table=None,
         kv_cache=None,
         model_id=-1,
         global_user_id=None,
         batch_size=1,
         user_id=0,
+        start_pos=0,
     ):
         if batch_size > 1:
-            prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+            prefill_kwargs = {
+                "page_table": page_table,
+                "chunk_page_table": chunk_page_table,
+                "chunk_start_idx": start_pos,
+                "batch_size": batch_size,
+                "user_id": user_id,
+            }
             if global_user_id is not None:
                 prefill_kwargs["global_user_id"] = global_user_id
             host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
             # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -246,6 +269,7 @@ class Generator(WarmupForwardMixin):
                 rot_mats_local=tt_rot_mats_prefill_local,
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
+                chunk_start_idx=transformed_inputs[3],
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
@@ -262,6 +286,7 @@ class Generator(WarmupForwardMixin):
                 rot_mats_local=tt_rot_mats_prefill_local,
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
+                chunk_start_idx=transformed_inputs[3],
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 user_id=user_id,
@@ -271,13 +296,18 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
         else:
-            prefill_kwargs = {"page_table": page_table}
+            prefill_kwargs = {
+                "page_table": page_table,
+                "chunk_page_table": chunk_page_table,
+                "chunk_start_idx": start_pos,
+                "user_id": user_id,
+            }
             if global_user_id is not None:
                 prefill_kwargs["global_user_id"] = global_user_id
             host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
-            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+            host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
             device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
@@ -287,6 +317,7 @@ class Generator(WarmupForwardMixin):
                 rot_mats_local=tt_rot_mats_prefill_local,
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
+                chunk_start_idx=transformed_inputs[3],
                 kv_cache=kv_cache,
             )
             ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -301,6 +332,7 @@ class Generator(WarmupForwardMixin):
                 rot_mats_local=tt_rot_mats_prefill_local,
                 page_table=transformed_inputs[1],
                 chunk_page_table=transformed_inputs[2],
+                chunk_start_idx=transformed_inputs[3],
                 kv_cache=kv_cache,
             )
             ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
@@ -358,19 +390,42 @@ class Generator(WarmupForwardMixin):
         model_id=-1,
         prefill_seq_len=None,
         batch_size=1,
+        num_cached_tokens=0,
         **kwargs,
     ):
         global_user_id = kwargs.get("global_user_id", None)
-        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}"
+        use_start_pos = "sp1" if num_cached_tokens > 0 else "sp0"
+        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
+
+        use_prefix_caching = num_cached_tokens > 0
+        chunk_start_idx = num_cached_tokens
+        block_size = get_block_size(kv_cache)
+
+        if page_table is not None and batch_size == 1:
+            page_table = page_table[user_id : user_id + 1, :]
+
+        chunk_page_table = None
+        if batch_size == 1:
+            max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+            page_table = _pad_or_create_page_table(page_table, max_blocks_prefill)
+            if use_prefix_caching:
+                chunk_start_block = num_cached_tokens // block_size
+                chunk_end_block = (num_cached_tokens + prefill_seq_len) // block_size
+                chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
+            chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+            chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
+
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
+                chunk_page_table=chunk_page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
                 global_user_id=global_user_id,
                 batch_size=batch_size,
                 user_id=user_id,
+                start_pos=chunk_start_idx,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -382,10 +437,12 @@ class Generator(WarmupForwardMixin):
             self.trace_output_prefill[trace_key],
             prefill_ids,
             page_table=page_table,
+            chunk_page_table=chunk_page_table,
             model_id=model_id,
             global_user_id=global_user_id,
             batch_size=batch_size,
             user_id=user_id,
+            start_pos=chunk_start_idx,
         )
 
         return tt_out_trace
@@ -398,16 +455,24 @@ class Generator(WarmupForwardMixin):
         prefill_ids,
         user_id=0,
         page_table=None,
+        chunk_page_table=None,
         model_id=-1,
         global_user_id=None,
         batch_size=1,
+        start_pos=0,
     ):
         # Use actual batch_size since tokens are now in batch dimension
-        prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+        prefill_kwargs = {
+            "page_table": page_table,
+            "chunk_page_table": chunk_page_table,
+            "chunk_start_idx": start_pos,
+            "batch_size": batch_size,
+            "user_id": user_id,
+        }
         if global_user_id is not None:
             prefill_kwargs["global_user_id"] = global_user_id
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
-        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
@@ -656,6 +721,7 @@ class Generator(WarmupForwardMixin):
                     model_id=model_id,
                     prefill_seq_len=prefill_seq_len,
                     batch_size=padded_batch if use_batched_prefill else 1,
+                    num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
                     **local_kwargs,
                 )
             else:
@@ -757,9 +823,13 @@ class Generator(WarmupForwardMixin):
 
             # Non-batched prefill path
             if enable_trace_current_prompt:
+                last_token_idx_for_trace = last_token_idx
+                if not use_batched_prefill and num_cached_tokens > 0:
+                    last_token_idx_for_trace = last_token_idx - num_cached_tokens
+
                 if return_hidden_states:
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
-                        logits, last_token_idx
+                        logits, last_token_idx_for_trace
                     )
                     prefill_results.append(
                         {
@@ -771,7 +841,9 @@ class Generator(WarmupForwardMixin):
                     )
                     continue
                 else:
-                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+                    logits = self.model[model_id].process_logits_after_prefill_trace(
+                        logits, last_token_idx_for_trace
+                    )
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
@@ -822,16 +894,14 @@ class Generator(WarmupForwardMixin):
                     tt_tokens = res["logits"][0]
                     tt_log_probs = res["logits"][1]
                     tokens_host = ttnn.to_torch(ttnn.get_device_tensors(tt_tokens)[0]).reshape(-1)[
-                        (
-                            last_token_idx % 32
-                        )  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
+                        last_token_idx_relative % 32
                     ]
                     if isinstance(tt_log_probs, LogProbsResult):
-                        log_probs_host = tt_log_probs.extract_user(last_token_idx % 32)
+                        log_probs_host = tt_log_probs.extract_user(last_token_idx_relative % 32)
                     elif tt_log_probs is not None:
                         log_probs_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
-                            (last_token_idx % 32)
-                        ]  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
+                            last_token_idx_relative % 32
+                        ]
                     else:
                         log_probs_host = None
                     output_tokens[idx] = tokens_host
@@ -938,6 +1008,7 @@ class Generator(WarmupForwardMixin):
                     chunk_rot_mats_local_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
+                    _chunk_start_idx_tt,
                 ) = chunk_inputs
 
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -966,7 +1037,7 @@ class Generator(WarmupForwardMixin):
                 user_id=user_id,
                 **kwargs,
             )
-            prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _ = inputs
+            prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _, _ = inputs
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
