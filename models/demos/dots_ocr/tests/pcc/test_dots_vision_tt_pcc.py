@@ -18,11 +18,13 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.dots_ocr.tt.dots_visionTT import DotsVisionTransformerTT
+from models.tt_transformers.tt.common import Mode
 
 
 def _default_model_dir() -> Path:
@@ -100,6 +102,49 @@ def _build_inputs_like_demo(model_dir: Path, device: torch.device):
     return pv, grid
 
 
+def _ttnn_trunk_to_seq2d(ttn: ttnn.Tensor, seqlen: int, dim: int) -> torch.Tensor:
+    t = ttnn.to_torch(ttn)
+    if t.dim() == 4:
+        o = t[0, 0, :seqlen, :dim]
+    elif t.dim() == 3:
+        o = t[0, :seqlen, :dim]
+    else:
+        raise RuntimeError(f"unexpected trunk tensor rank {t.dim()} shape={tuple(t.shape)}")
+    return o.float()
+
+
+def _vision_cu_seqlens(grid_thw: torch.Tensor) -> torch.Tensor:
+    """Match ``DotsVisionTransformer.forward`` / ``DotsVisionTransformerTT.forward`` (2D ``grid_thw``)."""
+    cu = torch.repeat_interleave(
+        grid_thw[:, 1] * grid_thw[:, 2],
+        grid_thw[:, 0],
+    ).cumsum(dim=0, dtype=torch.int32)
+    return F.pad(cu, (1, 0), value=0)
+
+
+def _ttnn_merger_to_torch(
+    x: ttnn.Tensor,
+    *,
+    t_images: int,
+    seqlen: int,
+    spatial_merge_size: int,
+    hidden_size: int,
+) -> torch.Tensor:
+    """Same host layout as ``DotsVisionTransformerTT.forward(..., return_host_torch=True)``."""
+    s_merge = seqlen // (spatial_merge_size**2)
+    o_full = ttnn.to_torch(x)
+    if o_full.dim() == 5:
+        o = o_full[:, 0, 0, :s_merge, :hidden_size]
+    elif o_full.dim() == 4:
+        o = o_full[:, 0, :s_merge, :hidden_size]
+    elif o_full.dim() == 3:
+        o = o_full[:, :s_merge, :hidden_size]
+    else:
+        raise RuntimeError(f"Unexpected merger tensor rank {o_full.dim()} shape={tuple(o_full.shape)}")
+    out = o.squeeze(0) if t_images == 1 else o.reshape(-1, hidden_size)
+    return out.float()
+
+
 @torch.inference_mode()
 @pytest.mark.parametrize(
     "mesh_device",
@@ -139,9 +184,6 @@ def test_dots_vision_tt_pcc_vs_reference(mesh_device, ensure_gc):
 
     pv, grid_thw = _build_inputs_like_demo(model_dir, device=torch.device("cpu"))
 
-    ref_out = vision_ref(pv, grid_thw)
-    logger.info(f"reference vision out shape: {ref_out.shape}")
-
     tt_model = DotsVisionTransformerTT(
         vision_config=hf_model.config.vision_config,
         mesh_device=mesh_device,
@@ -149,14 +191,83 @@ def test_dots_vision_tt_pcc_vs_reference(mesh_device, ensure_gc):
         state_dict_prefix="vision_tower.",
         weight_cache_path=None,
     )
+
+    pcc_required = float(os.environ.get("DOTS_VISION_PCC_REQUIRED", "0.99"))
+    n_blocks = len(vision_ref.blocks)
+    d = int(vision_ref.config.embed_dim)
+    logger.info(f"Vision trunk PCC: {n_blocks} blocks, embed_dim={d}")
+
+    # Staged PCC vs reference: patch → each vision block → post_trunk_norm → merger.
+    grid_2d = grid_thw.unsqueeze(0) if grid_thw.dim() == 1 else grid_thw
+    t_images = int(grid_2d.shape[0])
+    h_ref = vision_ref.patch_embed(pv.bfloat16(), grid_thw)
+    rpe_ref = vision_ref.rot_pos_emb(grid_thw)
+    cu_ref = _vision_cu_seqlens(grid_2d)
+    ref_trunk_in = h_ref.float()
+
+    hidden_tt = tt_model._patchify(pv, grid_2d)
+    grid_thw_list = [tuple(int(v) for v in row) for row in grid_2d.tolist()]
+    rotary_tt = tt_model._rot_pos_ttnn(grid_thw_list)
+    cu_tt = tt_model._cu_seqlens_ttnn_from_grid(grid_2d)
+    seqlen = int(hidden_tt.shape[0])
+    x_tt, seqlen_logical, _s_pad = tt_model._prepare_ttnn(hidden_tt, mesh_device)
+    assert seqlen_logical == seqlen
+    tt_trunk_in = _ttnn_trunk_to_seq2d(x_tt, seqlen, d)
+
+    ok_in, msg_in = comp_pcc(ref_trunk_in.cpu(), tt_trunk_in.cpu(), pcc_required)
+    logger.info(f"Trunk input (post-patch, pre-{n_blocks} blocks) PCC: {msg_in}")
+    assert ok_in, f"Trunk input PCC failed (required {pcc_required}): {msg_in}"
+
+    for layer_idx, (blk_ref, blk_tt) in enumerate(zip(vision_ref.blocks, tt_model.blocks, strict=True)):
+        h_ref = blk_ref(h_ref, cu_seqlens=cu_ref, rotary_pos_emb=rpe_ref)
+        x_tt = blk_tt(x_tt, rotary_tt, cu_tt, seqlen)
+        tt_layer = _ttnn_trunk_to_seq2d(x_tt, seqlen, d)
+        ok_l, msg_l = comp_pcc(h_ref.float().cpu(), tt_layer.cpu(), pcc_required)
+        logger.info(f"Vision block {layer_idx} output PCC: {msg_l}")
+        assert ok_l, f"Vision block {layer_idx} PCC failed (required {pcc_required}): {msg_l}"
+
+    ref_post = bool(vision_ref.config.post_norm)
+    tt_has_post_norm = tt_model.post_norm is not None
+    assert (
+        ref_post == tt_has_post_norm
+    ), "post_norm must match between HF vision_tower.config and DotsVisionTransformerTT"
+    if ref_post:
+        h_ref = vision_ref.post_trunk_norm(h_ref)
+        x_tt = tt_model.post_norm(x_tt, mode=Mode.PREFILL)
+        tt_post_host = _ttnn_trunk_to_seq2d(x_tt, seqlen, d)
+        ok_post, msg_post = comp_pcc(h_ref.float().cpu(), tt_post_host.cpu(), pcc_required)
+        logger.info(f"post_trunk_norm (torch) vs post_norm (ttnn) PCC: {msg_post}")
+        assert ok_post, f"Post-trunk norm PCC failed (required {pcc_required}): {msg_post}"
+    else:
+        logger.info("post_norm disabled; skipping post-trunk norm PCC")
+
+    h_merged_ref = vision_ref.merger(h_ref)
+    x_merged_tt = tt_model.merger(x_tt, seqlen)
+    hs = int(vision_ref.config.hidden_size)
+    sm = int(vision_ref.config.spatial_merge_size)
+    tt_merged_host = _ttnn_merger_to_torch(
+        x_merged_tt,
+        t_images=t_images,
+        seqlen=seqlen,
+        spatial_merge_size=sm,
+        hidden_size=hs,
+    )
+    ok_merge, msg_merge = comp_pcc(h_merged_ref.cpu().float(), tt_merged_host.cpu(), pcc_required)
+    logger.info(f"PatchMerger output PCC: {msg_merge}")
+
+    ttnn.deallocate(x_merged_tt)
+    ttnn.deallocate(rotary_tt)
+    ttnn.deallocate(cu_tt)
+
+    ref_out = vision_ref(pv, grid_thw)
+    logger.info(f"reference vision out shape: {ref_out.shape}")
     tt_out = tt_model(pv, grid_thw, return_host_torch=True)
 
     assert ref_out.shape == tt_out.shape, f"shape mismatch ref={ref_out.shape} tt={tt_out.shape}"
 
-    pcc_required = float(os.environ.get("DOTS_VISION_PCC_REQUIRED", "0.99"))
     passing, pcc_message = comp_pcc(ref_out.cpu().float(), tt_out.cpu().float(), pcc_required)
     logger.info(comp_allclose(ref_out, tt_out))
-    logger.info(f"PCC (required {pcc_required}): {pcc_message}")
+    logger.info(f"Full vision PCC (required {pcc_required}): {pcc_message}")
     assert passing, (
         f"DotsVisionTransformerTT vs reference PCC failed (required {pcc_required}): {pcc_message}. "
         "Tune DOTS_VISION_PCC_REQUIRED if numerical drift is expected on your mesh."

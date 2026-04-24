@@ -4,11 +4,10 @@
 TTNN Dots vision tower (Wormhole).
 
 Reuses ttnn patterns from Qwen2.5-VL / Qwen3-VL (RMSNorm, SwiGLU MLP, LayerNorm+GELU merger)
-for norms/MLP. Rotary position + scaled dot-product attention run in torch with the
-same numerics as `reference/dots_ocr/modeling_dots_vision` (QKV/Proj in ttnn where noted).
+for norms/MLP. The trunk uses TTNN tensors end-to-end; `DotsVisionTransformerTT.forward`
+accepts and returns PyTorch tensors, converting only at the API boundary.
 
-RoPE indices/frequencies are generated via a Pi0 helper that matches
-`DotsVisionTransformer.rot_pos_emb` geometry.
+RoPE frequencies follow the same geometry as `DotsVisionTransformer.rot_pos_emb`.
 
 Typical `state_dict` prefix: ``"vision_tower."`` (keys like ``vision_tower.blocks.0...``).
 """
@@ -57,6 +56,16 @@ def _w128(x: int) -> int:
     return ((x + 127) // 128) * 128
 
 
+def _pad_seq_dim_ttnn(x: ttnn.Tensor, s: int, s_pad: int) -> ttnn.Tensor:
+    """Pad sequence dim (dim=2) from s to s_pad; no-op if already padded."""
+    if s_pad <= s:
+        return x
+    pad_rows = s_pad - s
+    out = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+    ttnn.deallocate(x)
+    return out
+
+
 def _get_compute_cfg():
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -100,27 +109,15 @@ def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
     return out
 
 
-def apply_rotary_pos_emb_vision_ttnn(tensor: torch.Tensor, freqs: torch.Tensor, mesh_device: Any) -> torch.Tensor:
+def apply_rotary_pos_emb_vision_ttnn(tensor_tt: ttnn.Tensor, freqs_tt: ttnn.Tensor) -> ttnn.Tensor:
     """
     TTNN equivalent of reference apply_rotary_pos_emb_vision using raw freqs.
-    Input tensor shape: [1, S, H, D], freqs shape: [S, D/2].
+    ``tensor_tt``: [1, S, H, D] TILE BF16 (same layout as reference ``q.unsqueeze(0)``).
+    ``freqs_tt``: [S, head_dim / 2] TILE BF16 (matches reference ``rotary_pos_emb`` slice).
+    Returns TILE BF16 tensor with the same rank as ``tensor_tt``. ``freqs_tt`` is not deallocated.
     """
-    orig_dtype = tensor.dtype
-    tensor_tt = ttnn.from_torch(
-        tensor.float(),
-        dtype=ttnn.bfloat16,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    freqs_tt = ttnn.from_torch(
-        freqs.float(),
-        dtype=ttnn.bfloat16,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-    )
     cos_half = ttnn.cos(freqs_tt)
     sin_half = ttnn.sin(freqs_tt)
-    ttnn.deallocate(freqs_tt)
 
     cos_full = ttnn.concat([cos_half, cos_half], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     sin_full = ttnn.concat([sin_half, sin_half], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -144,9 +141,7 @@ def apply_rotary_pos_emb_vision_ttnn(tensor: torch.Tensor, freqs: torch.Tensor, 
     ttnn.deallocate(out_a)
     ttnn.deallocate(out_b)
 
-    out_torch = ttnn.to_torch(out)
-    ttnn.deallocate(out)
-    return out_torch.to(orig_dtype)
+    return out
 
 
 class VisionRotaryEmbeddingTt(LightweightModule):
@@ -178,7 +173,8 @@ class VisionRotaryEmbeddingTt(LightweightModule):
         inv_row = ttnn.reshape(self.inv_freq, (1, self.inv_freq.shape[-1]))
         freqs = ttnn.multiply(seq_col, inv_row)
         ttnn.deallocate(seq_col)
-        ttnn.deallocate(inv_row)
+        # Do not deallocate ``inv_row``: it aliases ``self.inv_freq``; deallocating it frees the
+        # module buffer and breaks the next ``forward`` (e.g. staged PCC then full ``forward``).
         return freqs
 
 
@@ -239,33 +235,22 @@ class DotsPatchEmbedTt(LightweightModule):
             weight_dtype=ttnn.bfloat16,
         )
 
-    @torch.inference_mode()
-    def forward(self, x: torch.Tensor, grid_thw=None) -> torch.Tensor:
+    def forward(self, x: ttnn.Tensor, grid_thw=None) -> ttnn.Tensor:
+        """
+        Patch projection + RMSNorm. Input ``x`` is [1, 1, N, C*P*P] TILE BF16 (same layout as
+        reference patchifier after flatten); ``grid_thw`` is unused (kept for API compatibility).
+        """
         del grid_thw
-        x = x.view(-1, self.cfg.num_channels, self.cfg.temporal_patch_size, self.cfg.patch_size, self.cfg.patch_size)[
-            :, :, 0
-        ]
-        n = x.shape[0]
-        x = x.reshape(n, self.cfg.num_channels * self.cfg.patch_size * self.cfg.patch_size)
-        x_tt = ttnn.from_torch(
-            x.unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
-            device=self.mesh,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        x_tt = ttnn.to_memory_config(x_tt, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x_proj = ttnn.linear(
-            x_tt,
+            x,
             self.w_proj,
             bias=self.b_proj,
             compute_kernel_config=self.compute_cfg,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(x_tt)
-        x_proj = self.norm(x_proj, mode=Mode.PREFILL)
-        x_torch = ttnn.to_torch(x_proj)
-        ttnn.deallocate(x_proj)
-        return x_torch[0, 0, :n, : self.cfg.embed_dim].to(x.dtype)
+        ttnn.deallocate(x)
+        return self.norm(x_proj, mode=Mode.PREFILL)
 
 
 class DotsMlpTt(LightweightModule):
@@ -392,8 +377,8 @@ class DotsMlpTt(LightweightModule):
 
 class DotsAttnQkvprojTt(LightweightModule):
     """
-    ttnn QKV and output projection; attention core (RoPE + SDPA) on torch
-    to match the reference and avoid RoPE format mismatches.
+    TTNN QKV and output projections; RoPE apply and ``F.scaled_dot_product_attention`` run on
+    host PyTorch inside this module (TTNN in/out at the submodule boundary).
     """
 
     def __init__(
@@ -459,8 +444,8 @@ class DotsAttnQkvprojTt(LightweightModule):
     def forward(
         self,
         x: ttnn.Tensor,
-        rotary_pos_emb: torch.Tensor,
-        cu_seqlens: torch.Tensor,
+        rotary_pos_emb: ttnn.Tensor,
+        cu_seqlens: ttnn.Tensor,
         seqlen_in: int,
     ) -> ttnn.Tensor:
         xqkv = ttnn.linear(
@@ -479,12 +464,49 @@ class DotsAttnQkvprojTt(LightweightModule):
         h = self.cfg.num_attention_heads
         hd = self.cfg.head_dim
         q, k, v = qkv.reshape(s, 3, h, hd).permute(1, 0, 2, 3).unbind(0)
-        rpe = rotary_pos_emb[:s].to(q.dtype)
-        q = apply_rotary_pos_emb_vision_ttnn(q.unsqueeze(0), rpe, self.mesh).squeeze(0)
-        k = apply_rotary_pos_emb_vision_ttnn(k.unsqueeze(0), rpe, self.mesh).squeeze(0)
+
+        rot_dim = int(rotary_pos_emb.shape[-1])
+        rpe_s = ttnn.slice(
+            rotary_pos_emb,
+            [0, 0, 0, 0],
+            [1, 1, s, rot_dim],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        freqs_2d = ttnn.reshape(rpe_s, (s, rot_dim))
+
+        q_tt = ttnn.from_torch(
+            q.unsqueeze(0).float(),
+            dtype=ttnn.bfloat16,
+            device=self.mesh,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        q_tt = ttnn.to_memory_config(q_tt, ttnn.DRAM_MEMORY_CONFIG)
+        q_tt = apply_rotary_pos_emb_vision_ttnn(q_tt, freqs_2d)
+        q = ttnn.to_torch(q_tt).squeeze(0).to(qkv.dtype)
+        ttnn.deallocate(q_tt)
+
+        k_tt = ttnn.from_torch(
+            k.unsqueeze(0).float(),
+            dtype=ttnn.bfloat16,
+            device=self.mesh,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        k_tt = ttnn.to_memory_config(k_tt, ttnn.DRAM_MEMORY_CONFIG)
+        k_tt = apply_rotary_pos_emb_vision_ttnn(k_tt, freqs_2d)
+        k = ttnn.to_torch(k_tt).squeeze(0).to(qkv.dtype)
+        ttnn.deallocate(k_tt)
+
+        # Do not deallocate ``rpe_s`` / ``freqs_2d``: they are views into ``rotary_pos_emb``;
+        # deallocating them frees the shared backing store and breaks later vision blocks.
+
+        cu_1d = ttnn.to_torch(cu_seqlens).reshape(-1).to(torch.int32)
         mask = torch.zeros(1, s, s, dtype=torch.bool, device=q.device)
-        for b in range(1, len(cu_seqlens)):
-            a, z = int(cu_seqlens[b - 1].item()), int(cu_seqlens[b].item())
+        for b in range(1, cu_1d.numel()):
+            a, z = int(cu_1d[b - 1].item()), int(cu_1d[b].item())
             mask[..., a:z, a:z] = True
         q1 = q.transpose(0, 1).unsqueeze(0)
         k1 = k.transpose(0, 1).unsqueeze(0)
@@ -503,6 +525,8 @@ class DotsAttnQkvprojTt(LightweightModule):
             dtype=ttnn.bfloat16,
             device=self.mesh,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
         )
         ttn_in = ttnn.to_memory_config(ttn_in, ttnn.DRAM_MEMORY_CONFIG)
         out1 = ttnn.linear(
@@ -642,9 +666,7 @@ class DotsVisionBlockTt(LightweightModule):
         self.attn = DotsAttnQkvprojTt(mesh_device, state_dict, f"{sp}attn.", cfg, weight_cache_path)
         self.mlp = DotsMlpTt(mesh_device, state_dict, f"{sp}mlp.", cfg, weight_cache_path)
 
-    def forward(
-        self, x: ttnn.Tensor, rotary_pos_emb: torch.Tensor, cu_seqlens: torch.Tensor, seqlen: int
-    ) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, rotary_pos_emb: ttnn.Tensor, cu_seqlens: ttnn.Tensor, seqlen: int) -> ttnn.Tensor:
         x0 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         n1 = self.rms1(x0, mode=Mode.PREFILL)
         ao = self.attn(n1, rotary_pos_emb, cu_seqlens, seqlen)
@@ -731,9 +753,78 @@ class DotsVisionTransformerTT(LightweightModule):
             for i in range(self.cfg.num_hidden_layers)
         ]
 
+    def _pixels_flat_torch(self, pixel_values: torch.Tensor) -> tuple[torch.Tensor, int]:
+        hs = pixel_values.view(
+            -1,
+            self.cfg.num_channels,
+            self.cfg.temporal_patch_size,
+            self.cfg.patch_size,
+            self.cfg.patch_size,
+        )[:, :, 0]
+        n = int(hs.shape[0])
+        hs = hs.reshape(n, self.cfg.num_channels * self.cfg.patch_size * self.cfg.patch_size)
+        return hs, n
+
+    def _patch_pixels_to_ttnn(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
+        hs, _n = self._pixels_flat_torch(pixel_values)
+        pixel_tt = ttnn.from_torch(
+            hs.unsqueeze(0).unsqueeze(0).bfloat16(),
+            dtype=ttnn.bfloat16,
+            device=self.mesh,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        pixel_tt = ttnn.to_memory_config(pixel_tt, ttnn.DRAM_MEMORY_CONFIG)
+        return self.patch_embed(pixel_tt, grid_thw=None)
+
     @torch.inference_mode()
     def _patchify(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
-        return self.patch_embed(hidden_states, grid_thw)
+        """
+        Host patch embed for staged PCC / callers that expect torch ``[N, embed_dim]``.
+        Same math as ``_patch_pixels_to_ttnn`` + ``to_torch`` slice; ``grid_thw`` is unused
+        (reference patchifier ignores it).
+        """
+        del grid_thw
+        out_tt = self._patch_pixels_to_ttnn(hidden_states)
+        n = int(out_tt.shape[2])
+        o = ttnn.to_torch(out_tt)[0, 0, :n, : self.cfg.embed_dim].to(hidden_states.dtype)
+        ttnn.deallocate(out_tt)
+        return o
+
+    def _prepare_ttnn(self, emb: torch.Tensor, mesh_device: Any) -> Tuple[ttnn.Tensor, int, int]:
+        """Pad sequence to ``_w128`` and upload for staged PCC (``[1,1,S_pad,D]`` TILE)."""
+        s, d = int(emb.shape[0]), int(emb.shape[1])
+        s_pad = _w128(s)
+        if s_pad > s:
+            p = emb.new_zeros(s_pad, d)
+            p[:s] = emb
+            tile = p
+        else:
+            tile = emb
+        tt = ttnn.from_torch(
+            tile.unsqueeze(0).unsqueeze(0).bfloat16(),
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt = ttnn.to_memory_config(tt, ttnn.DRAM_MEMORY_CONFIG)
+        return tt, s, s_pad
+
+    def _cu_seqlens_ttnn_from_grid(self, grid_thw: torch.Tensor) -> ttnn.Tensor:
+        g = grid_thw.unsqueeze(0) if grid_thw.dim() == 1 else grid_thw
+        cu = torch.repeat_interleave(g[:, 1] * g[:, 2], g[:, 0], dim=0).cumsum(0, dtype=torch.int32)
+        cu = F.pad(cu, (1, 0), value=0)
+        return ttnn.from_torch(
+            cu.reshape(1, 1, 1, -1).to(torch.int32),
+            dtype=ttnn.int32,
+            device=self.mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
 
     def _get_pos_ids_by_grid_ttnn(self, grid_thw_list: list[tuple[int, int, int]]) -> tuple[list[int], list[int]]:
         h_all: list[int] = []
@@ -787,46 +878,27 @@ class DotsVisionTransformerTT(LightweightModule):
         rotary = ttnn.concat([h_freqs, w_freqs], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(h_freqs)
         ttnn.deallocate(w_freqs)
-        return rotary
-
-    @torch.inference_mode()
-    def _rot_pos(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        grid_thw_list = [tuple(int(v) for v in row) for row in grid_thw.tolist()]
-        rotary_tt = self._rot_pos_ttnn(grid_thw_list)
-        rotary = ttnn.to_torch(rotary_tt)
-        ttnn.deallocate(rotary_tt)
-        return rotary
-
-    def _prepare_ttnn(self, emb: torch.Tensor, mesh_device: Any) -> Tuple[ttnn.Tensor, int, int]:
-        s, d = emb.shape[0], emb.shape[1]
-        s_pad = _w128(s)
-        if s_pad > s:
-            p = emb.new_zeros(s_pad, d)
-            p[:s] = emb
-        else:
-            p = emb
-        tt = ttnn.from_torch(
-            p.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        tt = ttnn.to_memory_config(tt, ttnn.DRAM_MEMORY_CONFIG)
-        return tt, s, s_pad
+        d = rotary.shape[-1]
+        return ttnn.reshape(rotary, (1, 1, token_count, d))
 
     def forward(
         self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, return_host_torch: bool = True
     ) -> Union[torch.Tensor, ttnn.Tensor]:
         if grid_thw.dim() == 1:
             grid_thw = grid_thw.unsqueeze(0)
-        hidden = self._patchify(pixel_values, grid_thw)
-        rotary = self._rot_pos(grid_thw)
         t = int(grid_thw.shape[0])
-        cu = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0], dim=0).cumsum(
-            0, dtype=torch.int32
-        )
-        cu = F.pad(cu, (1, 0), value=0)
-        s = hidden.shape[0]
-        x, seqlen, s_pad = self._prepare_ttnn(hidden, self.mesh)
+        hidden_tt = self._patch_pixels_to_ttnn(pixel_values)
+        seqlen = int(hidden_tt.shape[2])
+        s_pad = _w128(seqlen)
+        hidden_tt = _pad_seq_dim_ttnn(hidden_tt, seqlen, s_pad)
+        grid_thw_list = [tuple(int(v) for v in row) for row in grid_thw.tolist()]
+        rotary_tt = self._rot_pos_ttnn(grid_thw_list)
+        cu_tt = self._cu_seqlens_ttnn_from_grid(grid_thw)
+        x = hidden_tt
         for blk in self.blocks:
-            x = blk(x, rotary, cu, seqlen)
+            x = blk(x, rotary_tt, cu_tt, seqlen)
+        ttnn.deallocate(rotary_tt)
+        ttnn.deallocate(cu_tt)
         if self.post_norm is not None:
             x = self.post_norm(x, mode=Mode.PREFILL)
         x = self.merger(x, seqlen)

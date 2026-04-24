@@ -180,6 +180,7 @@ def _tt_cfg(vision) -> DotsVisionTtConfig:
         post_norm=bool(vision.post_norm),
         hidden_size=vision.hidden_size,
         patch_size=vision.patch_size,
+        temporal_patch_size=vision.temporal_patch_size,
         num_channels=vision.num_channels,
     )
 
@@ -201,6 +202,31 @@ def _prepare_ttnn_input(emb: torch.Tensor, mesh_device) -> tuple[ttnn.Tensor, in
     )
     tt = ttnn.to_memory_config(tt, ttnn.DRAM_MEMORY_CONFIG)
     return tt, s, s_pad
+
+
+def _rotary_rpe_to_ttnn(rpe: torch.Tensor, mesh_device) -> ttnn.Tensor:
+    """Host ``rpe`` [S, rot_dim] -> [1, 1, S, rot_dim] TILE BF16 (matches ``_rot_pos_ttnn`` layout)."""
+    r4 = rpe.unsqueeze(0).unsqueeze(0).contiguous()
+    tt = ttnn.from_torch(
+        r4.bfloat16(),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    return ttnn.to_memory_config(tt, ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _cu_seqlens_to_ttnn(cu: torch.Tensor, mesh_device) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        cu.reshape(1, 1, 1, -1).to(torch.int32),
+        dtype=ttnn.int32,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 def _tt_out_to_seq2d(
@@ -329,7 +355,11 @@ def test_dots_vision_attention_pcc_vs_checkpoint(mesh_device) -> None:
     x = torch.randn(s, d, dtype=torch.bfloat16, device="cpu")
     y_ref = attn(x, cu_seqlens=cu, rotary_pos_emb=rpe)
     ttn, seqlen, _ = _prepare_ttnn_input(x, mesh_device)
-    y_tt = ttatt(ttn, rpe, cu, seqlen)
+    rpe_tt = _rotary_rpe_to_ttnn(rpe, mesh_device)
+    cu_tt = _cu_seqlens_to_ttnn(cu, mesh_device)
+    y_tt = ttatt(ttn, rpe_tt, cu_tt, seqlen)
+    ttnn.deallocate(rpe_tt)
+    ttnn.deallocate(cu_tt)
     y_t = _tt_out_to_seq2d(y_tt, seqlen, d)
     _assert_pcc(y_ref.cpu().float(), y_t, "VisionSdpaAttention (QKV+proj)")
 
@@ -481,7 +511,11 @@ def test_dots_vision_block_pcc_vs_checkpoint(mesh_device) -> None:
     h = torch.randn(s, d, dtype=torch.bfloat16, device="cpu")
     y_ref = blk(h, cu_seqlens=cu, rotary_pos_emb=rpe)
     ttn, seqlen, _ = _prepare_ttnn_input(h, mesh_device)
-    y_tt = ttb(ttn, rpe, cu, seqlen)
+    rpe_tt = _rotary_rpe_to_ttnn(rpe, mesh_device)
+    cu_tt = _cu_seqlens_to_ttnn(cu, mesh_device)
+    y_tt = ttb(ttn, rpe_tt, cu_tt, seqlen)
+    ttnn.deallocate(rpe_tt)
+    ttnn.deallocate(cu_tt)
     y_t = _tt_out_to_seq2d(y_tt, seqlen, d)
     _assert_pcc(y_ref.cpu().float(), y_t, f"DotsVisionBlock (layer {LAYER}, sdpa)")
 
