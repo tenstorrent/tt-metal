@@ -398,6 +398,7 @@ class TTNNTurboQuantCache:
         seed: int = 42,
         max_batch_size: int = 1,
         memory_efficient: bool = True,
+        paged_config=None,
     ):
         _require_ttnn()
 
@@ -409,6 +410,12 @@ class TTNNTurboQuantCache:
         self.bits = bits
         self.max_batch_size = max_batch_size
         self.memory_efficient = memory_efficient
+        # Paged mode: allocate indices/norms as [max_num_blocks, NKH, block_size, DH]
+        # (matching standard paged attention layout). Callers then pass page_table
+        # into update_cache and fused_sdpa_decode. When None, falls back to
+        # contiguous [B, NKH, max_seq_padded, DH] layout (legacy, used by the
+        # pre-rescaled eval_e2e path).
+        self.paged_config = paged_config
 
         # Legacy flags — derived from memory_efficient for backward compat.
         self.cache_centroids = not memory_efficient
@@ -437,7 +444,22 @@ class TTNNTurboQuantCache:
         # supports BF16 input → BFP4 cache natively. Gather kernel handles
         # BFP4→float32 via the tile unpacker.
         idx_dtype = ttnn.bfloat4_b if memory_efficient else ttnn.bfloat16
-        zero_idx = torch.zeros(max_batch_size, num_kv_heads, max_seq_padded, head_dim, dtype=torch.bfloat16)
+
+        if paged_config is not None:
+            # Paged layout: [max_num_blocks, num_kv_heads, block_size, head_dim].
+            # Virtual-seq-to-physical-tile mapping is provided by the caller via
+            # page_table passed to update_cache / fused_sdpa_decode.
+            self.block_size = paged_config.block_size
+            self.max_num_blocks = paged_config.max_num_blocks
+            idx_shape = (self.max_num_blocks, num_kv_heads, self.block_size, head_dim)
+            norms_shape = (self.max_num_blocks, num_kv_heads, self.block_size, 1)
+        else:
+            self.block_size = None
+            self.max_num_blocks = None
+            idx_shape = (max_batch_size, num_kv_heads, max_seq_padded, head_dim)
+            norms_shape = (max_batch_size, num_kv_heads, max_seq_padded, 1)
+
+        zero_idx = torch.zeros(idx_shape, dtype=torch.bfloat16)
         self.k_indices_dev = [
             ttnn.from_torch(
                 zero_idx,
@@ -460,7 +482,7 @@ class TTNNTurboQuantCache:
         ]
         del zero_idx
 
-        zero_norms = torch.zeros(max_batch_size, num_kv_heads, max_seq_padded, 1, dtype=torch.bfloat16)
+        zero_norms = torch.zeros(norms_shape, dtype=torch.bfloat16)
         self.k_norms_dev = [
             ttnn.from_torch(
                 zero_norms,
@@ -652,12 +674,21 @@ class TTNNTurboQuantCache:
         v_heads: "ttnn.Tensor",
         layer_idx: int,
         current_pos,
+        page_table: "ttnn.Tensor" = None,
     ):
         """Quantize new K/V tokens and scatter into cache (no dequantize).
 
         Use with fused_sdpa_decode() which reads raw indices+norms directly.
         Identical to steps 1-2 of update_and_dequantize().
+
+        Args:
+            page_table: Required when cache is paged (paged_config was passed to
+                __init__). Int32 device tensor [B, max_pages_per_batch] mapping
+                virtual block → physical block. For contiguous caches, leave None.
         """
+        if self.paged_config is not None and page_table is None:
+            raise ValueError("page_table required for paged TQ cache")
+
         if isinstance(current_pos, int):
             pos_tt = ttnn.from_torch(
                 torch.tensor([current_pos], dtype=torch.int32),
@@ -688,8 +719,12 @@ class TTNNTurboQuantCache:
         ttnn.deallocate(k_idx_scatter)
         ttnn.deallocate(v_idx_scatter)
 
-        ttnn.experimental.paged_update_cache(self.k_indices_dev[layer_idx], k_idx_sharded, update_idxs_tensor=pos_tt)
-        ttnn.experimental.paged_update_cache(self.v_indices_dev[layer_idx], v_idx_sharded, update_idxs_tensor=pos_tt)
+        ttnn.experimental.paged_update_cache(
+            self.k_indices_dev[layer_idx], k_idx_sharded, update_idxs_tensor=pos_tt, page_table=page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            self.v_indices_dev[layer_idx], v_idx_sharded, update_idxs_tensor=pos_tt, page_table=page_table
+        )
         ttnn.deallocate(k_idx_sharded)
         ttnn.deallocate(v_idx_sharded)
 
@@ -708,8 +743,12 @@ class TTNNTurboQuantCache:
         ttnn.deallocate(k_norms_scatter)
         ttnn.deallocate(v_norms_scatter)
 
-        ttnn.experimental.paged_update_cache(self.k_norms_dev[layer_idx], k_norms_sharded, update_idxs_tensor=pos_tt)
-        ttnn.experimental.paged_update_cache(self.v_norms_dev[layer_idx], v_norms_sharded, update_idxs_tensor=pos_tt)
+        ttnn.experimental.paged_update_cache(
+            self.k_norms_dev[layer_idx], k_norms_sharded, update_idxs_tensor=pos_tt, page_table=page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            self.v_norms_dev[layer_idx], v_norms_sharded, update_idxs_tensor=pos_tt, page_table=page_table
+        )
         ttnn.deallocate(k_norms_sharded)
         ttnn.deallocate(v_norms_sharded)
 
@@ -722,6 +761,7 @@ class TTNNTurboQuantCache:
         layer_idx: int,
         current_pos: "ttnn.Tensor",
         scale: float,
+        page_table: "ttnn.Tensor" = None,
     ) -> "ttnn.Tensor":
         """Run fused TQ SDPA decode directly on BFP4 index + BF16 norm caches.
 
@@ -733,6 +773,9 @@ class TTNNTurboQuantCache:
             layer_idx: Transformer layer index.
             current_pos: Int32 current position tensor [B] on device.
             scale: Attention scale factor (1/sqrt(head_dim)).
+            page_table: Required for paged caches. Int32 device tensor
+                [B, max_pages_per_batch]. For contiguous caches, a 1x1 dummy
+                tensor is allocated internally.
 
         Returns:
             BF16 attention output [B, NQH, 1, DH] on device.
@@ -740,13 +783,21 @@ class TTNNTurboQuantCache:
         _require_ttnn()
         centroids = get_codebook(self.head_dim, self.bits, device="cpu", dtype=torch.float32).centroids.tolist()
 
-        # Dummy page table (not used by interleaved reader)
-        page_table = ttnn.from_torch(
-            torch.zeros(1, 1, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+        # Contiguous mode: allocate a 1x1 dummy page_table (reader ignores it).
+        # Paged mode: caller must supply real page_table.
+        if page_table is None:
+            if self.paged_config is not None:
+                raise ValueError("page_table required for paged TQ cache")
+            _pt = ttnn.from_torch(
+                torch.zeros(1, 1, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            _own_pt = True
+        else:
+            _pt = page_table
+            _own_pt = False
 
         out = ttnn.experimental.turbo_quant_sdpa_decode(
             q,
@@ -754,12 +805,13 @@ class TTNNTurboQuantCache:
             self.k_norms_dev[layer_idx],
             self.v_indices_dev[layer_idx],
             self.v_norms_dev[layer_idx],
-            page_table,
+            _pt,
             current_pos,
             centroids,
             scale,
         )
-        ttnn.deallocate(page_table)
+        if _own_pt:
+            ttnn.deallocate(_pt)
         return out
 
     def update_and_dequantize_rotated(

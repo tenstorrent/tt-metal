@@ -34,7 +34,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     const auto& k_norms = args.k_norms;
     const auto& v_idx = args.v_indices;
     const auto& v_norms = args.v_norms;
-    [[maybe_unused]] const auto& page_table = args.page_table;
+    const auto& page_table = args.page_table;
 
     IDevice* device = q.device();
     [[maybe_unused]] auto grid = device->compute_with_storage_grid_size();
@@ -45,7 +45,15 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     const uint32_t NKH = k_idx.padded_shape()[1];
     const uint32_t DHt = q.padded_shape()[3] / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = v_idx.padded_shape()[3] / tt::constants::TILE_WIDTH;
-    const uint32_t Skt = k_idx.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+
+    // Paged detection: if K indices' batch dim (0) != Q's batch dim, we have the
+    // paged layout [max_num_blocks, NKH, block_size, DH]. Otherwise contiguous
+    // [B, NKH, max_seq, DH]. Logical Skt comes from the page_table's per-batch
+    // page count (paged) or from K_indices' seq dim (contiguous).
+    const bool is_paged_attention = (k_idx.padded_shape()[0] != B);
+    const uint32_t block_size_t = is_paged_attention ? (k_idx.padded_shape()[2] / tt::constants::TILE_HEIGHT) : 0;
+    const uint32_t Skt = is_paged_attention ? (page_table.padded_shape()[-1] * block_size_t)
+                                            : (k_idx.padded_shape()[2] / tt::constants::TILE_HEIGHT);
 
     // Chunk sizes (hardcoded for decode: Sq=1 tile, Sk=4 tiles = 128 positions)
     const uint32_t Sq_chunk_t = 1;
@@ -278,6 +286,19 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             .compile_args = compute_ct_args,
             .defines = {{"SDPA_TQ_DECODE", "1"}}});
 
+    // ── Page table CB (paged mode only) ──
+    // Single page_table row (covers one batch slot). For B cores each reading their
+    // own batch, 1 page_table page of size page_size_bytes = max_pages_per_batch * 4.
+    const uint32_t page_table_page_size = is_paged_attention ? (page_table.padded_shape()[-1] * sizeof(uint32_t)) : 0;
+    if (is_paged_attention) {
+        auto page_table_df = datatype_to_dataformat_converter(page_table.dtype());
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(page_table_page_size, {{CBIndex::c_9, page_table_df}})
+                .set_page_size(CBIndex::c_9, page_table_page_size));
+    }
+
     // ── Reader kernel ──
     std::vector<uint32_t> reader_ct_args = {
         B,
@@ -292,12 +313,18 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         k_num_chunks,
         num_cores,
         attrs.pre_rescaled ? 1u : 0u,
+        is_paged_attention ? 1u : 0u,
+        block_size_t,
     };
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*k_idx.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*k_norms.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*v_idx.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*v_norms.buffer()).append_to(reader_ct_args);
+    // page_table TensorAccessor args — always append (even in contiguous mode, reader
+    // ignores them behind the `if constexpr (is_paged_attention)` gate, but the offset
+    // calculation must be consistent).
+    TensorAccessorArgs(*page_table.buffer()).append_to(reader_ct_args);
 
     KernelHandle reader_kernel = CreateKernel(
         program,
@@ -351,6 +378,8 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 k_norms.buffer()->address(),
                 v_idx.buffer()->address(),
                 v_norms.buffer()->address(),
+                is_paged_attention ? page_table.buffer()->address() : 0u,
+                page_table_page_size,
                 i,  // core_id
                 batch_start,
                 batch_end,
@@ -419,6 +448,10 @@ void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
         reader_args[2] = args.k_norms.buffer()->address();
         reader_args[3] = args.v_indices.buffer()->address();
         reader_args[4] = args.v_norms.buffer()->address();
+        // args[5] = page_table buffer address (0 if not paged).
+        // args[6] = page_table_page_size (constant — set in create, not touched here).
+        const bool is_paged = (args.k_indices.padded_shape()[0] != args.q.padded_shape()[0]);
+        reader_args[5] = is_paged ? args.page_table.buffer()->address() : 0u;
 
         auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, core);
         writer_args[0] = output.buffer()->address();
