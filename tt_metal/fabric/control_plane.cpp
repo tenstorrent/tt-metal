@@ -438,9 +438,9 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
         }
     }
 
-    // Stub: For mock devices, synthesize a FabricNodeId for any unmapped ASIC ID
+    // Stub: For mock or emulated devices, synthesize a FabricNodeId for any unmapped ASIC ID
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+    if (cluster.is_mock_or_emulated()) {
         return FabricNodeId(MeshId{0}, static_cast<ChipId>(asic_id));
     }
 
@@ -1253,9 +1253,9 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
         }
     }
 
-    // Stub: For mock devices, return a synthetic FabricNodeId for any unmapped chip
+    // Stub: For mock or emulated devices, return a synthetic FabricNodeId for any unmapped chip
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (this->cluster_.get().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (this->cluster_.get().is_mock_or_emulated()) {
         return FabricNodeId(MeshId{0}, physical_chip_id);
     }
 

@@ -37,6 +37,7 @@ jobs:
               { name: "Sanity tests",                  workflow: "sanity-tests.yaml",               optional: false },
               { name: "Blackhole post-commit",          workflow: "blackhole-post-commit.yaml",      optional: false },
               { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
+              { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
               { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },
               { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",        optional: true  },
               { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },

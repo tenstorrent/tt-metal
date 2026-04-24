@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
     PROMPTS_PATH,
+    check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
     extract_tt_state_dict,
@@ -51,6 +52,8 @@ PCC_THRESHOLD = 0.99
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+SEQ_LEN_1K = 1024
+SEQ_LEN_25K = 25 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
@@ -61,7 +64,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
     ["json_prompts", "abc_1k", "random", "passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("isl_total", [1024, 6400])
+@pytest.mark.parametrize("isl_total", [SEQ_LEN_1K, SEQ_LEN_25K])
 @pytest.mark.parametrize(
     "num_layers",
     [
@@ -78,6 +81,7 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
     ],
     ids=["e64_cf4_host", "e256_cf32_host", "e256_cf32_device"],
 )
+@pytest.mark.parametrize("num_iterations", [1])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -119,6 +123,7 @@ def test_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    num_iterations,
     input_source,
     use_pretrained,
     return_kv_cache,
@@ -172,12 +177,10 @@ def test_prefill_transformer(
     # --- Cache-aware loading strategy ---
     profiler.start("cache_check")
 
-    from models.demos.deepseek_v3_d_p.utils.cache_utils import check_reference_cache_exists, check_ttnn_cache_complete
-
     # Check cache states
     experts_per_chip = 256 // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
     ttnn_cache_complete = (
-        check_ttnn_cache_complete(effective_cache_path, num_layers, experts_per_chip, tuple(mesh_shape))
+        TtPrefillTransformer.check_cache_complete(effective_cache_path, num_layers, experts_per_chip)
         if effective_cache_path
         else False
     )
@@ -199,6 +202,11 @@ def test_prefill_transformer(
     )
 
     profiler.end("cache_check")
+
+    # Report cache check timing breakdown
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import report_and_clear
+
+    report_and_clear()
 
     # --- Create input (needed early for reference computation) ---
     if input_source == "random":
@@ -284,6 +292,10 @@ def test_prefill_transformer(
     profiler.end("weights_creation")
 
     # --- TT transformer ---
+    # Log program cache size BEFORE creation
+    cache_entries_before = mesh_device.num_program_cache_entries()
+    logger.info(f"Program cache entries BEFORE transformer creation: {cache_entries_before}")
+
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
         mesh_device=mesh_device,
@@ -301,6 +313,12 @@ def test_prefill_transformer(
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
+
+    # Log program cache size AFTER creation
+    cache_entries_after = mesh_device.num_program_cache_entries()
+    logger.info(f"Program cache entries AFTER transformer creation: {cache_entries_after}")
+    logger.info(f"Program cache entries ADDED during creation: {cache_entries_after - cache_entries_before}")
+
     # --- Free memory immediately after transformer creation ---
     del state_dict
     gc.collect()
@@ -335,8 +353,12 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
-    result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
-    ttnn.synchronize_device(mesh_device)
+    for i in range(num_iterations):
+        logger.info(f"Starting iteration: {i}")
+        result = transformer(tt_tokens, tt_kvpe_cache, return_intermediates=pcc_validation, read_profiler=True)
+        logger.info(f"Starting completion sync on iteration: {i}")
+        ttnn.synchronize_device(mesh_device)
+
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
 

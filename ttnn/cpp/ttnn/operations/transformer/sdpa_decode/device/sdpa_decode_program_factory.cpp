@@ -76,6 +76,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t DH = k_shape[3];
     uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
     uint32_t Bkv = k_shape[0];
+    uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
@@ -162,11 +163,14 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     // ========== Core Allocation ==========
     const uint32_t max_cores_per_head =
         program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
     const uint32_t num_cores_per_head = std::max(1u, num_cores_per_batch_uncapped / num_kv_heads);
-    const uint32_t num_heads_per_core =
-        std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    uint32_t num_heads_per_core = std::max(1u, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch_uncapped));
+    while (num_kv_heads % num_heads_per_core != 0) {
+        num_heads_per_core++;
+    }
     const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
     const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     const uint32_t num_output_cores = B;
@@ -399,7 +403,8 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const tt::DataFormat mask_df = use_attention_mask
                                        ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                        : tt::DataFormat::Float16_b;
-    const tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat im_df = tt::DataFormat::Float16_b;
     const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
@@ -626,6 +631,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         k_mcast_semaphore_id,
         (uint32_t)q_locally_available,
         (uint32_t)use_col_major_group_indexing,  // use_k_mcast
+        Bmask,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);

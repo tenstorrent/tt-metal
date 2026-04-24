@@ -16,8 +16,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Validate layouts
     TT_FATAL(
-        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Dispatched buffer must be ROW_MAJOR layout");
+        tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE ||
+            tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Dispatched buffer must be TILE_LAYOUT or ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.dispatched_metadata.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Dispatched metadata must be ROW_MAJOR layout");
@@ -116,7 +117,8 @@ ttnn::Tensor prefill_combine(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool init_zeros) {
+    bool init_zeros,
+    bool use_l1_small_for_semaphores) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -129,7 +131,8 @@ ttnn::Tensor prefill_combine(
             .topology = topology,
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
-            .init_zeros = init_zeros},
+            .init_zeros = init_zeros,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,
