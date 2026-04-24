@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Load replay buffer
     const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1; // Divide by 2 since SFSPU operates on 2 rows at a time
     const std::uint32_t replay_buf_len = num_sfpu_iterations * 4;
-    load_replay_buf(
+    load_replay_buf( // TODO: Replace with SFPI call when SFPI is supported for Quasar: https://github.com/tenstorrent/tt-llk/issues/1637
         0,
         replay_buf_len,
         false,

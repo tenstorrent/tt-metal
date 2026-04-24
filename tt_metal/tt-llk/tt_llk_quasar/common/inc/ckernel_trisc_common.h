@@ -277,7 +277,7 @@ struct srcs_dims
     static constexpr std::uint32_t YDIM_BASE = 8; // rows per slice when SrcS is in 16-bit mode
 
     static constexpr std::uint32_t ydim(bool srcs_32bit_mode)
-    {
+    { // TODO for metal bringup: make programmable based on tensor_shape for tiny tile support
         return srcs_32bit_mode ? (YDIM_BASE / 2) : YDIM_BASE;
     }
 
