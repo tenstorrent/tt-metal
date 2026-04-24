@@ -56,7 +56,7 @@ regressions, and to bump device/e2e perf thresholds that were set against pre-au
 | Falcon7b decode seq=2047 | auto-config (L1_SHARDED) | Tracy subprocess failure (pre-existing, not auto-tuner-related) | 548 | n/a |
 | sentence-BERT | manual config (upstream) | 546.5 sps | 546.5 | 0% (threshold locked in from upstream work; stability confirmed on opt_3) |
 | BGE-m3 | All mcast configs commented out → `ttnn.linear` | no device-perf test in tree | — | — |
-| DistilBERT wall-clock (seq=384) | `ttnn.linear` only, no explicit configs | median 0.0326 s / 246 sps (7 runs: 0.0325/0.0330/0.0325/0.0380/0.0326/0.0325/0.0326) | expected 0.0338 s | **-3.6% median inference time (auto-tuner win)** |
+| DistilBERT wall-clock (seq=384) | `ttnn.linear` only, no explicit configs | median 0.0326 s / 246 sps (7 runs: 0.0325/0.0330/0.0325/0.0380/0.0326/0.0325/0.0326) | expected 0.0338 s (set to actual × 1.05 in `dccb887fc5a`, so pre-auto-tuner actual was ~0.0322 s) | **+1.2% vs pre-auto-tuner actual — within noise, flat** |
 | DistilBERT device-perf (seq=768) | same model | tracy subprocess blocked — inner pytest hung in setup `GetNumPCIeDevices()` even after `tt-smi -r`, 25-min wall clock before inner 300s pytest-timeout fired | 245 (stale) | skip is `@pytest.mark.skip #26285`; setup-hang is pre-existing infra issue, not auto-tuner regression |
 | bert_tiny (WH) | auto-config | `@skip #26288` — weights not local (`mrm8488/bert-tiny-finetuned-squadv2`) | 6850 (stale) | pending |
 | Mamba (WH) | auto-config | weights not local (`state-spaces/mamba-2.8b`, ~5 GB) | 1.634 ms/layer | pending |
@@ -68,15 +68,14 @@ regressions, and to bump device/e2e perf thresholds that were set against pre-au
   auto-config paths. Consistent with the cross-arch hypothesis below — pack-phase lever doesn't
   dominate for small shapes / decode-mode matmuls. No threshold bumps needed.
 - **DistilBERT** wall-clock (`test_performance_distilbert_for_qa`, seq=384): 7 runs measured
-  0.0325, 0.0330, 0.0325, 0.0380, 0.0326, 0.0325, 0.0326 s. Median 0.0326 s vs expected 0.0338
-  = **-3.6% median (auto-tuner win)**. Test uses `inference_time < expected` so all 7 pass
-  even with the 0.0380 outlier, because the outlier is still below 0.0338. Tried tightening
-  to 0.0335 to lock the win in as a regression floor — first post-tighten run at 0.0380 would
-  have failed (variance spike, probably thermal/system-load — other runs clustered at 0.0325).
-  Reverted: 7 samples doesn't give enough statistical power for a 1% tighten without CI
-  flakes. Win is documented; threshold stays at 0.0338. Follow-on: if 20+ runs in CI-like
-  conditions consistently cluster at 0.032-0.033 s, drop threshold to 0.0345 s (conservative,
-  ~2% above the 0.0338 baseline but tighter than today's de facto 0.038 s worst case).
+  0.0325, 0.0330, 0.0325, 0.0380, 0.0326, 0.0325, 0.0326 s. Median 0.0326 s. **Important
+  correction**: the `expected_inference_time=0.0338 s` threshold was set in
+  `dccb887fc5a` (Oct 2025, pre-auto-tuner) using "5% margin above actual measurements" per
+  the commit message — so the pre-auto-tuner ACTUAL was ~0.0322 s, not 0.0338 s. My median of
+  0.0326 s is therefore **+1.2% vs the pre-auto-tuner actual, within the 1.5% intra-session
+  noise — i.e. flat**, not a -3.6% win. The -3.6% against the threshold is just the buffer
+  the threshold was set with. DistilBERT joins Falcon7b's auto-config paths on the "flat"
+  side of the ledger — no auto-tuner regression, no measurable win either.
 - **DistilBERT** device-perf (`test_distilbert_perf_device`, seq=768): test is
   `@pytest.mark.skip` (#26285). Attempted unskip+measure; hits an unrelated infrastructure
   hang in `ttnn._ttnn.device.GetNumPCIeDevices()` during tracy subprocess setup, even after
