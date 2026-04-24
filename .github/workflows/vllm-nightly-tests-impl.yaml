@@ -423,7 +423,6 @@ jobs:
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
-          job-status: ${{ job.status }}
 
       - name: Set artifact prefix
         if: ${{ !cancelled() }}
