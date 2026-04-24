@@ -616,7 +616,6 @@ class Pipeline:
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
 
-        _rank = int(ttnn.distributed_context_get_rank())
         self.barrier()  # Synchronize before socket creation — stage 0 may be slow due to weight loading
         logger.info("Configuring block")
         self.configure_block()
