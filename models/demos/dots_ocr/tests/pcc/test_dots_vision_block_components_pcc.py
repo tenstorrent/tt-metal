@@ -141,7 +141,7 @@ LAYER = 0
 
 
 def _pcc_required() -> float:
-    return float(os.environ.get("DOTS_VISION_BLOCK_PCC", os.environ.get("DOTS_VISION_PCC_REQUIRED", "0.97")))
+    return float(os.environ.get("DOTS_VISION_BLOCK_PCC", os.environ.get("DOTS_VISION_PCC_REQUIRED", "0.99")))
 
 
 def _weights_available(model_dir: Path) -> bool:
