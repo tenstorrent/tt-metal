@@ -55,6 +55,26 @@ bool is_native_transpose_sharding(const TensorSpec& input_spec, const MemoryConf
         output_memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         return false;
     }
+    // ROW_MAJOR sharded shards whose total element count is not a multiple of the tile footprint
+    // (TILE_HEIGHT * TILE_WIDTH) cannot use the specialized native kernels — those assume whole-tile
+    // pages. Mirrors the `is_shard_tile_aligned` guard used by `unary_ng`. Returning false routes
+    // such cases to the interleaved factories, which use TensorAccessorArgs to read/write sharded
+    // buffers directly over NOC without an explicit reshard hop.
+    if (input_spec.layout() == Layout::ROW_MAJOR) {
+        constexpr uint64_t tile_hw =
+            static_cast<uint64_t>(tt::constants::TILE_HEIGHT) * static_cast<uint64_t>(tt::constants::TILE_WIDTH);
+        auto shard_elements_not_tile_aligned = [](const MemoryConfig& mc) {
+            if (!mc.shard_spec().has_value()) {
+                return false;
+            }
+            const auto& s = mc.shard_spec()->shape;
+            const uint64_t elems = static_cast<uint64_t>(s[0]) * static_cast<uint64_t>(s[1]);
+            return elems % tile_hw != 0;
+        };
+        if (shard_elements_not_tile_aligned(in_cfg) || shard_elements_not_tile_aligned(output_memory_config)) {
+            return false;
+        }
+    }
     // When either spec is missing we're in the pre-derivation path (callers like transpose.cpp and
     // compute_output_specs use this predicate as an eligibility probe before deriving the output
     // shard_spec). Skip the grid equality check in that case — the derived grid will match the input's.
