@@ -12,6 +12,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include <set>
+#include <unordered_set>
 
 namespace tt::tt_metal {
 
@@ -220,13 +221,70 @@ void KernelDescriptor::emplace_runtime_args(const CoreCoord& core, RTArgList arg
     emplace_runtime_args_impl(*this, core, args.items_);
 }
 
+// Pack (kernel_idx, core.x, core.y, arg_idx) into a single uint64_t for O(1) set lookup.
+static uint64_t rt_binding_key(uint32_t kernel_idx, CoreCoord core, uint32_t arg_idx) {
+    return ((uint64_t)(kernel_idx & 0xffu) << 48) | ((uint64_t)(core.x & 0xffu) << 40) |
+           ((uint64_t)(core.y & 0xffu) << 32) | (uint64_t)arg_idx;
+}
+
 ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& desc) {
     ResolvedBindings result;
+
+    // Track every registered (kernel, core, arg_idx) position and every buffer address.
+    // Used below to detect unregistered positions that hold a buffer address — i.e.,
+    // the push_back(buf->address()) mistake.
+    std::unordered_set<uint64_t> registered_positions;
+    std::unordered_set<uint32_t> registered_addresses;
 
     for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
         for (const auto& b : desc.kernels[k].buffer_bindings) {
             auto& data = GetRuntimeArgs(program, k, b.core);
+
+            // Validate that the registered position actually contains this buffer's address.
+            // Fires when buffer_bindings.push_back() was called with the wrong arg_idx, or
+            // when the runtime arg was written independently with a different value.
+            TT_FATAL(
+                b.arg_idx < data.size() && data[b.arg_idx] == b.buffer->address(),
+                "BufferBinding for kernel {} at core ({},{}) arg[{}]: stored value {:#x} "
+                "does not match buffer->address() {:#x}. Wrong arg_idx in buffer_bindings, "
+                "or arg was written without using emplace_runtime_args().",
+                k,
+                b.core.x,
+                b.core.y,
+                b.arg_idx,
+                b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
+                b.buffer->address());
+
             result.rt_args.push_back({&data, b.arg_idx, b.buffer});
+            registered_positions.insert(rt_binding_key(k, b.core, b.arg_idx));
+            registered_addresses.insert(b.buffer->address());
+        }
+    }
+
+    // Scan every runtime arg on every kernel/core.  If an arg's value matches a registered
+    // buffer's address but no binding was declared at that position, the factory called
+    // push_back(buf->address()) instead of push_back(buf).  On cache hits the fast path
+    // would skip that arg and leave it stale.
+    if (!registered_addresses.empty()) {
+        for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
+            for (const auto& [core, args] : desc.kernels[k].runtime_args) {
+                for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
+                    if (registered_addresses.count(args[i]) &&
+                        !registered_positions.count(rt_binding_key(k, core, i))) {
+                        TT_FATAL(
+                            false,
+                            "Kernel {} core ({},{}) arg[{}]={:#x} matches a registered buffer "
+                            "address but no BufferBinding was declared at this position. "
+                            "Use push_back(buffer) instead of push_back(buffer->address()) so "
+                            "the address is patched on cache hits.",
+                            k,
+                            core.x,
+                            core.y,
+                            i,
+                            args[i]);
+                    }
+                }
+            }
         }
     }
 
