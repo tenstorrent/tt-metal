@@ -40,24 +40,6 @@ static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
     return 0;
 }
 
-// Largest n = rows * cols with rows <= max_rows, cols <= max_cols, dim % n == 0,
-// and (dim / n) % align == 0. Returns {rows, cols} or {0, 0} if no valid grid exists.
-static std::pair<uint32_t, uint32_t> find_best_n_2d(
-    uint32_t dim, uint32_t max_rows, uint32_t max_cols, uint32_t align) {
-    uint32_t best_n = 0, best_rows = 0, best_cols = 0;
-    for (uint32_t rows = 1; rows <= max_rows; rows++) {
-        for (uint32_t cols = 1; cols <= max_cols; cols++) {
-            uint32_t n = rows * cols;
-            if (n > best_n && dim % n == 0 && (dim / n) % align == 0) {
-                best_n = n;
-                best_rows = rows;
-                best_cols = cols;
-            }
-        }
-    }
-    return {best_rows, best_cols};
-}
-
 // Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
 // Callers must check is_sharded() before calling interleaved_to_sharded.
 MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, const TensorSpec& output_shape) {
@@ -114,34 +96,14 @@ MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, 
             is_rm ? CoreCoord{start.x + nx - 1, start.y + ny - 1} : CoreCoord{start.x + ny - 1, start.y + nx - 1};
         output_mem_config = output_shape.block_sharded(CoreRange{start, new_end}, orientation).memory_config();
     } else if (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        // 1D sharding uses a 2D CoreRange; only num_cores = rows * cols matters.
-        auto [best_rows, best_cols] = find_best_n_2d(phys_h, grid_y, grid_x, align_h);
-        if (best_rows == 0) {
-            log_warning(
-                tt::LogOp,
-                "ttnn.reshape: cannot find valid HEIGHT_SHARDED grid for output "
-                "(phys_h={}, align_h={}); falling back to INTERLEAVED",
-                phys_h,
-                align_h);
-            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-        }
-        CoreCoord new_end{start.x + best_cols - 1, start.y + best_rows - 1};
-        output_mem_config =
-            output_shape.height_sharded(CoreRangeSet{CoreRange{start, new_end}}, orientation).memory_config();
+        // Pass the full input grid through unchanged. Sub-grid search (picking a smaller
+        // rectangular subset for tile alignment) silently shrinks the shard grid and
+        // caused UFLD V2 PCC regression by changing the shard layout that downstream
+        // ops read from; let height_sharded() handle alignment internally instead.
+        output_mem_config = output_shape.height_sharded(input_shard_spec.grid, orientation).memory_config();
     } else if (layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto [best_rows, best_cols] = find_best_n_2d(phys_w, grid_y, grid_x, align_w);
-        if (best_cols == 0) {
-            log_warning(
-                tt::LogOp,
-                "ttnn.reshape: cannot find valid WIDTH_SHARDED grid for output "
-                "(phys_w={}, align_w={}); falling back to INTERLEAVED",
-                phys_w,
-                align_w);
-            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-        }
-        CoreCoord new_end{start.x + best_cols - 1, start.y + best_rows - 1};
-        output_mem_config =
-            output_shape.width_sharded(CoreRangeSet{CoreRange{start, new_end}}, orientation).memory_config();
+        // Pass the full input grid through unchanged (see HEIGHT_SHARDED comment above).
+        output_mem_config = output_shape.width_sharded(input_shard_spec.grid, orientation).memory_config();
     } else {
         TT_FATAL(
             false, "Unsupported memory layout {}: expected BLOCK_SHARDED, HEIGHT_SHARDED, or WIDTH_SHARDED", layout);
