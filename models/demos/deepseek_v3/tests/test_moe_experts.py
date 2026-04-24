@@ -180,7 +180,8 @@ def test_forward_pass(
 
     from models.common.utility_functions import comp_pcc
 
-    min_pcc = 0.975  # slightly lower after moving to quantize-then-transpose
+    required_pcc = 0.975  # slightly lower after moving to quantize-then-transpose
+    min_pcc = float("inf")
     passed = True
 
     for chunk_idx in range(num_chunks):
@@ -210,7 +211,7 @@ def test_forward_pass(
         if chunk_ref_output.shape != tt_output_chunk_torch.shape:
             chunk_ref_output = chunk_ref_output.unsqueeze(0)
 
-        chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=0.98)
+        chunk_passed, chunk_pcc = comp_pcc(tt_output_chunk_torch, chunk_ref_output, pcc=required_pcc)
 
         min_pcc = min(min_pcc, chunk_pcc)
         if not chunk_passed:
@@ -223,7 +224,7 @@ def test_forward_pass(
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
 
-    assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < 0.98"
+    assert passed, f"PCC check failed! Min PCC: {min_pcc:.6f} < {required_pcc}"
 
 
 def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
