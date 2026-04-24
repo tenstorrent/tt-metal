@@ -1528,6 +1528,7 @@ void MeshDeviceImpl::quiesce_internal() {
     // are both running before any handshake poll — fixing the FIX P regression where
     // per-device sequential processing caused Device 4's receiver to complete the
     // handshake before Device 0's sender was even launched.
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1 — relaunching fabric workers on all devices");
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
             submesh_ptr->restart_fabric_workers_for_quiesce();
@@ -1536,9 +1537,12 @@ void MeshDeviceImpl::quiesce_internal() {
     for (auto* idev : get_devices()) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1 — Device {} starting quiesce_and_restart_fabric_workers", dev->id());
             dev->quiesce_and_restart_fabric_workers();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1 — Device {} done", dev->id());
         }
     }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1 complete — all devices relaunched, starting Pass 2 (handshake wait)");
 
     // Phase 3: All devices have relaunched; now wait for handshake completion.
     for (const auto& submesh : submeshes_) {
@@ -1549,9 +1553,12 @@ void MeshDeviceImpl::quiesce_internal() {
     for (auto* idev : get_devices()) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} starting wait_for_fabric_workers_ready", dev->id());
             dev->wait_for_fabric_workers_ready();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} done", dev->id());
         }
     }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 2 complete — all devices ready");
 }
 
 void MeshDeviceImpl::quiesce_devices() {

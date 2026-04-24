@@ -911,6 +911,27 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
         quiesce_health = tt::tt_fabric::configure_fabric_cores(this, {}, quiesce_skip_reset_chans);
     }
+    // Log configure_fabric_cores health — newly_dead_channels here means configure itself
+    // killed channels (e.g. assert_risc_reset_at_core timed out).  These channels will be
+    // skipped in write_launch_msg_to_core below and won't reach READY_FOR_TRAFFIC.
+    log_info(
+        tt::LogMetal,
+        "quiesce_and_restart_fabric_workers: Device {} Phase 3: configure_fabric_cores complete — "
+        "newly_dead={}",
+        this->id(),
+        quiesce_health.newly_dead_channels.size());
+    if (!quiesce_health.newly_dead_channels.empty()) {
+        std::string newly_dead_str;
+        for (auto ch : quiesce_health.newly_dead_channels) {
+            newly_dead_str += fmt::format("{} ", ch);
+        }
+        log_warning(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3: configure_fabric_cores newly-dead "
+            "channels: [{}] — write_launch_msg will be skipped for these",
+            this->id(),
+            newly_dead_str);
+    }
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
@@ -1018,12 +1039,44 @@ void Device::quiesce_and_restart_fabric_workers() {
             msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+
+            // Pre-launch status read: confirm ERISC is in TERMINATED (0xA4B4C4D4) or 0x0
+            // before we send the launch message.  Any other value means Phase 2.5 didn't
+            // terminate the ERISC cleanly and we may be overwriting a live core.
+            {
+                const auto [erisc_sync_addr_pre, unused_pre] =
+                    builder_ctx.get_fabric_router_sync_address_and_status();
+                std::vector<uint32_t> pre_launch_buf(1, 0U);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
+                } catch (...) {
+                    pre_launch_buf[0] = 0xDEADBEEF;
+                }
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
+                    "write_launch_msg_to_core ETH logical ({},{}) pre_status=0x{:08x}",
+                    this->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    pre_launch_buf[0]);
+            }
+
             tt::llrt::write_launch_msg_to_core(
                 this->id(),
                 physical_core,
                 msg,
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
+                "write_launch_msg_to_core ETH logical ({},{}) done",
+                this->id(),
+                logical_core.x,
+                logical_core.y);
         }
     }
 
@@ -1179,6 +1232,9 @@ void Device::wait_for_fabric_workers_ready() {
         // 10s matches the fabric router sync timeout used at initial startup.
         constexpr uint32_t kSyncTimeoutMs = 10000;
         constexpr uint32_t kSpinLimit = 64U;
+        // Log intermediate status every 2.5s so we can see whether the ERISC is stuck at
+        // STARTED (0xA0B0C0D0), 0x0 (never launched), or something unexpected.
+        constexpr uint32_t kIntermediateLogIntervalMs = 2500;
 
         const auto master_chan = builder_ctx.get_fabric_master_router_chan(this->id());
         const auto& soc_desc_p5 = env_impl.get_cluster().get_soc_desc(this->id());
@@ -1199,6 +1255,7 @@ void Device::wait_for_fabric_workers_ready() {
             std::vector<uint32_t> sync_buf(1, 0U);
             const auto sync_start = std::chrono::steady_clock::now();
             uint32_t sync_spin = 0U;
+            int64_t last_log_ms = -1;
             while (true) {
                 try {
                     detail::ReadFromDeviceL1(
@@ -1225,6 +1282,22 @@ void Device::wait_for_fabric_workers_ready() {
                 const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                          std::chrono::steady_clock::now() - sync_start)
                                          .count();
+                // Periodic intermediate log every kIntermediateLogIntervalMs — tells us whether
+                // ERISC is stuck at STARTED (launched but no peer), at 0x0 (launch msg never
+                // arrived), or at some unexpected value.
+                if (elapsed / kIntermediateLogIntervalMs > last_log_ms / static_cast<int64_t>(kIntermediateLogIntervalMs)) {
+                    last_log_ms = elapsed;
+                    log_info(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: still waiting for "
+                        "LOCAL_HANDSHAKE_COMPLETE on master chan {} after {}ms — "
+                        "current status=0x{:08x} (expected=0x{:08x})",
+                        this->id(),
+                        master_chan,
+                        elapsed,
+                        sync_buf[0],
+                        sync_status);
+                }
                 if (elapsed > kSyncTimeoutMs) {
                     log_warning(
                         tt::LogMetal,
