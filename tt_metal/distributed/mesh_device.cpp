@@ -1472,7 +1472,18 @@ void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
     // Does NOT wait for handshake completion — that is deferred to
     // wait_for_fabric_workers_ready_for_quiesce() so that all devices
     // have their sender and receiver ERISCs running before any handshake poll.
-    for (auto* idev : get_devices()) {
+    //
+    // ORDERING: non-MMIO devices first, MMIO last.
+    // Non-MMIO L1 reads route through the MMIO device's ERISC relay firmware.
+    // If the MMIO device is quiesced first, its ERISCs enter a rebooting state
+    // (STARTED, not READY_FOR_TRAFFIC) and subsequent reads to non-MMIO devices
+    // time out with "Timeout waiting for Ethernet core service remote IO request".
+    auto devices = get_devices();
+    std::stable_sort(devices.begin(), devices.end(), [](IDevice* a, IDevice* b) {
+        // non-MMIO (false) sorts before MMIO (true)
+        return !a->is_mmio_capable() && b->is_mmio_capable();
+    });
+    for (auto* idev : devices) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             dev->quiesce_and_restart_fabric_workers();
@@ -1534,7 +1545,12 @@ void MeshDeviceImpl::quiesce_internal() {
             submesh_ptr->restart_fabric_workers_for_quiesce();
         }
     }
-    for (auto* idev : get_devices()) {
+    // ORDERING: non-MMIO first, MMIO last — see comment in restart_fabric_workers_for_quiesce().
+    auto pass1_devices = get_devices();
+    std::stable_sort(pass1_devices.begin(), pass1_devices.end(), [](IDevice* a, IDevice* b) {
+        return !a->is_mmio_capable() && b->is_mmio_capable();
+    });
+    for (auto* idev : pass1_devices) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             log_info(tt::LogMetal, "quiesce_internal: Pass 1 — Device {} starting quiesce_and_restart_fabric_workers", dev->id());

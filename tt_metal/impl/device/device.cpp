@@ -629,8 +629,23 @@ void Device::quiesce_and_restart_fabric_workers() {
             const auto eth_lc_diag = soc_desc_entry.get_eth_core_for_channel(
                 eth_chan_id, CoordSystem::LOGICAL);
             std::vector<uint32_t> diag_buf(1, 0U);
-            detail::ReadFromDeviceL1(
-                this, eth_lc_diag, router_sync_addr_diag, 4, diag_buf, CoreType::ETH);
+            // Wrap in try/catch: non-MMIO reads route through the MMIO device's ERISC relay.
+            // If the MMIO device was quiesced earlier in Pass 1, its ERISCs may not yet be
+            // READY_FOR_TRAFFIC and UMD will timeout.  The ENTRY snapshot is diagnostic only —
+            // log a warning but do NOT abort the quiesce.
+            try {
+                detail::ReadFromDeviceL1(
+                    this, eth_lc_diag, router_sync_addr_diag, 4, diag_buf, CoreType::ETH);
+            } catch (const std::exception& ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                    "eth_chan {} L1 read failed (relay not ready?): {}",
+                    this->id(),
+                    eth_chan_id,
+                    ex.what());
+                diag_buf[0] = 0xDEADBEEF;
+            }
             log_info(
                 tt::LogMetal,
                 "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
