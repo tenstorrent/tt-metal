@@ -798,9 +798,14 @@ void Device::quiesce_and_restart_fabric_workers() {
         const auto router_sync_addr =
             builder_ctx.get_fabric_router_sync_address_and_status().first;
         constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
-        // 150ms gives cooperative ERISC shutdowns more margin (was 100ms).
-        // Still well below the 500ms that added ~9s total quiesce latency.
-        constexpr uint32_t erisc_timeout_ms = 150;
+        // 2000ms: extended from 150ms to observe actual termination latency.
+        // ERISCs typically respond in <1ms; a longer window lets us see whether a slow
+        // or unresponsive ERISC eventually self-terminates, which guides whether we need
+        // a hardware reset vs. just waiting longer. Fast cases still exit the loop
+        // immediately on the first successful read — no performance regression.
+        constexpr uint32_t erisc_timeout_ms = 2000;
+        // Log current status every 200ms if ERISC has not yet terminated.
+        constexpr uint32_t kTermIntermediateLogMs = 200;
         constexpr uint32_t kSpinsBetweenSleeps = 64;
 
         std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
@@ -837,6 +842,7 @@ void Device::quiesce_and_restart_fabric_workers() {
             const auto start = std::chrono::steady_clock::now();
             uint32_t spin_counter = 0;
             bool terminated = false;
+            int64_t last_term_log_ms = -1;
             while (true) {
                 detail::ReadFromDeviceL1(
                     this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
@@ -848,6 +854,20 @@ void Device::quiesce_and_restart_fabric_workers() {
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - start)
                         .count();
+                // Log every kTermIntermediateLogMs so we can observe actual termination latency
+                // in CI logs and determine whether timeout thresholds need adjustment.
+                if (elapsed / kTermIntermediateLogMs >
+                    last_term_log_ms / static_cast<int64_t>(kTermIntermediateLogMs)) {
+                    last_term_log_ms = elapsed;
+                    log_info(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "still waiting for TERMINATED after {}ms — current status=0x{:08x}",
+                        this->id(),
+                        eth_chan_id,
+                        elapsed,
+                        status_buf[0]);
+                }
                 if (elapsed > erisc_timeout_ms) {
                     break;
                 }
@@ -1361,9 +1381,12 @@ void Device::wait_for_fabric_workers_ready() {
         // Phase 5b: Post-ready ERISC health check.
         //
         // After the handshake poll + READY_FOR_TRAFFIC write, verify that ALL active ERISC
-        // channels have reached READY_FOR_TRAFFIC.  Give a short retry window (500ms) for
-        // the master→subordinate propagation delay.
-        constexpr uint32_t kHealthCheckTimeoutMs = 500;
+        // channels have reached READY_FOR_TRAFFIC.  Extended to 2000ms (was 500ms) to observe
+        // how long propagation from master to subordinate channels actually takes and whether
+        // 500ms was cutting off channels that would have become healthy shortly after.
+        constexpr uint32_t kHealthCheckTimeoutMs = 2000;
+        // Log unhealthy channels every 200ms for observability.
+        constexpr uint32_t kHCIntermediateLogMs = 200;
 
         struct UnhealthyChannel {
             uint32_t eth_chan_id;
@@ -1391,8 +1414,10 @@ void Device::wait_for_fabric_workers_ready() {
         std::vector<UnhealthyChannel> unhealthy;
         const auto hc_start = std::chrono::steady_clock::now();
         uint32_t hc_spin = 0U;
+        int64_t last_hc_log_ms = -1;
         while (!pending.empty()) {
             std::vector<size_t> still_pending;
+            std::vector<std::pair<uint32_t, uint32_t>> still_pending_statuses;  // (chan, status)
             for (size_t idx : pending) {
                 const auto& ch = chans[idx];
                 std::vector<uint32_t> status_buf(1, 0);
@@ -1400,6 +1425,7 @@ void Device::wait_for_fabric_workers_ready() {
                     this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
                 if (status_buf[0] != expected_ready) {
                     still_pending.push_back(idx);
+                    still_pending_statuses.push_back({ch.eth_chan_id, status_buf[0]});
                 }
             }
             pending = std::move(still_pending);
@@ -1409,6 +1435,23 @@ void Device::wait_for_fabric_workers_ready() {
             const auto hc_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         std::chrono::steady_clock::now() - hc_start)
                                         .count();
+            // Log every kHCIntermediateLogMs to observe actual time-to-healthy
+            if (hc_elapsed / kHCIntermediateLogMs >
+                last_hc_log_ms / static_cast<int64_t>(kHCIntermediateLogMs)) {
+                last_hc_log_ms = hc_elapsed;
+                std::string pending_str;
+                for (const auto& [cid, st] : still_pending_statuses) {
+                    pending_str += fmt::format(" chan{}=0x{:08x}", cid, st);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5b: {}ms elapsed, "
+                    "{} channel(s) still not READY_FOR_TRAFFIC:{}",
+                    this->id(),
+                    hc_elapsed,
+                    still_pending_statuses.size(),
+                    pending_str);
+            }
             if (hc_elapsed > kHealthCheckTimeoutMs) {
                 // Final read for diagnostic.
                 for (size_t idx : pending) {
@@ -1462,14 +1505,22 @@ void Device::wait_for_fabric_workers_ready() {
                     details += fmt::format(
                         "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
                 }
+                // Interpret the observed status before throwing so the reader knows
+                // whether this is a timing issue or genuine hardware/firmware failure.
+                // STARTED (0xa0b0c0d0) = launched but handshake not complete → timing issue
+                // 0x0 = launch message never arrived → firmware loading failure
+                // 0x49705180 = L1 corrupt (prior crash left garbage) → needs tt-smi -r
+                // Other values = unexpected firmware state
                 TT_THROW(
                     "Fabric health check failed after quiesce restart on Device {} — "
-                    "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}). "
-                    "Possible corrupt ERISC state from prior process crash (#42429). "
-                    "Run tt-smi -r to reset chips.\n{}",
+                    "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) after {}ms. "
+                    "Check status values: STARTED=0xa0b0c0d0 (handshake incomplete, timing issue); "
+                    "0x0 (launch msg lost); 0x49705180 (L1 corrupt — run tt-smi -r); "
+                    "other = unexpected firmware state.\n{}",
                     this->id(),
                     truly_unhealthy.size(),
                     expected_ready,
+                    kHealthCheckTimeoutMs,
                     details);
             }
         }
