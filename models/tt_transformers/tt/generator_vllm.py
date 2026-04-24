@@ -574,13 +574,13 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         1. Convert ``images=[MultiModalKwargs_per_user, ...]`` into
            ``pixel_values=[tensor_per_user, ...]`` so the base
            ``prefill_forward_text`` can index pixel_values per user.
-        2. Force ``enable_trace=False`` for prefill. The captured prefill
-           trace in the base ``Transformer`` is text-only (it goes through
-           ``prepare_prefill_inputs_trace`` which sets ``trace_enabled=True``
-           in ``prepare_inputs_prefill`` and skips the vision-scatter branch).
-           For accurate image output we need the non-trace path, which
-           invokes ``compute_vision_token`` and masked-scatters the features
-           into the token embeddings.
+        2. ``enable_trace`` for prefill: models without
+           ``supports_vision_prefill_host_trace`` (text-only host trace) must
+           use ``enable_trace=False`` when ``pixel_values`` are present, because
+           the base ``prepare_prefill_inputs_trace`` path does not run vision
+           scatter. ``TtGemmaModel`` sets that flag and supplies pre-merged
+           activations for the same traced decoder path as ``model.py``; for
+           those models we do not override ``enable_trace`` here.
         """
         images = kwargs.pop("images", None)
         pixel_values_per_user = None
@@ -610,7 +610,8 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
             return super().prefill_forward_text(**kwargs)
 
         kwargs["pixel_values"] = pixel_values_per_user
-        kwargs["enable_trace"] = False
+        if not getattr(self.model[0], "supports_vision_prefill_host_trace", False):
+            kwargs["enable_trace"] = False
 
         # Batched prefill collapses all users into a single call to
         # `prepare_inputs_prefill` with pt_tokens of shape (batch, S) and only

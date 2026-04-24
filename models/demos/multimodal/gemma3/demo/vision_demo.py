@@ -4,7 +4,7 @@
 
 from io import BytesIO
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 import requests
 from loguru import logger
@@ -26,9 +26,23 @@ import torch
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import hf_multimodal_encode
+from models.tt_transformers.tt.common import PagedAttentionConfig, hf_multimodal_encode
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
+
+
+def _create_page_table(
+    global_batch_size: int,
+    data_parallel: int,
+    paged_attention_config: PagedAttentionConfig,
+):
+    """Build a virtual→physical page map (same pattern as `text_demo` / vLLM)."""
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
+    return reverse_permutation.reshape(
+        global_batch_size,
+        paged_attention_config.max_num_blocks // (global_batch_size // data_parallel),
+    )
 
 
 class UserMessage(BaseModel):
@@ -84,6 +98,7 @@ def create_multimodal_model(
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
 
+    # ``False`` here keeps ``Attention.layer_past`` for the Generator; ``True`` is the vLLM/externally-owned KV path
     model = TtGemmaModel(
         mesh_device=mesh_device,
         state_dict=checkpoint,
@@ -106,12 +121,34 @@ def prepare_generator_args(
     use_paged_kv_cache=False,
     optimizations=None,
     num_layers=None,
+    paged_attention: bool = True,
+    page_params: Optional[Dict[str, Any]] = None,
 ):
+    """
+    When ``paged_attention`` is True, builds a ``page_table`` and per-layer KV handles so
+    ``prefill_forward_text`` can keep ``enable_trace`` on (paged prefill is required for host trace).
+    """
+    if page_params is None:
+        # Match common text_demo defaults. Large max_num_blocks (e.g. 8192) multiplies
+        # paged K/V DRAM per layer and can OOM before SamplingGenerator init on smaller devices.
+        # batch-1: 32 * 1024 = 32k tokens pool; batch-32: 32*1024/32 = 1k per user — raise blocks or
+        # lower batch if you need longer paged context + prefill trace.
+        page_params = {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024}
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
 
+    paged_attention_config = (
+        PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks_per_dp"],
+        )
+        if paged_attention
+        else None
+    )
+
     model_args = []
     model = []
+    tt_kv_cache = []
 
     for submesh in submesh_devices:
         model_args_i, model_i, state_dict = create_multimodal_model(
@@ -123,11 +160,27 @@ def prepare_generator_args(
             checkpoint=state_dict,
             optimizations=optimizations,
             num_layers=num_layers,
+            paged_attention_config=paged_attention_config,
         )
         model_args.append(model_args_i)
         model.append(model_i)
+        if paged_attention_config is not None:
+            tt_kv_cache.append([l.attention.layer_past for l in model_i.layers])
+        else:
+            tt_kv_cache.append(None)
 
-    return model_args, model
+    if paged_attention and paged_attention_config is not None:
+        page_table = _create_page_table(
+            max_batch_size,
+            data_parallel,
+            paged_attention_config,
+        )
+    else:
+        page_table = None
+        # With no paged path, all kv entries should be None
+        tt_kv_cache = [None] * len(model)
+
+    return model_args, model, page_table, tt_kv_cache
 
 
 @pytest.mark.parametrize(
@@ -222,7 +275,7 @@ def test_multimodal_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
-    model_args, model = prepare_generator_args(
+    model_args, model, page_table, tt_kv_cache = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -230,8 +283,9 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
         optimizations=optimizations,
         num_layers=num_layers,
+        paged_attention=True,
+        page_params={"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
     )
-
     from transformers import AutoProcessor
 
     processor = AutoProcessor.from_pretrained(
@@ -240,10 +294,12 @@ def test_multimodal_demo_text(
 
     generator = Generator(model, model_args, mesh_device)
 
-    # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
+    # With paged ``page_table`` + ``tt_kv_cache``, prefill is allowed to use host
+    # prefill trace when `enable_trace` and `can_enable_trace` match (text-only
+    # rows: ``prefill_text_only_trace``; image rows: untraced e2e path in generator)
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
-        kv_cache=None,
+        kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         can_sample_on_device=False,
         non_greedy_decoding_on_device=False,
@@ -352,6 +408,10 @@ def test_multimodal_demo_text(
                     None,  # xattn_caches not used for Gemma3
                     total_lens,
                     prefill_lens,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    enable_trace=enable_trace,
+                    warmup_prefill=False,
                 )
 
             prefill_end = time.perf_counter()
@@ -372,6 +432,8 @@ def test_multimodal_demo_text(
                         next_token_tensor,
                         position_id,
                         enable_trace=enable_trace,
+                        page_table=page_table,
+                        kv_cache=tt_kv_cache,
                     )
 
                     next_tokens, next_texts = sampler(logits)

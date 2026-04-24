@@ -51,6 +51,14 @@ def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
 
+def _is_insufficient_trace_region_error(exc: BaseException) -> bool:
+    """True when ttnn trace capture needs a larger device trace_region_size (decode/prefill)."""
+    msg = str(exc).lower()
+    if "trace" not in msg:
+        return False
+    return "trace_region" in msg or "get_trace_buffers_size" in msg or ("allocated" in msg and "region" in msg)
+
+
 class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -84,6 +92,8 @@ class Generator(WarmupForwardMixin):
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
         self.mode = None
+        # Set when decode trace capture fails (e.g. trace_region_size too small); stay on untraced decode.
+        self._decode_trace_unavailable = False
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses)
     model_capabilities = {
@@ -235,6 +245,8 @@ class Generator(WarmupForwardMixin):
         global_user_id=None,
         batch_size=1,
         user_id=0,
+        last_token_idx=None,
+        **kwargs,
     ):
         logger.info(
             "Prefill trace capture starting (batch_size=%s): compile pass then trace record — "
@@ -242,9 +254,11 @@ class Generator(WarmupForwardMixin):
             batch_size,
         )
         if batch_size > 1:
-            prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+            prefill_kwargs = {**kwargs, "page_table": page_table, "batch_size": batch_size, "user_id": user_id}
             if global_user_id is not None:
                 prefill_kwargs["global_user_id"] = global_user_id
+            if last_token_idx is not None:
+                prefill_kwargs["last_token_idx"] = last_token_idx
             host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
             # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
             tt_rot_mats_prefill_global = host_inputs[1]
@@ -285,9 +299,11 @@ class Generator(WarmupForwardMixin):
             logger.info("Done Capturing Prefill Trace")
             return trace_id, tt_out_trace, *device_inputs
         else:
-            prefill_kwargs = {"page_table": page_table}
+            prefill_kwargs = {**kwargs, "page_table": page_table}
             if global_user_id is not None:
                 prefill_kwargs["global_user_id"] = global_user_id
+            if last_token_idx is not None:
+                prefill_kwargs["last_token_idx"] = last_token_idx
             host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
             tt_rot_mats_prefill_global = host_inputs[1]
             tt_rot_mats_prefill_local = host_inputs[2]
@@ -376,7 +392,14 @@ class Generator(WarmupForwardMixin):
         **kwargs,
     ):
         global_user_id = kwargs.get("global_user_id", None)
-        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}"
+        has_vision = kwargs.get("pixel_values", None) is not None
+        vision_merged = (
+            has_vision
+            and batch_size == 1
+            and getattr(self.model[model_id], "supports_vision_prefill_host_trace", False)
+        )
+        # Text-only and vision-e2e traces use different first inputs (uint32 vs merged bf16) — keep separate cache entries.
+        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}{'_vm' if vision_merged else ''}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
@@ -386,6 +409,8 @@ class Generator(WarmupForwardMixin):
                 global_user_id=global_user_id,
                 batch_size=batch_size,
                 user_id=user_id,
+                last_token_idx=last_token_idx,
+                **kwargs,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -401,6 +426,8 @@ class Generator(WarmupForwardMixin):
             global_user_id=global_user_id,
             batch_size=batch_size,
             user_id=user_id,
+            last_token_idx=last_token_idx,
+            **kwargs,
         )
 
         return tt_out_trace
@@ -416,11 +443,15 @@ class Generator(WarmupForwardMixin):
         model_id=-1,
         global_user_id=None,
         batch_size=1,
+        last_token_idx=None,
+        **kwargs,
     ):
         # Use actual batch_size since tokens are now in batch dimension
-        prefill_kwargs = {"page_table": page_table, "batch_size": batch_size, "user_id": user_id}
+        prefill_kwargs = {**kwargs, "page_table": page_table, "batch_size": batch_size, "user_id": user_id}
         if global_user_id is not None:
             prefill_kwargs["global_user_id"] = global_user_id
+        if last_token_idx is not None:
+            prefill_kwargs["last_token_idx"] = last_token_idx
         host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, **prefill_kwargs)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
@@ -600,8 +631,24 @@ class Generator(WarmupForwardMixin):
                 prefill_seq_len, num_cached_tokens if not use_batched_prefill else 0
             )
 
+            # Prefill host trace: text uses uint32 + embd in the graph; vision e2e (Gemma3 TtGemmaModel)
+            # uses pre-merged bf16 activations + decoder in the graph (vision tower runs before each prefill).
+            _pvs = kwargs.get("pixel_values", None)
+            if _pvs is not None and use_batched_prefill:
+                has_vision = isinstance(_pvs, (list, tuple)) and any(x is not None for x in _pvs)
+            elif _pvs is not None and not use_batched_prefill:
+                _u = _pvs[idx] if isinstance(_pvs, (list, tuple)) and idx < len(_pvs) else _pvs
+                has_vision = _u is not None
+            else:
+                has_vision = False
+            vision_e2e_trace_ok = (not has_vision) or (
+                not use_batched_prefill and getattr(self.model[model_id], "supports_vision_prefill_host_trace", False)
+            )
+            prefill_text_only_trace = enable_trace_current_prompt and vision_e2e_trace_ok
+
             logger.info(
-                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, "
+                f"can_trace: {enable_trace_current_prompt}, prefill_text_trace: {prefill_text_only_trace}"
             )
 
             if page_table is not None:
@@ -612,7 +659,7 @@ class Generator(WarmupForwardMixin):
                     page_table_for_user,
                     kv_cache[model_id],
                     seq_len,
-                    trace_enabled=enable_trace_current_prompt,
+                    trace_enabled=prefill_text_only_trace,
                     prefill_seq_len=prefill_seq_len,
                     use_batched_prefill=use_batched_prefill,
                     user_id=batch_user_ids if use_batched_prefill else user_id,
@@ -661,7 +708,7 @@ class Generator(WarmupForwardMixin):
                     empty_slots=[user_id % max_batch_size_per_model],
                 )
 
-            if enable_trace_current_prompt:
+            if prefill_text_only_trace:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
@@ -718,7 +765,7 @@ class Generator(WarmupForwardMixin):
                     )
 
                     sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
-                    if enable_trace_current_prompt:
+                    if prefill_text_only_trace:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
                             (
                                 s_trace_id,
@@ -771,7 +818,7 @@ class Generator(WarmupForwardMixin):
                 break
 
             # Non-batched prefill path
-            if enable_trace_current_prompt:
+            if prefill_text_only_trace:
                 if return_hidden_states:
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
@@ -1095,8 +1142,21 @@ class Generator(WarmupForwardMixin):
             "sampling_on_device": sampling_on_device,
         }
 
-        if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+        use_decode_trace = enable_trace and not self._decode_trace_unavailable
+        if use_decode_trace:
+            try:
+                tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            except RuntimeError as err:
+                if _is_insufficient_trace_region_error(err):
+                    logger.warning(
+                        "Decode trace capture failed (mesh trace region too small): running decode without trace. "
+                        "For Gemma 3 27B on T3K, set trace_region_size to at least 33554432 (32 MiB) in your "
+                        "device / override_tt_config (e.g. alongside l1_small_size and fabric_config)."
+                    )
+                    self._decode_trace_unavailable = True
+                    tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
+                else:
+                    raise
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
