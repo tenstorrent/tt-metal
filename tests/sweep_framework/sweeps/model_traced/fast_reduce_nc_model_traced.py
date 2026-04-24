@@ -71,6 +71,11 @@ def run(
 
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # fast_reduce_nc does not accept an 'output' kwarg.  The V2 loader may
+    # include it (e.g. output=None) but the master trace never recorded it,
+    # so passing it creates an extra_key diff.
+    op_kwargs.pop("output", None)
+
     # Extract dims from op_kwargs for golden computation
     dims = op_kwargs.get("dims", [0, 1])
 
