@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11l.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors
+from models.demos.yolov11l.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors, sharded_concat_2
 
 
 class TtnnDetect:
@@ -72,23 +72,23 @@ class TtnnDetect:
         x6 = self.cv3_2_1_1(device, x6)
         x6 = self.cv3_2_2_0(x6)
 
-        x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y1 = ttnn.concat((x1, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y2 = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Concat cv2/cv3 branches while height-sharded, then one S2I per scale (saves 3× sharded_to_interleaved vs S2I each branch).
+        y1 = sharded_concat_2(x1, x4)
+        y2 = sharded_concat_2(x2, x5)
+        y3 = sharded_concat_2(x3, x6)
+        deallocate_tensors(x1, x2, x3, x4, x5, x6)
+        y1 = ttnn.sharded_to_interleaved(y1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y2 = ttnn.sharded_to_interleaved(y2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
         y = ttnn.squeeze(y, dim=0)
         # Slices may alias y; materialize before freeing y. n_anchors must be read before deallocate(y).
         n_anchors = y.shape[1]
         ya, yb = y[:, :, :64], y[:, :, 64:144]
         ya = ttnn.reallocate(ya)
         yb = ttnn.reallocate(yb)
-        deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
+        deallocate_tensors(y1, y2, y3, y)
         ya = ttnn.reshape(ya, (ya.shape[0], n_anchors * 4, 16))
         ya = ttnn.softmax(ya, dim=-1)
         ya = ttnn.to_layout(ya, ttnn.ROW_MAJOR_LAYOUT)
