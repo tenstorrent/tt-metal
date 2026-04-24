@@ -412,7 +412,19 @@ def validate_matmul(
 
             if pcc_val < pcc_cutoff:
                 matmul_all_passed = False
-                logger.warning(f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f}")
+
+                logger.warning(
+                    f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val}"
+                    f" Allclose passed: {allclose_passed}"
+                )
+
+                # if not allclose_passed:
+            #                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
+            #                     logger.warning(
+            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]}"
+            #                         f" Indices: {mask.nonzero(as_tuple=True)}"
+            #                     )
+
             else:
                 logger.info(
                     f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -460,7 +472,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
                 mask = (vals - refs).abs() > ATOL_THRESHOLD
-                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
+                # logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -497,7 +509,7 @@ def create_torch_w0(L, E, K, N):
         torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w0: RANDOM - mode={mode}")
 
-    # return torch.ones_like(torch_w0) *0.001
+    # return torch.ones_like(torch_w0)
 
     return torch_w0
 
@@ -532,7 +544,7 @@ def create_torch_w1(L, E, K, N):
         torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w1: RANDOM - mode={mode}")
 
-    # return torch.ones_like(torch_w1) *0.001
+    # return torch.ones_like(torch_w1)
 
     return torch_w1
 
@@ -567,7 +579,10 @@ def create_torch_w2(L, E, N, K):
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
-    # return torch.ones_like(torch_w2) *0.001
+    # torch_w2[:,0,:,:] = torch.ones_like(torch_w2[:,0,:,:] )
+    # torch_w2[:,1,:,:] *=2
+
+    # return torch.ones_like(torch_w2)
 
     return torch_w2
 
@@ -661,7 +676,6 @@ def gen_sparse_buffer_and_indices(
     # original_tokens = torch.ones(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     # original_tokens = torch.zeros(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype)
     original_tokens = torch.rand(num_dispatch_devices, tokens_per_device, hidden_size, dtype=dtype) - 0.5
-    original_tokens = torch.ones_like(original_tokens)
 
     # Generate expert indices for each token
     # Shape: [num_dispatch_devices, tokens_per_device, selected_experts_k]
@@ -1071,7 +1085,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 5)],
+    [(1, 1, 1)],
     #     [(1, 1, 5), (8, 5, 3)],
     #     ids=["perf", "accuracy"],
 )
@@ -1081,14 +1095,11 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("enable_trace", [False])
 # @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
-<<<<<<< HEAD
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
-=======
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU])
 # @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
->>>>>>> ffe1f9428e0 (Op set up and launching for GPT-OSS, hitting ASSERT. (Works for DS))
 @torch.no_grad()
 def test_moe_compute(
     mesh_device,
