@@ -246,10 +246,9 @@ def main():
 
     # ── Device ────────────────────────────────────────────────────────────────
     shape = args.mesh_shape
-    if args.dp_axis != -1 and not (0 <= args.dp_axis < len(shape)):
-        raise ValueError(f"--dp_axis ({args.dp_axis}) is out of range for --mesh_shape of length {len(shape)}")
-    if args.tp_axis != -1 and not (0 <= args.tp_axis < len(shape)):
-        raise ValueError(f"--tp_axis ({args.tp_axis}) is out of range for --mesh_shape of length {len(shape)}")
+    for name, value in (("dp_axis", args.dp_axis), ("tp_axis", args.tp_axis)):
+        if value != -1 and not (0 <= value < len(shape)):
+            raise ValueError(f"--{name} ({value}) is out of range for --mesh_shape of length {len(shape)}")
     if args.dp_axis != -1 and args.dp_axis == args.tp_axis:
         raise ValueError(f"--dp_axis and --tp_axis must differ (both set to {args.dp_axis})")
     axis_names_list = [f"_{i}" for i in range(len(shape))]
