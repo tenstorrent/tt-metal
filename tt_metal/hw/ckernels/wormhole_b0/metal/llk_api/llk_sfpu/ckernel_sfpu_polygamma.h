@@ -36,7 +36,9 @@ namespace ckernel::sfpu {
  *   scale_packed: precomputed (-1)^(n+1) * n! (as float bits)
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
+inline void calculate_polygamma(
+    std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint32_t n_packed, uint32_t scale_packed) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     constexpr int NUM_TERMS = 11;  // Exact terms (k=0..10)
 
     // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
@@ -62,7 +64,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat sum = sfpi::vFloat(0.0f);
 
         // Part 1: Exact summation of first NUM_TERMS terms
@@ -123,7 +125,7 @@ inline void calculate_polygamma(uint32_t n_packed, uint32_t scale_packed) {
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }

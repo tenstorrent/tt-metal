@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "sfpi.h"
 
 namespace ckernel
@@ -97,13 +99,53 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
-inline void _calculate_rsqrt_compat_(const int iterations)
+inline void _calculate_rsqrt_compat_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::dst_reg[0] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
-        sfpi::vFloat in  = sfpi::dst_reg[0];
+        sfpi::vFloat sqrt_in                             = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sqrt_in);
+        sfpi::vFloat in                                  = sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS];
+        sfpi::vFloat out                                 = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
+        v_if (in < 0.0)
+        {
+            out = -out;
+        }
+        v_endif;
+        if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
+        {
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = out;
+        }
+        else
+        {
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
+        }
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
+inline void _calculate_sqrt_compat_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
+{
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS]);
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
+inline void _calculate_reciprocal_compat_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
+{
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::vFloat in  = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
         v_if (in < 0.0)
         {
@@ -112,47 +154,11 @@ inline void _calculate_rsqrt_compat_(const int iterations)
         v_endif;
         if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
         {
-            sfpi::dst_reg[0] = out;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = out;
         }
         else
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-        }
-        sfpi::dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
-inline void _calculate_sqrt_compat_(const int iterations)
-{
-#pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
-    {
-        sfpi::dst_reg[0] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
-        sfpi::dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
-inline void _calculate_reciprocal_compat_(const int iterations)
-{
-#pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++)
-    {
-        sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
-        if constexpr (fp32_dest_acc_en || APPROXIMATION_MODE)
-        {
-            sfpi::dst_reg[0] = out;
-        }
-        else
-        {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
         }
         sfpi::dst_reg++;
     }

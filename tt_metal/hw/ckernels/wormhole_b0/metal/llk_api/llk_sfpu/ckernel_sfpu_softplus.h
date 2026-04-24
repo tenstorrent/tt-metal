@@ -80,8 +80,14 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
-    sfpi::vFloat val = sfpi::dst_reg[0];
+inline void calculate_softplus_body(
+    std::uint32_t dst_index_in,
+    std::uint32_t dst_index_out,
+    const float beta,
+    const float beta_reciprocal,
+    const float threshold) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
+    sfpi::vFloat val = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
     sfpi::vFloat t = beta * val;
 
     v_if(t < threshold) {
@@ -128,18 +134,20 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
     }
     v_endif;
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_softplus(uint param0, uint param1, uint param2) {
+inline void calculate_softplus(
+    std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint param0, uint param1, uint param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
+        calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(
+            dst_index_in, dst_index_out, beta, beta_reciprocal, threshold);
         sfpi::dst_reg++;
     }
 }

@@ -57,13 +57,14 @@ constexpr std::array<float, 53> DIGAMMA_LUT = {
 #endif
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_digamma() {
+inline void calculate_digamma(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat result =
             piecewise_rational_eval<DIGAMMA_NUM_DEGREE, DIGAMMA_DEN_DEGREE, DIGAMMA_NUM_SEGMENTS, DIGAMMA_LUT_SIZE>(
                 DIGAMMA_LUT, x);
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }

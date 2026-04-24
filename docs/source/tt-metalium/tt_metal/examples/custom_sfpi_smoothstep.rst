@@ -197,7 +197,8 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
         MATH(_llk_math_eltwise_unary_sfpu_params_(
             smoothstep_tile_face,
-            idx_dst0,
+            idx_dst0,  // dst_index_in: tile to read from
+            idx_dst0,  // dst_index_out: tile to write to (same for standard unary ops)
             VectorMode::RC, // Apply on all 4 faces of the tile
             edge0,
             edge1,

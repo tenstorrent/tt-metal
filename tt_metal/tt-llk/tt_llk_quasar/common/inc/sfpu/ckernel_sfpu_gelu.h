@@ -49,21 +49,16 @@ inline void _init_gelu_()
 }
 
 // Calculates GELU for number of rows of output SFPU ops (Quasar = 2 rows)
-inline void _calculate_gelu_sfp_rows_()
+inline void _calculate_gelu_(std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, const int iterations)
 {
-    TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[3], uses ADDR_MOD_7 (set to all zeroes)
-
-    TTI_SFPLUTFP32(p_sfpu::LREG4, 0x2); // Calculate piecewise part on lreg[3] and store in lreg[4], using FP16 6-entry format mode 1 LUT
-    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 0); // 0.5 * x + piecewise result, store in lreg[5]
-    TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, 0, 0);                          // store from lreg[5] into dest register
-}
-
-inline void _calculate_gelu_(const int iterations)
-{
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        _calculate_gelu_sfp_rows_();
+        TT_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, dst_tile_index_in * SFP_DST_TILE_ROWS); // load from dest into lreg[3]
+        TTI_SFPLUTFP32(p_sfpu::LREG4, 0x2); // Calculate piecewise part on lreg[3] and store in lreg[4], using FP16 6-entry format mode 1 LUT
+        TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 0);            // 0.5 * x + piecewise result, store in lreg[5]
+        TT_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, 0, dst_tile_index_out * SFP_DST_TILE_ROWS); // store from lreg[5] into dest register
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
 }

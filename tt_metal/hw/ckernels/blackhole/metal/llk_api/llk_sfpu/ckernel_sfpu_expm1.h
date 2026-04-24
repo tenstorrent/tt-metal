@@ -114,19 +114,20 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_improved_<true>(sfpi::vFloat val) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_expm1() {
+inline void calculate_expm1(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     if constexpr (APPROXIMATION_MODE) {
         // Use original approximation mode
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat v = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_expm1_<is_fp32_dest_acc_en>(v);
+            sfpi::vFloat v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = _sfpu_expm1_<is_fp32_dest_acc_en>(v);
             sfpi::dst_reg++;
         }
     } else {
         // Use improved version based on destination precision
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat v = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_expm1_improved_<is_fp32_dest_acc_en>(v);
+            sfpi::vFloat v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = _sfpu_expm1_improved_<is_fp32_dest_acc_en>(v);
             sfpi::dst_reg++;
         }
     }

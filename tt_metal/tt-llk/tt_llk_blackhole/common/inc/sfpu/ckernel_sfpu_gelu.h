@@ -37,8 +37,9 @@ inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in)
 }
 
 template <int ITERATIONS>
-inline void _calculate_gelu_appx_()
+inline void _calculate_gelu_appx_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
     sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
@@ -49,22 +50,22 @@ inline void _calculate_gelu_appx_()
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        // sfpi::vFloat in = sfpi::dst_reg[0];
+        // sfpi::vFloat in = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         // sfpi::vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
 
         // sfpi::vFloat half_in = in * half;
         // result = lut(result, l0, l1, l2);
         // result = half_in * result + half_in;
 
-        // sfpi::dst_reg[0] = result;
+        // sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
 
-        sfpi::vFloat in      = sfpi::dst_reg[0];
+        sfpi::vFloat in      = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat half    = sfpi::vConstFloatPrgm0;
         sfpi::vFloat half_in = in * half;
         sfpi::vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
         result               = half_in + result;
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
 
         sfpi::dst_reg++;
 
@@ -85,35 +86,37 @@ inline void _calculate_gelu_appx_()
 }
 
 template <int ITERATIONS>
-inline void _calculate_gelu_accurate_()
+inline void _calculate_gelu_accurate_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
-    constexpr bool scaled = true;
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
+    constexpr bool scaled                     = true;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in     = sfpi::dst_reg[0];
-        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);
-        sfpi::dst_reg[0]    = result;
+        sfpi::vFloat in                                  = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
+        sfpi::vFloat result                              = _calculate_cdf_appx_(in, scaled);
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_()
+inline void _calculate_gelu_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
     if constexpr (APPROXIMATION_MODE)
     {
-        _calculate_gelu_appx_<ITERATIONS>();
+        _calculate_gelu_appx_<ITERATIONS>(dst_index_in, dst_index_out);
     }
     else
     {
-        _calculate_gelu_accurate_<ITERATIONS>();
+        _calculate_gelu_accurate_<ITERATIONS>(dst_index_in, dst_index_out);
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_derivative_()
+inline void _calculate_gelu_derivative_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     if constexpr (APPROXIMATION_MODE)
     {
         constexpr int lut_mode = 1; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
@@ -129,14 +132,14 @@ inline void _calculate_gelu_derivative_()
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++)
         {
-            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat val = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
             val              = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
             v_if (val < 0.0F)
             {
                 val = val + 1.0f;
             }
             v_endif;
-            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = val;
             sfpi::dst_reg++;
         }
 
@@ -158,7 +161,7 @@ inline void _calculate_gelu_derivative_()
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++)
         {
-            sfpi::vFloat in             = sfpi::dst_reg[0];
+            sfpi::vFloat in             = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
             sfpi::vFloat neg_half_sq_in = in * in * -0.5f;
 
             // exp = e^(val)
@@ -171,7 +174,7 @@ inline void _calculate_gelu_derivative_()
 
             result = lut(result, l0, l1, imm2);
 
-            sfpi::dst_reg[0] = partial + result + 0.5f;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = partial + result + 0.5f;
             sfpi::dst_reg++;
         }
 

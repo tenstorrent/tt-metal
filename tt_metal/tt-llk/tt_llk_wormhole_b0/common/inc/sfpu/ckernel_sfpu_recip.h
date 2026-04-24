@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
@@ -76,27 +78,28 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void _calculate_reciprocal_internal_(const int iterations)
+inline void _calculate_reciprocal_internal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat in = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
 
         if constexpr (APPROXIMATION_MODE)
         {
-            sfpi::dst_reg[0] = _sfpu_reciprocal_<0>(in);
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = _sfpu_reciprocal_<0>(in);
         }
         else
         {
             if constexpr (is_fp32_dest_acc_en)
             {
-                sfpi::dst_reg[0] = _sfpu_reciprocal_<2>(in);
+                sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = _sfpu_reciprocal_<2>(in);
             }
             else
             {
                 sfpi::vFloat out = _sfpu_reciprocal_<1>(in);
-                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
+                sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, sfpi::RoundMode::NearestEven));
             }
         }
 
@@ -105,15 +108,15 @@ inline void _calculate_reciprocal_internal_(const int iterations)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en, bool legacy_compat = false>
-inline void _calculate_reciprocal_(const int iterations)
+inline void _calculate_reciprocal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     if constexpr (legacy_compat)
     {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
     else
     {
-        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
 }
 

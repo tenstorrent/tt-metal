@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel_sfpu_rsqrt_compat.h"
+#include "cmath_common.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -58,17 +59,21 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
 }
 
 // Approximate reciprocal, with throughput of 1c/32.
-inline void _calculate_reciprocal_fast_7b_(const int iterations)
+inline void _calculate_reciprocal_fast_7b_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
+        sfpi::dst_reg++;
     }
 #else
+    ckernel::math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_in);
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
@@ -80,24 +85,28 @@ inline void _calculate_reciprocal_fast_7b_(const int iterations)
 }
 
 // BF16 reciprocal, with throughput of 3c/32.
-inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
+inline void _calculate_reciprocal_fast_8b_3c_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
 
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
         TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
         TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
+        sfpi::dst_reg++;
     }
 #else
+    ckernel::math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_in);
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     // We use SFPMAD_MOD1_INDIRECT_VD to schedule SFPMAD and write to L[L7],
     // with L7=x throughout.
     //
@@ -188,22 +197,26 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
 }
 
 // FP32 reciprocal, with throughput of 5c/32.
-inline void _calculate_reciprocal_fast_24b_5c_(const int iterations)
+inline void _calculate_reciprocal_fast_24b_5c_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPARECIP_MOD1_RECIP);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 1); // SFPMAD_MOD1_NEGATE_VA
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
         TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
+        sfpi::dst_reg++;
     }
 #else
+    ckernel::math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index_in);
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     // Pseudocode:
     //
     // y = arecip(x)
@@ -255,32 +268,32 @@ inline void _calculate_reciprocal_fast_24b_5c_(const int iterations)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void _calculate_reciprocal_internal_(const int iterations)
+inline void _calculate_reciprocal_internal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     if constexpr (APPROXIMATION_MODE)
     {
-        _calculate_reciprocal_fast_7b_(iterations);
+        _calculate_reciprocal_fast_7b_(dst_index_in, dst_index_out, iterations);
     }
     else if constexpr (is_fp32_dest_acc_en)
     {
-        _calculate_reciprocal_fast_24b_5c_(iterations);
+        _calculate_reciprocal_fast_24b_5c_(dst_index_in, dst_index_out, iterations);
     }
     else
     {
-        _calculate_reciprocal_fast_8b_3c_(iterations);
+        _calculate_reciprocal_fast_8b_3c_(dst_index_in, dst_index_out, iterations);
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en, bool legacy_compat = false>
-inline void _calculate_reciprocal_(const int iterations)
+inline void _calculate_reciprocal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
     if constexpr (legacy_compat)
     {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
     else
     {
-        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
 }
 

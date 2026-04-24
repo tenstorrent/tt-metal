@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cstdint>
+
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 
@@ -12,27 +15,27 @@ namespace sfpu
 {
 // Calculates SQRT for number of rows of output SFPU ops (Quasar = 2 rows)
 template <bool APPROXIMATION_MODE>
-inline void _calculate_sqrt_sfp_rows_()
+inline void _calculate_sqrt_(std::uint32_t dst_tile_index_in, std::uint32_t dst_tile_index_out, const int iterations)
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
-
-    // SFPARECIP, approx version of sqrt
-    if constexpr (APPROXIMATION_MODE)
-    {
-        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::SQRT_MODE); // Read value from lreg[0], approximate sqrt, load back into lreg[1]
-    }
-
-    // Store from lreg[1] into dest register
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0);
-}
-
-template <bool APPROXIMATION_MODE>
-inline void _calculate_sqrt_(const int iterations)
-{
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        _calculate_sqrt_sfp_rows_<APPROXIMATION_MODE>();
+        TT_SFPLOAD(
+            p_sfpu::LREG0,
+            p_sfpu::sfpmem::DEFAULT,
+            ADDR_MOD_7,
+            0,
+            dst_tile_index_in * SFP_DST_TILE_ROWS); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
+
+        // SFPARECIP, approx version of sqrt
+        if constexpr (APPROXIMATION_MODE)
+        {
+            TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::SQRT_MODE); // Read value from lreg[0], approximate sqrt, load back into lreg[1]
+        }
+
+        // Store from lreg[1] into dest register
+        TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, dst_tile_index_out * SFP_DST_TILE_ROWS);
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>(); // does the dest_reg++ (increments by 2 rows)
     }
 }

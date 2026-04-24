@@ -87,12 +87,13 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
 
 // mul_a * mul_b + addend (MAD)
 template <bool is_fp32_dest_acc_en>
-sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloat addend) {
+sfpi_inline void _xielu_mad_(std::uint32_t dst_index_out, sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloat addend) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     sfpi::vFloat result = mul_a * mul_b + addend;
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
     }
-    sfpi::dst_reg[0] = result;
+    sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
 }
 
 /*
@@ -113,18 +114,20 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
  *        --> alpha_n * (expm1(minimum(x, eps)) - x) + beta * x
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
+inline void calculate_xielu(
+    std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint32_t param0, const uint32_t param1) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     sfpi::vFloat alpha_p = Converter::as_float(param0);
     sfpi::vFloat alpha_n = Converter::as_float(param1);
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat beta_mul_x = 0.5f * x;
         v_if(x > 0.0f) {  // positive
-            _xielu_mad_<is_fp32_dest_acc_en>(alpha_p * x, x, beta_mul_x);
+            _xielu_mad_<is_fp32_dest_acc_en>(dst_index_out, alpha_p * x, x, beta_mul_x);
         }
         v_elseif(x >= sfpi::vConstFloatPrgm1) {  // very small negative
             sfpi::vFloat exp_term = sfpi::vConstFloatPrgm2 - x;
-            _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
+            _xielu_mad_<is_fp32_dest_acc_en>(dst_index_out, alpha_n, exp_term, beta_mul_x);
         }
         v_elseif(x > -0.5f) {  // moderate negative region
             // For small x >- 0.5: use Taylor series to avoid cancellation
@@ -142,11 +145,11 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
                                         8.333188481628894805908203125e-3f,
                                         1.400390756316483020782470703125e-3f,
                                         1.99588379473425447940826416015625e-4f);
-            _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
+            _xielu_mad_<is_fp32_dest_acc_en>(dst_index_out, alpha_n, exp_term, beta_mul_x);
         }
         v_else {  // large negative
             sfpi::vFloat exp_term = _sfpu_neg_exp_f32_(x) - sfpi::vConst1 - x;
-            _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
+            _xielu_mad_<is_fp32_dest_acc_en>(dst_index_out, alpha_n, exp_term, beta_mul_x);
         }
         v_endif;
         sfpi::dst_reg++;

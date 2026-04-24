@@ -25,12 +25,13 @@ namespace sfpu {
      t2)
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_i1() {
+inline void calculate_i1(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 0
 
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat result = 0.0f;
-        vFloat input = dst_reg[0];
+        vFloat input = dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         vFloat x = input * input;
 
         vFloat derivative = input * POLYVAL10_I1(
@@ -47,7 +48,7 @@ inline void calculate_i1() {
                                         0.125f,
                                         x);
         result = input * 0.5f + derivative;
-        dst_reg[0] = result;
+        dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         dst_reg++;
     }
 }

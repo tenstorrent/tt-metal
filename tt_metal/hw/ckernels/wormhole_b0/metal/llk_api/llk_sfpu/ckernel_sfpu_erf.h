@@ -61,9 +61,10 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 #endif
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_erf() {
+inline void calculate_erf(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
         sfpi::vFloat ax = sfpi::setsgn(x, 0);
         sfpi::vFloat threshold = 10.0f;
@@ -83,7 +84,7 @@ inline void calculate_erf() {
         sfpi::vFloat pos_one = sfpi::vConst1;
         sfpi::vec_min_max(neg_one, result);
         sfpi::vec_min_max(result, pos_one);
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }

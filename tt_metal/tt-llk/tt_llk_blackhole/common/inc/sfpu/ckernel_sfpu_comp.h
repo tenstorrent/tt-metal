@@ -31,8 +31,9 @@ sfpi_inline void _calculate_comp_init_flag_(bool check, sfpi::vFloat& flag1, sfp
 }
 
 template <bool APPROXIMATION_MODE, bool invert_output, bool check_zero, bool second_check, bool is_less_than_equal_zero, int ITERATIONS>
-inline void _calculate_comp_(const int iterations, std::uint32_t exponent_size_8)
+inline void _calculate_comp_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, std::uint32_t exponent_size_8)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     // output_0 and output_1 hold the outputs use use when a zero or negative check is true/false.
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
     // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
@@ -44,7 +45,7 @@ inline void _calculate_comp_(const int iterations, std::uint32_t exponent_size_8
 
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat flag1, flag2;
         if constexpr (check_zero)
         {
@@ -100,7 +101,7 @@ inline void _calculate_comp_(const int iterations, std::uint32_t exponent_size_8
             result = flag1;
         }
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
 
         sfpi::dst_reg++;
     }
@@ -194,13 +195,14 @@ inline void apply_zero_comp<SfpuType::less_than_equal_zero>(sfpi::vFloat& v, std
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_zero_comp_(std::uint32_t exponent_size_8)
+inline void _calculate_zero_comp_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t exponent_size_8)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = ZERO; d < ITERATIONS; d++)
     {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         apply_zero_comp<COMP_MODE>(v, exponent_size_8);
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = v;
         sfpi::dst_reg++;
     }
 }
@@ -293,13 +295,14 @@ inline void apply_zero_comp_int<SfpuType::greater_than_equal_zero>(sfpi::vInt& v
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_zero_comp_int_()
+inline void _calculate_zero_comp_int_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = ZERO; d < ITERATIONS; d++)
     {
-        sfpi::vInt v = sfpi::dst_reg[0];
+        sfpi::vInt v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         apply_zero_comp_int<COMP_MODE>(v);
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = v;
         sfpi::dst_reg++;
     }
 }
@@ -414,17 +417,18 @@ inline void apply_unary_int_comp<SfpuType::unary_le>(sfpi::vInt& v, int scalar, 
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_comp_unary_int_(int scalar)
+inline void _calculate_comp_unary_int_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, int scalar)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = ZERO; d < ITERATIONS; d++)
     {
-        sfpi::vInt v   = sfpi::dst_reg[0];
+        sfpi::vInt v   = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vInt val = ZERO;
 
         apply_unary_int_comp<COMP_MODE>(v, scalar, val);
 
-        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = val;
         sfpi::dst_reg++;
     }
 }
@@ -523,19 +527,20 @@ inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi::vFl
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
-inline void _calculate_comp_unary_(std::uint32_t value)
+inline void _calculate_comp_unary_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, std::uint32_t value)
 {
-    const sfpi::vFloat s = value;
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
+    const sfpi::vFloat s                      = value;
 
 #pragma GCC unroll 8
     for (int d = ZERO; d < ITERATIONS; d++)
     {
-        sfpi::vFloat v   = sfpi::dst_reg[0];
+        sfpi::vFloat v   = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat val = ZERO;
 
         apply_unary_float_comp<COMP_MODE>(v, s, val);
 
-        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = val;
         sfpi::dst_reg++;
     }
 }

@@ -18,16 +18,17 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_fp32_to_uint16_()
+inline void _calculate_typecast_fp32_to_uint16_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
@@ -56,16 +57,17 @@ inline void _calculate_typecast_fp32_to_uint16_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_uint16_to_fp16b_()
+inline void _calculate_typecast_uint16_to_fp16b_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
@@ -92,13 +94,14 @@ inline void _calculate_typecast_uint16_to_fp16b_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_int32_to_fp16b_()
+inline void _calculate_typecast_int32_to_fp16b_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                  // lreg[1] = iabs(lreg[0])
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);                    // lreg[2] = cast(lreg[1])
         TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);               // lreg[0] = sign(lreg[0]) | exp_man(lreg[2])
@@ -106,7 +109,7 @@ inline void _calculate_typecast_int32_to_fp16b_()
         TTI_SFPADDI(0xcf00, p_sfpu::LREG0, 0);                           // lreg[0] += -2**31
         TTI_SFPENCC(0, 0, 0, 0);                                         // restore cc
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 4 cycles per input row.
@@ -154,12 +157,13 @@ inline void _calculate_typecast_int32_to_fp16b_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_fp32_to_int32_()
+inline void _calculate_typecast_fp32_to_int32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         // result = 0
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
 
@@ -184,17 +188,18 @@ inline void _calculate_typecast_fp32_to_int32_()
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
 
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_fp32_to_uint32_()
+inline void _calculate_typecast_fp32_to_uint32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         // result = 0
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
 
@@ -214,23 +219,24 @@ inline void _calculate_typecast_fp32_to_uint32_()
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
 
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_fp32_to_fp16b_()
+inline void _calculate_typecast_fp32_to_fp16b_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG0, 5);               // lreg[0] = lreg[1] >> 16
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                           // lreg[0] &= 1
         TTI_SFPIADD(0, p_sfpu::LREG13, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE); // lreg[1] += 0x7FFF
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_CC_NONE);  // lreg[1] += lreg[0]
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
@@ -268,15 +274,16 @@ inline void _calculate_typecast_fp32_to_fp16b_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_uint16_to_fp32_()
+inline void _calculate_typecast_uint16_to_fp32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
@@ -302,20 +309,21 @@ inline void _calculate_typecast_uint16_to_fp32_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_int32_to_fp32_()
+inline void _calculate_typecast_int32_to_fp32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);                  // lreg[1] = iabs(lreg[0])
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);                    // lreg[2] = cast(lreg[1])
         TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);               // lreg[0] = sign(lreg[0]) | exp_man(lreg[2])
         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0); // cc = lreg[1] < 0
         TTI_SFPADDI(0xcf00, p_sfpu::LREG0, 0);                           // lreg[0] += -2**31
         TTI_SFPENCC(0, 0, 0, 0);                                         // restore cc
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 4 cycles per input row.
@@ -361,20 +369,21 @@ inline void _calculate_typecast_int32_to_fp32_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_uint32_to_fp16b_()
+inline void _calculate_typecast_uint32_to_fp16b_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
         TTI_SFPADDI(0x4f00, p_sfpu::LREG1, 0); // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
@@ -418,19 +427,20 @@ inline void _calculate_typecast_uint32_to_fp16b_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_uint32_to_fp32_()
+inline void _calculate_typecast_uint32_to_fp32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
         TTI_SFPADDI(0x4f00, p_sfpu::LREG2, 0); // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP32, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
@@ -475,14 +485,15 @@ inline void _calculate_typecast_uint32_to_fp32_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_uint16_to_uint32_()
+inline void _calculate_typecast_uint16_to_uint32_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
@@ -504,18 +515,19 @@ inline void _calculate_typecast_uint16_to_uint32_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_uint32_to_uint16_()
+inline void _calculate_typecast_uint32_to_uint16_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
         TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
@@ -544,17 +556,18 @@ inline void _calculate_typecast_uint32_to_uint16_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_typecast_int32_to_uint16_()
+inline void _calculate_typecast_int32_to_uint16_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, dst_index_out * SFP_DST_TILE_ROWS);
     }
 #else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.

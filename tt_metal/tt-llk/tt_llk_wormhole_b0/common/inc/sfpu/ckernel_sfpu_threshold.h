@@ -18,8 +18,9 @@ template <typename T>
 constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, typename T>
-inline void _calculate_threshold_(T threshold, T value)
+inline void _calculate_threshold_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, T threshold, T value)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     static_assert(is_supported_threshold_type_v<T>, "Type T must be either float or uint32_t");
 
     sfpi::vFloat v_threshold;
@@ -37,10 +38,10 @@ inline void _calculate_threshold_(T threshold, T value)
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat in = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         v_if (in <= v_threshold)
         {
-            sfpi::dst_reg[0] = v_value;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = v_value;
         }
         v_endif;
 

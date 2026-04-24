@@ -40,21 +40,22 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_sigmoid() {
+inline void calculate_sigmoid(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     if constexpr (!APPROXIMATION_MODE) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat val = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
             }
 
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
             sfpi::dst_reg++;
         }
     } else {
-        calculate_sigmoid_appx<ITERATIONS>();
+        calculate_sigmoid_appx<ITERATIONS>(dst_index_in, dst_index_out);
     }
 }
 

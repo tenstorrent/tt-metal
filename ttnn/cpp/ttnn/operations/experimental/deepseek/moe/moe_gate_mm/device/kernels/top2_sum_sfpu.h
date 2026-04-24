@@ -60,7 +60,7 @@ inline void _top2_configure_addrmod_() {
         .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
-inline void _top2_calculate_top2_() {
+inline void _top2_calculate_top2_(uint32_t /*dst_index_in*/, uint32_t /*dst_index_out*/) {
     constexpr uint16_t NEG_INF_BF16 = 0xFF80;
 
     // Reset Dst RWC to 0
@@ -156,7 +156,8 @@ inline void _llk_math_sum_top2_tile_init_() {
 }
 
 inline void _llk_math_sum_top2_tile_(uint32_t dst_index) {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_top2_calculate_top2_, dst_index, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_top2_calculate_top2_, dst_index, dst_index, VectorMode::RC_custom);
 }
 
 #endif

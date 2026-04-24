@@ -14,16 +14,17 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_prelu(uint value) {
+inline void calculate_prelu(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     // SFPU microcode
     vFloat init = Converter::as_float(value);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat a = dst_reg[0];
+        vFloat a = dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         v_if(a < 0.0f) { a = a * init; }
         v_endif;
-        dst_reg[0] = a;
+        dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = a;
         dst_reg++;
     }
 }

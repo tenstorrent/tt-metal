@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
@@ -114,34 +116,35 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool RECIPROCAL, bool FAST_APPROX>
-inline void _calculate_sqrt_internal_(const int iterations)
+inline void _calculate_sqrt_internal_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
+        sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS]);
         if constexpr (fp32_dest_acc_en)
         {
-            sfpi::dst_reg[0] = tmp;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = tmp;
         }
         else
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(tmp, sfpi::RoundMode::NearestEven));
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(tmp, sfpi::RoundMode::NearestEven));
         }
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool FAST_APPROX, bool legacy_compat = false>
-inline void _calculate_sqrt_(int iterations)
+inline void _calculate_sqrt_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, int iterations)
 {
     if constexpr (legacy_compat)
     {
-        return _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(iterations);
+        return _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(dst_index_in, dst_index_out, iterations);
     }
     else
     {
-        return _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>(iterations);
+        return _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>(dst_index_in, dst_index_out, iterations);
     }
 }
 

@@ -14,14 +14,15 @@ namespace sfpu {
 
 // SELU(x) = scale ∗ ( max(0, x) + min(0, α ∗ (exp(x)−1) ) )
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_selu(uint scale, uint alpha) {
+inline void calculate_selu(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint scale, uint alpha) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     sfpi::vFloat scale_value = Converter::as_float(scale);
     sfpi::vFloat alpha_value = Converter::as_float(alpha);
 #pragma GCC unroll 8
 
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v >= 0.0f) { sfpi::dst_reg[0] = v * scale_value; }
+        sfpi::vFloat v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
+        v_if(v >= 0.0f) { sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = v * scale_value; }
         v_else {
             sfpi::vFloat exp_calc = _sfpu_exp_21f_bf16_<true>(
                 v);  // is_fp32_dest_acc_en set to true to avoid rounding as it has to be done at the end of operation
@@ -31,7 +32,7 @@ inline void calculate_selu(uint scale, uint alpha) {
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
             }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         }
         v_endif;
         sfpi::dst_reg++;

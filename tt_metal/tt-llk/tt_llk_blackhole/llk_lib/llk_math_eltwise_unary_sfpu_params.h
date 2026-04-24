@@ -12,11 +12,14 @@
 
 template <typename Callable, typename... Args>
 inline void _llk_math_eltwise_unary_sfpu_params_(
-    Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
+    Callable&& sfpu_func, std::uint32_t dst_index_in, std::uint32_t dst_index_out, int vector_mode = static_cast<int>(VectorMode::RC), Args&&... args)
 {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
+    LLK_ASSERT((dst_index_in < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_in exceeds max dest tiles");
+    LLK_ASSERT((dst_index_out < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_out exceeds max dest tiles");
 
-    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
+    // Set base to 0: callbacks address tiles absolutely via dst_reg[idx * SFP_DST_TILE_ROWS].
+    // Follows the binary SFPU pattern (_llk_math_eltwise_binary_sfpu_params_).
+    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(0);
 
     VectorMode mode = static_cast<VectorMode>(vector_mode);
 
@@ -26,7 +29,7 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            std::forward<Callable>(sfpu_func)(dst_index_in, dst_index_out, std::forward<Args>(args)...);
             // Move to the next face
             _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
@@ -40,7 +43,7 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            std::forward<Callable>(sfpu_func)(dst_index_in, dst_index_out, std::forward<Args>(args)...);
             _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
             _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
@@ -51,14 +54,14 @@ inline void _llk_math_eltwise_unary_sfpu_params_(
 #pragma GCC unroll 0
         for (int face = 0; face < 4; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            std::forward<Callable>(sfpu_func)(dst_index_in, dst_index_out, std::forward<Args>(args)...);
             // Move to the next face
             _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         }
     }
     else
     {
-        std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+        std::forward<Callable>(sfpu_func)(dst_index_in, dst_index_out, std::forward<Args>(args)...);
     }
     _llk_math_eltwise_unary_sfpu_done_();
 }

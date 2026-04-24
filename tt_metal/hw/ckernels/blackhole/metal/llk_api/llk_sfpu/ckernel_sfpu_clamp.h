@@ -14,7 +14,7 @@ enum { Max = true, Min = false };  // Clamp Mode
 
 // out = min(max(x, min_val), max_val)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_clamp(uint min_val, uint max_val) {
+inline void calculate_clamp(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint min_val, uint max_val) {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_float(min_val);
@@ -26,7 +26,7 @@ inline void calculate_clamp(uint min_val, uint max_val) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_clamp_int32(uint min_val, uint max_val) {
+inline void calculate_clamp_int32(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint min_val, uint max_val) {
     for (int d = 0; d < ITERATIONS; d++) {
         load_value_param_int(min_val);
         calculate_unary_max_min_int32_body<Max>(min_val);

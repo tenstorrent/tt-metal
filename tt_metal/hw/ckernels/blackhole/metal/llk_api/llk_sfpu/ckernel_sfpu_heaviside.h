@@ -14,20 +14,21 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_heaviside(uint value) {
+inline void calculate_heaviside(std::uint32_t dst_index_in, std::uint32_t dst_index_out, uint value) {
     // SFPU microcode
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     vFloat s = Converter::as_float(value);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
+        vFloat v = dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
 
         v_if(v < 0.0f) { v = 0.0f; }
         v_elseif(v > 0.0f) { v = 1.0f; }
         v_else { v = s; }
         v_endif;
 
-        dst_reg[0] = v;
+        dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = v;
 
         dst_reg++;
     }

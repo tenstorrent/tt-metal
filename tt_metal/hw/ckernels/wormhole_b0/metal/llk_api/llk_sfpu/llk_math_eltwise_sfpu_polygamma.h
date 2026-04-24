@@ -21,6 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_polygamma(
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_polygamma<APPROXIMATE, is_fp32_dest_acc_en>,
         dst_index,
+        dst_index,
         vector_mode,
         n_packed,
         scale_packed);

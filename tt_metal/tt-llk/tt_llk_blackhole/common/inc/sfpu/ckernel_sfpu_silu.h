@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
@@ -26,12 +28,13 @@ inline sfpi::vFloat _sigmoid_piecewise_linear_positive_(sfpi::vFloat val)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_silu_()
+inline void _calculate_silu_(std::uint32_t dst_index_in, std::uint32_t dst_index_out)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat val    = sfpi::dst_reg[0];
+        sfpi::vFloat val    = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat result = sfpi::abs(val);
         result              = _sigmoid_piecewise_linear_positive_(result);
         v_if (val < 0.0f)
@@ -39,7 +42,7 @@ inline void _calculate_silu_()
             result = 1.0f - result;
         }
         v_endif;
-        sfpi::dst_reg[0] = val * result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = val * result;
         sfpi::dst_reg++;
     }
 }

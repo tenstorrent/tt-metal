@@ -275,26 +275,27 @@ void gelu_derivative_init() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_gelu() {
+inline void calculate_gelu(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     if constexpr (APPROXIMATION_MODE) {
-        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
     } else {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat in = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
             sfpi::vFloat result = calculate_gelu_piecewise(in);
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
             }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
             sfpi::dst_reg++;
         }
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
+inline void calculate_gelu_derivative(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out);
 }
 
 // =============================================================================
@@ -392,15 +393,16 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
-inline void calculate_gelu_derivative_polynomial() {
+inline void calculate_gelu_derivative_polynomial(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE>(val);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }

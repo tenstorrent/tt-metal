@@ -50,11 +50,12 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_erfinv() {
+inline void calculate_erfinv(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     // SFPU microcode
     constexpr int ITERATIONS = 8;
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat v = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat result;
 
         // Since erfinv(-x) = -erfinv(x), we can compute the result for the absolute value of the input.
@@ -70,7 +71,7 @@ inline void calculate_erfinv() {
 
         result = sfpi::setsgn(result, v);  // restore sign
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }

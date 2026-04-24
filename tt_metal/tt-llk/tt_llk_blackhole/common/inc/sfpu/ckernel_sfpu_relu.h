@@ -18,18 +18,19 @@ template <typename T>
 constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
 template <bool APPROXIMATION_MODE>
-inline void _calculate_lrelu_(const int iterations, std::uint32_t slope)
+inline void _calculate_lrelu_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, std::uint32_t slope)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     TT_SFPLOADI(p_sfpu::LREG2, 10, slope & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, 8, slope >> 16);
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);        // load from dest into lreg[0]
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_in * SFP_DST_TILE_ROWS); // load from dest into lreg[0]
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, 0);                                         // condition - if value in LREG0 is negative //will set cc result reg
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // Multiply LREG0 * LREG2 (x * slope)
         TTI_SFPENCC(0, 0, 0, 0);                                                      // clear cc result reg
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);       // store from lreg0 into dest register
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, dst_index_out * SFP_DST_TILE_ROWS); // store from lreg0 into dest register
         sfpi::dst_reg++;
     }
 }
@@ -51,11 +52,12 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_max_impl_(const int iterations, VecType threshold)
+inline void _relu_max_impl_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, VecType threshold)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = 0; d < iterations; d++)
     {
-        VecType result = sfpi::dst_reg[0];
+        VecType result = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         v_if (result > threshold)
         {
             result = threshold;
@@ -66,14 +68,14 @@ inline void _relu_max_impl_(const int iterations, VecType threshold)
             result = 0;
         }
         v_endif;
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }
 
 // Wrappers
 template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
-inline void _relu_max_(T threshold)
+inline void _relu_max_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, T threshold)
 {
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
@@ -98,18 +100,19 @@ inline void _relu_max_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+    _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out, ITERATIONS, v_threshold);
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, VecType threshold)
+inline void _relu_min_impl_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, VecType threshold)
 {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = 0; d < iterations; d++)
     {
-        VecType a = sfpi::dst_reg[0];
+        VecType a = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         v_if (a < threshold)
         {
-            sfpi::dst_reg[0] = threshold;
+            sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = threshold;
         }
         v_endif;
         sfpi::dst_reg++;
@@ -118,7 +121,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold)
 
 // Wrappers
 template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
-inline void _relu_min_(T threshold)
+inline void _relu_min_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, T threshold)
 {
     static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
 
@@ -143,7 +146,7 @@ inline void _relu_min_(T threshold)
         static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
-    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(dst_index_in, dst_index_out, ITERATIONS, v_threshold);
 }
 
 } // namespace sfpu

@@ -13,11 +13,12 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
-inline void calculate_rdiv(const uint value) {
+inline void calculate_rdiv(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const uint value) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     sfpi::vFloat val = Converter::as_float(value);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat in = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat recip;
         if constexpr (APPROXIMATION_MODE) {
             recip = _sfpu_reciprocal_<0>(in);
@@ -36,7 +37,7 @@ inline void calculate_rdiv(const uint value) {
         } else if constexpr (rounding_mode == RoundingMode::Floor) {
             result = _floor_body_(result);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = result;
         sfpi::dst_reg++;
     }
 }

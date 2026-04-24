@@ -11,16 +11,16 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
-inline void calculate_logical_not() {
+inline void calculate_logical_not(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
     static_assert(
         INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::LO16 ||
             INSTRUCTION_MODE == InstrModLoadStore::INT32,
         "INSTRUCTION_MODE must be one of: DEFAULT, LO16, INT32.");
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr int tile_size = 64;
         // load in conditional uint16 value
-        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, dst_index_in * SFP_DST_TILE_ROWS);
         // initially put 0 into output
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
         // if (REG0 == 0)
@@ -38,7 +38,7 @@ inline void calculate_logical_not() {
         // INSTR_MOD1: 0 => condition code enable reg is not modified.
         TTI_SFPENCC(0, 0, 0, 0);
         // store result
-        TTI_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, dst_index_out * SFP_DST_TILE_ROWS);
         sfpi::dst_reg++;
     }
 }

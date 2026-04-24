@@ -14,7 +14,7 @@ namespace sfpu
 {
 
 template <bool HAS_BASE_SCALING>
-sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_idx = 0)
+sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_index_in = 0, const std::uint32_t dst_index_out = 0)
 {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
@@ -22,7 +22,7 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     ////////////////////////////
     // Load From dest + "normalize to calculation range"
     ////////////////////////////
-    sfpi::vFloat in = sfpi::dst_reg[dst_idx * dst_tile_size_sfpi];
+    sfpi::vFloat in = sfpi::dst_reg[dst_index_in * dst_tile_size_sfpi];
     sfpi::vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
 
     // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
@@ -71,7 +71,7 @@ sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor,
     }
     v_endif;
 
-    sfpi::dst_reg[dst_idx * dst_tile_size_sfpi] = result;
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
 }
 
 sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
@@ -106,12 +106,12 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 }
 
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
-inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_factor)
+inline void _calculate_log_(std::uint32_t dst_index_in, std::uint32_t dst_index_out, const int iterations, std::uint32_t log_base_scale_factor)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        _calculate_log_body_<HAS_BASE_SCALING>(log_base_scale_factor);
+        _calculate_log_body_<HAS_BASE_SCALING>(log_base_scale_factor, dst_index_in, dst_index_out);
         sfpi::dst_reg++;
     }
 }

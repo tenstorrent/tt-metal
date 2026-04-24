@@ -15,7 +15,8 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_lgamma_stirling() {
+inline void calculate_lgamma_stirling(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
 
     // Minimal coefficients for 0-3 ULP
@@ -23,7 +24,7 @@ inline void calculate_lgamma_stirling() {
     constexpr float r1 = -0.0027777777f;  // -1/360
 
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat in = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         sfpi::vFloat z = in;
 
         // 1. Reflection for x < 0.5
@@ -47,7 +48,7 @@ inline void calculate_lgamma_stirling() {
         if constexpr (!is_fp32_dest_acc_en) {
             res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, sfpi::RoundMode::NearestEven));
         }
-        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = res;
         sfpi::dst_reg++;
     }
 }

@@ -60,9 +60,10 @@ constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
                                              -2.1375391632e-02f}};
 
 template <int ITERATIONS = 8>
-inline void calculate_erfc() {
+inline void calculate_erfc(std::uint32_t dst_index_in, std::uint32_t dst_index_out) {
+    constexpr std::uint32_t SFP_DST_TILE_ROWS = 32;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[dst_index_in * SFP_DST_TILE_ROWS];
         // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)
         sfpi::vFloat ax = sfpi::setsgn(x, 0);
         sfpi::vFloat limit = 5.0f;
@@ -73,7 +74,7 @@ inline void calculate_erfc() {
         // erfc(-x) = 2 - erfc(x)
         v_if(x < 0.0f) { r = 2.0f - r; }
         v_endif;
-        sfpi::dst_reg[0] = r;
+        sfpi::dst_reg[dst_index_out * SFP_DST_TILE_ROWS] = r;
         sfpi::dst_reg++;
     }
 }

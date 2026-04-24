@@ -17,9 +17,12 @@ template <
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(
+    std::uint32_t dst_index_in,
+    std::uint32_t dst_index_out,
+    const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, CLAMP_NEGATIVE, is_fp32_dest_acc_en>(
-        exp_base_scale_factor);
+        dst_index_in, dst_index_out, exp_base_scale_factor);
 }
 
 template <bool APPROXIMATION_MODE, uint32_t scale = 0x3F800000, bool CLAMP_NEGATIVE = true>
