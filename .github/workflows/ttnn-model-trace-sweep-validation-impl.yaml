@@ -422,6 +422,39 @@ jobs:
           name: ${{ matrix.vectors_artifact_name }}
           path: /work/tests/sweep_framework/vectors_export
 
+      - name: Detect mesh device shape from vectors
+        run: |
+          # Extract the mesh_device_shape from vector tensor_placement metadata.
+          # This ensures the sweep fixture creates a mesh device matching the
+          # traced topology (e.g., 4x8 for Galaxy, 1x2 for N300).
+          MESH=$(python3 -c "
+          import json, glob, sys
+          for f in glob.glob('/work/tests/sweep_framework/vectors_export/*.json'):
+              with open(f) as fh:
+                  data = json.load(fh)
+              for suite in data.values():
+                  if not isinstance(suite, dict):
+                      continue
+                  for cfg in suite.values():
+                      if not isinstance(cfg, dict):
+                          continue
+                      for key, val in cfg.items():
+                          if key.endswith('_tensor_placement') and isinstance(val, dict):
+                              ms = val.get('mesh_device_shape', '')
+                              if isinstance(ms, str) and ',' in ms:
+                                  nums = [int(x.strip().strip('[]')) for x in ms.split(',')]
+                                  if len(nums) == 2 and nums != [1, 1]:
+                                      print(f'{nums[0]}x{nums[1]}')
+                                      sys.exit(0)
+          print('')
+          " 2>/dev/null || true)
+          if [[ -n "$MESH" ]]; then
+            echo "Detected MESH_DEVICE_SHAPE=$MESH from vector metadata"
+            echo "MESH_DEVICE_SHAPE=$MESH" >> "$GITHUB_ENV"
+          else
+            echo "No multi-device mesh shape detected in vectors, using default"
+          fi
+
       - name: Run sweeps with tracer
         run: |
           mkdir -p /work/tests/sweep_framework/results_export
