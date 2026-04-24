@@ -493,20 +493,10 @@ def _get_bspm_path() -> Path:
 
 
 def _make_bspm_assignment_provider(bspm_path: Path):
-    """Return a callable (expert_idx, proj_idx) -> np.ndarray for load_bspm_for_expert."""
-    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    """Return a provider that loads the BSPM file once and caches codes for all calls."""
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import make_bspm_assignment_provider
 
-    def provider(expert_idx: int, proj_idx: int) -> np.ndarray:
-        K, N = _PROJ_SHAPES[proj_idx]
-        return load_bspm_for_expert(
-            str(bspm_path),
-            expert_idx=expert_idx,
-            proj_idx=proj_idx,
-            tile_rows=K // TILE_W,
-            tile_cols=N // TILE_W,
-        )
-
-    return provider
+    return make_bspm_assignment_provider(bspm_path, _PROJ_SHAPES)
 
 
 def _make_bspm_state_dict(layer_idx: int, expert_indices: list[int]) -> dict:
