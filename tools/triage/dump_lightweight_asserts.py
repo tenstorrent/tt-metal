@@ -78,7 +78,6 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                 return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
 
-            # Prefer *ASSERT( macros. LLK_ASSERT_BLOCK( does not contain the substring "ASSERT(".
             def scan_for_needle(needle: str) -> None:
                 nonlocal start_index
                 search_from = 0
@@ -103,8 +102,6 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
 
             start_index = -1
             scan_for_needle("ASSERT(")
-            if start_index == -1:
-                scan_for_needle("ASSERT_BLOCK(")
             if start_index == -1:
                 return "ASSERT() not found! Check the first code line in the stack trace."
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
