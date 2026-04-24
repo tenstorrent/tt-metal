@@ -213,9 +213,6 @@ class OperandRegistry:
         data_format: DataFormat,
         const_value: Optional[float] = None,
     ) -> Operand:
-        if name is None:
-            return
-
         if name in self.operands:
             operand = self.operands[name]
             if (dimensions is not None and dimensions != operand.dimensions) or (
