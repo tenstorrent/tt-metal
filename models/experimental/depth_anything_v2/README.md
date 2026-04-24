@@ -24,12 +24,15 @@ models/experimental/depth_anything_v2/
 │   ├── __init__.py
 │   └── model_def.py                      # Core model: ViT backbone, DPT neck/head, weight preprocessor
 ├── demo/
+│   ├── __init__.py
 │   ├── demo.py                           # Demo: load model, run inference, save depth map
 │   └── validate.py                       # Validation: PCC vs PyTorch reference + FPS benchmark
 └── tests/
+    ├── __init__.py
     ├── test_depth_anything_v2_pcc.py      # PCC accuracy test (PCC > 0.99 vs HuggingFace)
     ├── test_depth_anything_v2_perf.py     # Inference timing with profiler + perf report
-    └── test_depth_anything_v2_device_perf.py  # Device-level perf via run_device_perf
+    ├── test_depth_anything_v2_device_perf.py  # Device-level perf via run_device_perf
+    └── test_depth_anything_v2_trace_2cq.py   # Trace + dual command queue peak throughput
 ```
 
 ## Running the Demo
@@ -38,9 +41,9 @@ The demo script downloads the model from Hugging Face and initializes it on the 
 
 ```bash
 python models/experimental/depth_anything_v2/demo/demo.py
+python models/experimental/depth_anything_v2/demo/demo.py --model_id "depth-anything/Depth-Anything-V2-Large-hf"
+python models/experimental/depth_anything_v2/demo/demo.py --image_path /path/to/image.jpg
 ```
-
-To use a different model, edit the `model_id` parameter in the `run_demo()` call inside `demo.py`.
 
 ## Running the Tests
 
@@ -60,6 +63,12 @@ To run the device performance test:
 
 ```bash
 pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_device_perf.py
+```
+
+To run the trace + 2CQ test (peak throughput via trace replay):
+
+```bash
+pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_trace_2cq.py
 ```
 
 ## Implementation Details
