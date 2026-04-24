@@ -4,12 +4,17 @@
 
 // Shared guard helpers for routed_matmul kernels.
 //
-// Each dataflow kernel independently reads two DRAM row-major uint32 tables
-// (global_expert_idx_table, expert_token_counts) into a small L1 scratch region
-// (cb_guard). The skip predicate is:
+// Each dataflow kernel independently reads two DRAM-interleaved ROW_MAJOR uint32
+// tables (global_expert_idx_table, expert_token_counts) into an L1 scratch region
+// (cb_guard) via TensorAccessor. The skip predicate is:
 //
 //   global_idx = global_expert_idx_table[local_expert_idx]
 //   skip       = expert_token_counts[global_idx] <= curr_expert_iter * expert_iter_length
+//
+// TensorAccessor resolves the correct bank + offset for a given page, so this
+// works with arbitrary DRAM-interleaved memory configs — no assumption that the
+// data lives in bank 0. Both tables are read as a single page (their innermost
+// dim × dtype is one page) and then indexed within L1 scratch.
 //
 // Because both tensors are read-only for the duration of the FFN pass, no
 // token-based synchronization between the two dataflow threads is needed —
@@ -21,7 +26,7 @@
 // and TRISC pops the flag with the hardware-blocking mailbox_read inside its
 // own guard_check_wait(). mailbox_read stalls automatically until BRISC has
 // written, so no extra synchronization is needed. NCRISC cannot link
-// ckernel::mailbox_base and therefore does not participate in the BRISC→TRISC
+// ckernel::mailbox_base and therefore does not participate in the BRISC->TRISC
 // handoff; its decision (identical to BRISC's by construction) is consumed
 // only by its own kernel's early-return.
 //
@@ -33,14 +38,15 @@
 // implementations here reflect the actual processor assignment.
 //
 // Named compile-time args set by the program factory (via named_compile_args):
-//   GUARD_CB_ID     - CB index for cb_guard (scratch for the DRAM reads; dataflow only).
-//                     cb_guard is 64 bytes — partitioned into two 32-byte halves, one
-//                     per DRAM read. Using separate halves is required: reusing the
-//                     same scratch between two sequential noc_async_read + barrier
-//                     pairs deadlocks (observed empirically; likely a NoC/barrier
-//                     ordering issue). 32 bytes = 8 uint32s per half, so indices
-//                     0..7 into each table are addressable with a single NoC read.
-//   GUARD_ARG_BASE  - starting runtime arg index for the 5 guard args (dataflow only).
+//   GUARD_CB_ID                       - CB index for cb_guard (scratch for the DRAM reads;
+//                                       dataflow only). Must be large enough to hold one
+//                                       page of each table back-to-back (see program factory).
+//   GUARD_ARG_BASE                    - starting runtime arg index for the 5 guard args
+//                                       (dataflow only).
+//   GUARD_GLOBAL_TABLE_CTA_OFFSET     - compile-time-arg offset for global_expert_idx_table's
+//                                       TensorAccessorArgs (dataflow only).
+//   GUARD_COUNTS_CTA_OFFSET           - compile-time-arg offset for expert_token_counts'
+//                                       TensorAccessorArgs (dataflow only).
 //
 // Runtime args at positions GUARD_ARG_BASE+{0..4} (dataflow only):
 //   [0] global_expert_idx_table DRAM buffer address (uint32)
@@ -49,17 +55,10 @@
 //   [3] curr_expert_iter                           (uint32)
 //   [4] expert_iter_length                         (uint32)
 //
-// Table layout: both DRAM tensors are ROW_MAJOR_LAYOUT uint32.
-//
-// TODO — per-index reads: the current implementation does a naive
-// get_noc_addr_from_bank_id<true>(0, buffer_addr) + 32-byte NoC read, which
-// only retrieves whatever element(s) of a DRAM-INTERLEAVED buffer happen to
-// map to bank 0's first page. To read an arbitrary index i correctly, the
-// kernel must use InterleavedAddrGen<true> with the buffer's page size (or
-// a non-interleaved memory config on the host side). The stub callers today
-// work around this by filling each table uniformly so every bank-0 page has
-// the expected value. The ROW_MAJOR_LAYOUT choice keeps the page = uint32
-// contract clean for that upgrade.
+// Current limitation: each table is read as a single page (page 0), so the
+// full table must fit in one ROW_MAJOR page (= innermost dim × dtype_bytes)
+// AND in one 256-byte half of cb_guard (= 64 uint32 elements). Larger tables
+// need either multi-page reads keyed on the logical index or a bigger cb_guard.
 //
 // If ROUTED_GUARD_ENABLED is not defined, the helpers compile to no-ops.
 
@@ -68,10 +67,10 @@
 #include <cstdint>
 
 namespace routed_guard_detail {
-constexpr uint32_t kScalarOffset = 0;  // byte offset of scratch region within cb_guard
-// 32-byte DRAM transaction (8 uint32 values). Stub limitation: only indices 0..7
-// are addressable. This matches the pre-refactor single-scalar read size.
-constexpr uint32_t kReadBytes = 32;
+// Each table's page is read into its own 256-byte scratch half of cb_guard so
+// both values are resident simultaneously and the second DRAM read cannot
+// stomp on the first's L1 destination.
+constexpr uint32_t kGuardScratchHalfBytes = 256;
 }  // namespace routed_guard_detail
 
 #ifdef ROUTED_GUARD_ENABLED
@@ -97,16 +96,15 @@ FORCE_INLINE bool guard_check_wait() {
 
 #else  // dataflow side
 
+#include "api/tensor/tensor_accessor.h"
+
 namespace routed_guard_detail {
 
-// Read 32 bytes (8 uint32s of face-0 row 0) from DRAM bank 0 `dram_addr` into
-// `scratch_l1`, barrier, and return the value at logical row-0 column `idx`.
-// Assumes idx < 8 and `scratch_l1` points to an exclusive 32-byte L1 region
-// (callers that issue two reads must supply two disjoint scratch regions —
-// sharing scratch across back-to-back reads was observed to deadlock).
-FORCE_INLINE uint32_t read_indexed_u32(uint32_t dram_addr, uint32_t scratch_l1, uint32_t idx) {
-    const uint64_t dram_src = get_noc_addr_from_bank_id<true>(0, dram_addr);
-    noc_async_read(dram_src, scratch_l1, kReadBytes);
+// Read page 0 of `accessor` (one innermost-dim row) into `scratch_l1`, barrier,
+// and return the uint32 at position `idx` within that row.
+template <typename Accessor>
+FORCE_INLINE uint32_t read_page_indexed_u32(const Accessor& accessor, uint32_t scratch_l1, uint32_t idx) {
+    noc_async_read_page(0, accessor, scratch_l1);
     noc_async_read_barrier();
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1)[idx];
 }
@@ -114,10 +112,12 @@ FORCE_INLINE uint32_t read_indexed_u32(uint32_t dram_addr, uint32_t scratch_l1, 
 }  // namespace routed_guard_detail
 
 // NCRISC (in0_* readers): direct DRAM reads, no mailbox — ckernel::mailbox_base
-// is not linked for NCRISC, and BRISC already owns the BRISC→TRISC handoff.
+// is not linked for NCRISC, and BRISC already owns the BRISC->TRISC handoff.
 FORCE_INLINE bool guard_check_brisc() {
     constexpr uint32_t kArgBase = get_named_compile_time_arg_val("GUARD_ARG_BASE");
     constexpr uint32_t kCbId = get_named_compile_time_arg_val("GUARD_CB_ID");
+    constexpr uint32_t kGlobalTableCtaOff = get_named_compile_time_arg_val("GUARD_GLOBAL_TABLE_CTA_OFFSET");
+    constexpr uint32_t kCountsCtaOff = get_named_compile_time_arg_val("GUARD_COUNTS_CTA_OFFSET");
 
     const uint32_t global_table_addr = get_arg_val<uint32_t>(kArgBase);
     const uint32_t token_counts_addr = get_arg_val<uint32_t>(kArgBase + 1);
@@ -125,11 +125,17 @@ FORCE_INLINE bool guard_check_brisc() {
     const uint32_t curr_expert_iter = get_arg_val<uint32_t>(kArgBase + 3);
     const uint32_t expert_iter_length = get_arg_val<uint32_t>(kArgBase + 4);
 
-    const uint32_t scratch_base = get_write_ptr(kCbId) + routed_guard_detail::kScalarOffset;
+    constexpr auto global_table_args = TensorAccessorArgs<kGlobalTableCtaOff>();
+    constexpr auto counts_args = TensorAccessorArgs<kCountsCtaOff>();
+    const auto global_table_accessor = TensorAccessor(global_table_args, global_table_addr);
+    const auto counts_accessor = TensorAccessor(counts_args, token_counts_addr);
+
+    const uint32_t scratch_a = get_write_ptr(kCbId);
+    const uint32_t scratch_b = scratch_a + routed_guard_detail::kGuardScratchHalfBytes;
+
     const uint32_t global_idx =
-        routed_guard_detail::read_indexed_u32(global_table_addr, scratch_base, local_expert_idx);
-    const uint32_t token_count = routed_guard_detail::read_indexed_u32(
-        token_counts_addr, scratch_base + routed_guard_detail::kReadBytes, global_idx);
+        routed_guard_detail::read_page_indexed_u32(global_table_accessor, scratch_a, local_expert_idx);
+    const uint32_t token_count = routed_guard_detail::read_page_indexed_u32(counts_accessor, scratch_b, global_idx);
 
     return token_count <= curr_expert_iter * expert_iter_length;
 }
@@ -142,6 +148,8 @@ FORCE_INLINE bool guard_check_brisc() {
 FORCE_INLINE bool guard_check_wait() {
     constexpr uint32_t kArgBase = get_named_compile_time_arg_val("GUARD_ARG_BASE");
     constexpr uint32_t kCbId = get_named_compile_time_arg_val("GUARD_CB_ID");
+    constexpr uint32_t kGlobalTableCtaOff = get_named_compile_time_arg_val("GUARD_GLOBAL_TABLE_CTA_OFFSET");
+    constexpr uint32_t kCountsCtaOff = get_named_compile_time_arg_val("GUARD_COUNTS_CTA_OFFSET");
 
     const uint32_t global_table_addr = get_arg_val<uint32_t>(kArgBase);
     const uint32_t token_counts_addr = get_arg_val<uint32_t>(kArgBase + 1);
@@ -149,11 +157,17 @@ FORCE_INLINE bool guard_check_wait() {
     const uint32_t curr_expert_iter = get_arg_val<uint32_t>(kArgBase + 3);
     const uint32_t expert_iter_length = get_arg_val<uint32_t>(kArgBase + 4);
 
-    const uint32_t scratch_base = get_read_ptr(kCbId) + routed_guard_detail::kScalarOffset;
+    constexpr auto global_table_args = TensorAccessorArgs<kGlobalTableCtaOff>();
+    constexpr auto counts_args = TensorAccessorArgs<kCountsCtaOff>();
+    const auto global_table_accessor = TensorAccessor(global_table_args, global_table_addr);
+    const auto counts_accessor = TensorAccessor(counts_args, token_counts_addr);
+
+    const uint32_t scratch_a = get_read_ptr(kCbId);
+    const uint32_t scratch_b = scratch_a + routed_guard_detail::kGuardScratchHalfBytes;
+
     const uint32_t global_idx =
-        routed_guard_detail::read_indexed_u32(global_table_addr, scratch_base, local_expert_idx);
-    const uint32_t token_count = routed_guard_detail::read_indexed_u32(
-        token_counts_addr, scratch_base + routed_guard_detail::kReadBytes, global_idx);
+        routed_guard_detail::read_page_indexed_u32(global_table_accessor, scratch_a, local_expert_idx);
+    const uint32_t token_count = routed_guard_detail::read_page_indexed_u32(counts_accessor, scratch_b, global_idx);
 
     const bool skip = token_count <= curr_expert_iter * expert_iter_length;
     const uint32_t skip_u = skip ? 1u : 0u;

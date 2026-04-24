@@ -85,14 +85,17 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
-    uint32_t global_table_addr,
-    uint32_t token_counts_addr,
+    tt::tt_metal::Buffer* global_table_buffer,
+    tt::tt_metal::Buffer* counts_buffer,
     uint32_t local_expert_idx,
     uint32_t curr_expert_iter,
     uint32_t expert_iter_length,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
+
+    const uint32_t global_table_addr = global_table_buffer->address();
+    const uint32_t token_counts_addr = counts_buffer->address();
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -344,18 +347,20 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    // Guard CB — 64 bytes of L1 used as DRAM-read scratch by guard.h.
-    // Each kernel (BRISC/NCRISC) independently reads the global_expert_idx_table
-    // and expert_token_counts from DRAM into this scratch, then evaluates the
-    // per-chunk skip predicate. 64 bytes covers the first 16 uint32 values of
-    // face-0 row 0 — enough for experts_per_chip/num_global_experts <= 16 today.
+    // Guard CB — 512 bytes of L1 used as DRAM-read scratch by guard.h. Split
+    // into two 256-byte halves: the kernel reads one page of global_expert_idx_table
+    // into the first half and one page of expert_token_counts into the second half,
+    // then indexes into each half. 256 bytes is enough to hold a ROW_MAJOR uint32
+    // buffer of up to 64 elements (one page = innermost-dim row); for larger tables
+    // this CB size needs to grow or the kernel needs page-by-page reads.
     // CBIndex::c_11 is not used by any other CB in this factory.
     constexpr uint32_t guard_cb_index = tt::CBIndex::c_11;
+    constexpr uint32_t kGuardCbBytes = 512;
     auto cb_guard = tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        tt::tt_metal::CircularBufferConfig(64, {{guard_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(guard_cb_index, 64));
+        tt::tt_metal::CircularBufferConfig(kGuardCbBytes, {{guard_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(guard_cb_index, kGuardCbBytes));
 
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
@@ -596,6 +601,31 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_receiver_writer_compile_time_args);
 
+    // Guard-table accessor args — appended at the END of every dataflow kernel's
+    // compile-time arg vector. The starting offsets are propagated to the kernel
+    // via GUARD_GLOBAL_TABLE_CTA_OFFSET / GUARD_COUNTS_CTA_OFFSET named args. Both
+    // tables are small DRAM-interleaved ROW_MAJOR uint32 buffers; the kernel uses
+    // a TensorAccessor to read a specific page without assuming a fixed bank/offset.
+    const uint32_t in0_sender_global_cta_off = in0_sender_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*global_table_buffer).append_to(in0_sender_compile_time_args);
+    const uint32_t in0_sender_counts_cta_off = in0_sender_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*counts_buffer).append_to(in0_sender_compile_time_args);
+
+    const uint32_t in0_recv_global_cta_off = in0_receiver_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*global_table_buffer).append_to(in0_receiver_compile_time_args);
+    const uint32_t in0_recv_counts_cta_off = in0_receiver_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*counts_buffer).append_to(in0_receiver_compile_time_args);
+
+    const uint32_t in1_sender_global_cta_off = in1_sender_writer_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*global_table_buffer).append_to(in1_sender_writer_compile_time_args);
+    const uint32_t in1_sender_counts_cta_off = in1_sender_writer_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*counts_buffer).append_to(in1_sender_writer_compile_time_args);
+
+    const uint32_t in1_recv_global_cta_off = in1_receiver_writer_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*global_table_buffer).append_to(in1_receiver_writer_compile_time_args);
+    const uint32_t in1_recv_counts_cta_off = in1_receiver_writer_compile_time_args.size();
+    tt::tt_metal::TensorAccessorArgs(*counts_buffer).append_to(in1_receiver_writer_compile_time_args);
+
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_interleaved_defines;
@@ -691,8 +721,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
     - CB configured with size=2 to hold both tiles
 
     Result:
-    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
-    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+    - Tile 0: DRAM Bank 0, Address 64    -> CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    -> CB L1 Address 544 (not 64-byte aligned ✗)
 
     Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
     the intermediate CB first, then copy to the destination CB. This ensures proper
@@ -785,6 +815,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_in0_intermediate", tt::CBIndex::c_8},
                     {"GUARD_CB_ID", guard_cb_index},
                     {"GUARD_ARG_BASE", 8u},
+                    {"GUARD_GLOBAL_TABLE_CTA_OFFSET", in0_sender_global_cta_off},
+                    {"GUARD_COUNTS_CTA_OFFSET", in0_sender_counts_cta_off},
                 }});
     }
 
@@ -805,8 +837,10 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                 {"cb_sparsity", tt::CBIndex::c_7},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"GUARD_CB_ID", guard_cb_index},
-                // When OUT_SHARDED, the kernel skips last_num_blocks_w_dim arg → 1 fewer base arg.
+                // When OUT_SHARDED, the kernel skips last_num_blocks_w_dim arg -> 1 fewer base arg.
                 {"GUARD_ARG_BASE", output_is_sharded ? 20u : 21u},
+                {"GUARD_GLOBAL_TABLE_CTA_OFFSET", in1_sender_global_cta_off},
+                {"GUARD_COUNTS_CTA_OFFSET", in1_sender_counts_cta_off},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
@@ -827,8 +861,10 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_bias", tt::CBIndex::c_3},
                     {"cb_out", tt::CBIndex::c_4},
                     {"GUARD_CB_ID", guard_cb_index},
-                    // When OUT_SHARDED, the kernel skips last_num_blocks_{h,w} (2 args) → 2 fewer.
+                    // When OUT_SHARDED, the kernel skips last_num_blocks_{h,w} (2 args) -> 2 fewer.
                     {"GUARD_ARG_BASE", output_is_sharded ? 13u : 15u},
+                    {"GUARD_GLOBAL_TABLE_CTA_OFFSET", in1_recv_global_cta_off},
+                    {"GUARD_COUNTS_CTA_OFFSET", in1_recv_counts_cta_off},
                 }});
     }
 
@@ -849,6 +885,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_in0", tt::CBIndex::c_0},
                     {"GUARD_CB_ID", guard_cb_index},
                     {"GUARD_ARG_BASE", 2u},
+                    {"GUARD_GLOBAL_TABLE_CTA_OFFSET", in0_recv_global_cta_off},
+                    {"GUARD_COUNTS_CTA_OFFSET", in0_recv_counts_cta_off},
                 }});
     }
 
@@ -872,6 +910,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_out", tt::CBIndex::c_4},
                     {"GUARD_CB_ID", guard_cb_index},
                     {"GUARD_ARG_BASE", output_is_sharded ? 13u : 15u},
+                    {"GUARD_GLOBAL_TABLE_CTA_OFFSET", in1_recv_global_cta_off},
+                    {"GUARD_COUNTS_CTA_OFFSET", in1_recv_counts_cta_off},
                 }});
 
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
@@ -888,6 +928,8 @@ RoutedMatmulMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1
                     {"cb_in0", tt::CBIndex::c_0},
                     {"GUARD_CB_ID", guard_cb_index},
                     {"GUARD_ARG_BASE", 2u},
+                    {"GUARD_GLOBAL_TABLE_CTA_OFFSET", in0_recv_global_cta_off},
+                    {"GUARD_COUNTS_CTA_OFFSET", in0_recv_counts_cta_off},
                 }});
     }
 
@@ -1885,8 +1927,8 @@ static RoutedMatmulMcast2DProgramFactory::cached_program_t routed_matmul_build_p
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t global_table_addr = tensor_args.global_expert_idx_table.buffer()->address();
-    const uint32_t token_counts_addr = tensor_args.expert_token_counts.buffer()->address();
+    auto* global_table_buffer = tensor_args.global_expert_idx_table.buffer();
+    auto* counts_buffer = tensor_args.expert_token_counts.buffer();
     const uint32_t local_expert_idx = operation_attributes.local_expert_idx;
     const uint32_t guard_expert_iter = operation_attributes.curr_expert_iter;
     const uint32_t expert_iter_length = operation_attributes.expert_iter_length;
@@ -1932,8 +1974,8 @@ static RoutedMatmulMcast2DProgramFactory::cached_program_t routed_matmul_build_p
         output_data_format,
         untilize_out,
         fused_op_signaler,
-        global_table_addr,
-        token_counts_addr,
+        global_table_buffer,
+        counts_buffer,
         local_expert_idx,
         guard_expert_iter,
         expert_iter_length,

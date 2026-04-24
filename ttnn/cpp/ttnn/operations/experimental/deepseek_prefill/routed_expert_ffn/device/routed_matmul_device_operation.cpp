@@ -120,7 +120,7 @@ ttnn::Tensor routed_matmul(
 
     const tt::tt_metal::DataType out_dtype = output_dtype.value_or(a.dtype());
 
-    // Resolve output_memory_config: explicit → caller's value; else inherit from
+    // Resolve output_memory_config: explicit -> caller's value; else inherit from
     // optional_output_tensor (device op will use that tensor anyway); else
     // default to DRAM interleaved.
     const tt::tt_metal::MemoryConfig resolved_output_mem_cfg =

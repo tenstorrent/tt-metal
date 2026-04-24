@@ -107,24 +107,25 @@ def test_single_routed_expert(
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
     # Build fake guard tensors to exercise the routed-matmul kernel path.
-    # ROW_MAJOR_LAYOUT uint32 chosen for its intent: metadata tables indexed by
-    # small integer ids, not tile-aligned data. Note: the current kernel guard
-    # does a naive single-bank NoC read, which for DRAM-INTERLEAVED buffers only
-    # returns meaningful data for the element(s) that happen to land in bank 0.
-    # As a stub we fill the whole table uniformly so any byte offset the kernel
-    # reads lands on the correct value. Upgrading the guard to InterleavedAddrGen
-    # for per-index reads is tracked by the TODO in guard.h.
+    # ROW_MAJOR_LAYOUT uint32; element [i] lands at logical index i. The kernel-side
+    # guard uses TensorAccessor so per-index reads resolve to the correct DRAM bank
+    # regardless of interleaving. Shape (32,) gives one page per tensor — the guard
+    # reads that page once and indexes within L1 scratch.
     global_expert_idx_table = None
     expert_token_counts_tt = None
     if use_routed_matmul:
-        pad = 32  # fill size — must be >= one DRAM transaction (32 uint32s)
+        num_global_experts = experts_per_chip  # single-chip test: globals == locals
+        pad = 32
 
-        # Identity fill for the table and uniform num_tokens for counts are both
-        # correct for any indexing the kernel performs today (since the guard
-        # reads a single uint32's worth of data that must equal the expected
-        # value regardless of which bank element it reads).
-        global_table_torch = torch.zeros((pad,), dtype=torch.int32)  # all locals → global 0
-        token_counts_torch = torch.full((pad,), num_tokens, dtype=torch.int32)
+        # Identity mapping: local slot i -> global id i.
+        global_table_torch = torch.zeros((pad,), dtype=torch.int32)
+        for i in range(experts_per_chip):
+            global_table_torch[i] = i
+
+        # Real token count per global expert; other slots stay at 0 (guard skips).
+        token_counts_torch = torch.zeros((pad,), dtype=torch.int32)
+        for i in range(num_global_experts):
+            token_counts_torch[i] = num_tokens
 
         global_expert_idx_table = ttnn.from_torch(
             global_table_torch,
