@@ -446,9 +446,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ppetrovicTT/tt-github-actions/.github/actions/ai_run_summary@ppetrovic/ai-summary
+      - id: ai-run-summary
+        uses: ppetrovicTT/tt-github-actions/.github/actions/ai_run_summary@ppetrovic/ai-summary
         with:
           config-path: .github/ai-summary/vllm-nightly.yaml
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           matrix-manifest: vllm_matrix_manifest
+
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            echo "::group::AI Run Summary"
+            cat "$REPORT_FILE"
+            echo "::endgroup::"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi
