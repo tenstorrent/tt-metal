@@ -613,8 +613,6 @@ class ResBlock(Module):
                     num_chunks = NT // chunk_nt
                     break
 
-        last_chunk = NT - (num_chunks - 1) * chunk_nt if num_chunks > 1 else NT
-
         if num_chunks == 1:
             x_gathered = self._all_gather_hw(x_4d, N, T, H, W, C)
             x_normed = self._norm_silu_spatial_chunk(
@@ -943,7 +941,7 @@ class CausalUpsampleBlock(Module):
 
     def forward(self, x_NTHWC: ttnn.Tensor, logical_h: int = 0, logical_w: int = 0) -> ttnn.Tensor:
         N, T, H, W, C = x_NTHWC.shape
-        for i, block in enumerate(self.resnets):
+        for block in self.resnets:
             x_NTHWC = block(x_NTHWC, logical_h, logical_w)
         x_NTHWO = self.proj(x_NTHWC)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
@@ -1170,13 +1168,13 @@ class MochiVAEDecoder(Module):
         x_NTHWC = self.input_proj(x_NTHWC)
 
         # First set of residual blocks
-        for i, block in enumerate(self.first_blocks):
+        for block in self.first_blocks:
             x_res_NTHWC = block(x_NTHWC, logical_h, logical_w)
             ttnn.deallocate(x_NTHWC)
             x_NTHWC = x_res_NTHWC
 
         # Upsampling blocks
-        for i, block in enumerate(self.up_blocks):
+        for block in self.up_blocks:
             x_res_NTHWC = block(x_NTHWC, logical_h, logical_w)
             ttnn.deallocate(x_NTHWC)
             x_NTHWC = x_res_NTHWC
@@ -1187,7 +1185,7 @@ class MochiVAEDecoder(Module):
                 logical_w *= block.spatial_expansion
 
         # Last set of residual blocks
-        for i, block in enumerate(self.last_blocks):
+        for block in self.last_blocks:
             x_res_NTHWC = block(x_NTHWC, logical_h, logical_w)
             ttnn.deallocate(x_NTHWC)
             x_NTHWC = x_res_NTHWC
