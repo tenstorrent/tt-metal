@@ -13,7 +13,13 @@ import torch
 from safetensors import safe_open
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
-from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, compressor_prefill, swiglu_expert
+from models.demos.deepseek_v4_flash.cpu_reference import (
+    combine_routed_experts,
+    compressor_prefill,
+    indexer_topk,
+    sparse_attention,
+    swiglu_expert,
+)
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
@@ -23,6 +29,7 @@ from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
+from models.demos.deepseek_v4_flash.ttnn_sparse_attention import TtSparsePrefillAttention
 
 
 @pytest.fixture(scope="module")
@@ -192,3 +199,79 @@ def test_tiny_prefill_compressor_overlap_uses_host_ratio_pooling_and_matches_tor
 
     assert torch_output.shape == expected.shape
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
+
+
+def test_tiny_sparse_prefill_attention_abi_smoke_matches_torch(device):
+    """ABI/hardware smoke path; sparse gather, sink-softmax, and reduction are still host-side."""
+
+    batch_size, seq_len, num_heads, head_dim, cache_len = 1, 32, 2, 32, 32
+    q = torch.linspace(-0.35, 0.45, steps=batch_size * seq_len * num_heads * head_dim, dtype=torch.float32)
+    q = q.reshape(batch_size, seq_len, num_heads, head_dim).to(torch.bfloat16)
+    kv = torch.linspace(0.25, -0.4, steps=batch_size * cache_len * head_dim, dtype=torch.float32)
+    kv = kv.reshape(batch_size, cache_len, head_dim).to(torch.bfloat16)
+    attn_sink = torch.tensor([0.2, -0.15], dtype=torch.float32)
+    token_ids = torch.arange(seq_len).view(1, seq_len)
+    topk_idxs = torch.stack(
+        [
+            token_ids % cache_len,
+            (token_ids + 5) % cache_len,
+            (token_ids + 11) % cache_len,
+        ],
+        dim=-1,
+    ).to(torch.int64)
+    topk_idxs[:, 4::7, -1] = -1
+    softmax_scale = 0.5
+    expected = sparse_attention(q, kv, attn_sink, topk_idxs, softmax_scale)
+
+    tt_q = ttnn.from_torch(
+        q.reshape(batch_size, seq_len, num_heads * head_dim).unsqueeze(1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_kv = ttnn.from_torch(kv.unsqueeze(1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtSparsePrefillAttention(
+        device=device,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        softmax_scale=softmax_scale,
+    )
+    torch_output = ttnn.to_torch(module(tt_q, tt_kv, attn_sink=attn_sink, topk_idxs=topk_idxs))[:, 0]
+    torch_output = torch_output.reshape(batch_size, seq_len, num_heads, head_dim)
+
+    assert torch_output.shape == expected.shape
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=1e-2, atol=1e-2)
+
+
+def test_tiny_indexer_topk_feeds_sparse_prefill_attention_abi_smoke(device):
+    """CPU indexer feed-through smoke for the sparse attention ABI boundary."""
+
+    batch_size, seq_len, num_heads, head_dim, cache_len = 1, 32, 2, 32, 32
+    q = torch.arange(batch_size * seq_len * num_heads * head_dim, dtype=torch.float32)
+    q = ((q % 29) - 14).reshape(batch_size, seq_len, num_heads, head_dim).to(torch.bfloat16) / 17
+    kv = torch.arange(batch_size * cache_len * head_dim, dtype=torch.float32)
+    kv = ((kv % 23) - 8).reshape(batch_size, cache_len, head_dim).to(torch.bfloat16) / 19
+    weights = torch.tensor([[[1.0, 0.5]]], dtype=torch.float32).expand(batch_size, seq_len, num_heads)
+    attn_sink = torch.tensor([0.0, -0.25], dtype=torch.float32)
+    softmax_scale = 0.25
+    topk_idxs = indexer_topk(q, kv, weights, index_topk=4, compress_ratio=1, start_pos=0, offset=0)
+    expected = sparse_attention(q, kv, attn_sink, topk_idxs, softmax_scale)
+
+    tt_q = ttnn.from_torch(
+        q.reshape(batch_size, seq_len, num_heads * head_dim).unsqueeze(1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_kv = ttnn.from_torch(kv.unsqueeze(1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtSparsePrefillAttention(
+        device=device,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        softmax_scale=softmax_scale,
+    )
+    torch_output = ttnn.to_torch(module(tt_q, tt_kv, attn_sink=attn_sink, topk_idxs=topk_idxs))[:, 0]
+    torch_output = torch_output.reshape(batch_size, seq_len, num_heads, head_dim)
+
+    assert torch.any(topk_idxs < 0)
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=1e-2, atol=1e-2)

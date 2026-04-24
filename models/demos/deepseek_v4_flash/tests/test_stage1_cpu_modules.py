@@ -2,13 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import torch.nn.functional as F
 
 from models.demos.deepseek_v4_flash.cpu_reference import (
     combine_routed_experts,
-    compressor_prefill,
     compress_topk_indices,
+    compressor_prefill,
     hc_split_sinkhorn,
     hyperconnection_post,
     hyperconnection_pre,
@@ -18,6 +19,7 @@ from models.demos.deepseek_v4_flash.cpu_reference import (
     v4_router,
     window_topk_indices,
 )
+from models.demos.deepseek_v4_flash.ttnn_sparse_attention import validate_sparse_attention_contract
 
 
 def test_v4_router_hash_and_sqrtsoftplus_top6():
@@ -117,6 +119,22 @@ def test_indexer_topk_and_sparse_attention_decode():
         probs = torch.softmax(torch.cat([scores, attn_sink[head : head + 1]]), dim=0)[:2]
         manual[0, 0, head] = probs @ gathered
     torch.testing.assert_close(out, manual)
+
+
+def test_sparse_attention_contract_validation_errors():
+    q = torch.zeros(1, 2, 3, 4)
+    kv = torch.zeros(1, 5, 4)
+    attn_sink = torch.zeros(3)
+    topk_idxs = torch.tensor([[[0, 1], [2, -1]]], dtype=torch.int64)
+
+    validate_sparse_attention_contract(q, kv, attn_sink, topk_idxs, num_heads=3, head_dim=4)
+
+    with pytest.raises(ValueError, match="Expected q heads/dim"):
+        validate_sparse_attention_contract(q, kv, attn_sink, topk_idxs, num_heads=2, head_dim=4)
+    with pytest.raises(ValueError, match="topk_idxs values must be < cache_len 5"):
+        validate_sparse_attention_contract(q, kv, attn_sink, torch.full((1, 2, 1), 5), num_heads=3, head_dim=4)
+    with pytest.raises(ValueError, match="topk_idxs values must be -1 or non-negative"):
+        validate_sparse_attention_contract(q, kv, attn_sink, torch.full((1, 2, 1), -2), num_heads=3, head_dim=4)
 
 
 def test_shared_and_routed_expert_debug_weights():
