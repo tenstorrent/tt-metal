@@ -32,18 +32,21 @@ ALWI void matmul_block(
     uint32_t in1_cb,
     uint32_t out_cb,
     uint32_t interm_cb,
-    uint32_t block_w,
-    uint32_t in0_num_subblocks,
-    uint32_t in1_num_subblocks,
-    uint32_t num_k_blocks,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t batch,
+    MatmulBlockShape shape,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
     bool retain_in0,
     uint32_t in1_per_core_w,
     uint32_t out_row_width) {
+
+    // Hoist shape fields into local names so the existing body reads unchanged.
+    const uint32_t in0_num_subblocks = shape.in0_num_subblocks;
+    const uint32_t in1_num_subblocks = shape.in1_num_subblocks;
+    const uint32_t out_subblock_h = shape.out_subblock_h;
+    const uint32_t out_subblock_w = shape.out_subblock_w;
+    const uint32_t block_w = shape.in0_block_w;
+    const uint32_t num_k_blocks = shape.num_k_blocks;
+    const uint32_t batch = shape.batch;
 
     const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
     const uint32_t in0_subblock_num_tiles = out_subblock_h * block_w;

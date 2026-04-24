@@ -21,18 +21,19 @@ template <
     BiasBroadcast broadcast,
     OutputLayout output_layout,
     typename PostBiasFn>
-ALWI void add_bias_bcast_rows(
-    uint32_t in0_num_subblocks,
-    uint32_t in1_num_subblocks,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    PostBiasFn post_bias,
-    uint32_t out_row_width) {
+ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias) {
 
     // Compile-time validation
     static_assert(partials_cb < 32, "add_bias_bcast_rows: partials_cb must be less than 32");
     static_assert(bias_cb < 32, "add_bias_bcast_rows: bias_cb must be less than 32");
     static_assert(out_cb < 32, "add_bias_bcast_rows: out_cb must be less than 32");
+
+    // Hoist shape fields so the existing body reads unchanged.
+    const uint32_t in0_num_subblocks = shape.in0_num_subblocks;
+    const uint32_t in1_num_subblocks = shape.in1_num_subblocks;
+    const uint32_t out_subblock_h = shape.out_subblock_h;
+    const uint32_t out_subblock_w = shape.out_subblock_w;
+    uint32_t out_row_width = shape.out_row_width;
 
     const uint32_t out_num_tiles = out_subblock_h * out_subblock_w;
 

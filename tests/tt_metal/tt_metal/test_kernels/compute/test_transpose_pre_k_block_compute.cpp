@@ -81,13 +81,8 @@ void kernel_main() {
         in1_cb,
         out_cb,
         interm_cb,
-        in0_block_w,
-        in0_num_subblocks,
-        in1_num_subblocks,
-        num_k_blocks,
-        out_subblock_h,
-        out_subblock_w,
-        batch,
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch),
         compute_kernel_lib::NoPostCompute{},
         XposeFn{});
 }
