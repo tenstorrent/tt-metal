@@ -40,8 +40,6 @@ starting:
    the conflict, quote the rule, ask for override or scope adjustment.
 3. Wait for explicit confirmation before proceeding.
 
-See `skills/skill-creator/tt-guidelines.md` § Developer-Rule Conflict.
-
 ## Preflight: tool preload
 
 Fetch these schemas via `ToolSearch` before baseline — loading mid-session

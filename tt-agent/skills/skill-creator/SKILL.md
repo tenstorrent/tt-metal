@@ -108,6 +108,8 @@ Applies equally to new skills and to edits of existing skills.
    formulas.
 6. Duplication found → return to Phase 2. Rewrite the non-canonical file
    as a one-line cross-reference; do not restate.
+7. **Pointers must be runtime-useful.** Drop references to content
+   consumed only during a skill's construction.
 
 **Gate:** Phase 4 does not run until Phase 3 reports pass. Do not skip on
 edits — growth-per-edit is the bloat pattern, and rule-scatter is the
