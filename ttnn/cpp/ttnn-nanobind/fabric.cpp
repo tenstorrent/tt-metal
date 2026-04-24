@@ -320,6 +320,37 @@ void bind_fabric_api(nb::module_& mod) {
         R"(
             Returns the maximum fabric packet payload size in bytes.
         )");
+
+    mod.def(
+        "get_eth_forwarding_direction",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::optional<int> {
+            auto dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            if (!dir.has_value()) {
+                return std::nullopt;
+            }
+            return static_cast<int>(*dir);
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Query the ethernet forwarding direction a fabric packet would take from src to dst.
+
+            Returns the raw eth_chan_directions enum value (EAST=0, WEST=1, NORTH=2, SOUTH=3, Z=4),
+            or None if no route exists between the two chips. The returned int matches the
+            per-connection `tag` stored in RoutingPlaneConnectionManager, so it can be used by
+            callers to dedup fabric connections by direction.
+        )");
+
+    mod.def(
+        "get_all_fabric_mesh_ids",
+        &tt::tt_fabric::get_all_fabric_mesh_ids,
+        R"(
+            Returns every compute mesh id declared in the active mesh graph descriptor.
+
+            Unlike get_user_physical_mesh_ids (which is scoped to the local rank's meshes),
+            this enumerates peer meshes as well, enabling multi-mesh topology discovery.
+        )");
 }
 
 }  // namespace ttnn::fabric
