@@ -24,8 +24,12 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
+import os
+
+import numpy as np
 import ttnn
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
 
 from .transformer import DeepSeekMLP
@@ -35,6 +39,16 @@ from .autograd_ops import (
     autograd_softmax,
     moe_routing_normalize,
 )
+
+
+# Set ``MOE_DEBUG_EQ=1`` in the environment to compare two evaluations of
+# ``ttnn.eq(topk_indices, float(expert_idx))`` per expert per forward:
+# one read on the host (used to populate ``activated_experts``) versus the
+# downstream device chain that feeds ``_token_counts`` and ``mask_narrow``.
+# Any disagreement is printed on its own line and points at non-deterministic
+# / re-execution behaviour of ``ttnn.eq`` on UINT16 + non-zero float scalars
+# at the production tile shape.
+_MOE_DEBUG_EQ = os.environ.get("MOE_DEBUG_EQ", "0") == "1"
 
 
 class Expert(AbstractModuleBase):
@@ -168,10 +182,10 @@ class MoE(AbstractModuleBase):
             top_group_indices_u32 = ttnn.typecast(top_group_indices, ttnn.DataType.UINT32)
             top_group_indices_u32 = ttnn.to_layout(top_group_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
             group_mask = ttnn.zeros(
-                [b, 1, s, self.n_groups], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, biased.device()
+                [b, 1, s, self.n_groups], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, biased.device()
             )
             group_src = ttnn.ones(
-                [b, 1, s, self.n_limited_groups], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, biased.device()
+                [b, 1, s, self.n_limited_groups], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, biased.device()
             )
             group_mask = ttnn.scatter(group_mask, -1, top_group_indices_u32, group_src)
             group_mask = ttnn.repeat_interleave(group_mask, experts_per_group, dim=-1)
@@ -193,7 +207,12 @@ class MoE(AbstractModuleBase):
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         B, _, S, dim = list(x.get_value().shape)
 
-        scores, _topk_values, topk_indices = self.compute_routing(x)
+        # Branch subsections from x_in so backward markers are attributed to
+        # distinct zones rather than one chained marker path.
+        x_in = profiler_marker(x, "[START] [MoE]")
+
+        x_r = profiler_marker(x_in, "[START] [MoE] Routing")
+        scores, _topk_values, topk_indices = self.compute_routing(x_r)
 
         # ── 3. Build dense per-token expert mask via scatter ──
         # Scatter ones at topk indices into a zero tensor to produce a
@@ -202,8 +221,8 @@ class MoE(AbstractModuleBase):
         device = x.get_value().device()
         topk_indices_u32 = ttnn.typecast(topk_indices, ttnn.DataType.UINT32)
         topk_indices_u32 = ttnn.to_layout(topk_indices_u32, ttnn.ROW_MAJOR_LAYOUT)
-        expert_mask_all = ttnn.zeros([B, 1, S, self.num_experts], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, device)
-        expert_src = ttnn.ones([B, 1, S, self.n_activated], ttnn.DataType.BFLOAT16, ttnn.Layout.ROW_MAJOR, device)
+        expert_mask_all = ttnn.zeros([B, 1, S, self.num_experts], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
+        expert_src = ttnn.ones([B, 1, S, self.n_activated], ttnn.DataType.BFLOAT16, ttnn.ROW_MAJOR_LAYOUT, device)
         expert_mask_all = ttnn.scatter(expert_mask_all, -1, topk_indices_u32, expert_src)
         expert_mask_all = ttnn.to_layout(expert_mask_all, ttnn.TILE_LAYOUT)
 
@@ -223,12 +242,16 @@ class MoE(AbstractModuleBase):
         batch_counts = ttnn.sum(mask_bs_flat, dim=-2, keepdim=True)  # [1, 1, 1, num_experts]
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
         self._token_counts.tensor.set_value(new_counts)
+        scores = profiler_marker(scores, "[END] [MoE] Routing")
 
         # ── 5. Per-expert weighted outputs ──
         output = None
+        x_e = profiler_marker(x_in, "[START] [MoE] Experts")
 
         for expert_idx in range(self.num_experts):
-            expert_out = self.experts[expert_idx](x)
+            x_exp = profiler_marker(x_e, "[START] [MoE] Expert")
+            expert_out = self.experts[expert_idx](x_exp)
+            expert_out = profiler_marker(expert_out, "[END] [MoE] Expert")
 
             if self.score_func == "sigmoid":
                 # routing_weights is already mask-zero'd for unselected
@@ -257,13 +280,38 @@ class MoE(AbstractModuleBase):
                 output = ttml.ops.binary.add(output, weighted)
 
         if output is None:
-            output = ttml.autograd.create_tensor(ttml.core.zeros_like(x.get_value()))
+            output = ttml.autograd.create_tensor(ttml.core.zeros_like(x_in.get_value()))
+
+        output = profiler_marker(output, "[END] [MoE] Experts")
 
         # ── 5. Shared experts ──
         if self.shared_experts is not None:
-            output = ttml.ops.binary.add(output, self.shared_experts(x))
+            x_s = profiler_marker(x_in, "[START] [MoE] SharedExp")
+            shared_out = self.shared_experts(x_s)
+            shared_out = profiler_marker(shared_out, "[END] [MoE] SharedExp")
+            output = ttml.ops.binary.add(output, shared_out)
 
+        output = profiler_marker(output, "[END] [MoE]")
         return output
+
+    def read_activation_probabilities(self) -> np.ndarray:
+        """Non-destructive read of the current per-expert activation probabilities.
+
+        Returns the fraction of tokens for which each expert was selected,
+        accumulated across all forward passes since the last
+        ``update_expert_bias`` (which resets ``_token_counts``). Shape:
+        ``(num_experts,)``, dtype ``float32``, values in ``[0, 1]``.
+
+        Uses the self-normalising identity
+        ``sum(counts) == n_activated * total_tokens`` so no batch-size /
+        grad-accum bookkeeping is required at the call site.
+        """
+        counts = ttnn.to_torch(self._token_counts.tensor.get_value())
+        counts_np = counts.float().cpu().numpy().flatten()
+        total = float(counts_np.sum())
+        if total <= 0.0:
+            return np.zeros_like(counts_np, dtype=np.float32)
+        return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
     def update_expert_bias(self, coeff: float = 0.001) -> None:
         """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
