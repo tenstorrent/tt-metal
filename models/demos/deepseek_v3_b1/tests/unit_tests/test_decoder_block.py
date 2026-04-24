@@ -56,17 +56,6 @@ MTP_LAYER_IDX = 61
 _SRAM_HOT_EXPERTS_CEILING = 64
 
 
-def _mesh_shape_from_submesh(submesh) -> tuple[int, int]:
-    """Return ``(mesh_rows, mesh_cols)`` for the TP-aware SRAM layout.
-
-    Single-device submeshes report ``(1, 1)`` so the TP8 reshape short-
-    circuits to a 2D replicate path inside ``prepare_compressed_sram_slots``.
-    """
-    if submesh.get_num_devices() <= 1:
-        return (1, 1)
-    return (submesh.shape[0], submesh.shape[1])
-
-
 def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     """Build the ``(sram_hot_experts, sram_core_grids, sram_assigner)`` triple.
 
@@ -74,11 +63,10 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     CRS as shared-expert gate/up/down in ``overlap_configs``).
 
     Returns up to ``_SRAM_HOT_EXPERTS_CEILING`` candidates ranked by routing
-    frequency for ``layer_idx``; the actual budget-aware trim runs inside
-    ``prepare_moe_layer_weights`` against the attention footprint measured
-    after allocation (see ``worker_l1_size`` plumbing below).  A generous
-    10 MiB budget is passed here so the ceiling, not the byte cap, selects
-    the candidate set.
+    frequency for ``layer_idx``.  The actual address-based trim runs inside
+    ``prepare_moe_layer_weights`` against the measured per-core attention
+    footprint (see ``worker_l1_size`` plumbing below) -- no host-side
+    budgeting is applied here.
     """
     sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
     # Routed experts in DRAM are already BFP4 (see prepare_routed_expert_weights);
@@ -90,19 +78,10 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
 
     freqs = _load_routing_frequencies()
-    generous_budget_bytes = 10 * 1024 * 1024
-    full_config = build_sram_hot_expert_config(
-        state_dict,
-        [layer_idx],
-        sram_assigner,
-        sram_core_grids,
-        generous_budget_bytes,
-        freqs,
-        mesh_shape=_mesh_shape_from_submesh(submesh),
-    )
+    full_config = build_sram_hot_expert_config([layer_idx], freqs)
     sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
     logger.info(
-        "SRAM hot experts: layer {} -> {} ranked candidates (pre-budget trim)",
+        "SRAM hot experts: layer {} -> {} ranked candidates (pre-device trim)",
         layer_idx,
         len(sram_hot_experts.get(layer_idx, [])),
     )
@@ -397,11 +376,6 @@ def create_decoder_golden_tensors(
     ids=["validate_standalone_moe", "just_decoder_moe"],
 )
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
-@pytest.mark.parametrize(
-    "use_sram_hot_experts",
-    [False, True],
-    ids=["no_sram_hot_experts", "sram_hot_experts"],
-)
 @pytest.mark.requires_grid_size((13, 10))
 @requires_hybrid_allocator
 def test_decoder(
@@ -429,7 +403,6 @@ def test_decoder(
     validate_standalone_moe,
     slot_id,
     num_slots,
-    use_sram_hot_experts,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
@@ -474,12 +447,14 @@ def test_decoder(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    # SRAM hot experts are auto-enabled for the full 256-expert case.  Rigged
+    # modes upload a strict subset of experts into the state dict, so the
+    # frequency-based ranker would reference expert indices that aren't
+    # present -- skip SRAM for them.
     sram_hot_experts = None
     sram_core_grids = None
     sram_assigner = None
-    if use_sram_hot_experts:
-        if effective_num_routed_experts != 256:
-            pytest.skip("SRAM hot experts currently only wired for unrigged_all_experts (full 256-expert set)")
+    if effective_num_routed_experts == 256:
         sram_hot_experts, sram_core_grids, sram_assigner = _build_sram_hot_expert_kwargs(
             state_dict, submesh, ROUTED_EXPERT_LAYER_IDX
         )
@@ -498,7 +473,7 @@ def test_decoder(
         sram_hot_experts=sram_hot_experts,
         sram_core_grids=sram_core_grids,
         sram_assigner=sram_assigner,
-        worker_l1_size=device_params.get("worker_l1_size") if use_sram_hot_experts else None,
+        worker_l1_size=device_params.get("worker_l1_size") if sram_hot_experts is not None else None,
     )
 
     logger.info("Creating decoder block tensors...")
