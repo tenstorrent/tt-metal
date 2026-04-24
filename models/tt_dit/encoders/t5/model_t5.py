@@ -108,7 +108,7 @@ class T5Encoder(Module):
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def forward(
         self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
-    ) -> ttnn.Tensor:
+    ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])

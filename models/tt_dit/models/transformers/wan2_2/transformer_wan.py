@@ -266,7 +266,7 @@ class WanTransformer3DModel(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = True,
         model_type: str = "t2v",
-        output_dtype: torch.dtype = ttnn.float32,
+        output_dtype: ttnn.DataType = ttnn.float32,
     ) -> None:
         super().__init__()
 
@@ -675,7 +675,14 @@ class WanTransformer3DModel(Module):
             return cond
 
         uncond = self.inner_step(
-            spatial_1BNI, negative_prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep
+            spatial_1BNI,
+            negative_prompt_1BLP,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            N,
+            timestep,
+            gather_output=gather_output,
         )
 
         combined = ttnn.lerp(uncond, cond, guidance_scale)

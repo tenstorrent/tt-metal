@@ -124,7 +124,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             Number of links to use for CCL operations.
         checkpoint_name (`str`, *optional*, defaults to `"Wan-AI/Wan2.2-T2V-A14B-Diffusers"`):
             HuggingFace Hub repo ID to load model weights from.
-        scheduler (`FlowMatchEulerDiscreteScheduler`, *optional*):
+        scheduler (`UniPCMultistepScheduler`, *optional*):
             Scheduler to use for denoising. Defaults to `UniPCMultistepScheduler` loaded from the checkpoint.
         boundary_ratio (`float`, *optional*, defaults to `0.875`):
             Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
@@ -769,7 +769,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "np",
+        output_type: Optional[str] = "uint8",
         return_dict: bool = True,
         max_sequence_length: int = 512,
         traced: bool = False,
