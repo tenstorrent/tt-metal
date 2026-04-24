@@ -75,13 +75,58 @@ def ds_distributed_norm_reference(
     return (weight.to(torch.float32) * x).to(input_dtype)
 
 
-def ds_distributed_norm_ttnn(
+def ds_distributed_norm_ttnn_decode(
+    x: ttnn.Tensor,
+    cfg: dict,
+    memory_config: ttnn.MemoryConfig,
+    output_memory_config: ttnn.MemoryConfig,
+) -> ttnn.Tensor:
+    """
+    TTNN implementation for Distributed RMSNorm decode mode using fused operation.
+
+    This uses the fused RMSNorm operation that combines:
+    1. Compute local statistics (partial sum of squares)
+    2. AllGather statistics across devices
+    3. Apply normalization using gathered statistics
+
+    Args:
+        x: Input tensor sharded across devices (WIDTH_SHARDED)
+        cfg: Configuration dictionary containing all op configs
+        memory_config: Memory configuration for the input tensor
+        output_memory_config: Memory configuration for the output tensor
+
+    Returns:
+        Normalized output tensor (same shape and sharding as input)
+    """
+    tensor_in = ttnn.to_memory_config(x, memory_config)
+
+    program_config = DistributedRMSNorm._get_pc(memory_config)
+
+    # Use the fused RMSNorm operation
+    tt_out = DistributedRMSNorm._fwd_rms_norm_fused(
+        tensor_in,
+        output_memory_config,
+        cfg,
+        program_config,
+    )
+
+    # Deallocate tensor_in if it has a distinct buffer from x
+    from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import _has_distinct_buffer
+
+    if _has_distinct_buffer(x, tensor_in):
+        ttnn.deallocate(tensor_in)
+
+    tt_out = ttnn.typecast(tt_out, dtype=ttnn.bfloat16)
+    return tt_out
+
+
+def ds_distributed_norm_ttnn_prefill(
     x: ttnn.Tensor,
     cfg: dict,
     ccl,
 ) -> ttnn.Tensor:
     """
-    TTNN implementation for Distributed RMSNorm.
+    TTNN implementation for Distributed RMSNorm prefill mode.
 
     This performs the distributed RMSNorm in three steps:
     1. Compute local statistics (partial sum of squares)
@@ -132,7 +177,13 @@ def _run_ds_distributed_norm_test(
     # Log run configuration for superset
     log_run_mode(mode, trace_mode, program_cache_enabled, seq_len)
 
-    tt_output = ds_distributed_norm_ttnn(tt_input, run_config, ccl)
+    # Use the appropriate implementation based on mode
+    if mode == "decode":
+        memory_config = run_config["input_memory_config"]
+        output_memory_config = run_config["input_memory_config"]
+        tt_output = ds_distributed_norm_ttnn_decode(tt_input, run_config, memory_config, output_memory_config)
+    else:  # prefill
+        tt_output = ds_distributed_norm_ttnn_prefill(tt_input, run_config, ccl)
 
     # Convert output back to torch - concat across mesh
     tt_output_torch = ttnn.to_torch(
@@ -168,7 +219,10 @@ def _run_ds_distributed_norm_test(
         perf_profiler.start(step_name)
 
         def op_fn():
-            return ds_distributed_norm_ttnn(tt_input, run_config, ccl)
+            if mode == "decode":
+                return ds_distributed_norm_ttnn_decode(tt_input, run_config, memory_config, output_memory_config)
+            else:  # prefill
+                return ds_distributed_norm_ttnn_prefill(tt_input, run_config, ccl)
 
         perf_us = measure_perf_us(
             mesh_device,
@@ -223,7 +277,10 @@ def _run_ds_distributed_norm_test(
         from tracy import signpost
 
         def op_fn():
-            return ds_distributed_norm_ttnn(tt_input, run_config, ccl)
+            if mode == "decode":
+                return ds_distributed_norm_ttnn_decode(tt_input, run_config, memory_config, output_memory_config)
+            else:  # prefill
+                return ds_distributed_norm_ttnn_prefill(tt_input, run_config, ccl)
 
         for _ in range(PERF_WARMUP_ITERS):
             output = op_fn()
@@ -309,7 +366,14 @@ def _build_distributed_norm_inputs(
     )
     model_config = get_model_config(DistributedRMSNorm, mode, hf_config, mesh_device, batch_size_per_row=USERS_PER_ROW)
     model_state = DistributedRMSNorm.create_state(hf_config, mesh_device, ccl)
+
     run_config = create_run_config(model_config, weight_config, model_state)
+
+    # Create shared state (persistent_tensor and semaphore) needed for fused operation in decode mode
+    if mode == "decode":
+        shared_state = DistributedRMSNorm.create_shared_state(hf_config, mesh_device)
+        run_config["persistent_tensor"] = shared_state["persistent_tensor"]
+        run_config["semaphore"] = shared_state["semaphore"]
 
     # Input shape: [num_layers, 1, height, hidden_size]
     # RMSNorm convention (from original test_rms_norm.py):

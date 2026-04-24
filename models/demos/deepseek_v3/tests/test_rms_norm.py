@@ -33,7 +33,6 @@ def run_test_forward_pass_rms_norm(
     hf_config_size_attr,
     mode,
     seq_len,
-    batch_size_per_row,
     reference_layernorm_path,
     hf_config,
     cache_path,
@@ -77,17 +76,18 @@ def run_test_forward_pass_rms_norm(
         real_weights=reference_layernorm_path is not None,
         layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
+    # For decode mode, batch_size_per_row = seq_len (which is USERS_PER_ROW for standard tests)
     model_config = get_model_config(
-        RMSNormClass,
-        mode,
-        hf_config,
-        mesh_device,
-        batch_size_per_row=batch_size_per_row,
+        RMSNormClass, mode, hf_config, mesh_device, batch_size_per_row=seq_len if mode == "decode" else None
     )
-    model_state = RMSNormClass.create_state(
-        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
-    )
-    run_config = create_run_config(model_config, weight_config, model_state)
+    if RMSNormClass is DistributedRMSNorm:
+        # Create both shared state (semaphore, persistent_tensor) and regular state (mesh_device, ccl)
+        model_shared_state = RMSNormClass.create_shared_state(hf_config, mesh_device)
+        model_state = RMSNormClass.create_state(hf_config, mesh_device, ccl)
+        run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+    else:
+        model_state = RMSNormClass.create_state(hf_config, mesh_device)
+        run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
     if RMSNormClass is DistributedRMSNorm:
@@ -106,8 +106,12 @@ def run_test_forward_pass_rms_norm(
     )
 
     # Run TTNN forward pass
-    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
-
+    if mode == "decode":
+        tt_output = RMSNormClass.forward_decode(
+            tt_input, run_config, memory_config=memory_config, output_memory_config=memory_config
+        )
+    else:
+        tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
@@ -176,7 +180,6 @@ def test_forward_pass(
         hf_config_size_attr=hf_config_size_attr,
         mode=mode,
         seq_len=seq_len,
-        batch_size_per_row=USERS_PER_ROW,
         reference_layernorm_path=reference_layernorm_path,
         hf_config=hf_config,
         cache_path=cache_path,
@@ -217,7 +220,6 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
         hf_config_size_attr=hf_config_size_attr,
         mode="decode",
         seq_len=8,
-        batch_size_per_row=8,
         reference_layernorm_path=reference_layernorm_path,
         hf_config=hf_config,
         cache_path=cache_path,
