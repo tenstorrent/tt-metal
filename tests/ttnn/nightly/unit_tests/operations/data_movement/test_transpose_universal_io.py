@@ -37,11 +37,22 @@ def run_transpose_test(
     ttnn_input = ttnn.from_torch(x, layout=input_layout, dtype=dtype, device=device, memory_config=input_mem_config)
     result = ttnn.transpose(ttnn_input, dim0, dim1, memory_config=output_mem_config)
 
-    if output_mem_config is not None and output_mem_config.shard_spec is not None:
+    # Whenever the caller specified an output MemoryConfig, the result must honor the requested
+    # memory_layout. If the request was sharded we additionally require a concrete shard_spec on
+    # the output so silent fallbacks to interleaved (or a dropped spec) surface as test failures.
+    if output_mem_config is not None:
         actual = result.memory_config()
         assert (
             actual.memory_layout == output_mem_config.memory_layout
         ), f"Expected output memory layout {output_mem_config.memory_layout}, got {actual.memory_layout}"
+        if output_mem_config.memory_layout in (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ):
+            assert (
+                actual.shard_spec is not None
+            ), f"Sharded output requested but result has no shard_spec (silently fell back?)"
 
     ref = x.transpose(dim0, dim1)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
@@ -356,6 +367,33 @@ def test_transpose_block_sharded_output_no_shard_spec(device):
 
 
 # ---------------------------------------------------------------------------
+# 17b. Non-native sharded input + user-requested sharded output without
+# shard_spec — exercises the else-if ordering in `detail::transpose_` that
+# honors the user's `memory_layout` over the non-native default-to-interleaved
+# fallback. Before this ordering, a TILE BLOCK_SHARDED input paired with a
+# sharded no-spec output (any layout) would silently return L1 INTERLEAVED.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "requested_out_layout",
+    [
+        pytest.param(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, id="H_out"),
+        pytest.param(ttnn.TensorMemoryLayout.WIDTH_SHARDED, id="W_out"),
+        pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="B_out"),
+    ],
+)
+def test_transpose_non_native_sharded_input_to_sharded_nospec(requested_out_layout, device):
+    shape = (1, 1, 64, 64)
+    run_transpose_test(
+        shape,
+        2,
+        3,
+        device,
+        input_mem_config=_block_shard_config(shape, device),
+        output_mem_config=ttnn.MemoryConfig(requested_out_layout, ttnn.BufferType.L1),
+    )
+
+
+# ---------------------------------------------------------------------------
 # 18. ROW_MAJOR + BLOCK_SHARDED input → interleaved (WH)
 # Composite fallback: sharded→interleaved hop before transpose. Neither the
 # native sharded kernels nor prim::permute handle block-sharded RM pages that
@@ -562,7 +600,12 @@ def test_transpose_tile_hc_irregular_c_sharded_output_no_shard_spec(shape, dim0,
 # ===========================================================================
 
 
-def _explicit_block_shard_config(grid_y, grid_x, sh, sw):
+def _explicit_block_shard_config(device, grid_y, grid_x, sh, sw):
+    """Block-shard config clamped to the device's compute grid. Skips if clamping would change
+    the requested grid (the test was authored for a specific grid layout)."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid_y > compute_grid.y or grid_x > compute_grid.x:
+        pytest.skip(f"Device grid ({compute_grid.y}x{compute_grid.x}) too small for requested {grid_y}x{grid_x}")
     spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         (sh, sw),
@@ -572,8 +615,12 @@ def _explicit_block_shard_config(grid_y, grid_x, sh, sw):
 
 
 def _explicit_height_shard_config(device, ncores, sh, sw):
+    """Height-shard config; skips if the device can't host `ncores`."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
     spec = ttnn.ShardSpec(
-        ttnn.num_cores_to_corerangeset(ncores, device.compute_with_storage_grid_size(), True),
+        ttnn.num_cores_to_corerangeset(ncores, compute_grid, True),
         (sh, sw),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -581,8 +628,12 @@ def _explicit_height_shard_config(device, ncores, sh, sw):
 
 
 def _explicit_width_shard_config(device, ncores, sh, sw):
+    """Width-shard config; skips if the device can't host `ncores`."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
     spec = ttnn.ShardSpec(
-        ttnn.num_cores_to_corerangeset(ncores, device.compute_with_storage_grid_size(), True),
+        ttnn.num_cores_to_corerangeset(ncores, compute_grid, True),
         (sh, sw),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -593,12 +644,16 @@ def _explicit_width_shard_config(device, ncores, sh, sw):
 @pytest.mark.parametrize(
     "shape, dim0, dim1, mc_factory",
     [
-        pytest.param((1, 1, 65, 64), 2, 3, lambda d: _explicit_block_shard_config(3, 2, 32, 32), id="block_3x2_32x32"),
-        pytest.param((1, 1, 64, 97), 2, 3, lambda d: _explicit_block_shard_config(2, 4, 32, 32), id="block_2x4_32x32"),
+        pytest.param(
+            (1, 1, 65, 64), 2, 3, lambda d: _explicit_block_shard_config(d, 3, 2, 32, 32), id="block_3x2_32x32"
+        ),
+        pytest.param(
+            (1, 1, 64, 97), 2, 3, lambda d: _explicit_block_shard_config(d, 2, 4, 32, 32), id="block_2x4_32x32"
+        ),
         pytest.param((1, 1, 65, 64), 2, 3, lambda d: _explicit_height_shard_config(d, 3, 32, 64), id="height_3_32x64"),
         pytest.param((1, 1, 32, 97), 2, 3, lambda d: _explicit_width_shard_config(d, 4, 32, 32), id="width_4_32x32"),
         pytest.param(
-            (1, 13, 32, 64), 1, 2, lambda d: _explicit_block_shard_config(2, 2, 512, 32), id="block_2x2_hc_512x32"
+            (1, 13, 32, 64), 1, 2, lambda d: _explicit_block_shard_config(d, 2, 2, 512, 32), id="block_2x2_hc_512x32"
         ),
     ],
 )
@@ -612,7 +667,9 @@ def test_transpose_tile_sharded_irregular_shapes(shape, dim0, dim1, mc_factory, 
 @pytest.mark.parametrize(
     "shape, dim0, dim1, mc_factory",
     [
-        pytest.param((1, 1, 64, 96), 2, 3, lambda d: _explicit_block_shard_config(2, 3, 32, 32), id="block_2x3_32x32"),
+        pytest.param(
+            (1, 1, 64, 96), 2, 3, lambda d: _explicit_block_shard_config(d, 2, 3, 32, 32), id="block_2x3_32x32"
+        ),
         pytest.param((1, 1, 64, 96), 2, 3, lambda d: _explicit_width_shard_config(d, 3, 64, 32), id="width_3_64x32"),
     ],
 )
@@ -628,8 +685,12 @@ def test_transpose_row_major_sharded_irregular_shapes(shape, dim0, dim1, mc_fact
 @pytest.mark.parametrize(
     "shape, dim0, dim1, mc_factory",
     [
-        pytest.param((1, 1, 96, 64), 2, 3, lambda d: _explicit_block_shard_config(2, 2, 64, 32), id="block_2x2_64x32"),
-        pytest.param((1, 1, 64, 96), 2, 3, lambda d: _explicit_block_shard_config(2, 2, 32, 64), id="block_2x2_32x64"),
+        pytest.param(
+            (1, 1, 96, 64), 2, 3, lambda d: _explicit_block_shard_config(d, 2, 2, 64, 32), id="block_2x2_64x32"
+        ),
+        pytest.param(
+            (1, 1, 64, 96), 2, 3, lambda d: _explicit_block_shard_config(d, 2, 2, 32, 64), id="block_2x2_32x64"
+        ),
     ],
 )
 def test_transpose_tile_sharded_uneven(shape, dim0, dim1, mc_factory, device):
@@ -650,7 +711,7 @@ def test_transpose_tile_sharded_uneven(shape, dim0, dim1, mc_factory, device):
 @pytest.mark.parametrize(
     "shape, mc_factory",
     [
-        pytest.param((2, 4, 32, 64), lambda d: _explicit_block_shard_config(2, 2, 128, 32), id="block_2x2_128x32"),
+        pytest.param((2, 4, 32, 64), lambda d: _explicit_block_shard_config(d, 2, 2, 128, 32), id="block_2x2_128x32"),
         pytest.param((2, 4, 32, 64), lambda d: _explicit_width_shard_config(d, 2, 256, 32), id="width_2_256x32"),
     ],
 )
@@ -672,7 +733,7 @@ def test_transpose_cn_row_major_block_width_sharded(shape, mc_factory, device):
         pytest.param(
             (1, 2, 64, 64),
             ttnn.TILE_LAYOUT,
-            lambda d: _explicit_block_shard_config(2, 2, 64, 32),
+            lambda d: _explicit_block_shard_config(d, 2, 2, 64, 32),
             id="tile_block_2x2_64x32",
         ),
         pytest.param(
@@ -705,3 +766,91 @@ def test_transpose_multi_batch_channel_sharded_wh(shape, layout, mc_factory, dev
 def test_transpose_row_major_height_sharded_nontile_aligned_wh(shape, shard_shape, device):
     imc = _explicit_height_shard_config(device, 4, shard_shape[0], shard_shape[1])
     run_transpose_test(shape, 2, 3, device, input_layout=ttnn.ROW_MAJOR_LAYOUT, input_mem_config=imc)
+
+
+# CN TILE with sharded output (no shard_spec provided by caller). Exercises
+# `derive_effective_output_memory_config`'s spec-synthesis path for CN through
+# `TransposeCNProgramFactory`, which uses TensorAccessorArgs on the writer.
+# Covers both interleaved→sharded-output and height-sharded→sharded-output.
+@pytest.mark.parametrize(
+    "input_mem_factory",
+    [
+        pytest.param(lambda d, shape: L1_INTERLEAVED, id="in_interleaved"),
+        pytest.param(lambda d, shape: _height_shard_config(shape, d), id="in_height_sharded"),
+    ],
+)
+def test_transpose_cn_sharded_output(input_mem_factory, device):
+    shape = (2, 4, 32, 64)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    run_transpose_test(
+        shape,
+        0,
+        1,
+        device,
+        input_layout=ttnn.TILE_LAYOUT,
+        input_mem_config=input_mem_factory(device, shape),
+        output_mem_config=output_mem_config,
+    )
+
+
+# DRAM interleaved input + DRAM interleaved output. Verifies the full NOC-based
+# TensorAccessor path works end-to-end when both sides live in DRAM rather than L1.
+DRAM_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+
+@pytest.mark.parametrize(
+    "dim0, dim1",
+    [
+        pytest.param(2, 3, id="WH"),
+        pytest.param(1, 2, id="HC"),
+        pytest.param(0, 1, id="CN"),
+    ],
+)
+def test_transpose_dram_interleaved(dim0, dim1, device):
+    run_transpose_test(
+        (1, 4, 64, 128),
+        dim0,
+        dim1,
+        device,
+        input_layout=ttnn.TILE_LAYOUT,
+        input_mem_config=DRAM_INTERLEAVED,
+        output_mem_config=DRAM_INTERLEAVED,
+    )
+
+
+# WH transpose on tile-aligned height-sharded inputs whose transposed width legitimately shrinks
+# below a tile. A naive `std::max(scaled, TILE_*)` clamp in `adjust_shard_spec_to_shape` oversizes
+# the output shard for these shapes (scaled_h = 16 gets clamped up to 32, claiming 1024 elements
+# of capacity for a shard that should only hold 512), producing silent correctness regressions.
+# The fix returns the exact ratio-scaled shape, then the device op's post-check detects the
+# sub-tile TILE shard and falls through to `generate_transpose_shard_spec` for a tile-aligned
+# fresh spec. Verifies both small single-batch cases and asymmetric N>1 shapes.
+@pytest.mark.parametrize(
+    "shape, ncores, shard_shape",
+    [
+        pytest.param((1, 1, 64, 32), 2, (32, 32), id="1x1_64x32_hs_2x_32x32"),
+        pytest.param((1, 1, 128, 32), 4, (32, 32), id="1x1_128x32_hs_4x_32x32"),
+        pytest.param((2, 1, 64, 32), 4, (32, 32), id="2x1_64x32_hs_4x_32x32"),
+        pytest.param((2, 2, 64, 32), 8, (32, 32), id="2x2_64x32_hs_8x_32x32"),
+    ],
+)
+def test_transpose_wh_shrink_sub_tile_sharded(shape, ncores, shard_shape, device):
+    imc = _explicit_height_shard_config(device, ncores, shard_shape[0], shard_shape[1])
+    run_transpose_test(shape, 2, 3, device, input_layout=ttnn.TILE_LAYOUT, input_mem_config=imc)
+
+
+# HC TILE transpose with an irregular logical H (last tile partial) and a tile-aligned
+# height-sharded input. The padded H is rounded up to TILE_HEIGHT, so the shard geometry must
+# remain tile-aligned; the op rotates the padded H into output dim[1] and pads new dim[2] to
+# TILE_HEIGHT from the logical C. Exercises the HC TILE sharded path end-to-end against an
+# input whose logical shape doesn't divide evenly.
+@pytest.mark.parametrize(
+    "shape, ncores, shard_shape",
+    [
+        pytest.param((1, 13, 32, 64), 13, (32, 64), id="C13_H32_hs_13x_32x64"),
+        pytest.param((1, 5, 32, 64), 5, (32, 64), id="C5_H32_hs_5x_32x64"),
+    ],
+)
+def test_transpose_hc_tile_irregular_sharded_input(shape, ncores, shard_shape, device):
+    imc = _explicit_height_shard_config(device, ncores, shard_shape[0], shard_shape[1])
+    run_transpose_test(shape, 1, 2, device, input_layout=ttnn.TILE_LAYOUT, input_mem_config=imc)

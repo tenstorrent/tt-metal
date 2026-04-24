@@ -38,102 +38,103 @@ bool is_unevenly_sharded(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
 }
 
+// True when a RM MemoryConfig's shard element count is not a multiple of the tile footprint.
+// Such shards cannot use the specialized native kernels (which assume whole-tile pages); the
+// interleaved factories handle them via TensorAccessorArgs instead.
+bool rm_shard_elements_not_tile_aligned(const MemoryConfig& mc) {
+    if (!mc.shard_spec().has_value()) {
+        return false;
+    }
+    constexpr uint64_t tile_hw =
+        static_cast<uint64_t>(tt::constants::TILE_HEIGHT) * static_cast<uint64_t>(tt::constants::TILE_WIDTH);
+    const auto& s = mc.shard_spec()->shape;
+    const uint64_t elems = static_cast<uint64_t>(s[0]) * static_cast<uint64_t>(s[1]);
+    return elems % tile_hw != 0;
+}
+
+// Side-level native eligibility: sharded, non-DRAM, non-BLOCK, and for ROW_MAJOR: shard-element
+// count is a whole multiple of tile_hw. Shared by the input and output checks below.
+bool side_native(const MemoryConfig& mc, Layout layout) {
+    if (!mc.is_sharded()) {
+        return false;
+    }
+    if (mc.buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+    if (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        return false;
+    }
+    if (layout == Layout::ROW_MAJOR && rm_shard_elements_not_tile_aligned(mc)) {
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
-bool is_native_transpose_sharding(const TensorSpec& input_spec, const MemoryConfig& output_memory_config) {
-    const auto& in_cfg = input_spec.memory_config();
-    if (!output_memory_config.is_sharded() || !in_cfg.is_sharded()) {
+bool is_native_transpose_sharding(
+    const TensorSpec& input_spec, const std::optional<MemoryConfig>& output_memory_config) {
+    if (!side_native(input_spec.memory_config(), input_spec.layout())) {
         return false;
     }
     if (is_unevenly_sharded(input_spec)) {
         return false;
     }
-    if (in_cfg.buffer_type() == BufferType::DRAM || output_memory_config.buffer_type() == BufferType::DRAM) {
+    if (!output_memory_config.has_value()) {
+        // Pre-derivation path: the output shard_spec is about to be synthesized from the input's,
+        // so there's nothing to compare on the output side yet. Input-only eligibility is enough.
+        return true;
+    }
+    if (!side_native(*output_memory_config, input_spec.layout())) {
         return false;
     }
-    if (in_cfg.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-        output_memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        return false;
-    }
-    // ROW_MAJOR sharded shards whose total element count is not a multiple of the tile footprint
-    // (TILE_HEIGHT * TILE_WIDTH) cannot use the specialized native kernels — those assume whole-tile
-    // pages. Mirrors the `is_shard_tile_aligned` guard used by `unary_ng`. Returning false routes
-    // such cases to the interleaved factories, which use TensorAccessorArgs to read/write sharded
-    // buffers directly over NOC without an explicit reshard hop.
-    if (input_spec.layout() == Layout::ROW_MAJOR) {
-        constexpr uint64_t tile_hw =
-            static_cast<uint64_t>(tt::constants::TILE_HEIGHT) * static_cast<uint64_t>(tt::constants::TILE_WIDTH);
-        auto shard_elements_not_tile_aligned = [](const MemoryConfig& mc) {
-            if (!mc.shard_spec().has_value()) {
-                return false;
-            }
-            const auto& s = mc.shard_spec()->shape;
-            const uint64_t elems = static_cast<uint64_t>(s[0]) * static_cast<uint64_t>(s[1]);
-            return elems % tile_hw != 0;
-        };
-        if (shard_elements_not_tile_aligned(in_cfg) || shard_elements_not_tile_aligned(output_memory_config)) {
-            return false;
-        }
-    }
-    // When either spec is missing we're in the pre-derivation path (callers like transpose.cpp and
-    // compute_output_specs use this predicate as an eligibility probe before deriving the output
-    // shard_spec). Skip the grid equality check in that case — the derived grid will match the input's.
-    if (output_memory_config.shard_spec().has_value() && in_cfg.shard_spec().has_value()) {
-        if (in_cfg.shard_spec()->grid != output_memory_config.shard_spec()->grid) {
-            return false;
-        }
-    }
-    return true;
+    // The sharded WH/HC program factories assume a single shared grid; only enforce when both
+    // shard_specs are concrete. During derive_effective_output_memory_config the output_mem_config
+    // may still carry no shard_spec, and its grid is implicitly the input's.
+    const auto& in_ss = input_spec.memory_config().shard_spec();
+    const auto& out_ss = output_memory_config->shard_spec();
+    return !(in_ss.has_value() && out_ss.has_value() && in_ss->grid != out_ss->grid);
 }
 
-ShardSpec adjust_shard_spec_to_shape(
+std::optional<ShardSpec> adjust_shard_spec_to_shape(
     const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
-    auto ret = shard_spec;
-    uint32_t from_volume_except_width = 1;
-    uint32_t to_volume_except_width = 1;
+    // Volumes are accumulated in uint64_t to prevent overflow on large tensors (e.g. N*C*H
+    // products can exceed 2^32). Returning nullopt on non-exact division lets callers fall back
+    // gracefully (generate_transpose_shard_spec or interleaved) instead of crashing a valid user
+    // call, and avoids the silent-truncation pitfall of blind uint division.
+    uint64_t from_volume_except_width = 1;
+    uint64_t to_volume_except_width = 1;
     const auto from_rank = static_cast<int>(from_shape.rank());
     const auto to_rank = static_cast<int>(to_shape.rank());
     for (int i = 0; i < from_rank - 1; ++i) {
-        from_volume_except_width *= from_shape[i];
+        from_volume_except_width *= static_cast<uint64_t>(from_shape[i]);
     }
     for (int i = 0; i < to_rank - 1; ++i) {
-        to_volume_except_width *= to_shape[i];
+        to_volume_except_width *= static_cast<uint64_t>(to_shape[i]);
     }
-    uint32_t from_width = from_shape[-1];
-    uint32_t to_width = to_shape[-1];
-    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
-    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
-
-    // Require exact division so we never silently truncate the scaled shard dimensions. Callers
-    // must only invoke this helper when the to/from shape ratios evenly divide the source shard.
-    const uint64_t h_num = static_cast<uint64_t>(ret.shape[0]) * to_volume_except_width;
-    const uint64_t w_num = static_cast<uint64_t>(ret.shape[1]) * to_width;
-    TT_FATAL(
-        h_num % from_volume_except_width == 0,
-        "adjust_shard_spec_to_shape: height scaling not exact ({} * {} not divisible by {}).",
-        ret.shape[0],
-        to_volume_except_width,
-        from_volume_except_width);
-    TT_FATAL(
-        w_num % from_width == 0,
-        "adjust_shard_spec_to_shape: width scaling not exact ({} * {} not divisible by {}).",
-        ret.shape[1],
-        to_width,
-        from_width);
-    uint32_t scaled_h = static_cast<uint32_t>(h_num / from_volume_except_width);
-    uint32_t scaled_w = static_cast<uint32_t>(w_num / from_width);
-
-    // Only clamp to tile dimensions when the source shard was already tile-aligned. For sub-tile
-    // ROW_MAJOR shards the caller is responsible for legality and we must not over-size the shard.
-    const bool source_tile_aligned =
-        shard_spec.shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_spec.shape[1] % tt::constants::TILE_WIDTH == 0;
-    if (source_tile_aligned) {
-        scaled_h = std::max(scaled_h, tt::constants::TILE_HEIGHT);
-        scaled_w = std::max(scaled_w, tt::constants::TILE_WIDTH);
+    const uint64_t from_width = static_cast<uint64_t>(from_shape[-1]);
+    const uint64_t to_width = static_cast<uint64_t>(to_shape[-1]);
+    if (from_volume_except_width == 0 || from_width == 0) {
+        return std::nullopt;
     }
 
-    ret.shape[0] = scaled_h;
-    ret.shape[1] = scaled_w;
+    const uint64_t h_num = static_cast<uint64_t>(shard_spec.shape[0]) * to_volume_except_width;
+    const uint64_t w_num = static_cast<uint64_t>(shard_spec.shape[1]) * to_width;
+    if (h_num % from_volume_except_width != 0 || w_num % from_width != 0) {
+        return std::nullopt;
+    }
+
+    // Return the exact ratio-scaled shard without tile-size clamping. A naive
+    // `std::max(scaled, TILE_*)` clamp oversizes the shard whenever the target dim legitimately
+    // shrinks below a tile (e.g. WH on a tile-aligned height-sharded input where the new width
+    // becomes sub-tile) and then fills the grid with capacity for data that doesn't exist,
+    // producing silent correctness regressions. Callers that need tile-aligned shards post-check
+    // `shape[i] % TILE_*` and fall back to interleaved; callers targeting RM layouts tolerate
+    // sub-tile shards. This mirrors `unary_ng`/`binary_ng` semantics but avoids their latent
+    // clamp bug — harmless there because their shape ratios never shrink a dim.
+    auto ret = shard_spec;
+    ret.shape[0] = static_cast<uint32_t>(h_num / from_volume_except_width);
+    ret.shape[1] = static_cast<uint32_t>(w_num / from_width);
     return ret;
 }
 
@@ -147,41 +148,49 @@ ShardSpec generate_transpose_shard_spec(
     CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
     uint32_t num_cores = all_cores.num_cores();
 
-    uint32_t tensor_height = 1;
+    // Accumulate in uint64 to match adjust_shard_spec_to_shape and avoid overflow on tensors whose
+    // product of leading dims exceeds 2^32 (e.g. large batch x seq_len x head_dim attention shapes).
+    // The final per-shard dims we hand back are still uint32 (the hardware/shard-spec representation),
+    // but the intermediate height computation uses the wider type.
+    uint64_t tensor_height = 1;
     for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
+        tensor_height *= static_cast<uint64_t>(padded_out_shape[i]);
     }
-    uint32_t tensor_width = padded_out_shape[-1];
+    uint64_t tensor_width = padded_out_shape[-1];
 
     std::array<uint32_t, 2> shard_shape = {0, 0};
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
-        shard_shape = {shard_height, tensor_width};
+        auto height_padded = tt::round_up(tensor_height, static_cast<uint64_t>(num_cores) * tt::constants::TILE_HEIGHT);
+        auto shard_height =
+            tt::round_up(tt::div_up(height_padded, static_cast<uint64_t>(num_cores)), tt::constants::TILE_HEIGHT);
+        shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(tensor_width)};
     } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
-        shard_shape = {tensor_height, shard_width};
+        auto shard_width =
+            tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(num_cores)), tt::constants::TILE_WIDTH);
+        shard_shape = {static_cast<uint32_t>(tensor_height), static_cast<uint32_t>(shard_width)};
     } else {
         CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
-        shard_shape = {shard_height, shard_width};
+        auto height_padded =
+            tt::round_up(tensor_height, static_cast<uint64_t>(grid_size.y) * tt::constants::TILE_HEIGHT);
+        auto shard_height =
+            tt::round_up(tt::div_up(height_padded, static_cast<uint64_t>(grid_size.y)), tt::constants::TILE_HEIGHT);
+        auto shard_width =
+            tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(grid_size.x)), tt::constants::TILE_WIDTH);
+        shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)};
     }
     log_debug(tt::LogOp, "Transpose: generated shard spec over full compute grid ({} cores)", num_cores);
     return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
 }
 
-// Refreshes the runtime-tensor-shape common args on program cache hits. The destination span is
-// bounds-checked against the element count produced by the fresh TensorAccessorArgs so any layout
-// change between program creation and the cache hit triggers a clear assertion instead of a silent
-// buffer overrun.
+// Refreshes the runtime-tensor-shape common args on program cache hits. Strict equality between
+// destination and source lengths catches any drift in the TensorAccessorArgs footprint between
+// program creation and the cache hit (a >= check would leave stale trailing elements in dst).
 void copy_transpose_common_runtime_args(const Buffer& buffer, std::span<std::uint32_t> dst) {
     const auto src =
         TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape).get_common_runtime_args();
     TT_FATAL(
-        dst.size() >= src.size(),
-        "copy_transpose_common_runtime_args: destination span ({} elems) too small for common args ({} elems).",
+        dst.size() == src.size(),
+        "copy_transpose_common_runtime_args: destination span ({} elems) must match common args ({} elems).",
         dst.size(),
         src.size());
     std::copy(src.begin(), src.end(), dst.begin());

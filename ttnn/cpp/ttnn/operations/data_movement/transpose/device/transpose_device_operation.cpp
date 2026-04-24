@@ -19,31 +19,52 @@ namespace ttnn::prim {
 
 namespace {
 
-// Compute the output padded shape for a given transpose dim. Mirrors the switch in
-// compute_output_specs so derivation stays in one place.
-ttnn::Shape transposed_padded_shape(const Tensor& input_tensor, TransposeOpDim dim) {
-    auto out_padded = input_tensor.padded_shape();
+// Compute the output logical+padded shapes for a given transpose dim. The padded-shape semantics
+// mirror what the WH/HC/CN program factories expect (in particular, HC TILE rotates input's padded
+// H into output dim[1] and pads new dim[2] to TILE_HEIGHT based on the logical C). Keeping this in
+// a single helper ensures `derive_effective_output_memory_config` and `compute_output_specs` agree
+// on shape derivation.
+struct TransposedShapes {
+    ttnn::Shape logical;
+    ttnn::Shape padded;
+};
+
+TransposedShapes transposed_shapes(const Tensor& input_tensor, TransposeOpDim dim) {
+    auto output_shape = input_tensor.logical_shape();
+    auto output_padded_shape = input_tensor.padded_shape();
     switch (dim) {
-        case TransposeOpDim::CN: std::swap(out_padded[0], out_padded[1]); break;
+        case TransposeOpDim::CN:
+            std::swap(output_shape[0], output_shape[1]);
+            std::swap(output_padded_shape[0], output_padded_shape[1]);
+            break;
         case TransposeOpDim::HC:
             if (input_tensor.layout() == Layout::ROW_MAJOR) {
-                std::swap(out_padded[1], out_padded[2]);
+                std::swap(output_shape[1], output_shape[2]);
+                std::swap(output_padded_shape[1], output_padded_shape[2]);
             } else {
-                const uint32_t C = input_tensor.logical_shape()[1];
+                const uint32_t C = output_shape[1];
                 const uint32_t C_p = tt::round_up(C, input_tensor.tensor_spec().tile().get_height());
-                out_padded[1] = out_padded[2];
-                out_padded[2] = C_p;
+                const uint32_t H = output_shape[2];
+                output_shape[1] = H;
+                output_shape[2] = C;
+                output_padded_shape[1] = H;
+                output_padded_shape[2] = C_p;
             }
             break;
-        case TransposeOpDim::WH: std::swap(out_padded[2], out_padded[3]); break;
+        case TransposeOpDim::WH:
+            std::swap(output_shape[2], output_shape[3]);
+            std::swap(output_padded_shape[2], output_padded_shape[3]);
+            break;
         default: TT_THROW("Unsupported transpose dim"); break;
     }
-    return out_padded;
+    return {output_shape, output_padded_shape};
 }
 
 // Derive the effective output MemoryConfig. When the user asks for a sharded output but omits
 // shard_spec, we synthesize one here so the rest of the op (select_program_factory,
-// compute_output_specs) can reason about a fully-specified config.
+// compute_output_specs) can reason about a fully-specified config. When the input's shard spec
+// can't be scaled exactly to the output padded shape, fall back to generating a fresh spec over
+// the full compute grid instead of crashing.
 MemoryConfig derive_effective_output_memory_config(
     const TransposeDeviceOperation::operation_attributes_t& operation_attributes,
     const TransposeDeviceOperation::tensor_args_t& tensor_args) {
@@ -52,11 +73,30 @@ MemoryConfig derive_effective_output_memory_config(
         return output_mem_config;
     }
     const auto& input_tensor = tensor_args.input;
-    const auto output_padded_shape = transposed_padded_shape(input_tensor, operation_attributes.dim);
-    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value()) {
-        auto shard_spec = adjust_shard_spec_to_shape(
+    const auto output_padded_shape = transposed_shapes(input_tensor, operation_attributes.dim).padded;
+    // Only reuse the input's shard_spec geometry when the requested output layout matches the
+    // input's layout: `adjust_shard_spec_to_shape` scales the input shard dims by the shape
+    // ratio, which preserves the sharding style (height/width/block) but doesn't convert
+    // between them. When the user asks for a different layout, fall through to
+    // `generate_transpose_shard_spec` which builds a fresh spec for the requested layout.
+    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+        input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout()) {
+        auto adjusted = adjust_shard_spec_to_shape(
             input_tensor.shard_spec().value(), input_tensor.padded_shape(), output_padded_shape);
-        return output_mem_config.with_shard_spec(shard_spec);
+        if (adjusted.has_value()) {
+            // For TILE layouts, the sharded WH/HC program factories require tile-aligned shard
+            // dims. `adjust_shard_spec_to_shape` may now return a sub-tile shard whenever the
+            // transpose legitimately shrinks a dim below TILE (previously a clamp silently
+            // oversized such shards, producing correctness bugs). Fall through to
+            // `generate_transpose_shard_spec` in that case instead of handing the sharded
+            // kernels an unusable spec.
+            const bool tile_layout = input_tensor.layout() == Layout::TILE;
+            const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
+                                      adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
+            if (!tile_layout || tile_aligned) {
+                return output_mem_config.with_shard_spec(std::move(adjusted));
+            }
+        }
     }
     auto shard_spec =
         generate_transpose_shard_spec(input_tensor, output_padded_shape, output_mem_config.memory_layout());
@@ -179,37 +219,8 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
 TensorSpec TransposeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& dim = operation_attributes.dim;
     const auto output_mem_config = derive_effective_output_memory_config(operation_attributes, tensor_args);
-
-    auto output_shape = input_tensor.logical_shape();
-    auto output_padded_shape = input_tensor.padded_shape();
-
-    switch (dim) {
-        case TransposeOpDim::CN:
-            std::swap(output_shape[0], output_shape[1]);
-            std::swap(output_padded_shape[0], output_padded_shape[1]);
-            break;
-        case TransposeOpDim::HC:
-            if (input_tensor.layout() == Layout::ROW_MAJOR) {
-                std::swap(output_shape[1], output_shape[2]);
-                std::swap(output_padded_shape[1], output_padded_shape[2]);
-            } else {
-                uint32_t C = output_shape[1];
-                uint32_t C_p = tt::round_up(C, input_tensor.tensor_spec().tile().get_height());
-                uint32_t H = output_shape[2];
-                output_shape[1] = H;
-                output_shape[2] = C;
-                output_padded_shape[1] = H;
-                output_padded_shape[2] = C_p;
-            }
-            break;
-        case TransposeOpDim::WH:
-            std::swap(output_shape[2], output_shape[3]);
-            std::swap(output_padded_shape[2], output_padded_shape[3]);
-            break;
-        default: TT_THROW("Unsupported transpose dim"); break;
-    }
+    const auto [output_shape, output_padded_shape] = transposed_shapes(input_tensor, operation_attributes.dim);
 
     return TensorSpec(
         output_shape,
