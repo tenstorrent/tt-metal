@@ -153,7 +153,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + shared_tables_offset);
     volatile tt_l1_ptr uint32_t* shared_per_core_start = shared_local_counts + num_total_cores * SHARED_SLOT_U32;
     // md_block 32B aligned, after shared tables
-    uint32_t md_block_addr_raw = (uint32_t)(shared_per_core_start + num_total_cores * e_local);
+    uint32_t md_block_addr_raw = (uint32_t)(shared_per_core_start + num_total_cores * SHARED_SLOT_U32);
     uint32_t md_block_addr = (md_block_addr_raw + 31U) & ~31U;
     volatile tt_l1_ptr uint16_t* md_block = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(md_block_addr);
     // BLOCK_ROWS for streaming metadata. Use slice size if it fits, else 1024.
