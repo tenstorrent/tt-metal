@@ -29,7 +29,14 @@ private:
 
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
 #if defined(FABRIC_RELAY)
-    bool fabric_endpoint_ready_ = false;
+    // No in-class initializer: CQRelayClient is used as a namespace-scope (global) variable in
+    // dispatch kernels compiled for idle_erisc.  An in-class member initializer (even `= false`)
+    // makes the defaulted constructor non-trivial, which causes the compiler to emit a
+    // runtime-constructor entry in .init_array.  idle_erisc ELF validation rejects any
+    // .init_array content (bare-metal target, no CRT to run it).
+    // Global objects are zero-initialized by the linker (BSS), so this member is reliably
+    // false before init() is ever called — the behaviour is identical to `= false`.
+    bool fabric_endpoint_ready_;
 #endif
 
 #if ASSERT_ENABLED
