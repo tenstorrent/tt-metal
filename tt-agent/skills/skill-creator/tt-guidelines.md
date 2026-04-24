@@ -148,6 +148,34 @@ re-runs the preflight.
 and clearly destructive rules remain in force. The protocol surfaces
 friction between autonomy and personal rules; it does not erase the rules.
 
+## Token Economy
+
+Skills load into every invocation's context. A 300-line skill costs 300 lines
+every time any agent uses it. Optimize ruthlessly — never at the cost of a
+load-bearing rule.
+
+### Size targets (soft; overruns must be justified in-file)
+
+| File | Target | Hard cap |
+|---|---|---|
+| `SKILL.md` | ≤120 | 180 |
+| Subagent / procedure file | ≤100 | 150 |
+| Anti-patterns / recipes leaf | ≤150 | 200 |
+| Single rule within a leaf | ≤15 | 25 |
+
+Over the cap → split by concern or delete duplicated context. Do not grow
+existing files past cap; add a new one.
+
+### Writing rules
+
+- **One canonical example per rule.** Extras are decoration.
+- **Tables beat prose** for enumerable facts (severity, size ladder, lever → bound).
+- **State the rule, then the symptom.** No double-framing.
+- **No multi-paragraph motivation.** One sentence of *why*, if needed at all.
+- **Cross-reference, don't duplicate.** If a rule lives in X, others link — no restatement.
+- **Prune on every edit.** For each net-added paragraph, ask: *what behavior
+  changes if a reader skips this?* Decorative context fails this test.
+
 ## Self-Check
 
 Before finalizing any skill:
@@ -157,4 +185,7 @@ Before finalizing any skill:
 - [ ] Workflow skills have a phase table with Loads and Produces columns
 - [ ] All files referenced in Loads columns exist on disk
 - [ ] Autonomous skills declare and run the Developer-Rule Conflict Protocol
+- [ ] Every file within size target, or overrun justified in-file
+- [ ] Each rule ≤1 example; tables used where enumerable
+- [ ] No content duplicated across files — cross-references instead
 - [ ] `pytest tt-agent/tests/test_skill_frontmatter.py` passes

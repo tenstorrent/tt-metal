@@ -26,10 +26,11 @@ evals) and adds TT-specific guidance from `tt-guidelines.md`.
 ## Pipeline
 
 ```
-design → align → write → validate
+design → align → write → shrink → validate
 ```
 
-The design phase is where the real work happens.
+The design phase is where the real work happens. The shrink phase is where
+bloat gets caught before it ships.
 
 ## Phase 1: Design Alignment
 
@@ -78,10 +79,26 @@ Once all questions are resolved, state: _"I'm ready to write. Shall I proceed?"_
 Only after receiving explicit approval to proceed:
 
 1. **Invoke `/skill-creator`** for base mechanics.
-2. **Load `tt-guidelines.md`** and apply TT-specific constraints.
-3. Write SKILL.md + sub-files. Be concise — optimize token count in all skill content.
+2. **Load `tt-guidelines.md`** and apply TT-specific constraints — including
+   the Token Economy section. Size targets are non-optional.
+3. Write SKILL.md + sub-files.
 
-## Phase 3: Validate
+## Phase 3: Shrink
+
+Applies equally to new skills and to edits of existing skills.
+
+1. `wc -l` every file touched. Flag anything over the target in
+   `tt-guidelines.md § Token Economy`.
+2. For each net-added paragraph, ask: *what behavior changes if a reader
+   skips this?* Cut decorative context.
+3. Collapse repeated framings into one. If the same rule is stated twice,
+   delete the second.
+4. Prefer tables over prose for enumerable facts.
+5. Replace duplicated content with cross-references.
+
+Do not skip this phase on edits — the bloat pattern is growth-per-edit.
+
+## Phase 4: Validate
 
 Run the self-check from `tt-guidelines.md`. Run frontmatter tests.
 
