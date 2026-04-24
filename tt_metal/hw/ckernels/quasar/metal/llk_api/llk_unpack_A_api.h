@@ -38,8 +38,6 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const std::uint32_t operand = 0) {
-    (void)acc_to_dest;
-
     constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
     if constexpr (BType == BroadcastType::NONE) {
         if (transpose_of_faces != 0) {
@@ -74,7 +72,6 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
-    (void)acc_to_dest;
     WAYPOINT("UPAW");
     constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
     if constexpr (BType == BroadcastType::NONE) {
@@ -118,7 +115,4 @@ inline void llk_unpack_A_block(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_A_uninit(const std::uint32_t operand) {
-    (void)operand;
-    (void)BType;
-}
+inline void llk_unpack_A_uninit(const std::uint32_t /*operand*/) {}
