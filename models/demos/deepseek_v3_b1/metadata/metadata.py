@@ -23,6 +23,14 @@ class DeepseekMetadata:
     token_id: int = 0
     position_id: int = 0
     prefill_token_id: int = 0
+    temperature: float = 0.0
+    k: int = 0
+    probability_mass_threshold: float = 0.0
+    _pad0: int = 0
+    _pad1: int = 0
+    _pad2: int = 0
+    p_indices: list[int] = field(default_factory=list)
+    p_scores: list[float] = field(default_factory=list)
 
     @classmethod
     def aligned_size_bytes(cls) -> int:

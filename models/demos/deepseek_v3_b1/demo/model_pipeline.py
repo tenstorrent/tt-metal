@@ -10,7 +10,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
@@ -48,6 +47,7 @@ class ModelPipeline:
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
         num_slots: int = 64,
+        relaxed_acceptance_delta: float = 0.6,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -60,6 +60,7 @@ class ModelPipeline:
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
         self.mesh_device = mesh_device
+        self.relaxed_acceptance_delta = relaxed_acceptance_delta
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
@@ -147,19 +148,13 @@ class ModelPipeline:
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return results
 
-    def decode_forward(self, input_token: int) -> int:
-        """Run 1 decode step and return the next token id."""
-        if self.pipeline.my_stage_idx != 0:
-            raise RuntimeError("decode_forward() should only be called on mesh id 0")
-        assert self.model is not None
-
-        output = self.model.decode_step(
-            to_spec_input(input_token, user_id=0, position_id=self.position_id, page_size_datums=self._page_size_datums)
-        )
-        self.position_id += 1
-
-        next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
-        return next_token_id
+    def check_acceptance(self, prev_spec_token_id: int, result: DecodeResult) -> bool:
+        if prev_spec_token_id not in result.p_indices:
+            return False
+        prev_spec_token_index = result.p_indices.index(prev_spec_token_id)
+        p_max_prob = result.p_scores[0]
+        p_draft_prob = result.p_scores[prev_spec_token_index]
+        return (p_max_prob - p_draft_prob) <= self.relaxed_acceptance_delta
 
     def _write_spec_pair(self, token_0: int, pos_0: int, token_1: int, pos_1: int, user_id: int = 0) -> None:
         """Write two tokens (base + speculation) into the pipeline."""
@@ -251,7 +246,7 @@ class ModelPipeline:
             else:
                 if result.token_0_type == TokenType.BASE:
                     # On acceptance, we check that the base token matches the first token of the last unverified spec token
-                    if result.token_0 == unverified_spec_tokens[-1]:
+                    if self.check_acceptance(unverified_spec_tokens[-1], result):
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
                         emit(result.token_0)
                         base_accept += 1

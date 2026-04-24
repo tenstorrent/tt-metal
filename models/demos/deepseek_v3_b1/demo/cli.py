@@ -131,6 +131,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Number of users/slots (KV cache batch size) for the decoder stages",
     )
     parser.add_argument(
+        "--relaxed-acceptance-delta",
+        type=int,
+        default=0.6,
+        help="Relaxed acceptance delta for the MTP verification stage",
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -168,6 +174,7 @@ def run_demo(
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
     num_slots: int = 64,
+    relaxed_acceptance_delta: float = 0.6,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -186,6 +193,7 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
             num_slots=num_slots,
+            relaxed_acceptance_delta=relaxed_acceptance_delta,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -263,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         moe_layer_id_override=args.moe_layer_id_override,
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+        relaxed_acceptance_delta=args.relaxed_acceptance_delta,
     )
     print(file=sys.stdout, flush=True)
     return 0
