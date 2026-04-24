@@ -182,7 +182,7 @@ def run_flash_mla_prefill_chunked_vs_nonchunked(
     ### Compare chunked vs non-chunked
     ######################
     pcc_threshold = 0.999
-    out_pass, out_pcc = comp_allclose_and_pcc(nonchunked_torch, chunked_torch, pcc_threshold)
+    out_pass, out_pcc = comp_allclose_and_pcc(nonchunked_torch, chunked_torch, pcc=pcc_threshold)
     logger.debug(f"num_chunks={num_chunks} chunked vs non-chunked PCC: {out_pcc}")
 
     assert out_pass, (
