@@ -209,11 +209,56 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _sanitize_cli_path(
+    raw_path: str,
+    *,
+    arg_name: str,
+    expect_dir: bool = False,
+    allowed_suffixes: tuple[str, ...] = (),
+) -> Path:
+    if "\x00" in raw_path:
+        raise ValueError(f"Invalid {arg_name}: path contains null byte")
+
+    candidate = Path(raw_path).expanduser()
+    try:
+        sanitized = candidate.resolve(strict=False)
+    except OSError as exc:
+        raise ValueError(f"Invalid {arg_name}: failed to resolve path '{raw_path}' ({exc})") from exc
+
+    if expect_dir:
+        if sanitized.exists() and not sanitized.is_dir():
+            raise ValueError(f"Invalid {arg_name}: expected directory path, got file '{sanitized}'")
+    elif sanitized.exists() and not sanitized.is_file():
+        raise ValueError(f"Invalid {arg_name}: expected file path, got directory '{sanitized}'")
+
+    if allowed_suffixes and sanitized.suffix.lower() not in allowed_suffixes:
+        suffixes = ", ".join(allowed_suffixes)
+        raise ValueError(f"Invalid {arg_name}: expected one of [{suffixes}], got '{sanitized.suffix}'")
+
+    return sanitized
+
+
 def main() -> int:
     args = parse_args()
-    targets_yaml_path = Path(args.targets_yaml)
-    benchmark_dir = Path(args.benchmark_dir)
-    tests_yaml_path = Path(args.tests_yaml)
+    try:
+        targets_yaml_path = _sanitize_cli_path(
+            args.targets_yaml,
+            arg_name="--targets-yaml",
+            allowed_suffixes=(".yaml", ".yml"),
+        )
+        benchmark_dir = _sanitize_cli_path(
+            args.benchmark_dir,
+            arg_name="--benchmark-dir",
+            expect_dir=True,
+        )
+        tests_yaml_path = _sanitize_cli_path(
+            args.tests_yaml,
+            arg_name="--tests-yaml",
+            allowed_suffixes=(".yaml", ".yml"),
+        )
+    except ValueError as exc:
+        print(f"::error::{exc}")
+        return 1
 
     targets_yaml = _load_yaml(targets_yaml_path)
     if not isinstance(targets_yaml, dict):

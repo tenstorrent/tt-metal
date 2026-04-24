@@ -27,10 +27,16 @@ def _write_complete_run(path: Path, model: str, batch_size: int, seq_len: int, d
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _run_validator(tmp_path: Path, strict_missing: bool = False) -> subprocess.CompletedProcess[str]:
+def _run_validator(
+    tmp_path: Path,
+    strict_missing: bool = False,
+    *,
+    targets_yaml: Path | None = None,
+    tests_yaml: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     benchmark_dir = tmp_path / "generated/benchmark_data"
-    targets_yaml = tmp_path / "models/model_targets.yaml"
-    tests_yaml = tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml"
+    targets_yaml = targets_yaml or tmp_path / "models/model_targets.yaml"
+    tests_yaml = tests_yaml or tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml"
     command = [
         sys.executable,
         str(SCRIPT_PATH),
@@ -192,3 +198,18 @@ def test_validate_perf_targets_todo_entry_respects_strict_flag(tmp_path):
 
     strict = _run_validator(tmp_path, strict_missing=True)
     assert strict.returncode == 1
+
+
+def test_validate_perf_targets_rejects_non_yaml_targets_path(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    invalid_targets = tmp_path / "models/model_targets.txt"
+    invalid_targets.write_text("targets: {}", encoding="utf-8")
+    tests_yaml = tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml"
+    tests_yaml.write_text("[]", encoding="utf-8")
+
+    result = _run_validator(tmp_path, targets_yaml=invalid_targets, tests_yaml=tests_yaml)
+    assert result.returncode == 1
+    assert "Invalid --targets-yaml" in result.stdout
