@@ -93,7 +93,33 @@ thread_local tt_emule::EmuleDFBInterface* __emule_dfbs = nullptr;
 // Per-core tile counter array, shared between threads on the same core.
 thread_local tt_emule::TileCounterArray* __emule_tc_array = nullptr;
 
-// Quasar-specific per-thread identity used by JIT kernels.
+// Quasar-specific per-thread identity, written by the runner at thread start
+// (see launch_cores below) and read inside the JIT'd kernel .so. Each variable
+// stands in for a different hardware signal; they are NOT interchangeable.
+//
+// __processor_id  — RISC-V mhartid analogue. DM threads: DM index 0..7.
+//                   Compute threads: Neo engine index 0..3. Consumed by the
+//                   JIT regex that rewrites `asm volatile("csrr %0, mhartid" ...)`
+//                   into `VAR = __processor_id;` (x86 can't execute the CSR).
+//
+// __emule_neo_id  — Quasar NEO_ID CSR (0xBC2). Which of the 4 compute engines
+//                   in a Neo is executing. Set to processor_id for compute
+//                   threads, 0 for DM. Read by ckernel::csr_read<CSR::NEO_ID>().
+//
+// __emule_trisc_id — Quasar TRISC_ID CSR (0xBC3). Which TRISC sub-engine
+//                    (0=UNPACK, 1=MATH, 2=PACK, 3=ISOLATE_SFPU) is running.
+//                    Starts at 0; for Quasar compute kernels the launcher
+//                    iterates it 0..3 across ki.variants (see the variant
+//                    loop in launch_cores). Read by
+//                    ckernel::csr_read<CSR::TRISC_ID>().
+//
+// __emule_num_threads  — backs get_num_threads(). Total threads this kernel
+//                        runs on (DM count for DM kernels, active-engine count
+//                        for compute).
+//
+// __emule_my_thread_id — backs get_my_thread_id(). Same value as __processor_id
+//                        today, but kept separate for type (uint32_t vs uint8_t)
+//                        and public-API surface.
 thread_local uint8_t __processor_id = 0;
 thread_local uint8_t __emule_neo_id = 0;
 thread_local uint8_t __emule_trisc_id = 0;
