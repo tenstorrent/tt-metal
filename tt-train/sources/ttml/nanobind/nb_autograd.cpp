@@ -4,6 +4,7 @@
 
 #include "nanobind/nb_autograd.hpp"
 
+#include <fmt/core.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
@@ -366,10 +367,17 @@ void py_module(nb::module_& m) {
     // would walk std::set<std::string> entries whose backing heap may already
     // have been recycled, causing a use-after-free at process exit.
     nb::module_::import_("atexit").attr("register")(nb::cpp_function([]() {
+        // Best-effort cleanup at process exit: log and swallow. We can't
+        // re-throw — Python's atexit machinery would translate it into an
+        // unraisable error and we still want subsequent atexit handlers
+        // (and the C++ ShmResourceTracker handler) to run.
         try {
             AutoContext::get_instance().close_device();
+        } catch (const std::exception& e) {
+            fmt::println(stderr, "[tt-train] AutoContext close_device() failed during Python atexit: {}", e.what());
         } catch (...) {
-            // Best-effort cleanup; swallow any errors during shutdown.
+            fmt::println(
+                stderr, "[tt-train] AutoContext close_device() failed during Python atexit: unknown exception");
         }
     }));
 }
