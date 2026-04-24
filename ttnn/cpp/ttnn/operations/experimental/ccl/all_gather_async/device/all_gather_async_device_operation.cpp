@@ -363,11 +363,16 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     //   bottleneck_bytes = (N-1) * S.  Latency = (N-1) hops.
     //
     // RING topology — pick the better of two strategies:
-    //   Option A (half-ring multicast, low latency):
-    //     Each device multicasts S in both directions, each covering half
-    //     the ring. Each device's busier incoming link receives ceil(N/2)
-    //     slices.
-    //     bottleneck_bytes = ceil(N/2) * S, latency = ceil(N/2) hops.
+    //   Option A (balanced half-ring, low latency):
+    //     Each device splits its slice S and multicasts in both directions,
+    //     covering half the ring each way. For even N: in clockwise dir
+    //     upper S/2 goes to N/2 neighbors and lower S/2 to N/2-1 neighbors,
+    //     while in counter-clockwise dir upper S/2 goes to N/2-1 neighbors
+    //     and lower S/2 to N/2 neighbors. So the boundary device receives
+    //     different halves from each direction with zero redundancy.
+    //     For odd N: full S is sent to floor(N/2) neighbors in each direction
+    //     with no overlap.
+    //     bottleneck_bytes = (N-1) * S/2, latency = ceil((N-1)/2) hops.
     //
     //   Option B (split, full-ring, lower BW):
     //     Each device sends S/2 in each direction around the full ring.
@@ -379,7 +384,7 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
 
     const auto& input_tensor = tensor_args.input_tensor;
 
-    // --- Architecture and clock detection ---
+    // Architecture and clock detection
     tt::ARCH arch;
     float clock_rate_ghz;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
@@ -390,59 +395,38 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
         clock_rate_ghz = 1.0f;
     }
 
-    // --- Data size: bytes each device contributes ---
-    const int64_t input_size_bytes =
-        static_cast<int64_t>(input_tensor.physical_volume()) * static_cast<int64_t>(input_tensor.element_size());
-
-    // --- Packet size for BW map lookup ---
-    const uint32_t packet_size =
-        static_cast<uint32_t>(std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()));
+    // Data size: bytes each device contributes
+    const uint64_t input_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
 
     const uint32_t N = args.ring_size;
     const uint32_t num_links = args.num_links;
-    const uint32_t half_N = tt::div_up(N, 2u);
-
-    float fabric_time_ns = 0.0f;
-
+    double fabric_time_ns = 0.0f;
     if (N <= 1) {
         // Single device: no fabric communication
         fabric_time_ns = 0.0f;
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
         // Ring topology: pick the better of two strategies
 
-        // Option A: multicast full slice to each half-ring.
-        // Bottleneck link carries ceil(N/2) senders * S bytes each.
-        const int64_t bottleneck_bytes_a = static_cast<int64_t>(half_N) * input_size_bytes;
-        const float time_a = ttnn::ccl::estimate_fabric_transfer_ns(
-            bottleneck_bytes_a,
-            num_links,
-            packet_size,
-            ttnn::ccl::FabricWriteType::MulticastHalfRing,
-            ttnn::ccl::FabricNocWriteType::UnicastWrite,
-            half_N);
+        // Option A: balanced half-ring — each device distributes its slice
+        // across both directions so the boundary device (at distance N/2)
+        // receives different halves from each direction. Achieves the
+        // optimal (N-1)*S/2 per link with only ceil((N-1)/2) hops.
+        const uint64_t bottleneck_bytes_a = tt::div_up((N - 1) * input_size_bytes, 2);
+        const double time_a =
+            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes_a, num_links, tt::div_up(N - 1, 2u));
 
         // Option B: split slice, multicast S/2 in each direction around full ring.
         // Bottleneck link carries N-1 senders * S/2 bytes each (source's stream
         // doesn't traverse its own outgoing link).
-        const int64_t bottleneck_bytes_b = tt::div_up(static_cast<int64_t>(N - 1) * input_size_bytes, int64_t{2});
-        const float time_b = ttnn::ccl::estimate_fabric_transfer_ns(
-            bottleneck_bytes_b,
-            num_links,
-            packet_size,
-            ttnn::ccl::FabricWriteType::MulticastFullRing,
-            ttnn::ccl::FabricNocWriteType::UnicastWrite,
-            N - 1);
+        const uint64_t bottleneck_bytes_b = tt::div_up((N - 1) * input_size_bytes, 2);
+        const double time_b = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes_b, num_links, N - 1);
 
         fabric_time_ns = std::min(time_a, time_b);
     } else {
         // Line/Linear/Mesh topology: edge device has one link and must
         // receive all (N-1) slices through it.
-        const auto write_type = (args.topology == tt::tt_fabric::Topology::Mesh)
-                                    ? ttnn::ccl::FabricWriteType::MulticastMesh
-                                    : ttnn::ccl::FabricWriteType::MulticastLinear;
-        const int64_t bottleneck_bytes = static_cast<int64_t>(N - 1) * input_size_bytes;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(
-            bottleneck_bytes, num_links, packet_size, write_type, ttnn::ccl::FabricNocWriteType::UnicastWrite, N - 1);
+        const uint64_t bottleneck_bytes = (N - 1) * input_size_bytes;
+        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, N - 1);
     }
 
     // Convert fabric time (ns) to device clock cycles.
