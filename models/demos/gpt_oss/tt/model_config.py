@@ -87,6 +87,7 @@ class ModelArgs:
             self.vocab_size = self.hf_config.vocab_size
             self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
             self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
+            self.dim = self.hf_config.hidden_size
             self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
             self.rope_scaling = None  # Keep simple like original GPT-OSS
 

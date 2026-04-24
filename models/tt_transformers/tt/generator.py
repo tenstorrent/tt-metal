@@ -497,9 +497,6 @@ class Generator(WarmupForwardMixin):
         if use_batched_prefill and sampling_on_device_requested:
             sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
             if sampling_module is not None and sampling_dp > 1:
-                # NOTE: Batched prefill disabled: on-device sampling
-                # must fall back to sequential prefill until a row-sharded
-                # batched-prefill sampling contract is implemented.
                 use_batched_prefill = False
 
         if use_batched_prefill:
