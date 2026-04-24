@@ -44,6 +44,62 @@ IGNORED_KEYS = frozenset(
 )
 
 
+def _normalize_distribution_shape(value: Any) -> Any:
+    """Canonicalize distribution_shape to total device count.
+
+    The master trace may record a 1D shape like [32] while the sweep
+    records [4, 8] (or vice-versa).  Both represent the same 32-device
+    mesh so we normalize to a single canonical form: the product.
+
+    Handles both parsed lists ([4, 8]) and string-encoded values ("[4, 8]").
+    """
+    import ast as _ast
+
+    if isinstance(value, str):
+        try:
+            parsed = _ast.literal_eval(value)
+        except Exception:
+            return value
+    elif isinstance(value, list):
+        parsed = value
+    else:
+        return value
+
+    if isinstance(parsed, (list, tuple)) and all(isinstance(x, (int, float)) for x in parsed):
+        product = 1
+        for x in parsed:
+            product *= int(x)
+        return str([product]) if isinstance(value, str) else [product]
+    return value
+
+
+def _normalize_placement(value: Any) -> Any:
+    """Canonicalize all-replicate placement lists.
+
+    1D ['PlacementReplicate'] and 2D ['PlacementReplicate', 'PlacementReplicate']
+    are semantically equivalent — canonicalize to a single-entry list.
+
+    Handles both parsed lists and string-encoded values.
+    """
+    import ast as _ast
+
+    if isinstance(value, str):
+        try:
+            parsed = _ast.literal_eval(value)
+        except Exception:
+            return value
+    elif isinstance(value, list):
+        parsed = value
+    else:
+        return value
+
+    if isinstance(parsed, (list, tuple)) and all(isinstance(x, str) for x in parsed):
+        if all(x == "PlacementReplicate" for x in parsed):
+            canonical = ["PlacementReplicate"]
+            return str(canonical) if isinstance(value, str) else canonical
+    return value
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -62,22 +118,16 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             # sub_core_grids: None is noise
             if k == "sub_core_grids" and v is None:
                 continue
+            # Normalize distribution_shape and placement (may be strings or lists)
+            if k == "distribution_shape":
+                result[k] = _normalize_distribution_shape(v)
+                continue
+            if k == "placement":
+                result[k] = _normalize_placement(v)
+                continue
             result[k] = normalize(v, _parent_key=k)
         return result
     if isinstance(obj, list):
-        # Normalize distribution_shape: [32] and [4, 8] both represent 32 devices.
-        # Canonicalize to the product so 1D and 2D representations match.
-        if _parent_key == "distribution_shape" and all(isinstance(x, (int, float)) for x in obj):
-            product = 1
-            for x in obj:
-                product *= int(x)
-            return [product]
-        # Normalize placement arrays: all-replicate lists of different lengths
-        # (e.g. 1D ['PlacementReplicate'] vs 2D ['PlacementReplicate', 'PlacementReplicate'])
-        # are semantically equivalent — canonicalize to a single entry.
-        if _parent_key == "placement" and all(isinstance(x, str) for x in obj):
-            if all(x == "PlacementReplicate" for x in obj):
-                return ["PlacementReplicate"]
         return [normalize(item, _parent_key=_parent_key) for item in obj]
     return obj
 
