@@ -220,13 +220,14 @@ void kernel_main() {
                     in1_cb_id,
                     phase1_out_cb,
                     mm_partials_cb_id,
-                    in0_block_w,
-                    in0_num_subblocks,
-                    in1_num_subblocks,
-                    num_blocks_inner_dim,
-                    out_subblock_h,
-                    out_subblock_w,
-                    1,
+                    MatmulBlockShape::of(
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        out_subblock_h,
+                        out_subblock_w,
+                        in0_block_w,
+                        num_blocks_inner_dim,
+                        /*batch=*/1),
                     PostFn{},
                     PreFn{},
                     /*retain_in0=*/false,
@@ -260,6 +261,12 @@ void kernel_main() {
 
                 constexpr BiasBroadcast bias_broadcast =
                     row_broadcast_bias ? BiasBroadcast::RowBroadcast : BiasBroadcast::Elementwise;
+                const auto bias_shape = BiasAddShape::of(
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    out_subblock_h,
+                    out_subblock_w,
+                    /*out_row_width=*/out_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
                 add_bias_bcast_rows<
                     mm_partials_cb_id,
@@ -267,26 +274,14 @@ void kernel_main() {
                     untilize_mode_out_cb_id,
                     bias_broadcast,
                     output_layout,
-                    SFPUPostCompute>(
-                    in0_num_subblocks,
-                    in1_num_subblocks,
-                    out_subblock_h,
-                    out_subblock_w,
-                    SFPUPostCompute{},
-                    /*out_row_width=*/out_block_w);
+                    SFPUPostCompute>(bias_shape, SFPUPostCompute{});
 #else
                 add_bias_bcast_rows<
                     mm_partials_cb_id,
                     bias_cb_id,
                     untilize_mode_out_cb_id,
                     bias_broadcast,
-                    output_layout>(
-                    in0_num_subblocks,
-                    in1_num_subblocks,
-                    out_subblock_h,
-                    out_subblock_w,
-                    compute_kernel_lib::bias_add_config::NoPostBias{},
-                    /*out_row_width=*/out_block_w);
+                    output_layout>(bias_shape);
 #endif
 
                 if constexpr (num_blocks_w_dim > 1) {

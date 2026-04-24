@@ -70,6 +70,8 @@ void kernel_main() {
         cb_wait_front(bias_cb, bias_ntiles);
 #endif
 
+        const auto bias_shape =
+            compute_kernel_lib::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w);
 #ifdef HELPER_POST_BIAS_RELU
         compute_kernel_lib::add_bias_bcast_rows<
             partials_cb,
@@ -77,10 +79,9 @@ void kernel_main() {
             out_cb,
             compute_kernel_lib::BiasBroadcast::RowBroadcast,
             compute_kernel_lib::OutputLayout::SubblockMajor,
-            ReluPostBias>(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, ReluPostBias{});
+            ReluPostBias>(bias_shape, ReluPostBias{});
 #else
-        compute_kernel_lib::add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(
-            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w);
+        compute_kernel_lib::add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(bias_shape);
 #endif
 
 #ifdef BIAS_PER_ITER_PUSH
