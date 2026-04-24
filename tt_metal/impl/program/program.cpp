@@ -200,7 +200,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // watcher/dprint enabled are accounted for in the build key.
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     hasher.update(build_key);
     hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
     hasher.update(kernel->compute_hash());
@@ -502,15 +502,11 @@ uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const 
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(
-    const KernelSpecName& name,
-    const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
-    size_t num_common_runtime_args) {
+void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(
-        name, KernelRTASchema{num_runtime_args_per_node, num_common_runtime_args});
+    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(name, schema);
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 

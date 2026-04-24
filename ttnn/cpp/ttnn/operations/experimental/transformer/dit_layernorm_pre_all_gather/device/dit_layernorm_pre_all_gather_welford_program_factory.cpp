@@ -8,7 +8,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/bfloat16.hpp>
 
 #include <string>
 #include <variant>
@@ -129,9 +128,6 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
     tt::tt_metal::CreateCircularBuffer(program, all_cores, c_recip_config);
 
     uint32_t curr_row = 0;
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -148,7 +144,7 @@ PreAllGatherWelfordProgramFactory::cached_program_t PreAllGatherWelfordProgramFa
         uint32_t out_tile_offset = curr_row * output_tiles_per_row;
 
         tt::tt_metal::SetRuntimeArgs(
-            program, reader_kernels_id, core, {a_addr, num_tile_rows_per_core, Wt, in_tile_offset, packed_winv_value});
+            program, reader_kernels_id, core, {a_addr, num_tile_rows_per_core, Wt, in_tile_offset});
         tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
         tt::tt_metal::SetRuntimeArgs(
             program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core, out_tile_offset});
