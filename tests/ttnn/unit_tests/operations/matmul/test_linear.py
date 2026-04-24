@@ -229,8 +229,6 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
-
     # We supply no program config or core grid, so this uses the unfused path.
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, activation=activation)
     output_tensor = ttnn.to_torch(output_tensor)
