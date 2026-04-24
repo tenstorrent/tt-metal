@@ -449,7 +449,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_MultiNodeKernel) {
     auto producer = MakeMinimalDMKernel("producer", all_nodes);
     auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
 
-    // Uniform vararg count across both nodes — scalar.
+    // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.runtime_arguments_schema.num_runtime_varargs = 2;
     producer.runtime_arguments_schema.num_common_runtime_varargs = 1;
 
@@ -495,7 +495,7 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
     auto producer = MakeMinimalDMKernel("producer", all_nodes);
     auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
 
-    // Uniform vararg count across both nodes — scalar.
+    // Throw in some varargs (the normal kind, not the weird per-node override kind)
     producer.runtime_arguments_schema.num_runtime_varargs = 2;
     // consumer has no varargs (defaults)
 

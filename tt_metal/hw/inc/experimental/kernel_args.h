@@ -56,6 +56,8 @@ FORCE_INLINE T get_arg(CrtaArg<T> arg) {
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg.byte_offset / sizeof(uint32_t))));
 }
 
+// CTAs are compile-time constants, so this syntax is legal for CTAs (but not RTAs/CRTAs):
+//   constexpr auto x = get_arg(args::x);
 template <typename T>
 FORCE_INLINE constexpr T get_arg(CtaVal<T> arg) {
     return arg.value;
