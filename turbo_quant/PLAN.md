@@ -730,7 +730,7 @@ on UNPACK thread, wrapped in `UNPACK(...)` macro. Reading only 8 words fails;
 | 32768  |   256    | 0.9995 |
 | 131072 |  1024    | 0.9983 |
 
-**2. Paged cache support for indices + norms** — **IN PROGRESS (2026-04-24)**
+**2. Paged cache support for indices + norms** — **DONE (2026-04-24)**
 
 Current state (from post-Step-1 inspection):
 - `TTNNTurboQuantCache` allocates `k/v_indices_dev` as `[B, NKH, max_seq_padded, DH]`
@@ -776,33 +776,49 @@ Sub-phases:
    - Full 32-layer test deferred (only slow due to 32× cold-cache compile; logic verified
      at 2 layers)
 
-**Step 2 COMPLETE.** Paged TQ cache + page_table-aware reader + e2e integration
-all working. Next major piece is Step 3 (multi-device / T3K).
+**Step 2 COMPLETE (2026-04-24, commits `c833e062f15` + `39e590d6f03`).**
+Paged TQ cache + page_table-aware reader + e2e integration all working on
+single-device N150. Next major piece is Step 3 (multi-device / T3K).
 
-**3. Multi-device / T3K support**
+Quick-reference status after Step 1+2:
+
+| Layer | Status | Commit | Validation |
+|-------|--------|--------|------------|
+| Multi-chunk online softmax | ✅ DONE | `3da187312b0` | cos 0.9983+ at seq 128–131072 |
+| TTNNTurboQuantCache paged layout | ✅ DONE | `c833e062f15` | standalone test passes |
+| Reader kernel paged reads | ✅ DONE | `c833e062f15` | identity + shuffled page_tables |
+| fused_sdpa_decode page_table plumbing | ✅ DONE | `c833e062f15` | standalone test cos 0.9997 |
+| eval_e2e.py --tq-full-dequant | ✅ DONE | `39e590d6f03` | 2-layer e2e: 6.9 ms/tok |
+| T3K multi-device | ⏳ PENDING | — | Step 3 |
+| Accuracy/latency benchmarks | ⏳ PENDING | — | Step 5 |
+
+**3. Multi-device / T3K support** — PENDING
 - Replicate centroids across devices, shard indices/norms by heads
-- Fix `fused_sdpa_decode` to use mesh_composer/mesh_mapper where needed
+- `fused_sdpa_decode` to use mesh_composer/mesh_mapper where needed
+- Verify on 8-device T3K with FABRIC_1D (same setup as pre_rescaled path)
 - Effort: 1 day
 
-**4. Integration into eval_e2e.py / eval_e2e_prefill.py**
-- Add `--tq-full-dequant` flag (mutually exclusive with `--bfp4-cache`)
-- Allocate TTNNTurboQuantCache with `memory_efficient=True`
-- Route attention decode through `fused_sdpa_decode` (not std SDPA)
-- Effort: 1 day
+**4. Full validation of single-device path** — PARTIAL (basic e2e validated)
+- ✅ `--tq-full-dequant` flag present in eval_e2e.py
+- ✅ 2-layer end-to-end decode works
+- ⏳ Full 32-layer validation (first run needs cold-cache compile, scales with layers)
+- ⏳ Port flag into `eval_e2e_prefill.py` for real prefill → decode
+- ⏳ Quality comparison vs baseline/pre-rescaled at full 32L
+- Effort: 1-2 days
 
-**5. Accuracy + latency validation**
+**5. Accuracy + latency validation** — PENDING
 - Run token accuracy benchmark → expect >95% top-1 (vs pre-rescaled's 72%)
 - Measure decode latency → target <30ms on T3K (2× baseline acceptable given accuracy)
 - Run seqlen + batch sweeps to confirm long context + multi-batch works
 - Effort: 1-2 days
 
-**6. Optional: optimize centroid gather** (only if latency is unacceptable)
+**6. Optional: optimize centroid gather** (only if latency is unacceptable) — PENDING
 - Current: ~50 SFPU ops/tile via conditional cascades
 - Alternative: LUT-style gather via unpacker + matmul
 - Alternative: do centroid×norm expansion post-softmax instead of on K/V read
 - Effort: 3-5 days if needed
 
-**Total effort estimate: ~1-2 weeks.**
+**Total effort estimate for remaining work: ~1 week.**
 
 **Alternative approach (simpler but higher risk):**
 Modify the standard SDPA decode reader to support TQ dequant on-read. Reuse std
