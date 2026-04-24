@@ -402,7 +402,7 @@ void kernel_main() {
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {
                 // pad
-                pad_input(cb_in0, cb_x, cb_length_t, blk);
+                pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
                 // no Pad
@@ -443,7 +443,7 @@ void kernel_main() {
             // a part of the tensor
             if (do_mask && cur_pass == num_cb_passes - 1) {
                 // pad
-                pad_input(cb_in0, cb_x, cb_length_t, blk);
+                pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
                 // no Pad
@@ -510,7 +510,7 @@ void kernel_main() {
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {
                 // pad
-                pad_input(cb_in0, cb_x, cb_length_t, blk);
+                pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
                 // no Pad

@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
@@ -731,3 +731,34 @@ def test_softmax_4096x4096_fp32(device):
         atol=0.001,
         frobenius_threshold=0.019,
     )
+
+
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ((1, 100, 6800), -1),
+    ],
+)
+def test_softmax_large_kernel_mask_padded(device, shape, dim):
+    """Regression test for issue #42555: softmax deadlocks in the large-kernel path when a
+    non-tile-aligned H combines with a Wt not divisible by the capped CB length."""
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = F.softmax(torch_input, dim=dim, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(
+        ttnn_input,
+        dim=dim,
+        compute_kernel_config=compute_config,
+        numeric_stable=True,
+    )
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.999)
