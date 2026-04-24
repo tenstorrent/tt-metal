@@ -249,7 +249,7 @@ def _fused_compute_config(device: Any) -> Any:
     _COMPUTE_CFG = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
+        math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
