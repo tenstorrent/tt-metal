@@ -430,6 +430,7 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             cb_reserve_back(cb_src0, tiles_per_chunk);
             if (!tile_active) {
+                // we don't break because compute kernel does a fixed number of steps decided before dispatch
                 cb_push_back(cb_src0, tiles_per_chunk);
                 continue;
             }
