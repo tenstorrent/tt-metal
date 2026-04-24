@@ -247,10 +247,10 @@ def run(
     # Only cache and input are positional, everything else is keyword-only
     # So tensor_a=cache, tensor_b=input, tensor_c=update_idxs_tensor, tensor_d=page_table
     # Note: paged_update_cache may not accept memory_config parameter - it modifies cache_tensor in place
-    # Only pass batch_offset if explicitly provided in the master config.
-    # Defaulting to 0 creates an extra key in the sweep trace that the
-    # master doesn't have, causing a validation diff.
-    if "batch_offset" in op_kwargs and op_kwargs["batch_offset"] is None:
+    # Only pass batch_offset if it was explicitly set to a non-default value in
+    # the master config.  The V2 loader may include batch_offset=0 (default) which
+    # creates an extra_key diff when the master trace never recorded it.
+    if "batch_offset" in op_kwargs and (op_kwargs["batch_offset"] is None or op_kwargs["batch_offset"] == 0):
         del op_kwargs["batch_offset"]
     try:
         output_tensor = ttnn.experimental.paged_update_cache(

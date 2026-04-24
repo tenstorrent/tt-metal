@@ -71,18 +71,24 @@ def run(
     else:
         shape = input_a_shape
 
-    # num_heads is required - try to get from kwargs or infer from shape
+    # num_heads is required - try to get from op_kwargs first, then kwargs, then infer.
+    # op_kwargs is the authoritative source because it mirrors the master trace kwargs.
+    if num_heads is None:
+        num_heads = op_kwargs.pop("num_heads", None)
     if num_heads is None:
         num_heads = kwargs.get("num_heads", None)
     if num_heads is None:
-        # Try to infer from input shape: [B, 1, H, D] where H might be num_heads or head_dim
-        # For nlp_concat_heads_decode, input is typically [1, 1, num_heads, head_dim]
+        # Fallback: infer from input shape (may be tile-padded — less reliable)
         if len(shape) == 4 and shape[1] == 1:
-            # Use shape[2] as num_heads (third dimension)
             num_heads = shape[2]
         else:
-            # Default fallback
             num_heads = 16
+
+    # The V2 vector may contain a tile-padded shape (e.g. dim-2 = 32) while the
+    # master trace records the original logical shape (e.g. dim-2 = 8 = num_heads).
+    # Override dim-2 with the true num_heads so the tracer records the correct shape.
+    if len(shape) == 4 and num_heads is not None and shape[2] != num_heads:
+        shape = (shape[0], shape[1], num_heads, shape[3])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
