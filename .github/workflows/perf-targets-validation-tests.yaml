@@ -29,7 +29,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest PyYAML torch
+          pip install -r tools/tests/github_scripts/requirements.txt
 
       - name: Run new validator and resolver tests
         run: |
