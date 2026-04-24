@@ -636,11 +636,12 @@ public:
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    bool get_simulator_enabled() const {
-        // Also returns true when TT_METAL_SIMULATOR was set (non-empty path) even if
-        // TT_METAL_EMULATED_MODE later overwrote target to Emulated.  This lets
-        // tests that gate on get_simulator_enabled() run under emulation.
-        return runtime_target_device_ == TargetDevice::Simulator || !simulator_path.empty();
+    bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
+    // True when running against either the hardware simulator or the software emulator.
+    // Use this where a call site applies equally to both non-silicon targets (test-skip
+    // guards, dispatch-core empty-list tolerance, yaml-defined compute grid selection).
+    bool is_simulator_or_emulated() const {
+        return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
