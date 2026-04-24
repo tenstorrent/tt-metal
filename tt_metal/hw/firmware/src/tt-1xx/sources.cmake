@@ -18,4 +18,6 @@ set(FIRMWARE_JIT_API_FILES
     trisc.cc
     trisck.cc
     tt_eth_api.cpp
+    # TODO: add erisc_cmac_gw.cpp here (currently at ../erisc_cmac_gw.cpp)
+    # once the erisc cross-compiler toolchain target is wired up for this kernel.
 )
