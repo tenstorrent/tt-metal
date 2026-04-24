@@ -26,7 +26,7 @@ inline void llk_hash_cb(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
     const uint32_t total_bytes = (num_tiles * get_local_cb_interface(cb_id).fifo_page_size) << cb_addr_shift;
     const uint32_t n_words = total_bytes >> 2;
 
-    volatile uint32_t* const p = reinterpret_cast<volatile uint32_t*>(base_bytes);
+    volatile tt_l1_ptr uint32_t* const p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_bytes);
     uint32_t h = 0x811c9dc5u;
     for (uint32_t i = 0; i < n_words; ++i) {
         h = (h ^ p[i]) * 0x01000193u;
