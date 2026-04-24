@@ -46,8 +46,21 @@ noc_async_read(uint32_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size)
 
 Right:
 ```
-For NOC read/write API: tt_metal/hw/inc/api/dataflow/dataflow_api.h
+For NOC read/write API: tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h
 ```
+
+### Repo prefix on source-code/doc paths
+
+tt-agent is (or will be) a separate repo. Paths inside knowledge files
+that refer to source code or documentation in a specific TT repo must be
+prefixed with the repo name — e.g., `tt-metal/ttnn/cpp/...`,
+`tt-metal/tech_reports/...`.
+
+Paths inside tt-agent itself (`knowledge/...`, `skills/...`) stay
+unprefixed.
+
+Recipes under `knowledge/recipes/<repo>/` already carry repo scope in
+the directory — paths inside a recipe don't repeat the prefix.
 
 ---
 

@@ -41,7 +41,7 @@ CircularBufferConfig cb_config = CircularBufferConfig(
 auto cb = CreateCircularBuffer(program, core_range, cb_config);
 ```
 
-See `tt_metal/api/tt-metalium/circular_buffer_config.hpp` for full API.
+See `tt-metal/tt_metal/api/tt-metalium/circular_buffer_config.hpp` for full API.
 
 ## Design Rules
 

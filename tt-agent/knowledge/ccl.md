@@ -5,13 +5,13 @@ references, configuration, numerical correctness, and tuning.
 
 ## External references
 
-- **Ethernet and multi-chip guide** — `tech_reports/EthernetMultichip/BasicEthernetGuide.md`
+- **Ethernet and multi-chip guide** — `tt-metal/tech_reports/EthernetMultichip/BasicEthernetGuide.md`
   Ethernet link topology, bandwidth, latency. How to reason about
   multi-chip data movement.
-- **CCL operations** — `ttnn/cpp/ttnn/operations/ccl/`
+- **CCL operations** — `tt-metal/ttnn/cpp/ttnn/operations/ccl/`
   All-gather, all-reduce, reduce-scatter implementations. Current
   patterns.
-- **CCL tests** — `tests/ttnn/unit_tests/operations/ccl/`
+- **CCL tests** — `tt-metal/tests/ttnn/unit_tests/operations/ccl/`
   How CCL ops are set up and what parameters control topology.
 
 ## Configuration

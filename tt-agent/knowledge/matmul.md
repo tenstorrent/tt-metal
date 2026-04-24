@@ -7,15 +7,15 @@ deviate.
 
 ## External references
 
-- **GEMM FLOPS analysis** — `tech_reports/GEMM_FLOPS/GEMM_FLOPS.md`
+- **GEMM FLOPS analysis** — `tt-metal/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md`
   Per-core TFLOPS by math fidelity. Arithmetic intensity, compute-bound
   vs memory-bound reasoning.
-- **Matrix engine deep dive** — `tech_reports/matrix_engine/matrix_engine.md`
+- **Matrix engine deep dive** — `tt-metal/tech_reports/matrix_engine/matrix_engine.md`
   How the FPU executes 8×16 × 16×16 tile operations. Latency,
   throughput, fidelity.
-- **Matmul op implementation** — `ttnn/cpp/ttnn/operations/matmul/`
+- **Matmul op implementation** — `tt-metal/ttnn/cpp/ttnn/operations/matmul/`
   Current 1D / 2D / reuse strategies.
-- **Data formats and accuracy** — `tech_reports/data_formats/data_formats.md`
+- **Data formats and accuracy** — `tt-metal/tech_reports/data_formats/data_formats.md`
   bfloat16 / bfloat8_b / bfloat4_b accuracy and memory trade-offs.
 - **PSE Matmul Configuration Guide** — authoritative for variant
   selection, L1 budgeting, and subblock rules.
