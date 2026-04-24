@@ -11,19 +11,6 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-
-def _get_shard_dims(parallel_config):
-    """Compute ConcatMesh2dToTensor dims from parallel config (same logic as test helper)."""
-    dims = [0, 1]
-    if parallel_config.h_parallel.factor > 1:
-        dims[parallel_config.h_parallel.mesh_axis] = 2
-    if parallel_config.w_parallel.factor > 1:
-        dims[parallel_config.w_parallel.mesh_axis] = 3
-    if parallel_config.time_parallel.factor > 1:
-        dims[parallel_config.time_parallel.mesh_axis] = 1
-    return dims
-
-
 from ...layers.conv3d import ContextParallelConv3d
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import GroupNorm
@@ -290,49 +277,6 @@ class ResBlock(Module):
         # equally so cross-topology PCC is not impacted, but the absolute result is wrong.
         output = ttnn.tilize_with_zero_padding(
             ttnn.reshape(x, [N * T, 1, H * W, C]),
-            use_multicore=True,
-        )
-        return output
-
-    def pre_all_gather_reshape_norm_1(self, x, shape):
-        N, T, H, W, C = shape
-        dim_2_1 = ttnn.reshape(x, [N * T, 1, H * W, C])
-        residual = ttnn.tilize_with_zero_padding(
-            dim_2_1,
-            use_multicore=True,
-        )
-        assert not (C % 32)
-        if not (H * W * (C // 32) % 32):
-            output = ttnn.reshape(residual, [N * T, 1, H * W * (C // 32), 32])
-            gather_dim = 2
-        else:
-            output = ttnn.reshape(residual, [1, 1, N * T, H * W * C])
-            gather_dim = 3
-        ttnn.deallocate(dim_2_1)
-        return gather_dim, residual, output
-
-    def pre_all_gather_reshape_norm_2(self, x, shape):
-        N, T, H, W, C = shape
-        assert not (C % 32)
-        if not (H * W * (C // 32) % 32):
-            x = ttnn.reshape(x, (N * T, 1, H * W * (C // 32), 32))
-            gather_dim = 2
-        else:
-            x = ttnn.reshape(x, (1, 1, N * T, H * W * C))
-            gather_dim = 3
-        return gather_dim, x
-
-    def sharded_reshape_untilize_tilize(self, x, input_shapes, output_shapes, deallocate_input):
-        N, T, H, W, C = input_shapes
-        dim0, dim1, dim2, dim3 = output_shapes
-        if C == 768:
-            x = ttnn.reshape(x, (1, 1, N * T * H, W * C))
-        output = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if deallocate_input:
-            ttnn.deallocate(x)
-        output = ttnn.reshape(output, [dim0, dim1, dim2, dim3])
-        output = ttnn.tilize_with_zero_padding(
-            output,
             use_multicore=True,
         )
         return output
