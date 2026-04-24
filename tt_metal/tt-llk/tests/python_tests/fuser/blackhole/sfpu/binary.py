@@ -109,7 +109,7 @@ class BinarySfpu(Sfpu):
         if self.operation == MathOperation.SfpuAddTopRow:
             format = "0"
         else:
-            format = f"math_format{stage}"
+            format = config.sentinel.math_format
 
         return (
             f"    _llk_math_eltwise_binary_sfpu_start_<dest_sync{stage}>(0);\n"

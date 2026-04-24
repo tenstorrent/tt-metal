@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
-from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import GoldenType, PerfRunType
 
 from .block_data import BlockData
@@ -121,48 +120,6 @@ class ComputePipeline:
 
         return code
 
-    def unpack_operand_constants(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        # stage = operation.stage_id
-        # unpack_a_src = operation.unpack_a_in
-        # unpack_a_dst = operation.unpack_a_out
-        # unpack_b_src = operation.unpack_b_in
-        # unpack_b_dst = operation.unpack_b_out
-
-        # code = (
-        # f"    // Operation {stage}: Fused Unpack\n"
-        # f"    [[maybe_unused]] const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
-        # f"    [[maybe_unused]] const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
-        # f"    [[maybe_unused]] const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
-        # f"    [[maybe_unused]] const std::uint32_t unpack_b_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_dst.name});\n"
-        # )
-        return ""
-
-    def unpack_hw_configure(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-        compute_unit: "ComputeNode",
-    ) -> str:
-        # stage = operation.stage_id
-        # unpa_tile_size = compute_unit.src_a.tile_size
-        # unpb_tile_size = compute_unit.src_b.tile_size
-        # dest_acc = config.dest_acc.cpp_enum_value
-        # unpa_face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        # unpb_face_r_dim = compute_unit.src_b.tile_shape.face_r_dim
-        # unpa_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        # unpb_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
-
-        # if stage == 1:
-        #     return (
-        #         f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
-        #         f"    unpack_a_src_format{stage}, unpack_b_src_format{stage}, unpack_a_dst_format{stage}, unpack_b_dst_format{stage},\n"
-        #         f"    {unpa_face_r_dim}, {unpb_face_r_dim}, {unpa_num_faces}, {unpb_num_faces}, {unpa_tile_size}, {unpb_tile_size}\n"
-        #         f");\n"
-        #     )
-        return ""
-
     def unpacker_sync_with_packer(
         self,
         operation: "FusedOperation",
@@ -177,13 +134,13 @@ class ComputePipeline:
         return ""
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        code = self.unpack_operand_constants(operation, config)
+        code = ""
 
         if config.profiler_enabled:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.unpack_hw_configure(operation, config, self.operations[0])
+        code += config.sentinel.hw_configure_unpack(config, operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -213,20 +170,6 @@ class ComputePipeline:
             code += 'ZONE_SCOPED("INIT")\n'
             code += "PROFILER_SYNC();\n"
             code += "}\n"
-
-        return code
-
-    def math_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        dest_acc = config.dest_acc.cpp_enum_value
-        code = ""
-
-        if stage == 1:
-            code = f"_llk_math_hw_configure_<{dest_acc}>(math_format{stage}, math_format{stage});\n"
-
-        code += f"_llk_math_pack_sync_init_<dest_sync{stage}, {dest_acc}>();\n"
 
         return code
 
@@ -261,11 +204,9 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        # math_format = operation.output.data_format
         dest_sync = operation.dest_sync.cpp_enum_value
 
         code = f"// Operation {stage}: Math Setup\n"
-        # code += f"const std::uint32_t math_format{stage} = ckernel::to_underlying(DataFormat::{math_format.name});\n"
         code += f"constexpr DstSync dest_sync{stage} = {dest_sync};\n"
 
         return code
@@ -277,7 +218,11 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        # code += self.math_hw_configure(operation, config)
+        code += config.sentinel.hw_configure_math(config, operation)
+
+        stage = operation.stage_id
+        dest_acc = config.dest_acc.cpp_enum_value
+        code += f"_llk_math_pack_sync_init_<dest_sync{stage}, {dest_acc}>();\n"
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -333,46 +278,7 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        pack_src = operation.pack_in
-        pack_dst = operation.pack_out
-
-        return (
-            f"// Operation {stage}: Packer\n"
-            f"const std::uint32_t pack_src_format{stage} = ckernel::to_underlying(DataFormat::{pack_src.name});\n"
-            f"const std::uint32_t pack_dst_format{stage} = ckernel::to_underlying(DataFormat::{pack_dst.name});\n"
-        )
-
-    def pack_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        bh_tilize = operation.bh_tilize.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        pack_size = operation.output.tile_size
-        face_r_dim = operation.output.tile_shape.face_r_dim
-        num_faces = operation.output.tile_shape.total_num_faces()
-
-        if stage == 1:
-            if config.architecture == ChipArchitecture.BLACKHOLE:
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, false, {bh_tilize}>(\n"
-                    f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}, {face_r_dim}, TILE_C_DIM, {num_faces}\n"
-                    f");\n"
-                )
-            elif config.architecture == ChipArchitecture.WORMHOLE:
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
-                    f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}, {face_r_dim}, {num_faces}\n"
-                    f");\n"
-                )
-        else:
-            code = (
-                f"_llk_pack_reconfig_data_format_<{dest_acc}, false>(\n"
-                f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}\n"
-                f");\n"
-            )
-
-        return code
+        return f"// Operation {stage}: Packer\n"
 
     def _pack_reduce_mask_config(self) -> str:
         reduce_dim = self.get_reduce_pack_mask()
@@ -407,7 +313,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.pack_hw_configure(operation, config)
+        code += config.sentinel.hw_configure_pack(config, operation)
         code += self._pack_reduce_mask_config()
         code += self.packer().init(operation, config, None, None)
 

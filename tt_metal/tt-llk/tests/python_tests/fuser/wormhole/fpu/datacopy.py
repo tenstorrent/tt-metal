@@ -64,7 +64,7 @@ class DatacopyFpu(Fpu):
 
         return (
             f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}>(\n"
-            f"    {num_faces}, {compute_unit.math_format}\n"
+            f"    {num_faces}, {config.sentinel.math_format}\n"
             f");\n"
         )
 
@@ -83,7 +83,7 @@ class DatacopyFpu(Fpu):
 
         code = (
             f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-            f"        {block.tile_id_block}, {compute_unit.math_format}, {compute_unit.math_format}\n"
+            f"        {block.tile_id_block}, {config.sentinel.math_format}, {config.sentinel.math_format}\n"
             f"    );\n"
         )
 

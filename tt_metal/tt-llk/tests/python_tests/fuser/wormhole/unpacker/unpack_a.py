@@ -142,7 +142,7 @@ class UnpackerA(Unpacker):
 
         return (
             f"_llk_unpack_A_init_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, {compute_unit.unpack_a_src_format}, {compute_unit.unpack_a_dst_format}\n"
+            f"    {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
             f");\n"
         )
 
@@ -161,6 +161,6 @@ class UnpackerA(Unpacker):
 
         return (
             f"_llk_unpack_A_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    L1_ADDRESS({buffer_a}[{block.tile_id_global}]), {compute_unit.unpack_a_src_format}, {compute_unit.unpack_a_dst_format}\n"
+            f"    L1_ADDRESS({buffer_a}[{block.tile_id_global}]), {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
             f");\n"
         )
