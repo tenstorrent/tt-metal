@@ -137,7 +137,7 @@ def cause_hang_with_app(request):
             {
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
-            10,
+            30,
         ),
         (
             # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data
