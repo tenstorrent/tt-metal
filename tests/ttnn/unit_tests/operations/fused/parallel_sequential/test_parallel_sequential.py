@@ -25,7 +25,7 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
 
 
 def stress_test_program_cache(fn):
@@ -448,6 +448,7 @@ class TestShardedExecution:
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
         check_pcc(golden, out, label=f"sharded {shard_type}")
 
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     @stress_test_program_cache
     def test_sharded_three_phase(self, device):
@@ -711,6 +712,7 @@ class TestMatmulFusion:
         golden = torch_rms_norm(torch_rms_norm(torch_input.float(), torch_w.float()) @ torch_b.float(), torch_w.float())
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
+    @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
     @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue #40330")
     @pytest.mark.parametrize("num_rms", [2, 3, 4])
     @stress_test_program_cache
