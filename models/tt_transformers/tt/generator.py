@@ -199,8 +199,11 @@ class Generator(WarmupForwardMixin):
                 if skip_sequence_lengths:
                     break
 
-        # Vision compile for multimodal models
-        if getattr(self.model_args[0], "is_multimodal", False):
+        # Vision compile for multimodal models (text-only apps can set
+        # model_args.warmup_vision_encoder_in_generator=False to skip this)
+        if getattr(self.model_args[0], "is_multimodal", False) and getattr(
+            self.model_args[0], "warmup_vision_encoder_in_generator", True
+        ):
             vision_chunk_size = getattr(self.model_args[0], "vision_chunk_size", 896)
             vision_channels = getattr(self.model_args[0], "vision_in_channels", 3)
             model_id = 0

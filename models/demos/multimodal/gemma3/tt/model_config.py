@@ -75,6 +75,10 @@ class ModelArgs(TTModelArgs):
         # warmup uses untraced prefill only to compile kernels; trace records on the first real prefill.
         self.warmup_prefill_capture_trace = self.base_model_name != "gemma-3-27b"
 
+        # Set False in text-only demos: Generator.warmup_model_prefill will not run a synthetic image prefill
+        # (avoids L1/DRAM pressure when only text prefill + tracing is needed).
+        self.warmup_vision_encoder_in_generator = True
+
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
 

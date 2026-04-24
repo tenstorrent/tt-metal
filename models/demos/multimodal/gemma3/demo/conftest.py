@@ -55,5 +55,6 @@ def pytest_addoption(parser):
         "--disable_trace",
         action="store_false",
         dest="enable_trace",
-        help="Whether to enable tracing",
+        default=True,
+        help="Disable prefill/decode host traces; tracing is on by default",
     )

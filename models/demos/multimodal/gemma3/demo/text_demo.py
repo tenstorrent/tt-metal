@@ -78,8 +78,8 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
+    from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
         mesh_device,
@@ -91,17 +91,32 @@ def create_tt_model(
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
 
+    # Text-only path: do not run Generator's multimodal vision warmup (synthetic pixel_values prefill);
+    # it is unnecessary for prefill-trace verification and can OOM (e.g. L1) on some mesh configs.
+    tt_model_args.warmup_vision_encoder_in_generator = False
+
     # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
-    model = Transformer(
+    # E2E model (vLLM path): overrides prepare_inputs_prefill for text-only prefill tracing
+    # (host tokens + transform_and_embed in trace); same entry as models/demos/multimodal/gemma3/tt/gemma_e2e_model.py
+    #
+    # use_paged_kv_cache must be False (default for tt-transformers text demos) so Attention creates
+    # `layer_past` on each layer. If True, the vLLM path skips init_kv_cache and there is no layer_past
+    # (see models/tt_transformers/tt/attention.py) — the Generator here passes tt_kv_cache from the model.
+    model = TtGemmaModel(
         args=tt_model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        use_paged_kv_cache=False,
+    )
+    logger.info(
+        "Gemma3 text demo: using TtGemmaModel (e2e), paged_blocks={} — prefill trace uses e2e prepare_inputs_prefill",
+        paged_attention_config is not None,
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
@@ -752,7 +767,8 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
-    # enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    # --disable_trace (demo/conftest) sets config.option.enable_trace to False; default is True
+    enable_trace = enable_trace and getattr(request.config.option, "enable_trace", True)
     assert not (
         enable_trace and token_accuracy
     ), "Cannot run token accuracy with tracing. Set either enable_trace or token_accuracy to False."
@@ -917,6 +933,7 @@ def test_demo_text(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=enable_trace,
             warmup_prefill=False,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
