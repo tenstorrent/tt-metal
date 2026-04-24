@@ -40,7 +40,7 @@
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export NORM_OUTPUT_DIR=/tmp/ds_output_all_sources_new_ndshard # to deprecate
     export PCC_SUMMARY_DIR=/tmp/pcc_summaries
-    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Reference-prefill
+    export TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden-3bbdbfe4
     export TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill
     export HF_HOME=/tmp/hf_home # this is r/w path for huggingface, the actual model cache is in the read-only path defined by DEEPSEEK_V3_HF_MODEL
     export HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub # this is r/o path with the model
