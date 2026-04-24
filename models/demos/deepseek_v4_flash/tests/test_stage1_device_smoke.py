@@ -13,10 +13,13 @@ import torch
 from safetensors import safe_open
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
+from models.demos.deepseek_v4_flash.cpu_reference import swiglu_expert
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 ttnn = pytest.importorskip("ttnn")
+
+from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 
 
 @pytest.fixture(scope="module")
@@ -85,3 +88,31 @@ def test_tiny_shared_expert_w1_projection_matches_torch(tiny_tt_preprocessed_che
     torch_output = ttnn.to_torch(tt_output)
 
     torch.testing.assert_close(torch_output.float(), expected, rtol=2e-2, atol=2e-2)
+
+
+def test_tiny_shared_expert_mlp_module_matches_torch(tiny_tt_preprocessed_checkpoint: Path, device):
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    non_expert_path = tiny_tt_preprocessed_checkpoint / manifest["artifacts"]["non_expert_safetensors"][0]
+    with safe_open(non_expert_path, framework="pt", device="cpu") as handle:
+        w1 = handle.get_tensor("layers.0.ffn.shared_experts.w1.weight").to(torch.bfloat16)
+        w2 = handle.get_tensor("layers.0.ffn.shared_experts.w2.weight").to(torch.bfloat16)
+        w3 = handle.get_tensor("layers.0.ffn.shared_experts.w3.weight").to(torch.bfloat16)
+
+    hidden_size = w1.shape[-1]
+    torch_input = torch.linspace(-0.25, 0.25, steps=32 * hidden_size, dtype=torch.float32).reshape(
+        1, 1, 32, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    expected = swiglu_expert(
+        torch_input.reshape(-1, hidden_size),
+        w1,
+        w2,
+        w3,
+        swiglu_limit=float(manifest["config"]["swiglu_limit"]),
+    ).view_as(torch_input)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtSharedExpertMLP.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device)
+    torch_output = ttnn.to_torch(module(tt_input))
+
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
