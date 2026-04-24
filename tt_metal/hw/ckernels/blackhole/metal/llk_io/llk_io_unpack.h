@@ -52,7 +52,7 @@ inline void llk_pop_tiles(
 
     LLK_ASSERT(remaining >= num_words, "CB pop_front: fifo_rd_ptr would exceed fifo_limit");
 
-    cb.fifo_rd_ptr += (num_words <= remaining) ? num_words : remaining;
+    cb.fifo_rd_ptr += num_words;
 
     if (cb.fifo_rd_ptr >= cb.fifo_limit) {
         cb.fifo_rd_ptr -= cb.fifo_size;

@@ -82,7 +82,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
 
     LLK_ASSERT(remaining >= num_words, "CB push_back: fifo_wr_ptr would exceed fifo_limit");
 
-    cb.fifo_wr_ptr += (num_words <= remaining) ? num_words : remaining;
+    cb.fifo_wr_ptr += num_words;
     cb.fifo_wr_tile_ptr = 0;
 
     if (cb.fifo_wr_ptr >= cb.fifo_limit) {
