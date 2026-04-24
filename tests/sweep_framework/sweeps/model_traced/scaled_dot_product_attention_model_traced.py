@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    replicate_with_topology,
     mesh_tensor_to_torch,
 )
 
@@ -304,16 +305,14 @@ def run(
     if is_mesh_device and input_a_tensor_placement:
         q_tensor = create_tensor_on_mesh(torch_q, device, dtype_q, layout_q, mem_config_q, input_a_tensor_placement)
         if num_heads_k < num_heads_q:
-            k_tensor = ttnn.from_torch(
-                torch_k, dtype=dtype_k, layout=layout_k, device=device,
-                memory_config=mem_config_k, mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            k_tensor = replicate_with_topology(
+                torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement,
             )
         else:
             k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
         if num_heads_v < num_heads_q:
-            v_tensor = ttnn.from_torch(
-                torch_v, dtype=dtype_v, layout=layout_v, device=device,
-                memory_config=mem_config_v, mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            v_tensor = replicate_with_topology(
+                torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement,
             )
         else:
             v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)

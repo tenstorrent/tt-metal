@@ -244,6 +244,76 @@ def _restore_topology(
     tensor.update_tensor_topology(topology)
 
 
+def replicate_with_topology(
+    torch_tensor: torch.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    dtype: ttnn.DataType,
+    layout: ttnn.Layout,
+    memory_config: ttnn.MemoryConfig,
+    tensor_placement: Optional[Dict] = None,
+) -> ttnn.Tensor:
+    """Create a replicated tensor on mesh and restore the master trace's topology.
+
+    Use this when the master model creates a tensor per-device (replicated) but the
+    traced topology has shard-like placement.  This keeps the per-device shape as the
+    logical shape while restoring the correct topology metadata so the operation
+    tracer captures placement info matching the master trace.
+
+    Args:
+        torch_tensor: Input torch tensor (per-device shape)
+        mesh_device: Mesh device to create tensor on
+        dtype: TTNN data type
+        layout: TTNN layout (TILE/ROW_MAJOR)
+        memory_config: Memory configuration
+        tensor_placement: Optional placement info from traced config
+
+    Returns:
+        TTNN tensor on mesh device with replicated data and restored topology
+    """
+    import ast as _ast
+    import re
+
+    tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=layout,
+        device=mesh_device,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    if tensor_placement:
+        placement_raw = tensor_placement.get("placement", "")
+        placement_str = str(placement_raw) if not isinstance(placement_raw, str) else placement_raw
+        entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
+
+        dist_raw = tensor_placement.get("distribution_shape", "")
+        if isinstance(dist_raw, str):
+            try:
+                dist_parsed = _ast.literal_eval(dist_raw)
+            except Exception:
+                dist_parsed = []
+        else:
+            dist_parsed = list(dist_raw) if dist_raw else []
+
+        mesh_shape_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
+        if isinstance(mesh_shape_raw, str):
+            mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
+        mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+        if len(mesh_shape_tuple) == 0:
+            mesh_shape_tuple = (1, 1)
+        elif len(mesh_shape_tuple) == 1:
+            mesh_shape_tuple = (mesh_shape_tuple[0], 1)
+
+        if dist_parsed:
+            try:
+                _restore_topology(tensor, entries, dist_parsed, mesh_shape_tuple)
+            except Exception:
+                pass  # Best-effort; don't block sweep execution
+
+    return tensor
+
+
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,

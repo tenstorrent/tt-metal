@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    replicate_with_topology,
     mesh_tensor_to_torch,
 )
 
@@ -112,7 +113,13 @@ def run(
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
-            input_tensor_a = create_tensor_on_mesh(
+            # The input tensor shape is (1, batch, num_heads, head_dim) per-device.
+            # The master model creates it per-device (replicated) so logical_shape()
+            # returns the per-device shape with dim[2]=num_heads.
+            # create_tensor_on_mesh would expand+shard, causing logical_shape() to
+            # return the global shape (dim[2]=num_heads*mesh_factor), mismatching
+            # the master trace.  Replicate to preserve the per-device shape.
+            input_tensor_a = replicate_with_topology(
                 torch_input_tensor_a,
                 device,
                 input_a_dtype,
