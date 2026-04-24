@@ -149,7 +149,7 @@ def main() -> int:
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
         current_time = int(time.time_ns() // 1_000)
 
-        log_basename = _verify_path(f"{model_filename}_memory_analysis_{current_time}", tt_metal_runtime_root)
+        log_basename = f"{model_filename}_memory_analysis_{current_time}"
         log_path = output_dir / f"{log_basename}.log"
 
         cmd = process_binary_path(binary, tt_metal_runtime_root) + args
