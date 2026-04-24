@@ -17,7 +17,7 @@ WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::se
 }
 
 void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to Std/Var reductions need to be on device! Got storage type: {}",
@@ -33,6 +33,8 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.logical_shape().rank() >= 2,
         "Welford reduce only supports tensors with at least 2 dimensions, got rank: {}",
         tensor_args.logical_shape().rank());
+    validate_reduce_sharded_buffer_types(
+        tensor_args.memory_config(), operation_attributes.output_mem_config, "Std/Var reduction");
 }
 
 WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::compute_output_specs(

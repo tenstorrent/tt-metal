@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <string_view>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal {
@@ -42,5 +44,17 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::MemoryConfig& input_mem_config,
     tt::tt_metal::ReduceOpDim reduce_dim);
+
+// Enforces the documented contract that, for reduction-style ops, any sharded
+// participant (input or output) must live in L1.  Sharded layouts and DRAM
+// buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so
+// silently borrowing a grid across buffer types — as the shard-spec fallback
+// in `build_reduce_output_tensor_spec` would otherwise allow — produces an
+// invalid spec.  Pass an `op_name` (e.g. "reduce", "Std/Var reduction") for a
+// readable error message.
+void validate_reduce_sharded_buffer_types(
+    const tt::tt_metal::MemoryConfig& input_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::string_view op_name);
 
 }  // namespace ttnn::prim

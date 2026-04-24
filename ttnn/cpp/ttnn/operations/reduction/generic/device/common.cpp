@@ -107,4 +107,22 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     // Interleaved tensor: tensor_spec already has everything we need.
     return tensor_spec;
 }
+
+void validate_reduce_sharded_buffer_types(
+    const tt::tt_metal::MemoryConfig& input_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::string_view op_name) {
+    TT_FATAL(
+        !output_mem_config.is_sharded() || output_mem_config.is_l1(),
+        "{}: sharded output memory layout {} is only supported with L1 buffers, got buffer type {}",
+        op_name,
+        output_mem_config.memory_layout(),
+        output_mem_config.buffer_type());
+    TT_FATAL(
+        !input_mem_config.is_sharded() || input_mem_config.is_l1(),
+        "{}: sharded input memory layout {} is only supported with L1 buffers, got buffer type {}",
+        op_name,
+        input_mem_config.memory_layout(),
+        input_mem_config.buffer_type());
+}
 }  // namespace ttnn::prim

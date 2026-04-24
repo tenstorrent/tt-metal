@@ -24,7 +24,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
@@ -36,6 +36,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
         tensor_args.dtype());
+    validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
 }
 
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
