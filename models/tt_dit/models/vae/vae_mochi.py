@@ -562,6 +562,25 @@ class ResBlock(Module):
                         return bs
         return 1
 
+    @staticmethod
+    def _safe_num_out_blocks(Ht, num_out_blocks):
+        """Ensure num_out_blocks divides Ht evenly.
+
+        The GroupNorm kernel requires Ht % num_out_blocks == 0.  When
+        batch_size varies (e.g. from T-chunking), a tuned num_out_blocks
+        value may no longer divide Ht.  Search for the largest divisor of
+        Ht that is <= the requested value.
+        """
+        if num_out_blocks <= 0:
+            return 1
+        if Ht % num_out_blocks == 0:
+            return num_out_blocks
+        # Search downward for a divisor of Ht
+        for candidate in range(num_out_blocks - 1, 0, -1):
+            if Ht % candidate == 0:
+                return candidate
+        return 1
+
     def _run_norm(
         self, norm, x_tiled, batch_size, HW, num_out_blocks, dump_dir=None, dump_tag=None, compute_kernel_config=None
     ):
@@ -571,6 +590,7 @@ class ResBlock(Module):
         if valid_grid.x != original_grid.x or valid_grid.y != original_grid.y:
             norm.core_grid = valid_grid
         Ht = batch_size * ((HW + 31) // 32)
+        num_out_blocks = self._safe_num_out_blocks(Ht, num_out_blocks)
         logger.info(
             f"[NORM] batch_size={batch_size} HW={HW} Ht={Ht} num_out_blocks={num_out_blocks} "
             f"grid=({norm.core_grid.x},{norm.core_grid.y}) nvc={norm.num_virtual_cols}"
@@ -919,6 +939,8 @@ class ResBlock(Module):
             )
 
             logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} norm done")
+            ttnn.synchronize_device(x_chunk.device())
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} norm sync OK")
 
             # DEBUG: dump norm output before partition (chunk 0 only)
             if chunk_dump_dir is not None:
@@ -949,6 +971,9 @@ class ResBlock(Module):
                     memory_config=x_chunk.memory_config(),
                 )
             x_chunk = ttnn.squeeze(x_chunk, 0)  # remove N dim → (bs, H, W, C)
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} partition done")
+            ttnn.synchronize_device(x_chunk.device())
+            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} partition sync OK")
 
             # DEBUG: dump partitioned chunk 0 (fractured per-device)
             if chunk_dump_dir is not None:
@@ -961,8 +986,6 @@ class ResBlock(Module):
                     (1, bs, H, W, C),
                     is_gathered=False,
                 )
-
-            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} partition done")
             partitioned_chunks.append(x_chunk)
 
         # Deallocate the original input now that all chunks are processed
