@@ -1423,21 +1423,22 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
-#ifndef COMPILE_FOR_IDLE_ERISC
     // Issue #18881: snapshot our NOC1 atomic-acked counter at kernel entry so we can
     // publish only the *delta* (atomics this kernel issued) to dispatch_s. The absolute
     // value is seeded from the NIU register at startup and would otherwise double-count
     // when merged into dispatch_s's local counter (also seeded from the same NIU).
     constexpr uint8_t kDispatchDProc = 0;  // dispatch_d runs on BRISC
-    const uint32_t dispatch_d_atomics_acked_start = noc_nonposted_atomics_acked[upstream_noc_index];
-    const uint32_t dispatch_d_counter_val_start =
-        get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
-    DPRINT << "DBG18881 dispatch_d: snapshot at start, upstream_noc_index="
-           << (uint32_t)upstream_noc_index
-           << " local_atomics_acked_start=" << dispatch_d_atomics_acked_start
-           << " dispatch_d_counter_val_start=" << dispatch_d_counter_val_start
-           << ENDL();
-#endif
+    uint32_t dispatch_d_atomics_acked_start = 0;
+    if constexpr (!distributed_dispatcher) {
+        dispatch_d_atomics_acked_start = noc_nonposted_atomics_acked[upstream_noc_index];
+        const uint32_t dispatch_d_counter_val_start =
+            get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
+        DPRINT << "DBG18881 dispatch_d: snapshot at start, upstream_noc_index="
+               << (uint32_t)upstream_noc_index
+               << " local_atomics_acked_start=" << dispatch_d_atomics_acked_start
+               << " dispatch_d_counter_val_start=" << dispatch_d_counter_val_start
+               << ENDL();
+    }
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         uint32_t index = i + first_stream_used;
@@ -1520,7 +1521,6 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
-#ifndef COMPILE_FOR_IDLE_ERISC
     // Issue #18881: (TEMPORARY) dispatch_d (BRISC) and dispatch_s (NCRISC) share this core, so dispatch_s
     // can't see the NOC 1 (upstream) atomics dispatch_d issued (e.g. the upstream credit-return
     // semaphore_inc). Publish our final NOC 1 atomic count via a local L1 store into a slot in
@@ -1529,7 +1529,7 @@ void kernel_main() {
     // noc_async_full_barrier() so the barrier reconciles with the NIU hardware ack count.
     // Sentinel +1 so the slot value is always nonzero once published.
     constexpr uint8_t kDispatchSProc = 1;  // dispatch_s runs on NCRISC
-    {
+    if constexpr (!distributed_dispatcher) {
         // const uint32_t niu_atomics = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
 
         const uint32_t dispatch_d_atomics_acked_stop = noc_nonposted_atomics_acked[upstream_noc_index];
@@ -1545,7 +1545,7 @@ void kernel_main() {
         uint32_t delta = dispatch_d_atomics_acked_stop - dispatch_d_atomics_acked_start;
         set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
             upstream_noc_index, delta);
-        if constexpr (is_d_variant && !distributed_dispatcher) {
+        if constexpr (is_d_variant) {
             volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
             *shutdown_sem_addr = *shutdown_sem_addr + 1;
@@ -1557,7 +1557,6 @@ void kernel_main() {
                << " delta=" << delta
                << ENDL();
     }
-#endif
 
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
