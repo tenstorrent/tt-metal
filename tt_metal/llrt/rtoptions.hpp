@@ -637,9 +637,6 @@ public:
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
-    // True when running against either the hardware simulator or the software emulator.
-    // Use this where a call site applies equally to both non-silicon targets (test-skip
-    // guards, dispatch-core empty-list tolerance, yaml-defined compute grid selection).
     bool is_simulator_or_emulated() const {
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
