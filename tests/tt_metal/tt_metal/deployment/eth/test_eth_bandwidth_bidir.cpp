@@ -34,6 +34,8 @@ static void prepare_bidir(
     uint32_t iter_l1_address,
     uint32_t send_l1_address,
     uint32_t recv_l1_address,
+    uint32_t channel0,
+    uint32_t channel1,
     tt_metal::Program* send_program) {
     /* =================== */
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -44,6 +46,8 @@ static void prepare_bidir(
         .processor = processor,
         .compile_args =
             {
+                channel0,
+                channel1,
                 iter_l1_address,
                 num_bytes_per_send,
                 transfer_size,
@@ -191,6 +195,8 @@ static bool run_test_bandwidth_bidir(
         iter_l1_address,
         send_l1_address,
         recv_l1_address,
+        0,
+        1,
         &send_program);
 
     prepare_bidir(
@@ -205,6 +211,8 @@ static bool run_test_bandwidth_bidir(
         iter_l1_address,
         send_l1_address,
         recv_l1_address,
+        1,
+        0,
         &recv_program);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
