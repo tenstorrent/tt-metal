@@ -113,6 +113,37 @@ struct NoPostBias {
  *   shape      BiasAddShape — subblock counts, subblock size, row stride.
  *              Build with BiasAddShape::of(...).
  *   post_bias  PostBiasFn instance (default: {}).
+ *
+ * @example
+ *   // Simple row-broadcast bias, subblock-major output, no activation.
+ *   add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(
+ *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                         out_subblock_h, out_subblock_w));
+ *
+ * @example
+ *   // Row-major output (must match upstream matmul_block layout).
+ *   // The last BiasAddShape::of arg is out_row_width.
+ *   add_bias_bcast_rows<
+ *       partials_cb, bias_cb, out_cb,
+ *       BiasBroadcast::RowBroadcast,
+ *       OutputLayout::RowMajor>(
+ *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                         out_subblock_h, out_subblock_w,
+ *                         out_block_w));
+ *
+ * @example
+ *   // Elementwise bias (multiple M rows) — required when bias is not row-broadcast.
+ *   add_bias_bcast_rows<partials_cb, bias_cb, out_cb, BiasBroadcast::Elementwise>(
+ *       BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                         out_subblock_h, out_subblock_w));
+ *
+ * @example
+ *   // Fused SFPU activation after bias via PostBiasFn functor.
+ *   add_bias_bcast_rows<
+ *       partials_cb, bias_cb, out_cb,
+ *       BiasBroadcast::RowBroadcast,
+ *       OutputLayout::SubblockMajor,
+ *       SFPUPostBias>(BiasAddShape::of(...), SFPUPostBias{});
  */
 template <
     uint32_t partials_cb,

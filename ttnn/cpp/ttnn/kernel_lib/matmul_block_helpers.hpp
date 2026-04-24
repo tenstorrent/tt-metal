@@ -146,6 +146,50 @@ struct NoPreKBlock {
  *                      the exception: it reads in1 at per_core_N_in1_sender (unpadded shard
  *                      width) but packs output at per_core_N_compute (padded after subblock-
  *                      growth); those factories must pass the larger pack stride here.
+ *
+ * @example
+ *   // Simple K=1 non-blocked matmul, defaults everywhere (SubblockMajor pack).
+ *   // MatmulBlockShape::of arg order is (in0_sb, in1_sb, h, w, in0_block_w, num_k_blocks, batch).
+ *   mm_block_init(cb_in0, cb_in1, cb_intermed0, false, out_subblock_w, out_subblock_h, in0_block_w);
+ *   matmul_block<>(cb_in0, cb_in1, cb_out, cb_intermed0,
+ *                  MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                                        out_subblock_h, out_subblock_w,
+ *                                        in0_block_w, 1));
+ *
+ * @example
+ *   // Row-major output + packer-L1 accumulation across K, no fused bias.
+ *   // Template order: transpose, packer_l1_acc, pack_last_to_interm, pack_relu, layout.
+ *   matmul_block<false, true, false, false, OutputLayout::RowMajor>(
+ *       cb_in0, cb_in1, cb_out, cb_intermed0,
+ *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                             out_subblock_h, out_subblock_w,
+ *                             in0_block_w, num_k_blocks));
+ *
+ * @example
+ *   // SDPA-style: row-major pack, retain_in0 to reuse Q across K chunks, masked post-compute.
+ *   matmul_block<transpose, false, false, false, OutputLayout::RowMajor,
+ *                OptionalMaskPostCompute>(
+ *       in0_cb, in1_cb, out_cb, in0_cb,  // interm_cb unused when num_k_blocks==1
+ *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                             subblock_h, subblock_w, in0_block_w, num_blocks),
+ *       OptionalMaskPostCompute{...},
+ *       NoPreKBlock{},
+ *       true);  // retain_in0
+ *
+ * @example
+ *   // FUSE_BIAS path: last K-block packs to interm_cb so add_bias_bcast_rows reads it.
+ *   // DRAM-sharded passes explicit in1_per_core_w (shard width) and
+ *   // out_row_width (padded pack width).
+ *   matmul_block<in1_transpose_tile, l1_acc, true, false,
+ *                output_layout, PostFn, PreFn>(
+ *       in0_cb, in1_cb, out_cb, mm_partials_cb,
+ *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                             out_subblock_h, out_subblock_w,
+ *                             in0_block_w, num_blocks_inner_dim),
+ *       PostFn{}, PreFn{},
+ *       false,            // retain_in0
+ *       in1_block_w,      // in1_per_core_w  (DRAM-sharded shard width)
+ *       out_block_w);     // out_row_width   (DRAM-sharded padded pack width)
  */
 template <
     bool transpose = false,
@@ -188,6 +232,13 @@ ALWI void matmul_block(
  *   subblock_h      Subblock height in tiles (matmul rt_dim).
  *   subblock_w      Subblock width in tiles (matmul ct_dim; typically 1).
  *   block_kt        K dimension in tiles for each matmul call (typically 1 = subblock_w).
+ *
+ * @example
+ *   // SDPA fold M partial-sums using a column-identity tile in in1_cb.
+ *   // Before: cb_out_accum has (STATS_GRANULARITY * Wt) tiles;
+ *   // After:  cb_out_accum has Wt tiles (one reduced row).
+ *   // Args: (in_out_cb, in1_cb, num_subblocks, subblock_h, subblock_w=1, block_kt=1).
+ *   matmul_reduce_inplace(cb_out_accum, cb_col_identity, Wt, STATS_GRANULARITY);
  */
 ALWI void matmul_reduce_inplace(
     uint32_t in_out_cb,
