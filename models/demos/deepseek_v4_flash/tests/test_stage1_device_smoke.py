@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 from safetensors import safe_open
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
@@ -17,6 +18,7 @@ from models.demos.deepseek_v4_flash.cpu_reference import (
     combine_routed_experts,
     compressor_prefill,
     indexer_topk,
+    rms_norm,
     sparse_attention,
     swiglu_expert,
     v4_router,
@@ -27,6 +29,11 @@ from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 ttnn = pytest.importorskip("ttnn")
 
 from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
+from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
+    TtAttentionProjection,
+    grouped_output_projection_a,
+    load_attention_projection_weights,
+)
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
@@ -231,6 +238,74 @@ def test_tiny_prefill_compressor_overlap_uses_host_ratio_pooling_and_matches_tor
 
     assert torch_output.shape == expected.shape
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
+
+
+def test_tiny_attention_q_projection_module_matches_torch(tiny_tt_preprocessed_checkpoint: Path, device):
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    weights = load_attention_projection_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=0,
+        include_output_projection=True,
+    )
+    hidden_size = manifest["config"]["hidden_size"]
+    seq_len = 32
+    torch_input = torch.linspace(-0.12, 0.18, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    q_rank = F.linear(torch_input[:, 0].float(), weights.wq_a.float()).to(torch.bfloat16)
+    expected = F.linear(
+        rms_norm(q_rank, weights.q_norm, float(manifest["config"]["rms_norm_eps"])).float(),
+        weights.wq_b.float(),
+    ).unsqueeze(1)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtAttentionProjection.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=0)
+    torch_output = ttnn.to_torch(module.project_q(tt_input))
+
+    assert torch_output.shape == expected.shape
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
+
+
+def test_tiny_attention_output_projection_host_grouped_wo_a_matches_torch(
+    tiny_tt_preprocessed_checkpoint: Path, device
+):
+    """Smoke output projection; grouped wo_a is an explicit host fallback."""
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    weights = load_attention_projection_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=0,
+        include_output_projection=True,
+    )
+    num_heads = manifest["config"]["num_attention_heads"]
+    head_dim = manifest["config"]["head_dim"]
+    seq_len = 32
+    attention_dim = num_heads * head_dim
+    attention_output = torch.linspace(-0.2, 0.25, steps=seq_len * attention_dim, dtype=torch.float32).reshape(
+        1, 1, seq_len, attention_dim
+    )
+    attention_output = attention_output.to(torch.bfloat16)
+    output_rank = grouped_output_projection_a(
+        attention_output[:, 0],
+        weights.wo_a,
+        o_groups=int(manifest["config"]["o_groups"]),
+    )
+    expected = F.linear(output_rank.float(), weights.wo_b.float()).unsqueeze(1)
+
+    tt_attention_output = ttnn.from_torch(
+        attention_output,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    module = TtAttentionProjection.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=0)
+    torch_output = ttnn.to_torch(module.project_output(tt_attention_output))
+
+    assert torch_output.shape == expected.shape
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
 
 
 def test_tiny_sparse_prefill_attention_abi_smoke_matches_torch(device):

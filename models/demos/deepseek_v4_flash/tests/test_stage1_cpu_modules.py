@@ -6,6 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
 from models.demos.deepseek_v4_flash.cpu_reference import (
     combine_routed_experts,
     compress_topk_indices,
@@ -18,6 +19,13 @@ from models.demos.deepseek_v4_flash.cpu_reference import (
     swiglu_expert,
     v4_router,
     window_topk_indices,
+)
+from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
+from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
+    AttentionProjectionWeights,
+    grouped_output_projection_a,
+    load_attention_projection_weights,
+    validate_attention_projection_weights,
 )
 from models.demos.deepseek_v4_flash.ttnn_router import select_router_scores, validate_router_config
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import validate_sparse_attention_contract
@@ -163,6 +171,53 @@ def test_compressor_and_topk_indices_prefill_paths():
     assert compress_topk_indices(2, batch_size=1, seq_len=4, start_pos=0, offset=3).tolist() == [
         [[-1, -1], [3, -1], [3, -1], [3, 4]]
     ]
+
+
+def test_attention_projection_weight_loading_and_grouped_wo_a_host_scaffold(tmp_path):
+    source = generate_tiny_hf_checkpoint(tmp_path / "source", num_hidden_layers=1)
+    output = convert_hf_checkpoint(source, tmp_path / "tt_preprocessed")
+    weights = load_attention_projection_weights(output, layer=0, include_output_projection=True)
+
+    validate_attention_projection_weights(
+        weights,
+        hidden_size=32,
+        q_lora_rank=16,
+        num_heads=4,
+        head_dim=8,
+        o_groups=4,
+        o_lora_rank=16,
+    )
+    assert weights.wq_a.shape == (16, 32)
+    assert weights.q_norm.shape == (16,)
+    assert weights.wq_b.shape == (32, 16)
+    assert weights.wo_a is not None and weights.wo_a.shape == (64, 8)
+    assert weights.wo_b is not None and weights.wo_b.shape == (32, 64)
+
+    attention_output = torch.arange(1 * 2 * 32, dtype=torch.float32).reshape(1, 2, 32) / 31
+    grouped_rank = grouped_output_projection_a(attention_output, weights.wo_a, o_groups=4)
+    manual = []
+    for group in range(4):
+        group_input = attention_output[:, :, group * 8 : (group + 1) * 8]
+        group_weight = weights.wo_a[group * 16 : (group + 1) * 16]
+        manual.append(F.linear(group_input.float(), group_weight.float()))
+    torch.testing.assert_close(grouped_rank, torch.cat(manual, dim=-1))
+
+    with pytest.raises(ValueError, match="Expected q_norm shape"):
+        validate_attention_projection_weights(
+            AttentionProjectionWeights(
+                wq_a=weights.wq_a,
+                q_norm=torch.ones(8),
+                wq_b=weights.wq_b,
+                wo_a=weights.wo_a,
+                wo_b=weights.wo_b,
+            ),
+            hidden_size=32,
+            q_lora_rank=16,
+            num_heads=4,
+            head_dim=8,
+            o_groups=4,
+            o_lora_rank=16,
+        )
 
 
 def test_indexer_topk_and_sparse_attention_decode():
