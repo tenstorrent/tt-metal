@@ -77,8 +77,8 @@ struct TxnDFBDescriptor {
 
 #ifdef COMPILE_FOR_TRISC
 static_assert(sizeof(DFBTCSlot) == 23, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 109, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 155, "LocalDFBInterface size is incorrect");
 #else
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 87, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
 #endif

@@ -26,9 +26,9 @@ namespace tt::tt_metal::experimental::dfb::detail {
 
 // Per-risc config matching dfb_initializer_per_risc_t
 struct LocalDFBInterfaceHost {
-    std::array<uint32_t, 4> base_addr = {0};
-    std::array<uint32_t, 4> limit = {0};
-    std::array<::dfb::PackedTileCounter, 4> packed_tile_counter = {0};
+    std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> base_addr = {0};
+    std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> limit = {0};
+    std::array<::dfb::PackedTileCounter, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
     bool broadcast_tc = false;  // DM-DM BLOCKED producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;

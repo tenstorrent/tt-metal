@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/ranges.h>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
@@ -229,6 +230,30 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         desc.txn_ids[i] = txn_ids[i];
     }
     return desc;
+}
+
+// Returns the largest n in [1, NUM_TXN_IDS] satisfying the divisibility constraint that
+// compute_txn_descriptor() enforces:
+//   blocked consumer:  num_entries % (n * num_tcs_per_risc) == 0
+//   all other cases:   num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0
+// Using the maximum valid n maximises ISR double-buffering opportunities.
+// If even n=1 does not satisfy the constraint the configuration is invalid
+// and compute_txn_descriptor() will catch it with a TT_FATAL.
+static uint8_t compute_optimal_txn_id_count(
+    uint16_t num_entries,
+    uint8_t num_prods_or_cons,
+    uint8_t num_tcs_per_risc,
+    bool is_blocked_consumer) {
+    uint8_t best = 1;
+    for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
+        uint32_t divisor = is_blocked_consumer
+            ? static_cast<uint32_t>(n) * num_tcs_per_risc
+            : static_cast<uint32_t>(n) * num_prods_or_cons * num_tcs_per_risc;
+        if (num_entries % divisor == 0) {
+            best = n;
+        }
+    }
+    return best;
 }
 
 bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
@@ -1067,13 +1092,17 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     // Allocate transaction IDs and compute ISR descriptor fields when implicit sync is enabled.
-    // Only done on the first core processed for this DFB because txn IDs are core-invariant
-    // Two txn IDs per side for double buffering.
+    // Only done on the first core processed for this DFB because txn IDs are core-invariant.
+    // The number of txn IDs is chosen dynamically: the largest value in [1, NUM_TXN_IDS] that
+    // satisfies num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0.  Using more txn
+    // IDs gives the ISR more double-buffering flexibility; using fewer accommodates configurations
+    // where the entry count is not a multiple of the maximum possible divisor.
     if (config.enable_implicit_sync && dfb->groups.empty()) {
-        constexpr uint8_t TXN_IDS_PER_SIDE = 2;
-
         if (!producer_is_tensix_only) {
-            auto producer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries, config.num_producers, num_producer_tcs,
+                /*is_blocked_consumer=*/false);
+            auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
             dfb->producer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
                 config.num_producers,
@@ -1084,17 +1113,20 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.pap);
             log_info(
                 tt::LogMetal,
-                "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
-                dfb->producer_txn_descriptor.txn_ids[0],
-                dfb->producer_txn_descriptor.txn_ids[1],
+                fmt::join(producer_txn_ids, ","),
                 dfb->producer_txn_descriptor.num_entries_to_process_threshold,
                 dfb->producer_txn_descriptor.num_entries_per_txn_id,
                 dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
         }
 
         if (!consumer_is_tensix_only) {
-            auto consumer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            const bool consumer_is_blocked = (config.cap == ::dfb::AccessPattern::BLOCKED);
+            uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries, config.num_consumers, num_consumer_tcs,
+                /*is_blocked_consumer=*/consumer_is_blocked);
+            auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
             dfb->consumer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
                 config.num_producers,
@@ -1105,11 +1137,9 @@ void ProgramImpl::finalize_single_dfb_config(
                 config.cap);
             log_info(
                 tt::LogMetal,
-                "DFB {} implicit sync: "
-                "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
                 dfb->id,
-                dfb->consumer_txn_descriptor.txn_ids[0],
-                dfb->consumer_txn_descriptor.txn_ids[1],
+                fmt::join(consumer_txn_ids, ","),
                 dfb->consumer_txn_descriptor.num_entries_to_process_threshold,
                 dfb->consumer_txn_descriptor.num_entries_per_txn_id,
                 dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
