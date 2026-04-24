@@ -889,9 +889,24 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize(
+    "sram_expert_ids",
+    [
+        pytest.param(frozenset(), id="no_sram"),
+        pytest.param(
+            frozenset([1]),
+            id="sram_expert_1",
+            marks=pytest.mark.xfail(
+                reason="SRAM expert kernel path not yet implemented: mul_num_experts hardcoded to 8", strict=False
+            ),
+        ),
+    ],
+)
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, sram_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -945,6 +960,29 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
+
+    if sram_expert_ids:
+        # Mark SRAM experts in gate_indices tensor by setting bit 15 (0x8000).
+        # The tensor is (16, 16) uint16 where element [k % 16, k // 16] == k (global expert id).
+        # The gate kernel reads from this tensor and writes the matching value to gate_output_indices,
+        # so the SRAM flag propagates to the index used by the DRAM matmul reader.
+        indices = torch.arange(256, dtype=torch.int32).reshape(16, 16)
+        gate_indices_torch = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
+        for expert_id in sram_expert_ids:
+            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | expert_id
+        r = r._replace(
+            ttnn_gate_indices=ttnn.from_torch(
+                gate_indices_torch,
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=r.ttnn_gate_indices.memory_config(),
+                tile=ttnn.Tile([16, 16]),
+                mesh_mapper=mesh_mapper,
+            )
+        )
+        logger.info(f"Marked experts {sorted(sram_expert_ids)} as SRAM in gate_indices tensor")
+
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
     s = create_shared_expert_tensors(
@@ -1135,6 +1173,13 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         gate_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.expert_weights_dict.items()}
         up_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.up_proj_weights_dict.items()}
         down_dict_d = {e: w[:, :, down_slice_start:down_slice_end, :] for e, w in r.down_proj_weights_dict.items()}
+
+        # SRAM experts are skipped by the DRAM matmul reader — zero their weights in the golden
+        # so the expected output matches what the kernel actually computes.
+        if sram_expert_ids:
+            gate_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in gate_dict_d.items()}
+            up_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in up_dict_d.items()}
+            down_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in down_dict_d.items()}
 
         _, _, device_expected = MoeOp.golden(
             r.torch_input,
