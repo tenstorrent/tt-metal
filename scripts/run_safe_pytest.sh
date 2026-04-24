@@ -1,5 +1,5 @@
 #!/bin/bash
-# tt-test.sh - Cooperative device-aware test runner
+# run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
@@ -15,7 +15,7 @@
 #   pytest in an outer wall-clock timeout as a last resort if Python gets
 #   stuck in a blocking C++ call.
 #
-# Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -44,7 +44,7 @@ WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_JSON_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
-TRIAGE_LOG="/tmp/tt-test-triage-$$.log"
+TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
 
 # --- Detect simulator mode ---
@@ -64,9 +64,9 @@ fi
 if [[ "$SIM_MODE" == true ]]; then
     DISPATCH_TIMEOUT=0  # wall-clock timeout disabled for sim
     SIM_CYCLE_TIMEOUT=${TT_METAL_SIM_CYCLE_TIMEOUT:-100000000}  # 100M cycles default
-    SIM_WALL_TIMEOUT_PER_TEST=${TT_TEST_SIM_TIMEOUT_PER_TEST_SECONDS:-120}
-    SIM_WALL_TIMEOUT_FLOOR=${TT_TEST_SIM_TIMEOUT_FLOOR_SECONDS:-1800}
-    SIM_COLLECT_TIMEOUT=${TT_TEST_SIM_COLLECT_TIMEOUT_SECONDS:-300}
+    SIM_WALL_TIMEOUT_PER_TEST=${SAFE_PYTEST_SIM_TIMEOUT_PER_TEST_SECONDS:-120}
+    SIM_WALL_TIMEOUT_FLOOR=${SAFE_PYTEST_SIM_TIMEOUT_FLOOR_SECONDS:-1800}
+    SIM_COLLECT_TIMEOUT=${SAFE_PYTEST_SIM_COLLECT_TIMEOUT_SECONDS:-300}
 else
     DISPATCH_TIMEOUT=5
 fi
@@ -92,8 +92,8 @@ done
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
-    echo "TT_TEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/tt-test.sh [--dev] <test_path> [extra_pytest_args...]" >&2
+    echo "SAFE_PYTEST_ERROR: No test path provided" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -105,12 +105,12 @@ if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
 
     LOCK_TIMEOUT=600  # 10min: accounts for queued runs holding device during dual-mode testing
-    echo "TT_TEST: Waiting for device lock..." >&2
+    echo "SAFE_PYTEST: Waiting for device lock..." >&2
     if ! flock -w "$LOCK_TIMEOUT" 9; then
-        echo "TT_TEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
+        echo "SAFE_PYTEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
         exit 3
     fi
-    echo "TT_TEST: Device lock acquired" >&2
+    echo "SAFE_PYTEST: Device lock acquired" >&2
 
     # Signal to child processes (e.g. conftest device lock plugin) that the lock
     # is already held — they must not re-acquire it or they will deadlock.
@@ -118,13 +118,13 @@ if [[ "$SIM_MODE" == false ]]; then
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "TT_TEST: Device marked dirty from previous run, resetting..." >&2
+        echo "SAFE_PYTEST: Device marked dirty from previous run, resetting..." >&2
         if ! tt-smi -r; then
-            echo "TT_TEST_ERROR: Device reset (tt-smi -r) failed" >&2
+            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed" >&2
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
-        echo "TT_TEST: Device reset complete" >&2
+        echo "SAFE_PYTEST: Device reset complete" >&2
     fi
 fi
 
@@ -132,10 +132,10 @@ fi
 cd "$REPO_DIR"
 if [[ -f python_env/bin/activate ]]; then
     if ! source python_env/bin/activate; then
-        echo "TT_TEST: WARNING: Failed to activate python_env virtual environment" >&2
+        echo "SAFE_PYTEST: WARNING: Failed to activate python_env virtual environment" >&2
     fi
 else
-    echo "TT_TEST: WARNING: python_env not found; using system Python" >&2
+    echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
 fi
 
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
@@ -166,8 +166,8 @@ fi
 emit_missing_ttexalens_warning() {
     if [[ "$MISSING_TTEXALENS" == true ]]; then
         echo "" >&2
-        echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang is unavailable." >&2
-        echo "TT_TEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
+        echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang is unavailable." >&2
+        echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
     fi
 }
 trap emit_missing_ttexalens_warning EXIT
@@ -190,7 +190,7 @@ if [[ "$DEV_MODE" == true ]]; then
         # NoC sanitization is redundant on the simulator — the sim itself
         # validates NoC transactions natively. Disable it to avoid overhead.
         export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-        echo "TT_TEST: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) triage=OFF cycle_timeout=${SIM_CYCLE_TIMEOUT} outer_timeout>=${SIM_WALL_TIMEOUT_FLOOR}s" >&2
+        echo "SAFE_PYTEST: [sim+dev] watcher=polling(+assert,noc_sanitize=OFF) triage=OFF cycle_timeout=${SIM_CYCLE_TIMEOUT} outer_timeout>=${SIM_WALL_TIMEOUT_FLOOR}s" >&2
     else
         # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at
         # the exact instruction. The dispatch timeout then fires and runs triage,
@@ -207,14 +207,14 @@ if [[ "$DEV_MODE" == true ]]; then
         # the core so triage can capture callstacks from ALL cores, rather than
         # having watcher handle asserts independently.
         export TT_METAL_WATCHER_DISABLE_ASSERT=1
-        echo "TT_TEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+        echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
     fi
 elif [[ "$SIM_MODE" == true ]]; then
-    echo "TT_TEST: [sim] cycle_timeout=${SIM_CYCLE_TIMEOUT} outer_timeout>=${SIM_WALL_TIMEOUT_FLOOR}s" >&2
+    echo "SAFE_PYTEST: [sim] cycle_timeout=${SIM_CYCLE_TIMEOUT} outer_timeout>=${SIM_WALL_TIMEOUT_FLOOR}s" >&2
 else
-    echo "TT_TEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
+    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
 fi
-echo "TT_TEST: pytest ${TEST_PATH} $*" >&2
+echo "SAFE_PYTEST: pytest ${TEST_PATH} $*" >&2
 echo "========================================" >&2
 
 # --- Mark device dirty before running tests (hardware only) ---
@@ -236,7 +236,7 @@ PYTEST_CMD+=("$@")
 
 if [[ "$SIM_MODE" == true ]]; then
     NUM_TESTS=0
-    COLLECT_LOG="/tmp/tt-test-collect-$$.log"
+    COLLECT_LOG="/tmp/safe-pytest-collect-$$.log"
     COLLECT_EXIT=0
     timeout --signal=TERM --kill-after=10 "$SIM_COLLECT_TIMEOUT" \
         pytest "${TEST_PATH}" --collect-only -q "$@" \
@@ -244,9 +244,9 @@ if [[ "$SIM_MODE" == true ]]; then
     if [[ $COLLECT_EXIT -eq 0 ]]; then
         NUM_TESTS=$(tail -1 "$COLLECT_LOG" | grep -oP '^\d+' || echo "0")
     elif [[ $COLLECT_EXIT -eq 124 || $COLLECT_EXIT -eq 137 ]]; then
-        echo "TT_TEST: WARNING: pytest --collect-only timed out after ${SIM_COLLECT_TIMEOUT}s; using floor timeout budget" >&2
+        echo "SAFE_PYTEST: WARNING: pytest --collect-only timed out after ${SIM_COLLECT_TIMEOUT}s; using floor timeout budget" >&2
     else
-        echo "TT_TEST: WARNING: pytest --collect-only exited ${COLLECT_EXIT}; using floor timeout budget" >&2
+        echo "SAFE_PYTEST: WARNING: pytest --collect-only exited ${COLLECT_EXIT}; using floor timeout budget" >&2
     fi
 
     SIM_WALL_BUDGET=$(( NUM_TESTS * SIM_WALL_TIMEOUT_PER_TEST ))
@@ -279,13 +279,13 @@ fi
 
 if [[ "$SIM_MODE" == false ]]; then
     # Always reset device after every run to guarantee a clean slate.
-    echo "TT_TEST: Resetting device..." >&2
+    echo "SAFE_PYTEST: Resetting device..." >&2
     if tt-smi -r; then
         sleep 2
         rm -f "$DIRTY_FLAG"
-        echo "TT_TEST: Device reset complete" >&2
+        echo "SAFE_PYTEST: Device reset complete" >&2
     else
-        echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
+        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty" >&2
     fi
 fi
 
@@ -293,14 +293,14 @@ fi
 
 if [[ $EXIT_CODE -eq 0 ]]; then
     rm -f "$TRIAGE_LOG"
-    echo "TT_TEST_RESULT: PASS" >&2
+    echo "SAFE_PYTEST_RESULT: PASS" >&2
     exit 0
 fi
 
 # Pytest exit code 5 = no tests collected (typo in path, bad marker filter, etc.)
 if [[ $EXIT_CODE -eq 5 ]]; then
     rm -f "$TRIAGE_LOG"
-    echo "TT_TEST_ERROR: No tests collected" >&2
+    echo "SAFE_PYTEST_ERROR: No tests collected" >&2
     exit 3
 fi
 
@@ -308,11 +308,11 @@ fi
 #   Triage log non-empty = timeout marker fired.
 #   On hardware this contains full triage output; on sim it's just a "HANG" marker.
 if [[ -s "$TRIAGE_LOG" ]]; then
-    echo "TT_TEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
+    echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
     echo "" >&2
 
     if [[ "$SIM_MODE" == true ]]; then
-        echo "TT_TEST: Simulator timeout fired (dispatch cycle budget or outer wall timeout; no triage available)" >&2
+        echo "SAFE_PYTEST: Simulator timeout fired (dispatch cycle budget or outer wall timeout; no triage available)" >&2
     else
         # Dump full triage log
         echo "=== TRIAGE LOG ===" >&2
@@ -329,7 +329,7 @@ if [[ -s "$TRIAGE_LOG" ]]; then
         fi
 
         if [[ -f "$TRIAGE_JSON" ]]; then
-            echo "TT_TEST: JSON triage: ${TRIAGE_JSON}" >&2
+            echo "SAFE_PYTEST: JSON triage: ${TRIAGE_JSON}" >&2
         fi
     fi
 
@@ -338,5 +338,5 @@ if [[ -s "$TRIAGE_LOG" ]]; then
 fi
 
 rm -f "$TRIAGE_LOG"
-echo "TT_TEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
+echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
 exit 1

@@ -256,7 +256,7 @@ For each proposed helper sequence, generate two files:
      ```
 
 - **HANG** (output stops for > 60 seconds):
-  If using `scripts/tt-test.sh`, the hang is auto-detected with triage.
+  If using `scripts/run_safe_pytest.sh`, the hang is auto-detected with triage.
   For GTest binaries, watch for stalled output.
   ```
   echo '{"ts":"'"$(date -Iseconds)"'","event":"device_validation_hang","op":"OP","tiles":N,"diagnosis":"..."}' >> $BCRUMB

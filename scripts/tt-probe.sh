@@ -3,7 +3,7 @@
 #
 # Drop-in replacement for raw "python3 << 'PYEOF'" heredocs.
 # Reads a Python script from stdin, saves it to disk, and runs it with
-# the same device protections as tt-test.sh (flock, timeout, reset).
+# the same device protections as run_safe_pytest.sh (flock, timeout, reset).
 #
 # Saved scripts persist as debugging artifacts — they document what was
 # tried and can be re-run later.
@@ -16,7 +16,7 @@
 # Flags:
 #   --dev   Enables polling watcher (NoC sanitizer, waypoints, CB sanitization),
 #           lightweight ebreak asserts (ASSERT + LLK_ASSERT), and JSON triage
-#           to generated/tt-triage/triage.json. Same semantics as tt-test.sh --dev.
+#           to generated/tt-triage/triage.json. Same semantics as run_safe_pytest.sh --dev.
 #
 # With DPRINT:
 #   TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=TR0 \
@@ -32,7 +32,7 @@
 #              Probes a suspected hang or bad kernel state, letting ASSERT()/
 #              LLK_ASSERT() halt at the exact failing instruction for triage.
 #
-# Exit codes (same as tt-test.sh):
+# Exit codes (same as run_safe_pytest.sh):
 #   0 - Script completed successfully
 #   1 - Script failed (exception, assertion, non-zero exit)
 #   2 - Hang detected (dispatch timeout)
@@ -119,7 +119,7 @@ export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
 
 # --- Hang detection setup ---
 # Triage writes JSON to generated/tt-triage/triage.json for machine-readable
-# inspection (same location tt-test.sh uses), plus a text log for the stderr
+# inspection (same location run_safe_pytest.sh uses), plus a text log for the stderr
 # dump. Grep targets are documented in .claude/CLAUDE.md § "Hang triage".
 rm -f "$TRIAGE_LOG"
 MISSING_TTEXALENS=false
@@ -147,7 +147,7 @@ emit_missing_ttexalens_warning() {
 trap emit_missing_ttexalens_warning EXIT
 
 # --- Dev-mode instrumentation ---
-# Mirrors tt-test.sh --dev exactly. On hardware this enables ebreak ASSERTs and
+# Mirrors run_safe_pytest.sh --dev exactly. On hardware this enables ebreak ASSERTs and
 # the polling watcher; on sim only the watcher runs (ebreak asserts are useless
 # without a triage mechanism on sim).
 if [[ "$DEV_MODE" == true ]]; then
