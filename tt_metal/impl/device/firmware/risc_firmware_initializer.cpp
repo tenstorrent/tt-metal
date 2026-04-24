@@ -176,6 +176,9 @@ void RiscFirmwareInitializer::teardown_simulator_ethernet_cores() {
             auto all_devices = cluster_.all_chip_ids();
             for (tt::ChipId device_id : all_devices) {
                 for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+                    if (cluster_.is_external_cmac_port(device_id, logical_core)) {
+                        continue;
+                    }
                     CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
                         device_id, logical_core, CoreType::ETH);
                     erisc_send_exit_signal(device_id, virtual_core, false);

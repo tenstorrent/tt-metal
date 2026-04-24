@@ -2033,6 +2033,9 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     static_view.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
 
     for (const auto& active_ethernet_core : active_ethernet_cores) {
+        if (this->cluster_.get().is_external_cmac_port(physical_chip_id, active_ethernet_core)) {
+            continue;
+        }
         auto chan_id =
             this->cluster_.get().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(active_ethernet_core);
 
