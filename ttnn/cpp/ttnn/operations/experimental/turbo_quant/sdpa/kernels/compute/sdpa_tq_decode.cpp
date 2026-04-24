@@ -33,11 +33,24 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_tile.h"
 
 // Include existing SDPA compute building blocks (matmul_blocks, softmax helpers, etc.)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+
+// Empirical fix for multi-chunk online softmax: a non-inlined UNPACK-thread volatile L1 read
+// of the given CB's first tile. Without this call at end-of-iteration, chunks 1+ produce
+// wrong softmax state (cos≈0.1-0.3 vs expected 0.999+). The pack→unpack path needs this
+// to flush cb_max/cb_sum/cb_out_im pack writes from the current iteration before the
+// unpacker reads them as prev_max/prev_sum/prev_out in the next iteration.
+// Reading only 8 words fails, 64 works — threshold seems to be a minimum data volume.
+// Matches the sync TSLICE(cb, range::hw0_32_4) provides inside DPRINT_UNPACK.
+__attribute__((noinline)) inline void sync_unpack_cb_read(uint32_t cb_id) {
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift);
+    for (uint32_t i = 0; i < 64; ++i) {
+        [[maybe_unused]] volatile uint32_t dummy = ptr[i];
+    }
+}
 
 // ── Inline dequantize: BFP4 index tile → BF16 centroid×norm tile ──
 // Reads 1 tile from cb_idx, 1 tile from cb_norms (already waiting).
@@ -190,14 +203,10 @@ inline void dequant_k_chunk(
         tile_regs_release();
     }
 
-    // Pass 2b: Norm bcast multiply + grid-transpose into cb_k_in.
-    // Col-major iteration with sequential pack writes tiles in the transposed-grid order:
-    // slot i*Sk+j = tile at (col=i, row=j) — same layout the reader produces for standard SDPA.
-    // Using sequential pack (no out-of-order) ensures clean pack→unpack sync for the
-    // subsequent matmul_blocks read of cb_k_in.
+    // Pass 2b: Norm bcast multiply + tile-grid transpose into cb_k_in.
     cb_reserve_back(cb_k_in, chunk_tiles);
-    for (uint32_t col = 0; col < DHt; col++) {
-        for (uint32_t row = 0; row < Sk_chunk_t; row++) {
+    for (uint32_t row = 0; row < Sk_chunk_t; row++) {
+        for (uint32_t col = 0; col < DHt; col++) {
             uint32_t src_tile = row * DHt + col;
             tile_regs_acquire();
             mul_bcast_cols_init_short(cb_dq_temp, cb_k_norms);
@@ -205,7 +214,7 @@ inline void dequant_k_chunk(
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(cb_k_in);
-            pack_tile(0, cb_k_in);
+            pack_tile<true>(0, cb_k_in, col * Sk_chunk_t + row);
             tile_regs_release();
         }
     }
@@ -494,10 +503,6 @@ void kernel_main() {
                     dequant_k_chunk<Sk_chunk_t, DHt, num_levels>(
                         cb_k_idx, cb_k_norms, cb_dq_temp, cb_k_in, centroids, level_bits_arr);
 
-                    // Sync hack: touching cb_k_in via UNPACK-thread volatile L1 read forces
-                    // proper pack→unpack sync for the subsequent matmul_blocks (empirical fix).
-                    DPRINT_UNPACK(DPRINT << TSLICE(cb_k_in, 0, SliceRange::hw0_32_4()) << ENDL());
-
                     // ── Step 2: QK = Q × K^T ──
                     reconfig_data_format(cb_k_in, cb_q_in);
                     pack_reconfig_data_format(cb_qk_im);
@@ -535,9 +540,6 @@ void kernel_main() {
                     dequant_v_chunk<Sk_chunk_t, vDHt, num_levels>(
                         cb_v_idx, cb_v_norms, cb_dq_temp, cb_v_in, centroids, level_bits_arr);
 
-                    // Sync hack (same as K): force unpack-thread to touch cb_v_in.
-                    DPRINT_UNPACK(DPRINT << TSLICE(cb_v_in, 0, SliceRange::hw0_32_4()) << ENDL());
-
                     // ── Step 5: OUT_IM = softmax × V ──
                     reconfig_data_format(cb_v_in, cb_qk_im);
                     pack_reconfig_data_format(alias_mm2_cur_out);
@@ -572,6 +574,9 @@ void kernel_main() {
                         mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
                             alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
                     }
+
+                    // Empirical fix: multiple volatile L1 reads via the CB tile pointer on UNPACK.
+                    UNPACK(sync_unpack_cb_read(alias_cur_max););
 
                     // ── Step 7: Swap aliases for next iteration ──
                     uint32_t tmp;
