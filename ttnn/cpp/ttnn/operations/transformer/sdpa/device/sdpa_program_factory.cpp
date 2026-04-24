@@ -400,12 +400,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         Sk,
         Sq_chunk_t);
 
-    const bool lightweight_mask = use_streaming_compute && use_padded_mask;
+    const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
+    const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = lightweight_mask ? 1 : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+    uint32_t mask_tiles =
+        lightweight_mask ? (lightweight_causal ? 2 : 1) : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -575,7 +577,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         sliding_window_size.value_or(0),
-        (std::uint32_t)(use_streaming_compute && use_padded_mask),  // arg 20: lightweight mask for v2
+        (std::uint32_t)(lightweight_mask),  // arg 20: lightweight mask (causal or streaming padded)
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -647,7 +649,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
@@ -658,7 +661,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
     uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
     uint32_t out_tile_size = tt::tile_size(out_df);
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
@@ -689,13 +691,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     // Only create mask buffer if it's going to be used
     if (use_provided_mask or is_causal or use_padded_mask) {
-        // Lightweight mask: single bfloat16 -inf tile (no Bfp4_b round-trip artifacts).
+        // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
         // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
-        uint32_t actual_mask_tiles = lightweight_mask ? 1 : mask_tiles;
         tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = lightweight_mask ? tt::tile_size(actual_mask_df) : mask_tile_size;
+        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
         auto c_in3_config =
-            CircularBufferConfig(actual_mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
+            CircularBufferConfig(mask_tiles * actual_mask_tile_size, {{tt::CBIndex::c_3, actual_mask_df}})
                 .set_page_size(tt::CBIndex::c_3, actual_mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
@@ -1222,11 +1223,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 const CoreCoord rect_start = CoreCoord{min_x, injector_y};
                 const CoreCoord rect_end = CoreCoord{max_x, injector_y};
 
-                // When the injector is geometrically inside the mcast rect (not at min or max X),
-                // the hardware counts it as a destination slot, so num_dests must include it.
-                const uint32_t injector_x = core_work[injector_idx].physical_core.x;
-                const bool injector_inside_rect = (injector_x > min_x && injector_x < max_x);
-                const uint32_t mcast_num_dests = injector_inside_rect ? chain_size : num_receivers;
+                const uint32_t mcast_num_dests = num_receivers;
 
                 // Configure injector
                 auto& injector_chain = core_chain_info[injector_idx];
@@ -1265,7 +1262,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             }
         }
 
-        log_info(
+        log_debug(
             tt::LogOp,
             "Multicast eligibility: {}/{} chains using mcast (all-or-nothing)",
             mcast_chains,

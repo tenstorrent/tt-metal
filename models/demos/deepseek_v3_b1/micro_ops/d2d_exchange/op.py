@@ -33,20 +33,37 @@ import ttnn
 
 
 class MeshWrapper:
-    def __init__(self, mesh_device=None, mesh_id=None):
+    """Wraps a local MeshDevice or identifies a remote endpoint by rank.
+
+    For local endpoints, pass ``mesh_device``.  The rank defaults to the
+    current MPI rank and mesh_id is read from the device.
+
+    For remote endpoints, pass ``rank`` (the MPI rank that owns the remote
+    mesh).  Optionally pass ``mesh_id`` for backwards compatibility with the
+    old multi-mesh code path; when omitted it defaults to 0.
+    """
+
+    def __init__(self, mesh_device=None, mesh_id=None, rank=None):
         self.mesh_device = mesh_device
 
         if self.mesh_device is not None:
             self.mesh_id = self.mesh_device.get_system_mesh_id()
+            self._rank = rank if rank is not None else int(ttnn.distributed_context_get_rank())
         else:
-            assert mesh_id is not None
             self.mesh_id = mesh_id
+            assert (
+                rank is not None or mesh_id is not None
+            ), "MeshWrapper requires at least one of mesh_device, mesh_id, or rank"
+            self._rank = rank if rank is not None else mesh_id
 
     def get_mesh_device(self):
         return self.mesh_device
 
     def get_mesh_id(self):
         return self.mesh_id
+
+    def get_rank(self):
+        return self._rank
 
 
 def _build_exchange_program(
@@ -181,6 +198,7 @@ class SocketInterface:
         upstream_sockets=None,
         upstream_core_coords=None,
         upstream_page_size=None,
+        forward_metadata_size_bytes=0,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -200,6 +218,7 @@ class SocketInterface:
 
         # Determine multi-upstream mode
         self.multi_upstream = upstream_sockets is not None or upstream_core_coords is not None
+        self.forward_metadata_size_bytes = forward_metadata_size_bytes
         if self.multi_upstream:
             assert upstream_page_size is not None, "upstream_page_size required for multi-upstream mode"
             assert upstream_socket is None, "Cannot mix upstream_socket (singular) with multi-upstream params"
@@ -223,9 +242,14 @@ class SocketInterface:
                     self.upstream_socket_pairs = []
                     buffer_depth = socket_fifo_size // page_size
                     upstream_fifo_size = self.upstream_page_size * buffer_depth
-                    for uc in upstream_core_coords:
+                    last_upstream_page_size = self.upstream_page_size + self.forward_metadata_size_bytes
+                    last_upstream_fifo_size = last_upstream_page_size * buffer_depth
+                    num_upstreams = len(upstream_core_coords)
+                    for idx, uc in enumerate(upstream_core_coords):
+                        is_last = idx == num_upstreams - 1
+                        fifo_size = last_upstream_fifo_size if is_last else upstream_fifo_size
                         socket_connection = ttnn.SocketConnection(uc, send_core_coord)
-                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, upstream_fifo_size)
+                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, fifo_size)
                         socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                         pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                         self.upstream_socket_pairs.append(pair)
@@ -267,19 +291,26 @@ class SocketInterface:
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
 
         if self.local_socket:
-            # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
             self.internal_socket_pair = ttnn.create_socket_pair(
                 sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
         else:
-            # If running across multiple hosts/processes create a single socket interface
-            socket_config = ttnn.SocketConfig(
-                connections=[socket_connection],
-                memory_config=socket_memory_config,
-                sender_mesh_id=sender_mesh.get_mesh_id(),
-                receiver_mesh_id=receiver_mesh.get_mesh_id(),
-            )
+            same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+            if same_mesh:
+                socket_config = ttnn.SocketConfig(
+                    connections=[socket_connection],
+                    memory_config=socket_memory_config,
+                    sender_rank=sender_mesh.get_rank(),
+                    receiver_rank=receiver_mesh.get_rank(),
+                )
+            else:
+                socket_config = ttnn.SocketConfig(
+                    connections=[socket_connection],
+                    memory_config=socket_memory_config,
+                    sender_mesh_id=sender_mesh.get_mesh_id(),
+                    receiver_mesh_id=receiver_mesh.get_mesh_id(),
+                )
             self.internal_socket = ttnn.MeshSocket(self.mesh_device, socket_config)
 
         if self.send_core_coord.core_coord == self.recv_core_coord.core_coord:
@@ -415,12 +446,13 @@ class SocketInterface:
                 packet_header_cb_index,  # 8
                 use_fabric_on_receiver,  # 9
                 use_fabric_on_sender,  # 10
-                page_ready_sem_id,  # 11
-                ncrisc_done_sem_id,  # 12
-                socket_start_idx,  # 13
-                pkt_hdr_slot_start,  # 14
+                self.forward_metadata_size_bytes,  # 11: forward_metadata_size_bytes
+                page_ready_sem_id,  # 12
+                ncrisc_done_sem_id,  # 13
+                socket_start_idx,  # 14
+                pkt_hdr_slot_start,  # 15
             ]
-            ct_args.extend(socket_addrs)  # 15..15+len(socket_addrs)-1
+            ct_args.extend(socket_addrs)  # 16..16+len(socket_addrs)-1
             return ct_args
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])

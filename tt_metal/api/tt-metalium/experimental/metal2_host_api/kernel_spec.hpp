@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -54,7 +55,12 @@ struct DataMovementConfiguration {
     std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
 };
 
-using KernelSpecID = uint32_t;
+// A name identifying a KernelSpec within a ProgramSpec.
+//
+// CONVENTION: define names as `constexpr const char*` constants, e.g.:
+//   constexpr const char* READER_KERNEL = "reader";
+//   KernelSpec{.unique_id = READER_KERNEL, ...};
+// Reusing a single constant helps catch typos and errors at compile time.
 using KernelSpecName = std::string;
 
 struct KernelSpec {
@@ -65,10 +71,16 @@ struct KernelSpec {
     // Kernel identifier: used to reference this kernel within the ProgramSpec
     KernelSpecName unique_id;
 
-    // Kernel source
-    std::string source;
-    enum class SourceType { FILE_PATH, SOURCE_CODE };
-    SourceType source_type = SourceType::FILE_PATH;
+    // Kernel source: either a path to a source file, or the source code itself.
+    // (Wrapper types disambiguate the string-constructible variant alternatives,
+    // ensuring compile-time enforcement.)
+    struct SourceFilePath {
+        std::filesystem::path path;
+    };
+    struct SourceCode {
+        std::string code;
+    };
+    std::variant<SourceFilePath, SourceCode> source;
 
     // Target nodes
     // The logical coordinates for the set of device nodes on which the kernel will run
@@ -78,8 +90,11 @@ struct KernelSpec {
     // Threading
     // Number of kernel threads (this can be specified globally or per-node)
     uint8_t num_threads = 1;
-    using ThreadNodeMap = std::unordered_map<Nodes, uint8_t>;  // node -> number of kernel threads
-    std::optional<ThreadNodeMap> thread_node_map = std::nullopt;
+    // Optional per-node thread count specification (overrides global num_threads)
+    // This is currently unsupported, and an open question if we ever want to support it.
+    using NodeSpecificThreadCount = std::pair<Nodes, uint8_t>;  // {node, num_threads}
+    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
+    std::optional<NodeSpecificThreadCounts> node_specific_thread_counts = std::nullopt;
 
     // Kernel type (methods)
     bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
@@ -91,12 +106,10 @@ struct KernelSpec {
     struct CompilerOptions {
         using IncludePaths = std::vector<std::string>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
-        using Macros = std::vector<std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
         Defines defines;                    // -D <name>=<value>
-        Macros macros;                      // -M <macro>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };
@@ -125,29 +138,62 @@ struct KernelSpec {
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings
-    // TODO -- Socket bindings
 
-    // Compile time argument bindings (values cannot be changed between Program executions)
-    using CompileTimeArgBindings = std::unordered_map<std::string, uint32_t>;
+    //////////////////////////////////////////////////////////////////////////////
+    // Kernel arguments
+    //////////////////////////////////////////////////////////////////////////////
+
+    //----------------------------------------------------------------------------
+    // Compile time argument bindings
+    // (Bound argument values cannot be changed between Program executions)
+    using CompileTimeArgBindings = std::vector<std::pair<std::string, uint32_t>>;
     CompileTimeArgBindings compile_time_arg_bindings;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
-    //////////////////////////////////////////////////////////////////////////////
-    // Runtime argument schema / declaration
-    //////////////////////////////////////////////////////////////////////////////
+    //----------------------------------------------------------------------------
+    // Runtime argument schema (declaration)
 
-    // Schema for runtime and common runtime arguments
+    // Schema for runtime arguments (RTA) and common runtime arguments (CRTA)
     // (The VALUES of these arguments are set as ProgramRunParams.)
+    //
+    // Two mechanisms are supported per kernel:
+    //   - Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
+    //     (Currently, only uint32_t type is supported.)
+    //   - Vararg RTAs/CRTAs: positional, variable-count, always uint32_t.
+    //     Indexed from 0 in kernel code via `get_vararg(idx)` / `get_common_vararg(idx)`.
+    //     Vararg indices are stable across schema changes (e.g., moving a named arg from RTA→CRTA).
     struct RuntimeArgSchema {
-        // Schema for named and typed RTAs + CRTAs
-        // (These must be fully specified in the kernel code.)
-        //   TODO
+        // Named RTAs: names in declaration order. Must be unique valid C++ identifiers.
+        std::vector<std::string> named_runtime_args;
 
-        // Schema for unnamed/variable RTAs + CRTAs
-        // (Must be of uint32_t; can be treated as varargs in the kernel code)
-        using NumRTAsPerNode = std::vector<std::pair<NodeCoord, size_t>>;  // {node, num_rtas}
-        NumRTAsPerNode num_runtime_args_per_node;                          // default: empty
-        size_t num_common_runtime_args = 0;
+        // Named CRTAs: names in declaration order. Must be unique valid C++ identifiers.
+        std::vector<std::string> named_common_runtime_args;
+
+        //----------------------
+        // Advanced options
+
+        // Runtime varargs: dynamic RTAs
+        // Some kernels are designed to take a variable number of arguments.
+        //  e.g. N arguments representing the dimensions of an N-dimensional tensor,
+        //       where N is passed to the kernel as a CTA.
+        // Varargs are accessed positionally, since the kernel does not know how many to expect.
+        // The vararg schema specifies the number of RTA varargs for this kernel.
+        // Use ProgramRunParams to set the vararg values (per node).
+        size_t num_runtime_varargs = 0;
+
+        // Per-node vararg number override: different per-node vararg counts
+        // In very rare cases, the kernel running on different nodes requires a DIFFERENT
+        // number of varargs on different nodes.
+        // Use num_runtime_varargs_per_node to override the number of varargs.
+        // Any kernel target node not specified in the override defaults to num_runtime_varargs.
+        using NumVarargsPerNode = std::vector<std::pair<Nodes, size_t>>;  // {nodes, num_varargs}
+        std::optional<NumVarargsPerNode> num_runtime_varargs_per_node = std::nullopt;
+        // TODO: This feature is truly bizarre. Investigate removing it from the API.
+
+        // Common runtime varargs: dynamic number of CRTAs
+        // These are similar to runtime varargs. However, when specifying the argument values
+        // (in ProgramRunParams), all nodes of the kernel receive the common values.
+        size_t num_common_runtime_varargs = 0;
     };
     RuntimeArgSchema runtime_arguments_schema{};
 

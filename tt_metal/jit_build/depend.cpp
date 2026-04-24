@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "depend.hpp"
+#include "build_cache_telemetry.hpp"
 #include "common/stable_hash.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -67,7 +69,7 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     char buf[65536];
     for (;;) {
         file.read(buf, sizeof(buf));
@@ -75,7 +77,7 @@ uint64_t hash_file_content(std::istream& file) {
         if (bytes_read <= 0) {
             break;
         }
-        hasher.update(buf, buf + bytes_read);
+        hasher.update(std::string_view{buf, static_cast<std::size_t>(bytes_read)});
     }
     return hasher.digest();
 }
@@ -268,13 +270,21 @@ bool dependencies_up_to_date(std::istream& hash_file) {
 }
 
 bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
+    auto t0 = std::chrono::steady_clock::now();
     std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
     std::ifstream hash_file(hash_path);
     if (!hash_file.is_open()) {
         log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());
         return false;
     }
-    return dependencies_up_to_date(hash_file);
+
+    auto up_to_date = dependencies_up_to_date(hash_file);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
+    tok.record(elapsed_ms);
+
+    return up_to_date;
 }
 
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }

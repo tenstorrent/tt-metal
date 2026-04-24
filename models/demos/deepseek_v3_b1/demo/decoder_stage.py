@@ -15,16 +15,21 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.demo.stage import (
-    ACTIVATION_FIFO_SIZE,
     ACTIVATION_PAGE_SIZE_BYTES,
+    ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+    DEFAULT_ACTIVATION_FIFO_PAGES,
     PIPELINE_CORE_COORD,
     StageContext,
     StageKind,
+    activation_fifo_size_bytes,
 )
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
+from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
@@ -36,8 +41,6 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3MoELayerWeights,
     create_gate_indices_tensor,
-    prepare_dense_layer_weights,
-    prepare_moe_layer_weights,
 )
 
 
@@ -48,26 +51,35 @@ def create_decoder_block_tensors(
     sender_row,
     sender_col,
     position_id,
-    state_dict,
-    layer_idx,
     max_seq_len,
     reduce_root_coord=ttnn.MeshCoordinate(1, 1),
     *,
+    weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
+    metadata: DeepseekMetadata | None = None,
+    num_slots: int = 64,
     is_moe: bool = True,
-    num_routed_experts: int = 0,
-    preloaded_weights=None,
     validate_debug_tensors: bool = False,
     torch_input=None,
+    forward_metadata=False,
 ):
     """Create all tensors required by DecoderBlock.op().
+
+    ``weights`` must be built on ``submesh`` (e.g. via
+    ``prepare_moe_layer_weights`` / ``prepare_dense_layer_weights`` from
+    ``weights/prepare.py``).
 
     Returns a dict with all attention + FFN + shared expert + reduce tensors.
     Intermediate torch CPU tensors (torch_input, torch_kv_cache, etc.) are
     included so that callers (e.g. golden-reference builders) can reuse them.
     """
-    if preloaded_weights is None and state_dict is None:
-        raise ValueError("Either state_dict or preloaded_weights must be provided")
+    if is_moe and not isinstance(weights, DeepSeekV3MoELayerWeights):
+        raise TypeError(f"is_moe=True requires DeepSeekV3MoELayerWeights, got {type(weights).__name__}")
+    if not is_moe and not isinstance(weights, DeepSeekV3DenseLayerWeights):
+        raise TypeError(f"is_moe=False requires DeepSeekV3DenseLayerWeights, got {type(weights).__name__}")
     torch.manual_seed(0)
+    if metadata is None:
+        metadata = DeepseekMetadata(position_id=position_id)
+    position_id = metadata.position_id
     num_devices = mesh_rows * mesh_cols
     device_grid_size = submesh.compute_with_storage_grid_size()
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
@@ -87,7 +99,7 @@ def create_decoder_block_tensors(
 
     _RopeConfig.max_seq_len = max_seq_len
 
-    # ── Constants for runtime tensors ──
+    # Constants for runtime tensors
     QNOPE_HEAD_DIM = 128
     QROPE_HEAD_DIM = _RopeConfig.qk_rope_head_dim
     QNOPE_OUT_DIM = 512
@@ -131,7 +143,7 @@ def create_decoder_block_tensors(
         }
     )
 
-    # ── SDPA KV cache buffer ──
+    # SDPA KV cache buffer
     kv_cache_num_cores_x = device_grid_size.x
     kv_cache_num_cores_y = device_grid_size.y
     kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
@@ -154,7 +166,7 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
 
-    # ── SDPA output intermediate buffer ──
+    # SDPA output intermediate buffer
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
     sdpa_out_interm_num_slots = 5  # MoE needs 36864 bytes/shard; 5 slots × 17 tiles × 512 = 43520
     sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8
@@ -182,24 +194,7 @@ def create_decoder_block_tensors(
     if torch_input is None:
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # All weights via prepare_* functions or preloaded
-    # ══════════════════════════════════════════════════════════════════════════
-    if preloaded_weights is not None:
-        layer = preloaded_weights
-    else:
-        if is_moe:
-            layer = prepare_moe_layer_weights(
-                submesh,
-                state_dict,
-                layer_idx,
-                num_routed_experts=num_routed_experts,
-                move_to_device=True,
-            )
-        else:
-            layer = prepare_dense_layer_weights(submesh, state_dict, layer_idx, move_to_device=True)
-
-    # ── FFN final output config (DRAM streaming matmul output grid) ──
+    # FFN final output config (DRAM streaming matmul output grid)
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(submesh, gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
@@ -220,7 +215,7 @@ def create_decoder_block_tensors(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
 
-    # ── MoE-only: gate indices and output buffers ──
+    # MoE-only gate indices and output buffers
     if is_moe:
         input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
         input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
@@ -272,12 +267,17 @@ def create_decoder_block_tensors(
                 mesh_mapper=mesh_mapper,
             )
 
-    # ══════════════════════════════════════════════════════════════════════════
+    if forward_metadata:
+        padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
+        padded_shape = (1, K + padding)
+        padded_input = torch.nn.functional.pad(torch_input, (0, padding), value=0)
+    else:
+        padded_shape = shape
+        padded_input = torch_input
     # Attention input/intermediate/output mesh tensors
-    # ══════════════════════════════════════════════════════════════════════════
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), padded_shape, ttnn.ShardOrientation.ROW_MAJOR
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -285,9 +285,9 @@ def create_decoder_block_tensors(
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if row == sender_row and col == sender_col:
-                device_tensors.append(torch_input)
+                device_tensors.append(padded_input)
             else:
-                device_tensors.append(torch.zeros_like(torch_input))
+                device_tensors.append(torch.zeros_like(padded_input))
 
     input_tensor_mesh = ttnn.from_torch(
         torch.cat(device_tensors, dim=0),
@@ -299,7 +299,7 @@ def create_decoder_block_tensors(
         mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
-    # ── RoPE TTNN tensors ──
+    # RoPE TTNN tensors
     qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     position_ids = torch.tensor([position_id])
 
@@ -345,7 +345,7 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
 
-    # ── Trans mat ──
+    # Rotation transform matrix tensor
     qrope_grid = ttnn.CoreRange(
         ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
     )
@@ -356,7 +356,7 @@ def create_decoder_block_tensors(
     trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem,
@@ -364,25 +364,13 @@ def create_decoder_block_tensors(
         mesh_mapper=mesh_mapper,
     )
 
-    # ── Position IDs ──
-    pos_core_grid = ttnn.CoreRangeSet(
+    # Metadata / position IDs
+    metadata_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
     )
-    pos_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    ttnn_position_ids = ttnn.from_torch(
-        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=submesh,
-        memory_config=pos_mem,
-        mesh_mapper=mesh_mapper,
-    )
+    ttnn_metadata_tensor = create_metadata_tensor(submesh, metadata_core_grid, metadata)
 
-    # ── KV Cache (ND sharded DRAM) ──
+    # KV cache (ND sharded DRAM)
     program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
     grid = program_config.grid
     kv_nd_shard_spec = ttnn.NdShardSpec(
@@ -394,23 +382,21 @@ def create_decoder_block_tensors(
     kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
     num_sp = mesh_rows
     dcs = program_config.device_chunk_size
-    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
-    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache = torch.zeros((num_slots, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(num_slots, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
     kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
-    ttnn_kv_cache = ttnn.from_torch(
-        torch_kv_cache_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=kv_cache_2d_mesh_mapper,
-    )
-
-    # ── KV cache clone for standalone AttentionBlock.op sanity check ──
-    ttnn_kv_cache_attn_ref = None
-    if validate_debug_tensors:
-        ttnn_kv_cache_attn_ref = ttnn.from_torch(
+    if position_id == 0:
+        ttnn_kv_cache = DRAMZeroFill.allocate_kv_cache_on_device(
+            submesh,
+            num_users=torch_kv_cache.shape[0],
+            max_seq_len=max_seq_len,
+            kvpe_dim=kvpe_dim,
+            dtype=ttnn.bfloat8_b,
+            mesh_shape=(mesh_rows, mesh_cols),
+        )
+    else:
+        ttnn_kv_cache = ttnn.from_torch(
             torch_kv_cache_shuffled,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
@@ -419,7 +405,29 @@ def create_decoder_block_tensors(
             mesh_mapper=kv_cache_2d_mesh_mapper,
         )
 
-    # ── SDPA output tensor ──
+    # KV cache clone for standalone AttentionBlock validation
+    ttnn_kv_cache_attn_ref = None
+    if validate_debug_tensors:
+        if position_id == 0:
+            ttnn_kv_cache_attn_ref = DRAMZeroFill.allocate_kv_cache_on_device(
+                submesh,
+                num_users=torch_kv_cache.shape[0],
+                max_seq_len=max_seq_len,
+                kvpe_dim=kvpe_dim,
+                dtype=ttnn.bfloat8_b,
+                mesh_shape=(mesh_rows, mesh_cols),
+            )
+        else:
+            ttnn_kv_cache_attn_ref = ttnn.from_torch(
+                torch_kv_cache_shuffled,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=kv_mem,
+                mesh_mapper=kv_cache_2d_mesh_mapper,
+            )
+
+    # SDPA output tensor
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
     sdpa_input_output_grid_crs = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
@@ -445,13 +453,13 @@ def create_decoder_block_tensors(
             tile=sdpa_tile,
         )
 
-    # ── Post-SDPA tensors ──
+    # Post-SDPA tensors
     a_tile = ttnn.Tile([M, 32])
     shard_mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-    # ── Attention block output / MoE residual input (overlapped with sdpa_kv_cache_buffer) ──
+    # Attention block output / MoE residual input (overlapped with sdpa_kv_cache_buffer)
     # These are temporally disjoint: the kv cache on core (12,9) is done after SDPA,
     # so the attention output and MoE residual input can reuse that L1 region.
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
@@ -478,7 +486,7 @@ def create_decoder_block_tensors(
             mesh_mapper=shard_mesh_mapper,
         )
 
-    # ── SDPA worker/forwarder tensors ──
+    # SDPA worker/forwarder tensors
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
     sdpa_worker_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
@@ -533,9 +541,7 @@ def create_decoder_block_tensors(
         mesh_mapper=shard_mesh_mapper,
     )
 
-    # ══════════════════════════════════════════════════════════════════════════
     # Reduce-to-one tensors
-    # ══════════════════════════════════════════════════════════════════════════
     reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
     reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
     tile_1x32 = ttnn.Tile([1, 32])
@@ -580,7 +586,7 @@ def create_decoder_block_tensors(
         mesh_mapper=reduce_mesh_mapper,
     )
 
-    # ── Standalone MoE ref reduce tensors (MoE only) ──
+    # Standalone MoE reference reduce tensors (MoE only)
     if is_moe:
         moe_ref_reduce_intermediate = None
         moe_ref_reduce_output = None
@@ -607,23 +613,23 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
-    # ── Routed weight tensors differ between MoE (list) and dense (single tensor) ──
-    routed_gate = layer.routed_gate_proj[0] if is_moe else layer.routed_gate_proj
-    routed_up = layer.routed_up_proj[0] if is_moe else layer.routed_up_proj
-    routed_down = layer.routed_down_proj[0] if is_moe else layer.routed_down_proj
+    # Routed weight tensors differ between MoE (list) and dense (single tensor)
+    routed_gate = weights.routed_gate_proj[0] if is_moe else weights.routed_gate_proj
+    routed_up = weights.routed_up_proj[0] if is_moe else weights.routed_up_proj
+    routed_down = weights.routed_down_proj[0] if is_moe else weights.routed_down_proj
 
     result = {
         # Attention weights (from prepare_*_layer_weights)
-        "gamma_overlapped": layer.attn_norm,
-        "matmul_weights_overlapped": layer.q_a_proj,
-        "rmsnorm2_gamma_overlapped": layer.q_norm,
-        "matmul2_weights_overlapped": layer.q_b_proj,
-        "matmul3_weights_overlapped": layer.kv_b1_proj,
-        "dkv_matmul_weights_overlapped": layer.kv_a_proj,
-        "dkv_rmsnorm_gamma_overlapped": layer.kv_norm,
-        "kv_b2_overlapped": layer.kv_b2_proj,
-        "o_proj_overlapped": layer.o_proj,
-        "ffn_norm_overlapped": layer.ffn_norm,
+        "gamma_overlapped": weights.attn_norm,
+        "matmul_weights_overlapped": weights.q_a_proj,
+        "rmsnorm2_gamma_overlapped": weights.q_norm,
+        "matmul2_weights_overlapped": weights.q_b_proj,
+        "matmul3_weights_overlapped": weights.kv_b1_proj,
+        "dkv_matmul_weights_overlapped": weights.kv_a_proj,
+        "dkv_rmsnorm_gamma_overlapped": weights.kv_norm,
+        "kv_b2_overlapped": weights.kv_b2_proj,
+        "o_proj_overlapped": weights.o_proj,
+        "ffn_norm_overlapped": weights.ffn_norm,
         # Attention activation/buffer tensors
         "input_tensor_mesh": input_tensor_mesh,
         "ttnn_qrope_sin": ttnn_qrope_sin,
@@ -633,7 +639,7 @@ def create_decoder_block_tensors(
         "ttnn_krope_sin": ttnn_krope_sin,
         "ttnn_kv_cache": ttnn_kv_cache,
         "ttnn_kv_cache_attn_ref": ttnn_kv_cache_attn_ref,
-        "ttnn_position_ids": ttnn_position_ids,
+        "ttnn_metadata_tensor": ttnn_metadata_tensor,
         "scale": scale,
         "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
         "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
@@ -655,9 +661,9 @@ def create_decoder_block_tensors(
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
-        "shared_gate_weights_overlapped": layer.shared_gate_proj,
-        "shared_up_weights_overlapped": layer.shared_up_proj,
-        "shared_down_weights_tensor": layer.shared_down_proj,
+        "shared_gate_weights_overlapped": weights.shared_gate_proj,
+        "shared_up_weights_overlapped": weights.shared_up_proj,
+        "shared_down_weights_tensor": weights.shared_down_proj,
         "shared_k_parallel": SharedExpert.K_PARALLEL,
         "shared_n_parallel": SharedExpert.N_PARALLEL,
         # Reduce-to-one
@@ -667,6 +673,7 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
+        "forward_metadata": forward_metadata,
         # Intermediate CPU tensors (for golden-reference builders)
         "torch_input": torch_input,
         "torch_kv_cache": torch_kv_cache,
@@ -678,8 +685,8 @@ def create_decoder_block_tensors(
     if is_moe:
         result.update(
             {
-                "gate_mm_overlapped": layer.gate_mm,
-                "ttnn_gate_bias": layer.gate_bias,
+                "gate_mm_overlapped": weights.gate_mm,
+                "ttnn_gate_bias": weights.gate_bias,
                 "ttnn_gate_indices": ttnn_gate_indices,
                 "gate_output_scores_tensor": gate_output_scores_tensor,
                 "gate_output_indices_tensor": gate_output_indices_tensor,
@@ -699,61 +706,90 @@ class DecoderStage(StageKind):
 
     def __init__(
         self,
-        state_dict: dict[str, torch.Tensor] | None,
         *,
-        weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights | None,
+        weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights,
         layer_idx: int,
-        position_id: int,
+        metadata: DeepseekMetadata,
         max_seq_len: int,
+        num_slots: int,
         persistent_mode: bool,
         is_torus: bool,
         is_moe: bool,
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
+        forward_metadata: bool = True,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
-        if state_dict is None and weights is None:
-            raise ValueError("Either state_dict or weights must be provided")
-        if state_dict is not None and weights is not None:
-            raise ValueError("Provide state_dict or weights, not both")
-        self._state_dict = state_dict
+        if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
+            raise ValueError(
+                f"Invalid weights type: {type(weights)}, expected DeepSeekV3MoELayerWeights or DeepSeekV3DenseLayerWeights"
+            )
+        if is_moe and not isinstance(weights, DeepSeekV3MoELayerWeights):
+            raise ValueError(f"MoE weights must be a DeepSeekV3MoELayerWeights, got {type(weights)}")
+        if not is_moe and not isinstance(weights, DeepSeekV3DenseLayerWeights):
+            raise ValueError(f"Dense weights must be a DeepSeekV3DenseLayerWeights, got {type(weights)}")
+
         self._weights = weights
         self._layer_idx = layer_idx
-        self._position_id = position_id
+        self._metadata = metadata
         self._max_seq_len = max_seq_len
+        self._num_slots = num_slots
         self._persistent_mode = persistent_mode
         self._is_torus = is_torus
         self._is_moe = is_moe
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
+        self._forward_metadata = forward_metadata
+        self._upstream_fifo_pages = upstream_fifo_pages
+        self._downstream_fifo_pages = downstream_fifo_pages
+        self._num_links_bcast = 1
+        self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
 
         gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
         shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
         aggregator_core = shard_cores_list[0]
 
-        stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+        stage_entry_device = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        assert (
+            ACTIVATION_PAGE_SIZE_BYTES % len(shard_cores_list) == 0
+        ), "ACTIVATION_PAGE_SIZE_BYTES must be divisible by len(shard_cores_list)"
+
+        exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
+
+        if self._forward_metadata:
+            page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        else:
+            page_size = ACTIVATION_PAGE_SIZE_BYTES
+        upstream_fifo_size = activation_fifo_size_bytes(page_size, self._upstream_fifo_pages)
+        downstream_fifo_size = activation_fifo_size_bytes(page_size, self._downstream_fifo_pages)
 
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_fifo_size=upstream_fifo_size,
+            downstream_d2d_socket_fifo_size=downstream_fifo_size,
+            upstream_d2d_socket_page_size=page_size,
+            downstream_d2d_socket_page_size=page_size,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
-            exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            exit_upstream_page_size=exit_upstream_page_size,
+            forward_metadata=self._forward_metadata,
+            my_stage_idx=my_stage_idx,
+            stages_metadata=ctx.stages_metadata,
+            pipeline_config=pipeline_config,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -791,7 +827,7 @@ class DecoderStage(StageKind):
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
+            d["ttnn_metadata_tensor"],
             d["scale"],
             d["sdpa_kv_cache_buffer"],
             d["sdpa_out_interm_buffer"],
@@ -831,30 +867,33 @@ class DecoderStage(StageKind):
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
-            num_links_bcast=1,
-            num_links_allreduce=1,
+            num_links_bcast=self._num_links_bcast,
+            num_links_allreduce=self._num_links_allreduce,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],
             downstream_sockets=self._state["downstream_sockets"],
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
+            forward_metadata=self._forward_metadata,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         mesh_device = ctx.mesh_device
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
 
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+        sender_coord = pipeline_config[my_stage_idx].entry_node_coord
+        reduce_root_coord = pipeline_config[my_stage_idx].exit_node_coord
 
         num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
         available_cores = ttnn.num_cores_to_corerangeset(
             num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
         )
 
-        attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
+        attn_semaphores = AttentionBlock.create_semaphores(
+            mesh_device, num_links_bcast=self._num_links_bcast, num_links_allreduce=self._num_links_allreduce
+        )
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         persistent_next_iter_semaphore = (
@@ -868,13 +907,13 @@ class DecoderStage(StageKind):
                 mesh_device.shape[1],
                 sender_coord[0],
                 sender_coord[1],
-                self._position_id,
-                self._state_dict,
-                self._layer_idx,
+                self._metadata.position_id,
                 self._max_seq_len,
                 reduce_root_coord=reduce_root_coord,
-                num_routed_experts=self._num_routed_experts,
-                preloaded_weights=self._weights,
+                weights=self._weights,
+                metadata=self._metadata,
+                num_slots=self._num_slots,
+                forward_metadata=self._forward_metadata,
             )
         else:
             d = create_decoder_block_tensors(
@@ -883,13 +922,14 @@ class DecoderStage(StageKind):
                 mesh_device.shape[1],
                 sender_coord[0],
                 sender_coord[1],
-                self._position_id,
-                self._state_dict,
-                self._layer_idx,
+                self._metadata.position_id,
                 self._max_seq_len,
                 reduce_root_coord=reduce_root_coord,
+                weights=self._weights,
+                metadata=self._metadata,
+                num_slots=self._num_slots,
                 is_moe=False,
-                preloaded_weights=self._weights,
+                forward_metadata=self._forward_metadata,
             )
         ttnn.synchronize_device(mesh_device)
 
@@ -911,7 +951,7 @@ class DecoderStage(StageKind):
 
         self._state["decoder_program_context"] = self._build_decoder_program_context()
 
-        logger.info(f"[rank={my_mesh_id}] {type(self).__name__} setup complete")
+        logger.info(f"[rank={my_stage_idx}] {type(self).__name__} setup complete")
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         DecoderBlock.execute(*self._state["decoder_program_context"])
@@ -920,72 +960,79 @@ class DecoderStage(StageKind):
 class MoEDecoderStage(DecoderStage):
     """Decoder stage: bcast + fused attention + MoE + reduce-to-one.
 
-    Accepts weights in two forms (mutually exclusive):
-    - ``weights``: a pre-loaded :class:`DeepSeekV3MoELayerWeights` (production path via
-      ``WeightProvider.load_moe_layer``).
-    - ``state_dict``: a raw HF-format state dict (test path; requires ``layer_idx`` and
-      ``num_routed_experts`` for weight processing).
+    Requires ``weights`` as a pre-loaded :class:`DeepSeekV3MoELayerWeights`
+    (typically from ``WeightProvider.load_moe_layer``).
     """
 
     def __init__(
         self,
-        state_dict: dict[str, torch.Tensor] | None = None,
         *,
-        weights: DeepSeekV3MoELayerWeights | None = None,
+        weights: DeepSeekV3MoELayerWeights,
         layer_idx: int = 4,
         num_routed_experts: int = 256,
-        position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        metadata: DeepseekMetadata = DeepseekMetadata(),
+        max_seq_len: int = 128 * 1024,
+        num_slots: int = 64,
         persistent_mode: bool = True,
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
+        forward_metadata: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
-            state_dict,
             weights=weights,
             layer_idx=layer_idx,
-            position_id=position_id,
+            metadata=metadata,
             max_seq_len=max_seq_len,
+            num_slots=num_slots,
             persistent_mode=persistent_mode,
             is_torus=is_torus,
             is_moe=True,
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
+            forward_metadata=forward_metadata,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
         )
 
 
 class DenseDecoderStage(DecoderStage):
     """Dense decoder stage: bcast + fused attention + dense MLP + reduce-to-one.
 
-    Accepts weights in two forms (mutually exclusive):
-    - ``weights``: a pre-loaded :class:`DeepSeekV3DenseLayerWeights` (production path via
-      ``WeightProvider.load_dense_layer``).
-    - ``state_dict``: a raw HF-format state dict (test path; requires ``layer_idx``).
+    Requires ``weights`` as a pre-loaded :class:`DeepSeekV3DenseLayerWeights`
+    (typically from ``WeightProvider.load_dense_layer``).
     """
 
     def __init__(
         self,
-        state_dict: dict[str, torch.Tensor] | None = None,
         *,
-        weights: DeepSeekV3DenseLayerWeights | None = None,
+        weights: DeepSeekV3DenseLayerWeights,
         layer_idx: int = 0,
-        position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        metadata: DeepseekMetadata = DeepseekMetadata(),
+        max_seq_len: int = 128 * 1024,
+        num_slots: int = 64,
         persistent_mode: bool = True,
         is_torus: bool = True,
+        forward_metadata: bool = False,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
-            state_dict,
             weights=weights,
             layer_idx=layer_idx,
-            position_id=position_id,
+            metadata=metadata,
             max_seq_len=max_seq_len,
+            num_slots=num_slots,
             persistent_mode=persistent_mode,
             is_torus=is_torus,
             is_moe=False,
             num_routed_experts=0,
             use_hardcoded_expert_index=False,
             enable_routing=False,
+            forward_metadata=forward_metadata,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
         )

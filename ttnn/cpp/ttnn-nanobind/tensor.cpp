@@ -38,6 +38,8 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -53,7 +55,21 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
-    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity");
+    export_enum<tt::tt_metal::MathFidelity>(m_tensor, "MathFidelity", R"doc(
+        Number of mantissa-bit passes through the 5b×7b multiplier array.
+
+        Higher fidelity consumes more mantissa bits from each operand and therefore produces more
+        accurate results, at the cost of proportionally lower throughput. The matrix engine uses
+        5 bits (1 hidden + 4) from SrcA and 7 bits (1 hidden + 6) from SrcB per pass:
+
+        - ``LoFi``  (1 pass):  SrcA uses the 4 MSB mantissa bits; SrcB uses the 6 MSB mantissa bits.
+        - ``HiFi2`` (2 passes): SrcA adds the next 4 LSB bits; SrcB keeps the 6 MSB bits.
+        - ``HiFi3`` (3 passes): SrcA keeps the 4 MSB bits; SrcB adds the next 6 LSB bits.
+        - ``HiFi4`` (4 passes): SrcA adds the next 4 LSB bits; SrcB keeps both 6 MSB and 6 LSB bits.
+
+        Note: ``reduce_max`` and elementwise ``add``/``sub`` are unaffected by this setting.
+        Elementwise ``mul`` and ``reduce_average``/``sum`` do respect this setting.
+    )doc");
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     // export_enum<ShardMode>(m_tensor);
@@ -222,6 +238,44 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("dtype"),
             "Get tile size in bytes for the given data type")
         .def(nb::self == nb::self);
+
+    // Standalone tile/element size utilities — equivalent to Tile.get_tile_size but
+    // usable without a Tile object (e.g., for intermediate CB sizing).
+    m_tensor.def(
+        "tile_size",
+        [](DataType dtype) -> uint32_t { return tt::tile_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get tile size in bytes for the given data type (standard 32x32 tile).
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Tile size in bytes (e.g., 2048 for bfloat16, 4096 for float32).
+
+            Example:
+            >>> ttnn.tile_size(ttnn.bfloat16)  # Returns 2048
+            >>> ttnn.tile_size(ttnn.float32)   # Returns 4096
+        )doc");
+
+    m_tensor.def(
+        "element_size",
+        [](DataType dtype) -> uint32_t { return tt::datum_size(datatype_to_dataformat_converter(dtype)); },
+        nb::arg("dtype"),
+        R"doc(
+            Get element size in bytes for the given data type.
+
+            Args:
+                dtype: TTNN data type (e.g., ttnn.bfloat16, ttnn.float32).
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+
+            Example:
+            >>> ttnn.element_size(ttnn.bfloat16)  # Returns 2
+            >>> ttnn.element_size(ttnn.float32)   # Returns 4
+        )doc");
 
     auto pyTensorSpec = static_cast<nb::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec

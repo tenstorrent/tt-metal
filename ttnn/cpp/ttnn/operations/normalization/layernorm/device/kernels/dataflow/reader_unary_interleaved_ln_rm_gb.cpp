@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "experimental/noc.h"
@@ -47,32 +47,36 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
-    constexpr auto src0_args = TensorAccessorArgs<2>();
+    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(2);
+    constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
-    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+    const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, stick_size);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto addrb = TensorAccessor(beta_args, beta_addr, stick_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
+    const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 
     // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_in_2, scaler);
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_in_2,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW,
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+            /*compute_uses_reduce_tile=*/true>();
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);

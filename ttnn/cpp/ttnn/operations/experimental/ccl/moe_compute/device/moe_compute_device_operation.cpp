@@ -5,6 +5,7 @@
 #include "moe_compute_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
@@ -21,7 +22,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_hit(
 }
 
 void MoEComputeDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Tilize
     TT_FATAL(
         tensor_args.tilize_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
@@ -30,7 +31,38 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         tensor_args.tilize_input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
     TT_FATAL(
         tensor_args.tilize_expert_indices_tensor.dtype() == tt::tt_metal::DataType::UINT16,
-        "Indices tensor must be uint32");
+        "Indices tensor must be uint16");
+
+    // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
+    // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
+    // dm0 silently reads from wrong expert boundaries after the first expert.
+    if (args.has_bias) {
+        constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
+        constexpr uint32_t w0w1_txn = moe_ring::W0_W1_TILES_PER_TXN * tile_h;  // bytes per transaction row
+        constexpr uint32_t w2_txn = moe_ring::W2_TILES_PER_TXN * tile_h;
+
+        const auto& w0_w1_shape = tensor_args.matmul_w0_w1_tensor.tensor_spec().logical_shape();
+        const uint32_t w0_w1_k = w0_w1_shape[-2];
+        TT_FATAL(
+            w0_w1_k % w0w1_txn == 0,
+            "matmul_w0_w1_tensor K-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
+            "when has_bias=True. Use moe_compute_utils.prepare_w0_w1_tensor_with_bias() to prepare the tensor.",
+            w0_w1_k,
+            w0w1_txn,
+            moe_ring::W0_W1_TILES_PER_TXN,
+            tile_h);
+
+        const auto& w2_shape = tensor_args.matmul_w2_tensor.tensor_spec().logical_shape();
+        const uint32_t w2_n = w2_shape[-2];
+        TT_FATAL(
+            w2_n % w2_txn == 0,
+            "matmul_w2_tensor N-dimension ({}) must be a multiple of {} elements ({} tiles * {} rows/tile) "
+            "when has_bias=True. Use moe_compute_utils.prepare_w2_tensor_with_bias() to prepare the tensor.",
+            w2_n,
+            w2_txn,
+            moe_ring::W2_TILES_PER_TXN,
+            tile_h);
+    }
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -53,19 +85,33 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
 
+    const CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
+    const CoreRangeSet shard_cores =
+        CoreRangeSet({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
+    const auto num_cores = shard_cores.num_cores();
+
     //-------------------------------------------------------------------------
     // Tilize outputs
     //-------------------------------------------------------------------------
     // Output 0: Per expert total tokens tensor
+    // This data will be replicated on all cores
     auto per_expert_total_tokens_row_bytes = tt::align(experts_per_device * sizeof(uint32_t), l1_alignment);
-    auto per_expert_total_tokens_row_elements = per_expert_total_tokens_row_bytes / sizeof(uint32_t);
-    auto tilize_per_expert_total_tokens_shape = ttnn::Shape({1, per_expert_total_tokens_row_elements});
+    auto per_expert_total_tokens_row_elements = tt::div_up(per_expert_total_tokens_row_bytes, sizeof(uint32_t));
+    auto tilize_per_expert_total_tokens_shape = ttnn::Shape({num_cores, per_expert_total_tokens_row_elements});
+
+    const ttnn::MemoryConfig tilize_per_expert_total_tokens_sharded_memory_config = ttnn::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec(
+            shard_cores, {1, per_expert_total_tokens_row_elements}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
+    };
+
     auto tilize_per_expert_total_tokens_spec = TensorSpec(
-        Shape(tilize_per_expert_total_tokens_shape),
+        tilize_per_expert_total_tokens_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
+            tilize_per_expert_total_tokens_sharded_memory_config));
 
     // Output 1: Expert activation tensor
     // Each row: [token_id, k_indices[experts_per_device], scores[experts_per_device]]
@@ -76,7 +122,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
     auto tilize_expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
     auto tilize_expert_activation_spec = TensorSpec(
-        Shape(tilize_expert_activation_shape),
+        tilize_expert_activation_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -104,8 +150,6 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
      * MM: Used as input CB (where tilized chunks arrive)
      * Combine: Stores output of MM, for input to combine
      */
-    CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
-    CoreRangeSet shard_cores = CoreRangeSet({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
     ttnn::MemoryConfig output_sharded_memory_config = ttnn::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
@@ -196,13 +240,15 @@ std::vector<ttnn::Tensor> moe_compute(
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
     const uint32_t output_width_shard_dim,
+    const bool has_bias,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
     const std::optional<CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
+    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
+    const std::optional<::detail::MoEActivationFunction>& activation_type) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -239,7 +285,9 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
-            .combine_params = combine_params},
+            .has_bias = has_bias,
+            .combine_params = combine_params,
+            .activation_type = activation_type.value_or(::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

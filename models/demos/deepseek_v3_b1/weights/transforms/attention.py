@@ -72,7 +72,8 @@ def _make_q_ab_kv_a_overlap_entries(
     q_a_proj_weights: torch.Tensor,
     q_b_proj_weights: torch.Tensor,
     kv_a_proj_weights: torch.Tensor,
-    dtype: ttnn.DataType,
+    q_ab_dtype: ttnn.DataType,
+    kv_a_dtype: ttnn.DataType,
 ) -> list[OverlapEntry]:
     """Validate MLA proj weights and build three :class:`OverlapEntry` items (no I/O)."""
     q_b_tp = cfg.q_b_shard_spec.tp(mesh_shape)
@@ -100,17 +101,17 @@ def _make_q_ab_kv_a_overlap_entries(
         OverlapEntry(
             "q_a_proj",
             q_a_packed,
-            replace(cfg.q_a_shard_spec, raw_tensor_shape=tuple(q_a_packed.shape), dtype=dtype),
+            replace(cfg.q_a_shard_spec, raw_tensor_shape=tuple(q_a_packed.shape), dtype=q_ab_dtype),
         ),
         OverlapEntry(
             "q_b_proj",
             q_b_preprocessed,
-            replace(cfg.q_b_shard_spec, raw_tensor_shape=tuple(q_b_preprocessed.shape), dtype=dtype),
+            replace(cfg.q_b_shard_spec, raw_tensor_shape=tuple(q_b_preprocessed.shape), dtype=q_ab_dtype),
         ),
         OverlapEntry(
             "kv_a_proj",
             kv_reordered,
-            replace(cfg.kv_a_shard_spec, raw_tensor_shape=tuple(kv_reordered.shape), dtype=dtype),
+            replace(cfg.kv_a_shard_spec, raw_tensor_shape=tuple(kv_reordered.shape), dtype=kv_a_dtype),
         ),
     ]
 
@@ -121,14 +122,14 @@ def fuse_q_ab_kv_a(
     kv_a_proj_weights: torch.Tensor,
     device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse q_a, q_b, and kv_a projection weights into one overlapped buffer."""
     cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
     mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
     entries = _make_q_ab_kv_a_overlap_entries(
-        cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, dtype
+        cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, dtype, dtype
     )
     return overlap_tensors(entries, device=device, move_to_device=move_to_device)
 
@@ -142,7 +143,7 @@ def fuse_o_proj_gate_mm_norms(
     ffn_norm: torch.Tensor,
     device,
     *,
-    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse o_proj, gate_mm, and RMSNorm weights into one overlapped buffer."""
@@ -178,13 +179,19 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     kv_a_proj_weights: torch.Tensor,
     device,
     *,
-    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    mla_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
+    q_ab_dtype: ttnn.DataType = ttnn.bfloat4_b,
+    kv_a_dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
-    """Fuse TP4 ``shuffle_q_a`` o_proj, gate_mm, norms, and q_a / q_b / kv_a into one L1 buffer.
+    """Fuse TP4 ``shuffle_q_a`` o_proj, norms, and q_a / q_b / kv_a into one per-core L1 buffer.
+
+    ``gate_mm`` is excluded from the overlap and returned as a standalone
+    ``OverlappedTensor`` backed by its own per-core allocated tensor, avoiding
+    lockstep L1 reservation on the ~115 cores used by the fused buffer.
 
     Requires a **4×2** mesh.  ``o_proj_weights`` shape ``(16384, 7168)``.
+    Must be the first per-core allocation on the device.
     """
     o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
     q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
@@ -216,13 +223,12 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     )
 
     q_entries = _make_q_ab_kv_a_overlap_entries(
-        q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, mla_proj_dtype
+        q_cfg, mesh_shape, q_a_proj_weights, q_b_proj_weights, kv_a_proj_weights, q_ab_dtype, kv_a_dtype
     )
 
-    return overlap_tensors(
+    result = overlap_tensors(
         [
             OverlapEntry("o_proj", o_packed, o_spec),
-            OverlapEntry("gate_mm", gate_mm_weights, o_cfg.gate_mm),
             OverlapEntry("attn_norm", attn_norm, o_cfg.attn_norm),
             OverlapEntry("q_norm", q_norm, o_cfg.q_norm),
             OverlapEntry("ffn_norm", ffn_norm, o_cfg.ffn_norm),
@@ -231,7 +237,18 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
         ],
         device=device,
         move_to_device=move_to_device,
+        per_core=True,
     )
+
+    gate_mm_result = overlap_tensors(
+        [OverlapEntry("gate_mm", gate_mm_weights, o_cfg.gate_mm)],
+        device=device,
+        move_to_device=move_to_device,
+        per_core=True,
+    )
+    result["gate_mm"] = gate_mm_result["gate_mm"]
+
+    return result
 
 
 def fuse_kv_b12(
@@ -239,7 +256,7 @@ def fuse_kv_b12(
     kv_b2_proj_weights: torch.Tensor,
     device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse kv_b1 and kv_b2 projection weights into one overlapped buffer."""

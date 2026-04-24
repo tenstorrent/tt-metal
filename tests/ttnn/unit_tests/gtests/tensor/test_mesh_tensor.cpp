@@ -5,9 +5,12 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <numeric>
+#include <set>
 
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -19,9 +22,14 @@
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/core_subset_write/tensor.hpp>
+#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+
 namespace ttnn::distributed::test {
 namespace {
 
+using ::testing::Each;
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::HasSubstr;
@@ -626,6 +634,30 @@ void expect_host_tensors_eq(const HostTensor& expected, const HostTensor& actual
     }
 }
 
+// Verify the contract for a HEIGHT_SHARDED tensor with shard_shape {rows_per_shard, cols} on cores
+// {(0,0), (0,1)}: rows [0, rows_per_shard) live on (0,0); rows [rows_per_shard, 2*rows_per_shard)
+// live on (0,1).  Asserts that, in the *logical* row-major view of the shard, rows backed by a
+// filtered core hold `new_value` while the rest hold `sentinel_value`.
+void expect_height_sharded_filter_applied(
+    const std::vector<uint32_t>& logical_data,
+    uint32_t cols,
+    uint32_t rows_per_shard,
+    bool first_shard_was_filtered,
+    bool second_shard_was_filtered,
+    uint32_t sentinel_value,
+    uint32_t new_value) {
+    ASSERT_EQ(logical_data.size(), 2u * rows_per_shard * cols);
+    const uint32_t first_expected = first_shard_was_filtered ? new_value : sentinel_value;
+    const uint32_t second_expected = second_shard_was_filtered ? new_value : sentinel_value;
+    for (uint32_t row = 0; row < 2u * rows_per_shard; ++row) {
+        const uint32_t expected = (row < rows_per_shard) ? first_expected : second_expected;
+        for (uint32_t col = 0; col < cols; ++col) {
+            const size_t idx = static_cast<size_t>(row) * cols + col;
+            ASSERT_EQ(logical_data[idx], expected) << "mismatch at row=" << row << " col=" << col;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  is_uniform_write
 // ---------------------------------------------------------------------------
@@ -633,35 +665,35 @@ void expect_host_tensors_eq(const HostTensor& expected, const HostTensor& actual
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_FullCoverage) {
     const ttnn::Shape shape{1, 1, 32, 32};
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
-    EXPECT_TRUE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_TRUE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_NO_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_NO_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SingleShard) {
     const ttnn::Shape shape{1, 1, 32, 32};
     auto host_tensor = make_single_shard_host_tensor(shape, 1);
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_PartialCoverage) {
     const ttnn::Shape shape{1, 1, 32, 32};
     std::vector<distributed::MeshCoordinate> coords = {{0, 0}, {0, 1}};
     auto host_tensor = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), coords, {0, 0});
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_SmallerMeshShape) {
     const ttnn::Shape shape{1, 1, 32, 32};
     distributed::MeshShape smaller_mesh{1, 2};
     auto host_tensor = make_full_coverage_host_tensor(shape, smaller_mesh, {0, 0});
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
 }
 
 TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
@@ -669,9 +701,9 @@ TEST_F(MeshTensorDataMovementTest, IsUniformWrite_EmptyDistributedHostBuffer) {
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
     HostTensor host_tensor(std::move(dhb), spec, TensorTopology{});
-    EXPECT_FALSE(tensor_impl::is_uniform_write(host_tensor, *mesh_device_));
+    EXPECT_FALSE(is_uniform_write(host_tensor, *mesh_device_));
     auto& cq = mesh_device_->mesh_command_queue();
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_));
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, *mesh_device_));
 }
 
 // ---------------------------------------------------------------------------
@@ -684,8 +716,8 @@ TEST_F(MeshTensorDataMovementTest, UniformToDevice_ToHost_Roundtrip) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
-    HostTensor result = tensor_impl::enqueue_read_mesh_tensor(cq, device_tensor);
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
 
     expect_host_tensors_eq(host_tensor, result);
 }
@@ -701,17 +733,85 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_CopyToHost_Roundtrip) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = tensor_impl::allocate_mesh_tensor(spec, *mesh_device_, host_tensor.tensor_topology());
-    tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor);
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+    enqueue_write_tensor(cq, host_tensor, device_tensor);
 
     auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
     HostTensor result(std::move(result_dhb), spec, TensorTopology{});
-    tensor_impl::enqueue_read_mesh_tensor(cq, device_tensor, result);
+    enqueue_read_tensor(cq, device_tensor, result);
 
     expect_host_tensors_eq(host_tensor, result);
+}
+
+// Verifies the user-facing contract: in a HEIGHT_SHARDED tensor with one shard per core, applying
+// a core filter restricts a write to the logical rows backed by those cores. The test does not
+// touch BufferPageMapping or raw device byte layout; it asserts on the logical row-major view
+// returned by enqueue_read_tensor.
+TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_WithCoreFilter_WritesOnlyFilteredCores) {
+    constexpr uint32_t kRowsPerShard = 32;
+    constexpr uint32_t kCols = 32;
+    constexpr uint32_t kSentinel = 0x11u;
+    constexpr uint32_t kNew = 0x22u;
+    const ttnn::Shape shape{1, 1, 2 * kRowsPerShard, kCols};
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    ShardSpec shard_spec(shard_grid, {kRowsPerShard, kCols});
+    // Use L1 so that BufferPageMapping::all_cores equals the user's shard grid (Tensix cores).
+    MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
+    auto host_sentinel =
+        make_full_coverage_host_tensor(shape, mesh_device_->shape(), {kSentinel, kSentinel, kSentinel, kSentinel});
+    auto host_new = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {kNew, kNew, kNew, kNew});
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_sentinel.tensor_topology());
+    enqueue_write_tensor(cq, host_sentinel, device_tensor);
+    // Filter to logical core (0,0) -- the first shard slot of the ShardSpec grid.
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_new, device_tensor, filter);
+
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+    for (const auto& coord : result.buffer().shard_coords()) {
+        auto shard = result.buffer().get_shard(coord);
+        ASSERT_TRUE(shard.has_value());
+        auto span = shard->view_as<uint32_t>();
+        std::vector<uint32_t> data(span.begin(), span.end());
+        expect_height_sharded_filter_applied(
+            data,
+            kCols,
+            kRowsPerShard,
+            /*first_shard_was_filtered=*/true,
+            /*second_shard_was_filtered=*/false,
+            kSentinel,
+            kNew);
+    }
+}
+
+TEST_F(MeshTensorDataMovementTest, EnqueueWriteTensor_FilterEmpty_Noop) {
+    const ttnn::Shape shape{1, 1, 64, 32};
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    ShardSpec shard_spec(shard_grid, {32, 32});
+    MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
+    auto host_sentinel = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {5u, 5u, 5u, 5u});
+    auto host_new = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {9u, 9u, 9u, 9u});
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_sentinel.tensor_topology());
+    enqueue_write_tensor(cq, host_sentinel, device_tensor);
+    CoreRangeSet empty_filter;
+    tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_new, device_tensor, empty_filter);
+    cq.finish();
+
+    auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+        result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
+    }
+    HostTensor result(std::move(result_dhb), spec, TensorTopology{});
+    enqueue_read_tensor(cq, device_tensor, result);
+    expect_host_tensors_eq(host_sentinel, result);
 }
 
 // ---------------------------------------------------------------------------
@@ -725,8 +825,8 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_RejectsPartialCoverage) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = tensor_impl::allocate_mesh_tensor(spec, *mesh_device_, TensorTopology{});
-    EXPECT_ANY_THROW(tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor));
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
+    EXPECT_ANY_THROW(enqueue_write_tensor(cq, host_tensor, device_tensor));
 }
 
 // ---------------------------------------------------------------------------
@@ -741,11 +841,10 @@ TEST_F(MeshTensorDataMovementTest, NonUniformToDevice_ToHost_Roundtrip) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto [device_tensor, written_coords] =
-        tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
+        non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, *mesh_device_);
     ASSERT_EQ(written_coords.size(), coords.size());
 
-    HostTensor result =
-        tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(cq, device_tensor, written_coords);
+    HostTensor result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, written_coords);
     expect_host_tensors_eq(host_tensor, result);
 }
 
@@ -761,10 +860,9 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    MeshTensor device_tensor = tensor_impl::allocate_mesh_tensor(spec, *mesh_device_, TensorTopology{});
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology{});
 
-    auto written_coords =
-        tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, device_tensor);
+    auto written_coords = non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, device_tensor);
     ASSERT_EQ(written_coords.size(), coords.size());
 
     auto result_dhb = DistributedHostBuffer::create(mesh_device_->shape());
@@ -772,7 +870,7 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToDevice_CopyToHost_Roundtrip) 
         result_dhb.emplace_shard(coord, [&]() { return tensor_impl::allocate_host_buffer(spec); });
     }
     HostTensor result(std::move(result_dhb), spec, TensorTopology{});
-    tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(cq, device_tensor, result, written_coords);
+    non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, result, written_coords);
     expect_host_tensors_eq(host_tensor, result);
 }
 
@@ -786,9 +884,8 @@ TEST_F(MeshTensorDataMovementTest, NonUniformToDevice_SingleShard_Roundtrip) {
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto [device_tensor, written_coords] =
-        tensor_impl::non_uniform_data_movement::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
-    HostTensor result =
-        tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(cq, device_tensor, written_coords);
+        non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, written_coords);
     auto expected = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {55, 55, 55, 55});
     expect_host_tensors_eq(expected, result);
 }
@@ -803,10 +900,10 @@ TEST_F(MeshTensorDataMovementTest, NonUniformToHost_ShedsExtraShards) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
 
     std::vector<distributed::MeshCoordinate> subset = {{0, 1}, {1, 0}};
-    HostTensor result = tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(cq, device_tensor, subset);
+    HostTensor result = non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, subset);
 
     ASSERT_EQ(result.buffer().shard_coords().size(), subset.size());
     auto expected = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), subset, {20, 30});
@@ -819,17 +916,105 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToHost_ShedsExtraShards) {
     auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), shard_fills);
 
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = tensor_impl::enqueue_write_mesh_tensor(cq, host_tensor, *mesh_device_);
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
 
     // Pass a full-coverage host tensor as the destination, but only read back a subset of coords.
     std::vector<distributed::MeshCoordinate> subset = {{1, 1}};
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto dest = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {0, 0, 0, 0});
-    tensor_impl::non_uniform_data_movement::enqueue_read_mesh_tensor(cq, device_tensor, dest, subset);
+    non_uniform_data_movement::enqueue_read_tensor(cq, device_tensor, dest, subset);
 
     ASSERT_EQ(dest.buffer().shard_coords().size(), subset.size());
     auto expected = make_partial_coverage_host_tensor(shape, mesh_device_->shape(), subset, {35});
     expect_host_tensors_eq(expected, dest);
+}
+
+TEST_F(MeshTensorDataMovementTest, UniformEnqueueWriteTensor_FilteredWriteRejectsInterleavedLayout) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    auto host_tensor = make_full_coverage_host_tensor(shape, mesh_device_->shape(), {1u, 2u, 3u, 4u});
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    MeshTensor device_tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, host_tensor.tensor_topology());
+    enqueue_write_tensor(cq, host_tensor, device_tensor);
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    EXPECT_ANY_THROW(
+        tt::tt_metal::experimental::core_subset_write::enqueue_write_tensor(cq, host_tensor, device_tensor, filter));
+}
+
+// Verifies the copy_to_device_filtered entry point at the ttnn::Tensor level: only the logical
+// rows backed by the filtered logical cores change. Asserted on the logical view via cpu().
+TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_WritesOnlyFilteredCores) {
+    constexpr uint32_t kRowsPerShard = 32;
+    constexpr uint32_t kCols = 32;
+    constexpr uint32_t kSentinel = 0x11u;
+    constexpr uint32_t kNew = 0x22u;
+    const ttnn::Shape shape{1, 1, 2 * kRowsPerShard, kCols};
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    ShardSpec shard_spec(shard_grid, {kRowsPerShard, kCols});
+    MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
+    TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    std::vector<uint32_t> sent_data(shape.volume(), kSentinel);
+    std::vector<uint32_t> new_data(shape.volume(), kNew);
+    Tensor host_sent = distribute_tensor(Tensor::from_vector(sent_data, spec), *mapper);
+    Tensor host_new = distribute_tensor(Tensor::from_vector(new_data, spec), *mapper);
+    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
+    copy_to_device(host_sent, device_tensor);
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, filter);
+
+    Tensor out = cpu(device_tensor);
+    auto out_shards = get_device_tensors(out);
+    ASSERT_FALSE(out_shards.empty());
+    for (const auto& shard : out_shards) {
+        auto data = shard.to_vector<uint32_t>();
+        expect_height_sharded_filter_applied(
+            data,
+            kCols,
+            kRowsPerShard,
+            /*first_shard_was_filtered=*/true,
+            /*second_shard_was_filtered=*/false,
+            kSentinel,
+            kNew);
+    }
+}
+
+TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
+    const ttnn::Shape shape{1, 1, 64, 32};
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    ShardSpec shard_spec(shard_grid, {32, 32});
+    MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
+    TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    std::vector<uint32_t> sent_data(shape.volume(), 0x55u);
+    std::vector<uint32_t> new_data(shape.volume(), 0x66u);
+    Tensor host_sent = distribute_tensor(Tensor::from_vector(sent_data, spec), *mapper);
+    Tensor host_new = distribute_tensor(Tensor::from_vector(new_data, spec), *mapper);
+    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_new.tensor_topology());
+    copy_to_device(host_sent, device_tensor);
+    CoreRangeSet empty_filter;
+    ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, empty_filter);
+    mesh_device_->mesh_command_queue().finish();
+    Tensor out = cpu(device_tensor);
+    auto out_shards = get_device_tensors(out);
+    ASSERT_FALSE(out_shards.empty());
+    for (const auto& shard : out_shards) {
+        EXPECT_THAT(shard.to_vector<uint32_t>(), Each(Eq(0x55u)));
+    }
+}
+
+TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_ThrowsOnInterleavedLayout) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    std::vector<uint32_t> a(shape.volume(), 1u);
+    std::vector<uint32_t> b(shape.volume(), 2u);
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor host_a = distribute_tensor(Tensor::from_vector(a, spec), *mapper);
+    Tensor host_b = distribute_tensor(Tensor::from_vector(b, spec), *mapper);
+    Tensor device_tensor = create_device_tensor(spec, mesh_device_.get(), host_a.tensor_topology());
+    copy_to_device(host_a, device_tensor);
+    CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    EXPECT_ANY_THROW(ttnn::experimental::core_subset_write::copy_to_device_filtered(host_b, device_tensor, filter));
 }
 
 }  // namespace

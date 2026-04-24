@@ -50,8 +50,8 @@ on:
         required: false
         type: boolean
         default: false
-      run_tt_train_cpp_model_tests:
-        description: 'Run tt-train-cpp-models'
+      run_tt_train_model_tests:
+        description: 'Run tt-train-models'
         required: false
         type: boolean
         default: false
@@ -353,61 +353,6 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  # Metal IOMMU Unit Tests
-  metal-iommu-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_metal_iommu_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-blackhole-only != '[]'
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-blackhole-only) }}
-    uses: ./.github/workflows/metal-iommu-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # Slow Dispatch Unit Tests
-  sd-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
-    uses: ./.github/workflows/build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  # Fast Dispatch Unit Tests
-  fast-dispatch-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_fd_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
-    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]
@@ -464,10 +409,10 @@ jobs:
       timeout: 90
       gtest_filter: "*"
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-cpp-models:
+  tt-train-models:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
+      (github.event_name == 'schedule' || inputs.run_tt_train_model_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
     secrets: inherit
     strategy:
@@ -480,7 +425,8 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      timeout: 90
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      timeout: 240
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-python-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

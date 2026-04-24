@@ -17,10 +17,12 @@ Owner:
 
 import os
 import threading
+
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
 from ttexalens.tt_exalens_lib import parse_elf
+from utils import INFO
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -30,94 +32,75 @@ script_config = ScriptConfig(
 class ElfsCache:
     """
     Thread-safe cache for ParsedElfFile objects.
-
-    This class provides a thread-safe API for caching and retrieving ParsedElfFile
-    objects parsed from ELF files. It automatically parses and caches ELF files
-    on first access and returns cached instances on subsequent requests.
+    When `enabled=False` the cache acts as a pass-through: every lookup
+    re-parses the ELF and returns it without storing a reference, so the
+    ParsedElfFile is released (and its file descriptor closed) once the
+    caller drops it. Intended as a mitigation toggle via --disable-elf-cache
+    if the cache misbehaves.
     """
 
-    def __init__(self, context: Context):
-        """
-        Initialize the ELF cache.
-
-        Args:
-            context: ttexalens Context object for parsing ELF files
-        """
+    def __init__(self, context: Context, enabled: bool = True):
         self.context = context
+        self._enabled = enabled
         self._cache: dict[str, ParsedElfFile] = {}
         self._lock = threading.Lock()
 
+        self._distinct_paths: set[str] = set()
+        self._total_bytes = 0
+
     def __getitem__(self, elf_path: str) -> ParsedElfFile:
-        """
-        Get a ParsedElfFile from cache or parse and cache it if not present.
-
-        This method is thread-safe and will only parse each ELF file once,
-        returning the cached instance on subsequent calls.
-
-        Args:
-            elf_path: Path to the ELF file
-
-        Returns:
-            ParsedElfFile object for the given path
-        """
         if not os.path.exists(elf_path):
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
+
         with self._lock:
-            if elf_path not in self._cache:
-                parsed_elf = parse_elf(elf_path, self.context)
-                if not parsed_elf:
-                    raise TTTriageError(
-                        f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-                    )
+            if self._enabled and elf_path in self._cache:
+                return self._cache[elf_path]
+
+            parsed_elf = parse_elf(elf_path, self.context)
+            if not parsed_elf:
+                raise TTTriageError(
+                    f"Failed to extract DWARF info from ELF file {elf_path}.\n"
+                    f"Run workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+                )
+
+            if elf_path not in self._distinct_paths:
+                self._distinct_paths.add(elf_path)
+                try:
+                    self._total_bytes += os.path.getsize(elf_path)
+                except OSError:
+                    # Size accounting is best-effort; a stat failure here
+                    # must not block ELF parsing or caching.
+                    pass
+
+            if self._enabled:
                 self._cache[elf_path] = parsed_elf
-            return self._cache[elf_path]
+            return parsed_elf
 
     def has_elf(self, elf_path: str) -> bool:
-        """
-        Check if an ELF file is already cached.
-
-        Args:
-            elf_path: Path to the ELF file
-
-        Returns:
-            True if the ELF file is cached, False otherwise
-        """
         with self._lock:
             return elf_path in self._cache
 
     def clear_cache(self) -> None:
-        """
-        Clear all cached ELF files.
-
-        This method removes all cached ParsedElfFile objects from the cache.
-        """
         with self._lock:
             self._cache.clear()
 
     def get_cached_paths(self) -> list[str]:
-        """
-        Get list of all cached ELF file paths.
-
-        Returns:
-            List of ELF file paths currently in the cache
-        """
         with self._lock:
             return list(self._cache.keys())
+
+    def log_stats(self) -> None:
+        with self._lock:
+            INFO(
+                f"elfs cache enabled={self._enabled}\n"
+                f"distinct elf files={len(self._distinct_paths)}\n"
+                f"total size={self._total_bytes / 1e6:.1f}MB\n"
+            )
 
 
 @triage_singleton
 def run(args, context: Context) -> ElfsCache:
-    """
-    Create and return a thread-safe ELF cache instance.
-
-    Args:
-        args: Script arguments (unused)
-        context: ttexalens Context object
-
-    Returns:
-        ElfsCache instance for caching ParsedElfFile objects
-    """
-    return ElfsCache(context)
+    enabled = not bool(args["--disable-elf-cache"])
+    return ElfsCache(context, enabled=enabled)
 
 
 if __name__ == "__main__":

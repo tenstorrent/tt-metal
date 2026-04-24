@@ -14,6 +14,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeSem
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 
 
@@ -28,7 +29,7 @@ class DecoderBlock:
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
-        position_ids,
+        metadata,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
@@ -67,7 +68,7 @@ class DecoderBlock:
             matmul3_weights_tensor,
             sin_tensor,
             cos_tensor,
-            position_ids,
+            metadata,
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
@@ -144,7 +145,7 @@ class DecoderBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
+        metadata_tensor,
         sdpa_scale,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -200,6 +201,7 @@ class DecoderBlock:
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
         is_torus=True,
+        forward_metadata=False,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -209,7 +211,7 @@ class DecoderBlock:
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
-        full_device_grid, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
+        full_device_grid, metadata_addr, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
             matmul_weights_tensor,
@@ -224,7 +226,7 @@ class DecoderBlock:
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
-            position_ids_tensor,
+            metadata_tensor,
             sdpa_scale,
             None,
             sdpa_kv_cache_buffer,
@@ -254,6 +256,7 @@ class DecoderBlock:
             upstream_socket=upstream_socket,
             fabric_config=fabric_config,
             broadcast_topology_override=broadcast_topology_override,
+            forward_metadata=forward_metadata,
         )
 
         moe = MoeOp(
@@ -291,6 +294,8 @@ class DecoderBlock:
             persistent_mode=persistent_mode,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
+            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
+            metadata_l1_addr=metadata_addr if forward_metadata else 0,
         )
 
         moe._build_descriptors()
@@ -317,7 +322,7 @@ class DecoderBlock:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            position_ids_tensor,
+            metadata_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -517,26 +522,39 @@ class DecoderBlock:
                 ccl_sender_core = ctx["ccl_sender_core"]
                 gather_core = ctx["gather_core"]
                 allreduce_config = ccl["allreduce_config"]
+                allgather_config = ccl["allgather_config"]
                 coord = ccl["mesh_coord"]
 
                 sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
                 receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
-                # Sender NCRISC: common RT args + per-core fabric args
+                # Sender NCRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
                 ccl_sender_ncrisc_rt = program.kernels[sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
                 ccl_sender_ncrisc_rt.extend(ccl["sender_ncrisc_common_rt_args"])
-                ccl_sender_ncrisc_rt.extend(
+                allreduce_ncrisc_pc_args = list(
                     allreduce_config.get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
                 )
+                ccl_sender_ncrisc_rt.append(len(allreduce_ncrisc_pc_args))
+                ccl_sender_ncrisc_rt.extend(allreduce_ncrisc_pc_args)
+                ccl_sender_ncrisc_rt.extend(
+                    allgather_config.get_transport_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
-                # Sender BRISC: common RT args + per-core fabric args
+                # Sender BRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
                 ccl_sender_brisc_rt = program.kernels[sender_group.brisc_kernel_index].runtime_args[ccl_sender_core.x][
                     ccl_sender_core.y
                 ]
                 ccl_sender_brisc_rt.extend(ccl["sender_brisc_common_rt_args"])
-                ccl_sender_brisc_rt.extend(allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core))
+                allreduce_brisc_pc_args = list(
+                    allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+                ccl_sender_brisc_rt.append(len(allreduce_brisc_pc_args))
+                ccl_sender_brisc_rt.extend(allreduce_brisc_pc_args)
+                ccl_sender_brisc_rt.extend(
+                    allgather_config.get_transport_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
                 # Receiver NCRISC: common RT args only (reader uses semaphores, no fabric)
                 ccl_receiver_ncrisc_rt = program.kernels[receiver_group.ncrisc_kernel_index].runtime_args[
