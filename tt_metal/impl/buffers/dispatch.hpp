@@ -109,7 +109,6 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
 };
 
 // Returns true if pinned memory was used for the transfer
-// If logical_core_filter is non-null, only cores contained in the set are written (sharded buffers only).
 bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
@@ -117,8 +116,7 @@ bool write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr,
-    const CoreRangeSet* logical_core_filter = nullptr);
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);

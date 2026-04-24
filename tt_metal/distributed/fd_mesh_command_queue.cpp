@@ -570,8 +570,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
-    const tt::tt_metal::CoreRangeSet* logical_core_filter) {
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         return false;
@@ -598,8 +597,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
         expected_num_workers_completed_,
         this->dispatch_core_type(),
         sub_device_ids,
-        pinned_memory,
-        logical_core_filter);
+        pinned_memory);
 }
 
 void FDMeshCommandQueue::read_shard_from_device(
