@@ -1188,11 +1188,13 @@ void Device::wait_for_fabric_workers_ready() {
     //
     // Without this wait, the next dispatch op can arrive while the MUX is still in its
     // startup path (waiting for ERISC, opening the EDM connection, etc.).  The dispatch
-    // relay kernel calls wait_for_fabric_endpoint_ready(mux) — an unbounded spin on
-    // device — and hangs if the MUX hasn't written READY_FOR_TRAFFIC yet.
+    // relay kernel calls wait_for_fabric_endpoint_ready(mux). That wait is bounded, but
+    // proceeding after it times out still leaves dispatch connected to an endpoint that
+    // never opened, which later looks like an opaque CQ or AllGather hang.
     //
-    // Use the same bounded-poll + force-reset pattern as Phase 2 so a stuck MUX can
-    // never hang the host indefinitely.
+    // Use a bounded poll, then force-reset and throw on timeout. Continuing after the
+    // reset would leave the MUX halted without a relaunch in this phase; failing here
+    // preserves the first useful diagnostic instead of letting the next operation hang.
     // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
     if (has_tensix_mux) {
         const auto& tensix_config = builder_ctx.get_tensix_config();
@@ -1241,8 +1243,8 @@ void Device::wait_for_fabric_workers_ready() {
             if (!ready) {
                 log_warning(
                     tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX READY_FOR_TRAFFIC on "
-                    "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX core",
+                    "wait_for_fabric_workers_ready: Timeout waiting for fabric MUX READY_FOR_TRAFFIC on "
+                    "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX core before failing",
                     this->id(),
                     eth_chan_id,
                     status_buf[0]);
@@ -1260,6 +1262,14 @@ void Device::wait_for_fabric_workers_ready() {
                         eth_chan_id,
                         e.what());
                 }
+                TT_THROW(
+                    "Fabric MUX did not reach READY_FOR_TRAFFIC after quiesce restart on Device {} eth_chan {} "
+                    "(status=0x{:08x}, waited {}ms). The MUX was reset and the restart is aborted so the next "
+                    "dispatch/AllGather does not connect to a non-ready fabric endpoint.",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0],
+                    timeout_ms);
             }
         }
     }

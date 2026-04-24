@@ -24,6 +24,8 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
@@ -134,6 +136,73 @@ decltype(auto) validate_and_get_reference_value(
         }
     }
     return reference_value;
+}
+
+std::vector<IDevice*> get_fabric_quiesce_restart_order(std::vector<IDevice*> devices) {
+    // Relaunch writes to non-MMIO devices are serviced through the MMIO device's ETH relay.
+    // Restarting MMIO first puts that relay into STARTED/not-ready firmware and can make
+    // subsequent non-MMIO L1 reads time out, so every quiesce entry point must use the same
+    // global non-MMIO-before-MMIO ordering instead of submesh traversal order.
+    std::stable_sort(devices.begin(), devices.end(), [](IDevice* a, IDevice* b) {
+        return !a->is_mmio_capable() && b->is_mmio_capable();
+    });
+    return devices;
+}
+
+std::vector<IDevice*> get_fabric_quiesce_ready_order(const std::vector<IDevice*>& devices) {
+    // Initial fabric bring-up publishes READY_FOR_TRAFFIC in tunnel order: farthest tunnel
+    // devices first, then the MMIO gateway.  Quiesce restart must mirror that order because
+    // wait_for_fabric_workers_ready() writes the same READY_FOR_TRAFFIC signal that releases
+    // peer ERISC handshakes.  Row-major polling can publish readiness at the gateway before
+    // the far end of the tunnel has completed its receiver side.
+    auto& cluster = MetalContext::instance().get_cluster();
+
+    std::unordered_map<ChipId, IDevice*> devices_by_id;
+    std::unordered_set<ChipId> remaining;
+    devices_by_id.reserve(devices.size());
+    remaining.reserve(devices.size());
+    for (auto* dev : devices) {
+        devices_by_id.emplace(dev->id(), dev);
+        remaining.insert(dev->id());
+    }
+
+    std::vector<IDevice*> ordered;
+    ordered.reserve(devices.size());
+    auto append_if_present = [&](ChipId chip_id) {
+        auto it = devices_by_id.find(chip_id);
+        if (it != devices_by_id.end() && remaining.erase(chip_id) > 0) {
+            ordered.push_back(it->second);
+        }
+    };
+
+    for (auto* dev : devices) {
+        if (cluster.get_associated_mmio_device(dev->id()) != dev->id()) {
+            continue;
+        }
+
+        try {
+            for (const auto& tunnel : cluster.get_tunnels_from_mmio_device(dev->id())) {
+                // Tunnel index 0 is the MMIO device; process remote devices farthest-to-closest.
+                for (size_t idx = tunnel.size(); idx > 1; --idx) {
+                    append_if_present(tunnel[idx - 1]);
+                }
+            }
+        } catch (const std::exception&) {
+            // Some mesh views (single-device, disabled fabric, or partially discovered hardware)
+            // do not have tunnel metadata for every MMIO chip. Fall back to the row-major append
+            // below instead of making quiesce fail before the per-device fabric guards can return.
+        }
+        append_if_present(dev->id());
+    }
+
+    // Preserve row-major order for any device that is not represented in the MMIO tunnel map.
+    // This keeps the helper total over submeshes and unusual discovery states while still
+    // applying startup-compatible order to every device whose tunnel is known.
+    for (auto* dev : devices) {
+        append_if_present(dev->id());
+    }
+
+    return ordered;
 }
 
 // Returns offset of the mesh device view in the system mesh.
@@ -1462,12 +1531,6 @@ void MeshDeviceImpl::drain_cqs_for_quiesce() {
 }
 
 void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
-    // Recursively restart submesh fabric workers first (depth-first).
-    for (const auto& submesh : submeshes_) {
-        if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->restart_fabric_workers_for_quiesce();
-        }
-    }
     // Phase 1 per-device: terminate + reconfigure + relaunch all cores.
     // Does NOT wait for handshake completion — that is deferred to
     // wait_for_fabric_workers_ready_for_quiesce() so that all devices
@@ -1478,12 +1541,10 @@ void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
     // If the MMIO device is quiesced first, its ERISCs enter a rebooting state
     // (STARTED, not READY_FOR_TRAFFIC) and subsequent reads to non-MMIO devices
     // time out with "Timeout waiting for Ethernet core service remote IO request".
-    auto devices = get_devices();
-    std::stable_sort(devices.begin(), devices.end(), [](IDevice* a, IDevice* b) {
-        // non-MMIO (false) sorts before MMIO (true)
-        return !a->is_mmio_capable() && b->is_mmio_capable();
-    });
-    for (auto* idev : devices) {
+    // Use a flattened mesh-local list here. The old depth-first submesh walk could relaunch
+    // an MMIO gateway before a non-MMIO device in another submesh, recreating the relay race
+    // that quiesce_internal() avoids.
+    for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             dev->quiesce_and_restart_fabric_workers();
@@ -1492,17 +1553,14 @@ void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
 }
 
 void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
-    // Recursively wait for submeshes first (depth-first).
-    for (const auto& submesh : submeshes_) {
-        if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->wait_for_fabric_workers_ready_for_quiesce();
-        }
-    }
     // Phase 2 per-device: poll for ERISC handshake completion + Tensix MUX readiness.
     // By this point, ALL devices across ALL meshes have completed Phase 1 (relaunch).
     // Both sender and receiver ERISCs are running, so the natural sender-receiver
     // handshake will complete without host MAGIC injection.
-    for (auto* idev : get_devices()) {
+    // Match init-time tunnel ordering (farthest-to-closest, then MMIO) because this phase
+    // publishes READY_FOR_TRAFFIC and can unblock peer ERISCs. Submesh order and row-major
+    // order are not equivalent to the startup sequence on T3K.
+    for (auto* idev : get_fabric_quiesce_ready_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             dev->wait_for_fabric_workers_ready();
@@ -1545,11 +1603,7 @@ void MeshDeviceImpl::quiesce_internal() {
     // ordering is respected across submesh boundaries.  The submesh loop was removed because it
     // processed devices in submesh-iteration order (MMIO before non-MMIO across submeshes) and
     // caused Device 7 (non-MMIO) to encounter a broken relay after Device 0 (MMIO) was relaunched.
-    auto pass1_devices = get_devices();
-    std::stable_sort(pass1_devices.begin(), pass1_devices.end(), [](IDevice* a, IDevice* b) {
-        return !a->is_mmio_capable() && b->is_mmio_capable();
-    });
-    for (auto* idev : pass1_devices) {
+    for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             log_info(tt::LogMetal, "quiesce_internal: Pass 1 — Device {} starting quiesce_and_restart_fabric_workers", dev->id());
@@ -1560,8 +1614,10 @@ void MeshDeviceImpl::quiesce_internal() {
     log_info(tt::LogMetal, "quiesce_internal: Pass 1 complete — all devices relaunched, starting Pass 2 (handshake wait)");
 
     // Phase 3: All devices have relaunched; now wait for handshake completion.
-    // (No ordering constraint here — we're just polling, not launching.)
-    for (auto* idev : get_devices()) {
+    // Match wait_for_fabric_router_sync() tunnel order: farthest-to-closest non-MMIO devices,
+    // then the MMIO gateway. Phase 5 writes READY_FOR_TRAFFIC to the master ERISC, so polling
+    // row-major can publish gateway readiness before far tunnel receivers have completed.
+    for (auto* idev : get_fabric_quiesce_ready_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} starting wait_for_fabric_workers_ready", dev->id());

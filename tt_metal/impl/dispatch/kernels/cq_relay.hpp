@@ -28,6 +28,9 @@ private:
     constexpr static ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
+#if defined(FABRIC_RELAY)
+    bool fabric_endpoint_ready_ = false;
+#endif
 
 #if ASSERT_ENABLED
     // Pointer to the end of the last released page. Used for assertions to catch cmd_ptr/released_pages desync.
@@ -86,7 +89,15 @@ public:
             StreamId{0}  // my stream id -- As a sender I currently do NOT get acks over stream regs
         );
 
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x, mux_y, mux_status_address, local_mux_status_address);
+        fabric_endpoint_ready_ =
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x, mux_y, mux_status_address, local_mux_status_address);
+        if (!fabric_endpoint_ready_) {
+            // The MUX did not publish READY_FOR_TRAFFIC. Do not open a fabric client against
+            // a non-ready endpoint: the connection metadata/credits are not valid, and later
+            // relay writes can deadlock in ways that hide the original readiness failure.
+            WAYPOINT("FMCF");
+            return;
+        }
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
@@ -130,7 +141,9 @@ public:
     template <uint8_t noc_index, uint64_t noc_xy, uint32_t sem_id>
     FORCE_INLINE void teardown() {
 #if defined(FABRIC_RELAY)
-        tt::tt_fabric::fabric_client_disconnect<mux_num_buffers_per_channel>(edm);
+        if (fabric_endpoint_ready_) {
+            tt::tt_fabric::fabric_client_disconnect<mux_num_buffers_per_channel>(edm);
+        }
 #else
         constexpr uint32_t k_PacketQueueTeardownFlag = 0x80000000;
         noc_semaphore_inc(
@@ -141,6 +154,9 @@ public:
     template <uint8_t noc_idx, bool count = true>
     FORCE_INLINE void write_inline(uint64_t dst, uint32_t val) {
 #if defined(FABRIC_RELAY)
+        if (!fabric_endpoint_ready_) {
+            return;
+        }
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         packet_header->to_noc_unicast_inline_write(
             tt::tt_fabric::NocUnicastInlineWriteCommandHeader{.noc_address = dst, .value = val});
@@ -158,6 +174,9 @@ public:
     template <uint8_t noc_idx, bool wait, uint8_t downstream_cmd_buf, bool count = true>
     FORCE_INLINE void write_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length) {
 #if defined(FABRIC_RELAY)
+        if (!fabric_endpoint_ready_) {
+            return;
+        }
         // Writing to a HEADER only buffer is wrong. This function requires a FULL SIZE buffer
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
@@ -216,6 +235,9 @@ public:
     template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id>
     FORCE_INLINE void release_pages(uint32_t n) {
 #if defined(FABRIC_RELAY)
+        if (!fabric_endpoint_ready_) {
+            return;
+        }
         auto sem_addr = get_semaphore<fd_core_type>(dest_sem_id);
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
 
@@ -269,6 +291,9 @@ public:
         uint8_t downstream_cmd_buf>
     FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint32_t n) {
 #if defined(FABRIC_RELAY)
+        if (!fabric_endpoint_ready_) {
+            return;
+        }
         // Writing to a HEADER only buffer is wrong. This function requires a FULL SIZE buffer
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);

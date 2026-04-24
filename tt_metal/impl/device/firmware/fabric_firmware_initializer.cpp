@@ -1119,6 +1119,17 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         std::rethrow_exception(first_ex);
     }
 
+    // A fresh fabric configure session must recompute degraded topology from the current
+    // probe results. Leaving these sets or per-device flags populated from an earlier open
+    // would make quiesce skip router readiness on an MMIO device that may be healthy now.
+    dead_relay_devices_.clear();
+    mmio_dead_peer_devices_.clear();
+    for (auto* dev : compiled_devices) {
+        if (dev) {
+            dev->set_fabric_is_mmio_dead_peer_device(false);
+        }
+    }
+
     // FIX J (#42429): Two-phase probe-then-configure to prevent non-MMIO relay read races.
     //
     // PROBLEM: The original single loop interleaved terminate_stale_erisc_routers() (probe reads)

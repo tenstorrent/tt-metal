@@ -188,8 +188,14 @@ void kernel_main() {
 
     if (mux_connection_valid) {
         // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        bool mux_ready = tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
+        if (!mux_ready) {
+            // Do not connect to a MUX that never published READY_FOR_TRAFFIC. Returning here
+            // turns the failure into a bounded op/dispatch timeout instead of sending CCL
+            // packets through uninitialized fabric metadata and hiding the root cause.
+            return;
+        }
     }
 #else
     size_t arg_for_fab = arg_idx;
