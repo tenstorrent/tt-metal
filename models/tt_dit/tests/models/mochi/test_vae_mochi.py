@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import torch
 import torch.nn as nn
@@ -297,15 +295,8 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links,
 
     logger.info(f"TT input shape: {tt_input.shape}")
 
-    # Dump intermediate tensors for cross-topology comparison
-    dump_dir = os.environ.get("DUMP_TENSORS")
-    if dump_dir:
-        os.makedirs(dump_dir, exist_ok=True)
-        # Also save the torch input so we can verify both runs got the same data
-        torch.save(torch_input, os.path.join(dump_dir, "torch_input.pt"))
-
     logger.info("Run TtResBlock forward")
-    tt_output = tt_model(tt_input, logical_h, logical_w, dump_dir=dump_dir)
+    tt_output = tt_model(tt_input, logical_h, logical_w)
     logger.info("End TtResBlock forward")
 
     # Convert TT output to torch tensor
@@ -450,14 +441,11 @@ def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_p
         ref_output = reference_model(torch_input)[0]
     logger.info("End RefResBlock forward")
 
-    # Per-frame PCC check
     logger.info("assert quality")
     for i in range(T):
-        ref_slice = ref_output[:, :, i, :, :]
-        tt_slice = tt_output_torch[:, :, i, :, :]
-        pcc_val = torch.corrcoef(torch.stack([tt_slice.flatten().double(), ref_slice.flatten().double()]))[0, 1].item()
-        logger.info(f"  frame {i}: PCC={pcc_val*100:.4f}%")
-        assert_quality(ref_slice, tt_slice, pcc=0.9998)
+        ref_output_slice = ref_output[:, :, i, :, :]
+        tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9998)
 
 
 def create_random_causalupsampleblock_models(
@@ -959,47 +947,6 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     H_out, W_out = ref_output.shape[3], ref_output.shape[4]
     tt_output_torch = tt_output_torch[:, :, :, :H_out, :W_out]
     logger.info(f"TT Output shape (after slicing) {tt_output_torch.shape}")
-
-    # Per-device PCC check: compare each device's output against the corresponding
-    # spatial slice of the reference to isolate gathering vs computation issues.
-    # Use per-device PADDED width (not logical) for global column mapping since
-    # padding is concentrated on the last device, not distributed uniformly.
-    if vae_parallel_config.h_parallel.factor > 1 or vae_parallel_config.w_parallel.factor > 1:
-        h_factor = vae_parallel_config.h_parallel.factor
-        w_factor = vae_parallel_config.w_parallel.factor
-        ref_NTHWC = ref_output.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
-        T_out = ref_NTHWC.shape[1]
-        dev_tensors = ttnn.get_device_tensors(tt_output)
-        per_dev_h_padded = dev_tensors[0].shape[2]  # padded per-device H
-        per_dev_w_padded = dev_tensors[0].shape[3]  # padded per-device W
-        logger.info(
-            f"[PER_DEV_PCC] T_out={T_out}, H_out={H_out}, W_out={W_out}, "
-            f"per_dev_h_padded={per_dev_h_padded}, per_dev_w_padded={per_dev_w_padded}, "
-            f"num_devices={len(dev_tensors)}, per_dev_shape={dev_tensors[0].shape}"
-        )
-        for dev_idx, dev_t in enumerate(dev_tensors):
-            dev_torch = ttnn.to_torch(dev_t).float()
-            h_idx = dev_idx // w_factor
-            w_idx = dev_idx % w_factor
-            # Global column range for this device (using padded per-device width)
-            h_start = h_idx * per_dev_h_padded
-            w_start = w_idx * per_dev_w_padded
-            # Valid range: intersection of device range with reference range
-            h_valid = min(per_dev_h_padded, H_out - h_start) if h_start < H_out else 0
-            w_valid = min(per_dev_w_padded, W_out - w_start) if w_start < W_out else 0
-            if h_valid <= 0 or w_valid <= 0:
-                logger.info(f"[PER_DEV_PCC] dev[{dev_idx}] coord=({h_idx},{w_idx}): SKIP (no valid region)")
-                continue
-            tt_slice = dev_torch[:, :T_out, :h_valid, :w_valid, :]
-            ref_slice = ref_NTHWC[:, :T_out, h_start : h_start + h_valid, w_start : w_start + w_valid, :]
-            a, b = tt_slice.flatten().double(), ref_slice.flatten().double()
-            pcc_val = torch.corrcoef(torch.stack([a, b]))[0, 1].item() * 100
-            diff = (tt_slice - ref_slice.float()).abs()
-            logger.info(
-                f"[PER_DEV_PCC] dev[{dev_idx}] coord=({h_idx},{w_idx}): "
-                f"PCC={pcc_val:.4f}% max_diff={diff.max():.6f} "
-                f"h_range=[{h_start}:{h_start + h_valid}] w_range=[{w_start}:{w_start + w_valid}]"
-            )
 
     logger.info("assert quality")
     for i in range(ref_output.shape[2]):
