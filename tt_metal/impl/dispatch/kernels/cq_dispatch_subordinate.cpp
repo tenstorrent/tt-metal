@@ -29,6 +29,7 @@ constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
@@ -409,6 +410,15 @@ void kernel_main() {
         DPRINT << "DBG18881 dispatch_s: pre-poll local_atomics_acked=" << pre_local
                << " my_noc_index=" << (uint32_t)my_noc_index
                << " niu_atomic_resp=" << pre_niu << ENDL();
+    }
+    if constexpr (!distributed_dispatcher) {
+        volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+        while (*shutdown_sem_addr == 0) {
+            invalidate_l1_cache();
+        }
+        DPRINT << "DBG18881 dispatch_s: received shutdown semaphore signal, sem_val="
+               << *shutdown_sem_addr << ENDL();
     }
     uint32_t handoff_val = 0;
     uint32_t poll_iters = 0;

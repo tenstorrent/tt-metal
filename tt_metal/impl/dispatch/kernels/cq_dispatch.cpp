@@ -28,6 +28,7 @@ constexpr uint32_t dispatch_cb_log_page_size = DISPATCH_CB_LOG_PAGE_SIZE;
 constexpr uint32_t dispatch_cb_pages = DISPATCH_CB_PAGES;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uint32_t dispatch_cb_blocks = DISPATCH_CB_BLOCKS;
 constexpr uint32_t upstream_sync_sem = UPSTREAM_SYNC_SEM;
 constexpr uint32_t command_queue_base_addr = COMMAND_QUEUE_BASE_ADDR;
@@ -1544,6 +1545,13 @@ void kernel_main() {
         uint32_t delta = dispatch_d_atomics_acked_stop - dispatch_d_atomics_acked_start;
         set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
             upstream_noc_index, delta);
+        if constexpr (is_d_variant && !distributed_dispatcher) {
+            volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+            *shutdown_sem_addr = *shutdown_sem_addr + 1;
+            DPRINT << "DBG18881 dispatch_d: signaled dispatch_s shutdown semaphore, sem_val="
+                   << *shutdown_sem_addr << ENDL();
+        }
         DPRINT << "DBG18881 dispatch_d: published, slot_readback="
                << get_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index)
                << " delta=" << delta
