@@ -2104,14 +2104,26 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 device, realtime_profiler_core, ring_buffer_addr, zero_header, CoreType::WORKER);
         }
 
-        // Zero config_buffer_addr in the profiler mailbox BEFORE launching the
-        // kernel.  L1 is not guaranteed to be zero-initialized, and a stale
-        // non-zero value here will cause the NCRISC to exit its config wait
-        // loop immediately and read garbage socket config.
+        // Zero the entire realtime_profiler_msg_t region in L1 BEFORE launching the
+        // kernels. L1 is not guaranteed to be zero-initialized between runs, so the
+        // profiler mailbox can carry stale values across a MeshDevice re-create.
+        // Any of these fields being non-zero at BRISC/NCRISC boot can misbehave:
+        //   * config_buffer_addr != 0  -> NCRISC exits its config wait loop
+        //     immediately and reads garbage socket config.
+        //   * sync_request != 0        -> BRISC enters realtime_profiler_sync() at
+        //     boot before the host has reached the sync phase.
+        //   * sync_host_timestamp != 0 -> BRISC pushes a stale sync marker to the
+        //     ring buffer on first boot; NCRISC forwards it as a phantom page.
+        //   * realtime_profiler_state / program_id_fifo_{start,end} stale values
+        //     similarly corrupt the kernel state machine on first boot.
+        // realtime_profiler_base_addr == realtime_profiler_mailbox_addr (the mailbox
+        // base is the start of the struct), so zero from realtime_profiler_base_addr.
         {
-            std::vector<uint32_t> zero_config = {0};
+            const uint32_t profiler_msg_size = factory.size_of<dev_msgs::realtime_profiler_msg_t>();
+            const uint32_t profiler_msg_words = profiler_msg_size / sizeof(uint32_t);
+            std::vector<uint32_t> zero_msg(profiler_msg_words, 0);
             tt::tt_metal::detail::WriteToDeviceL1(
-                device, realtime_profiler_core, realtime_profiler_mailbox_addr, zero_config, CoreType::WORKER);
+                device, realtime_profiler_core, realtime_profiler_base_addr, zero_msg, CoreType::WORKER);
         }
 
         // Compile and launch real-time profiler kernels (BRISC reader + NCRISC pusher)
