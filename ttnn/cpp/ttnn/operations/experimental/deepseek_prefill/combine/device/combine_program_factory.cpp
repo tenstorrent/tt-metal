@@ -684,7 +684,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
 
-    if (init_zeros) {
+    // Launch zero_init_writer whenever we need either the zero-init prelude (init_zeros)
+    // or the TILE_LAYOUT untilize-send path. With INIT_ZEROS=0 the kernel skips the
+    // prelude and runs only the send loop — needed so cb_untilize_id / cb_stop_signal_id
+    // always have a drainer, even when init_zeros=False.
+    const bool need_zero_init_kernel = init_zeros || is_tile_layout;
+    if (need_zero_init_kernel) {
         uint32_t noc_max_burst_size;
         const auto arch = mesh_device->arch();
         if (arch == tt::ARCH::BLACKHOLE) {
@@ -700,10 +705,12 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
                 .set_page_size(tt::CBIndex::c_7, noc_max_burst_size);
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, zi_inline_cb_config);
 
-        uint32_t total_zero_init_cores = num_cores + num_idle_cores;
-        uint32_t total_output_pages = detail::get_num_pages(output_tensor);
-        pages_per_core = total_output_pages / total_zero_init_cores;
-        remainder_pages = total_output_pages % total_zero_init_cores;
+        if (init_zeros) {
+            uint32_t total_zero_init_cores = num_cores + num_idle_cores;
+            uint32_t total_output_pages = detail::get_num_pages(output_tensor);
+            pages_per_core = total_output_pages / total_zero_init_cores;
+            remainder_pages = total_output_pages % total_zero_init_cores;
+        }
 
         tt::tt_metal::CircularBufferConfig zi_idle_cb_config =
             tt::tt_metal::CircularBufferConfig(noc_max_burst_size, {{tt::CBIndex::c_6, tt::DataFormat::UInt8}})
@@ -737,6 +744,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
         std::map<std::string, std::string> zi_defines;
         zi_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
+        zi_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
 
         zero_init_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -831,23 +839,27 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
-    // Set runtime args for hybrid idle row cores
-    if (init_zeros) {
+    // Set runtime args for hybrid idle row cores. When !init_zeros the zero-init-prelude
+    // args (page_start, page_end, zi_done_sem, sender NOC coords) are skipped — the kernel
+    // compiled with INIT_ZEROS=0 does not read them.
+    if (need_zero_init_kernel) {
         for (uint32_t idle_idx = 0; idle_idx < num_idle_cores; idle_idx++) {
-            uint32_t row_idx = num_cores + idle_idx;
-            uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
-            uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
-
-            // Each idle core signals all sender cores
             std::vector<uint32_t> zi_runtime_args = {
                 output_tensor.buffer()->address(),
-                page_start,
-                page_end,
-                zi_done_semaphore_id,
             };
-            for (const auto& [noc_x, noc_y] : sender_noc_coords) {
-                zi_runtime_args.push_back(noc_x);
-                zi_runtime_args.push_back(noc_y);
+
+            if (init_zeros) {
+                uint32_t row_idx = num_cores + idle_idx;
+                uint32_t page_start = (row_idx * pages_per_core) + std::min(row_idx, remainder_pages);
+                uint32_t page_end = page_start + pages_per_core + (row_idx < remainder_pages ? 1 : 0);
+                zi_runtime_args.push_back(page_start);
+                zi_runtime_args.push_back(page_end);
+                zi_runtime_args.push_back(zi_done_semaphore_id);
+                // Each idle core signals all sender cores when its zero-init range is done
+                for (const auto& [noc_x, noc_y] : sender_noc_coords) {
+                    zi_runtime_args.push_back(noc_x);
+                    zi_runtime_args.push_back(noc_y);
+                }
             }
 
             // TILE_LAYOUT: append owning-sender info so zero_init_writer can run its send loop

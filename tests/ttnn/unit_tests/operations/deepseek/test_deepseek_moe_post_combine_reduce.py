@@ -263,3 +263,104 @@ def test_output_layout(device):
     )
     assert result_tt.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {result_tt.layout}"
     assert list(result_tt.shape) == [1, NUM_TOKENS, EMB_DIM], f"Wrong shape: {result_tt.shape}"
+
+
+# ============================================================================
+# Garbage-in-nonlocal-slots tests (repro for issue #42999)
+# ============================================================================
+#
+# In real MoE prefill, when combine runs with init_zeros=False, DRAM slots for
+# non-local experts are left uninitialized. Those bytes can decode to NaN/Inf
+# in bfloat16. The post_combine_reduce kernel is supposed to skip non-local
+# experts, but when a token has *all* non-local experts, the writer forces the
+# last expert's weight to 0 and compute takes the `must_zero_init` path — it
+# multiplies the uninitialized combine_input tile by 0. In IEEE-754,
+# NaN*0 = NaN and Inf*0 = NaN, so garbage leaks through and poisons the sum.
+
+
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
+@pytest.mark.parametrize("garbage", ["nan", "inf"], ids=["nan", "inf"])
+def test_all_nonlocal_garbage_in_combine(device, garbage):
+    """All experts non-local + garbage (NaN/Inf) in combine_input.
+
+    Every token hits the `must_zero_init` path. Expected output: all zeros.
+    If the kernel does mul(garbage, 0) the IEEE-754 result is NaN and the
+    output is polluted — reproducing the test_prefill_block PCC collapse.
+    """
+    torch.manual_seed(42)
+    fill = float("nan") if garbage == "nan" else float("inf")
+    combine = torch.full((1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM), fill, dtype=torch.bfloat16)
+    weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
+
+    # Dispatch table: all -1 → every expert is non-local for this chip.
+    table = torch.full((NUM_ROUTED_EXPERTS,), -1, dtype=torch.int32)
+    dispatch_table_tt = ttnn.from_torch(
+        table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    )
+
+    nan_count = torch.isnan(result).sum().item()
+    inf_count = torch.isinf(result).sum().item()
+    max_abs = result.abs().max().item() if result.numel() > 0 else 0.0
+    logger.info(f"  all_nonlocal_{garbage}: NaN={nan_count} Inf={inf_count} max|x|={max_abs}")
+    assert nan_count == 0, f"got {nan_count} NaN in output (NaN*0=NaN leaked through must_zero_init)"
+    assert inf_count == 0, f"got {inf_count} Inf in output"
+    assert max_abs == 0.0, f"expected all-zero output, got max|x|={max_abs}"
+
+
+@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
+@pytest.mark.parametrize("garbage", ["nan", "inf"], ids=["nan", "inf"])
+def test_mixed_nonlocal_garbage_in_combine(device, garbage):
+    """Partial non-local (TP4-like) + garbage only in non-local slots.
+
+    Mimics real combine behaviour: local slots hold valid data, non-local
+    slots hold uninitialised DRAM (simulated as NaN/Inf). With topk=8 and
+    75% non-local, ~10% of tokens fall through the `must_zero_init` path
+    and are the ones that can poison the output.
+    """
+    torch.manual_seed(42)
+    fill = float("nan") if garbage == "nan" else float("inf")
+    local_expert_end = 64  # TP4: 64/256 experts local per chip
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
+
+    table = torch.full((NUM_ROUTED_EXPERTS,), -1, dtype=torch.int32)
+    for i in range(local_expert_end):
+        table[i] = i // 8
+    dispatch_table_tt = ttnn.from_torch(
+        table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    indices_torch, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+
+    # Poison non-local slots in combine + reference: only local experts contribute.
+    ref_combine = combine.clone()
+    all_nonlocal_tokens = 0
+    for t in range(NUM_TOKENS):
+        any_local = False
+        for k in range(NUM_EXPERTS):
+            expert_id = indices_torch[0, t, k].item()
+            if expert_id >= local_expert_end:
+                combine[0, t, k, :] = fill
+                ref_combine[0, t, k, :] = 0.0
+            else:
+                any_local = True
+        if not any_local:
+            all_nonlocal_tokens += 1
+    ref = pytorch_reference(ref_combine, weights)
+    logger.info(f"  mixed_{garbage}: {all_nonlocal_tokens}/{NUM_TOKENS} tokens hit must_zero_init")
+
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    )
+
+    nan_count = torch.isnan(result).sum().item()
+    inf_count = torch.isinf(result).sum().item()
+    logger.info(f"  mixed_{garbage}: NaN={nan_count} Inf={inf_count} in output")
+    assert nan_count == 0, f"got {nan_count} NaN in output"
+    assert inf_count == 0, f"got {inf_count} Inf in output"
+    assert_pcc(result, ref, label=f"mixed_nonlocal_{garbage}")
