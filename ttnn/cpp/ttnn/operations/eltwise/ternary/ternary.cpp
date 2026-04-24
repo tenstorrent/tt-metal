@@ -41,8 +41,7 @@ Tensor where_impl(
             /* output */ std::nullopt,
             /* post_activations */ FusedActivations{},
             /* lhs_activations */ FusedActivations{},
-            /* rhs_activations */ FusedActivations{},
-            /* use_legacy */ false);
+            /* rhs_activations */ FusedActivations{});
     };
 
     return ttnn::add(
@@ -53,8 +52,7 @@ Tensor where_impl(
         output,
         /* post_activations */ FusedActivations{},
         /* lhs_activations */ FusedActivations{},
-        /* rhs_activations */ FusedActivations{},
-        /* use_legacy */ false);
+        /* rhs_activations */ FusedActivations{});
 }
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }

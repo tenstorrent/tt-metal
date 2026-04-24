@@ -60,7 +60,6 @@ using BinaryOpTensorScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<bool>&,
     const std::optional<CoreRangeSet>&);
 using BinaryOpTensorTensorFn = Tensor (*)(
     const Tensor&,
@@ -71,7 +70,6 @@ using BinaryOpTensorTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    const std::optional<bool>&,
     const std::optional<CoreRangeSet>&);
 
 using InplaceScalarFn = Tensor (*)(
@@ -80,7 +78,6 @@ using InplaceScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 
 using InplaceTensorFn = Tensor (*)(
@@ -89,7 +86,6 @@ using InplaceTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 
 using BitwiseScalarFn = Tensor (*)(
@@ -100,7 +96,6 @@ using BitwiseScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 using BitwiseTensorFn = Tensor (*)(
     const Tensor&,
@@ -110,7 +105,6 @@ using BitwiseTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 using BinaryUnaryScalarFn = Tensor (*)(
     const Tensor&,
@@ -120,8 +114,7 @@ using BinaryUnaryScalarFn = Tensor (*)(
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>);
+    ttsl::Span<const unary::EltwiseUnaryWithParam>);
 using BinaryUnaryTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -130,8 +123,7 @@ using BinaryUnaryTensorFn = Tensor (*)(
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>);
+    ttsl::Span<const unary::EltwiseUnaryWithParam>);
 using BinaryUnaryMaxScalarFn = Tensor (*)(
     const Tensor&,
     unary::ScalarVariant,
@@ -140,8 +132,7 @@ using BinaryUnaryMaxScalarFn = Tensor (*)(
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>);
+    ttsl::Span<const unary::EltwiseUnaryWithParam>);
 using BinaryUnaryMaxTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -150,8 +141,7 @@ using BinaryUnaryMaxTensorFn = Tensor (*)(
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>);
+    ttsl::Span<const unary::EltwiseUnaryWithParam>);
 using BinaryCompositeTensorTensorFn = Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 using BinaryCompositeTensorScalarFn = Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&);
 using BinaryOverloadScalarFn =
@@ -166,7 +156,6 @@ using InplaceFastApproxScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
-    std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 using InplaceFastApproxTensorFn = Tensor (*)(
     const Tensor&,
@@ -174,7 +163,6 @@ using InplaceFastApproxTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>,
     std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 
@@ -202,7 +190,6 @@ void bind_binary_inplace_operation(
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
             input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
-            use_legacy (bool, optional): use legacy implementation. Defaults to `None`.
             sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
 
         {6}
@@ -241,7 +228,6 @@ void bind_binary_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
@@ -251,7 +237,6 @@ void bind_binary_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }
 
@@ -326,7 +311,6 @@ void bind_binary_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
@@ -339,7 +323,6 @@ void bind_binary_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }
 
@@ -410,8 +393,7 @@ void bind_binary_gcd_lcm_operation(
         nb::arg("output_tensor") = nb::none(),
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("use_legacy") = nb::none());
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}));
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -474,8 +456,7 @@ void bind_binary_unary_max_operation(
         nb::arg("output_tensor") = nb::none(),
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("use_legacy") = nb::none());
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}));
     auto tensor_overload = ttnn::overload_t(
         tensor_tensor_fn,
         nb::arg("input_tensor_a"),
@@ -486,8 +467,7 @@ void bind_binary_unary_max_operation(
         nb::arg("output_tensor") = nb::none(),
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("use_legacy") = nb::none());
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}));
     ttnn::bind_function<Name>(mod, doc.c_str(), scalar_overload, tensor_overload);
 }
 
@@ -561,8 +541,7 @@ void bind_binary_unary_operation(
             nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{})),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -573,8 +552,7 @@ void bind_binary_unary_operation(
             nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none()));
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{})));
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -710,7 +688,6 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
@@ -722,7 +699,6 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }
 
@@ -1053,7 +1029,6 @@ void bind_div(
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("use_legacy") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
     auto tensor_scalar_overload = ttnn::overload_t(
         tensor_scalar_fn,
@@ -1068,7 +1043,6 @@ void bind_div(
         nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
         nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-        nb::arg("use_legacy") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
     ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
 }
@@ -1084,7 +1058,6 @@ Tensor multiply_fast_approx_tensor_scalar(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::multiply(
         input_tensor_a,
@@ -1097,7 +1070,6 @@ Tensor multiply_fast_approx_tensor_scalar(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
         fast_and_approximate_mode,
         sub_core_grids);
 }
@@ -1112,7 +1084,6 @@ Tensor multiply_fast_approx_tensor_tensor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::multiply(
         input_tensor_a,
@@ -1125,7 +1096,6 @@ Tensor multiply_fast_approx_tensor_tensor(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
         fast_and_approximate_mode,
         sub_core_grids);
 }
@@ -1140,7 +1110,6 @@ Tensor divide_fast_approx_tensor_scalar(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::divide(
         input_tensor_a,
@@ -1153,7 +1122,6 @@ Tensor divide_fast_approx_tensor_scalar(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
         fast_and_approximate_mode,
         sub_core_grids);
 }
@@ -1168,7 +1136,6 @@ Tensor divide_fast_approx_tensor_tensor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::divide(
         input_tensor_a,
@@ -1181,7 +1148,6 @@ Tensor divide_fast_approx_tensor_tensor(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
         ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
         fast_and_approximate_mode,
         sub_core_grids);
 }
@@ -1254,7 +1220,6 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
@@ -1268,7 +1233,6 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }
 
@@ -1465,7 +1429,6 @@ void bind_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
@@ -1475,7 +1438,6 @@ void bind_inplace_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 }
 
@@ -1542,7 +1504,6 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("fast_and_approximate_mode") = false,
             nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
@@ -1553,7 +1514,6 @@ void bind_inplace_operation_with_fast_approx(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none(),
             nb::arg("fast_and_approximate_mode") = false,
             nb::arg("sub_core_grids") = nb::none()));
 }
@@ -1628,8 +1588,7 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
                 const std::optional<Tensor>&,
                 ttsl::Span<const unary::EltwiseUnaryWithParam>,
                 ttsl::Span<const unary::EltwiseUnaryWithParam>,
-                ttsl::Span<const unary::EltwiseUnaryWithParam>,
-                std::optional<bool>>(&ttnn::pow),
+                ttsl::Span<const unary::EltwiseUnaryWithParam>>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
@@ -1638,8 +1597,7 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none()),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{})),
         ttnn::overload_t(
             nb::overload_cast<
                 float,
@@ -1649,8 +1607,7 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
                 const std::optional<Tensor>&,
                 ttsl::Span<const unary::EltwiseUnaryWithParam>,
                 ttsl::Span<const unary::EltwiseUnaryWithParam>,
-                ttsl::Span<const unary::EltwiseUnaryWithParam>,
-                std::optional<bool>>(&ttnn::pow),
+                ttsl::Span<const unary::EltwiseUnaryWithParam>>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
@@ -1659,8 +1616,7 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none()));
+            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{})));
 }
 }  // namespace detail
 
@@ -1775,7 +1731,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_and),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16)doc",
-        "INT32 for tensor-scalar is supported only when use_legacy= False.");
+        "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"logical_or">(
         mod,
@@ -2052,7 +2008,6 @@ void py_module(nb::module_& mod) {
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            const std::optional<bool>&,
             const std::optional<CoreRangeSet>&>(&ttnn::div),
         nb::overload_cast<
             const Tensor&,
@@ -2065,7 +2020,6 @@ void py_module(nb::module_& mod) {
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            const std::optional<bool>&,
             const std::optional<CoreRangeSet>&>(&ttnn::div),
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
