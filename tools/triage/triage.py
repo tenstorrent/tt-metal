@@ -88,6 +88,11 @@ from types import ModuleType
 
 
 def _raise_open_file_limit(desired: int = 65536) -> None:
+    """
+    Raise the open file limit for the current process to the desired value if possible.
+    This is necessary to avoid hitting the open file limit when processing many ELF files with the elf cache enabled.
+    If the file limit is already at or above the desired value, this function does nothing.
+    """
     try:
         import resource
 
