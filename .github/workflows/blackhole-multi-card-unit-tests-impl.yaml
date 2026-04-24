@@ -112,12 +112,20 @@ jobs:
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -vvv --tb=short --timeout=900
-              pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and with_ref and isl_1k" -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900
             timeout: 60
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
+            model-name: deepseek_prefill
+          - name: bh_lb_DeepSeek_PREFILL_PERF
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short
+            timeout: 30
+            test-type: loudbox
+            owner_id: U09LK84G4TF # Nikola Milicevic
             model-name: deepseek_prefill
           - name: bh_qb_DeepSeek_PREFILL
             cmd: |
