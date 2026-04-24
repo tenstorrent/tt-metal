@@ -471,10 +471,8 @@ void kernel_main() {
         merge_dispatch_d_noc_counter_deltas(dispatch_d_shutdown_sem_start);
     }
 
-    DEVICE_PRINT("DBG18881 dispatch_s: entering noc_async_full_barrier\n");
     noc_async_full_barrier();
-    DEVICE_PRINT("DBG18881 dispatch_s: exited noc_async_full_barrier\n");
- 
+
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
 }
