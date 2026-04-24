@@ -1,8 +1,8 @@
 ---
 name: llk-analyzer
-description: Analyze a problem (kernel generation or issue fix) and produce a solution approach grounded in target-architecture instructions. Runs first on every LLK task; follows codegen/skills/llk-arch-lookup/SKILL.md to discover usable instructions.
+description: Analyze a problem (kernel generation or issue fix) and produce a solution approach grounded in target-architecture instructions. Runs first on every LLK task; invokes the llk-arch-lookup skill to discover usable instructions.
 model: opus
-tools: Read, Glob, Grep, Write, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question
+tools: Read, Glob, Grep, Write, Skill, mcp__atlassian__getConfluencePage, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePageDescendants, mcp__deepwiki__ask_question
 ---
 
 # LLK Analyzer Agent
@@ -86,7 +86,11 @@ namespace ckernel { namespace sfpu {
 // Optional — only if LUT/constant pre-loading is needed (e.g., gelu)
 inline void _init_{op}_();
 
-// Inner row processor: processes SFP_ROWS rows via TTI_SFPLOAD / ops / TTI_SFPSTORE
+// Inner row processor — ONLY include when the per-row body is ≥2 instructions.
+// Typical body: TTI_SFPLOAD → one or more compute ops → TTI_SFPSTORE.
+// If the loop body is a single TTI_ call (e.g., a pure SFPSTORE with no preceding
+// SFPLOAD), omit this wrapper and inline the instruction directly in the loop.
+// A one-line wrapper is never justified — the writer playbook forbids it.
 [template <...>]
 inline void _calculate_{op}_sfp_rows_([runtime_args]);
 
@@ -95,7 +99,7 @@ inline void _calculate_{op}_sfp_rows_([runtime_args]);
 inline void _calculate_{op}_(const int iterations [, runtime_args]) {
     #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
-        _calculate_{op}_sfp_rows_(...);
+        _calculate_{op}_sfp_rows_(...);   // or inline single instruction here
         ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();
     }
 }
@@ -104,7 +108,8 @@ inline void _calculate_{op}_(const int iterations [, runtime_args]) {
 ```
 
 Record the universal conventions:
-- **NO SFPI.** Quasar does **not** use the SFPI C++ DSL. Do not use `sfpi::vFloat`, `sfpi::vUInt`, `sfpi::vInt`, `sfpi::dst_reg[...]`, `sfpi::l_reg[...]`, `v_if` / `v_elseif` / `v_endif`, `v_and`, `lut` / `lut2` / `lut2_sign`, `sfpi::sFloat16b`, or any `#include "sfpi.h"`. These are Blackhole-only. Quasar kernels are written in **raw `TTI_` / `TT_` macros** operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols directly. If the reference uses SFPI, treat every SFPI construct as a semantic description to translate, not code to copy.
+- **NO SFPI DSL.** Quasar does **not** use the SFPI C++ DSL types. Do not use `sfpi::vFloat`, `sfpi::vUInt`, `sfpi::vInt`, `sfpi::dst_reg[...]`, `sfpi::l_reg[...]`, `v_if` / `v_elseif` / `v_endif`, `v_and`, `lut` / `lut2` / `lut2_sign`, `sfpi::sFloat16b`. These are Blackhole-only DSL constructs. Quasar kernels are written in **raw `TTI_` / `TT_` macros** operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols directly. If the reference uses SFPI, treat every SFPI construct as a semantic description to translate, not code to copy.
+  **Exception — `sfpi::SFPLOADI_MOD0_*` constants ARE available on Quasar**: `sfpi_constants.h` (in `namespace sfpi`) is always reachable via `ckernel_sfpu.h` → `sfpi.h` → `sfpi_constants.h`. The writer MUST use these named constants for `TTI_SFPLOADI` / `TT_SFPLOADI` mode operands — never raw hex. "No SFPI on Quasar" means no C++ DSL types, not no sfpi-namespace constants.
 - Includes: `ckernel_trisc_common.h`, `cmath_common.h`, optional `ckernel_ops.h`; sibling kernels for composition (e.g., silu includes `ckernel_sfpu_sigmoid.h`). **Never** `#include "sfpi.h"`.
 - Namespace: `namespace ckernel { namespace sfpu { ... } }` (Blackhole uses `ckernel::sfpu` — do **not** copy that form).
 - Address mode: `ADDR_MOD_7`, pre-configured by `_eltwise_unary_sfpu_configure_addrmod_()`. Never invent a new addrmod.
@@ -154,13 +159,13 @@ For math/pack/unpack, locate the matching `_llk_{family}_params_` wrapper and re
 
 ## Step 3: Instruction Discovery via `llk-arch-lookup`
 
-The `llk-arch-lookup` skill is a local file, **not** a Claude Code registered skill — you cannot invoke it through a `Skill` tool. Instead, Read it directly and follow the instructions inside:
+Invoke the `llk-arch-lookup` skill via the Skill tool — it injects the full Confluence page index, CQL search patterns, and MCP-fetch protocol into your context:
 
 ```
-Read: codegen/skills/llk-arch-lookup/SKILL.md
+Skill: llk-arch-lookup
 ```
 
-That file provides the curated Confluence page index, CQL search patterns, and the MCP-fetch protocol. Treat it as your playbook for this step. For the problem at hand, follow its SFPU / math / pack-unpack track:
+Treat the injected content as your playbook for this step. For the problem at hand, follow its SFPU / math / pack-unpack track:
 
 1. **Primary arch spec** — SFPU MAS (`1256423592`) for SFPU; FPU MAS (`881197063`) for math; pack/unpack discovery via CQL.
 2. **Instruction set** — Tensix SFPU ISA (`1170505767`) or the full ISA tree (`1613201604`). Search for the specific instructions you expect:
@@ -199,6 +204,10 @@ This is where the approach takes shape. For each semantic step in the problem st
    ```
 3. **Compose from primitives.** If no single instruction or sibling exists, design a sequence. Prefer TTI_ forms (see Step 5).
 4. **Fall back to algorithm redesign.** If the target truly cannot compose the operation, flag it explicitly — the port may need a different mathematical approach (e.g., Taylor series instead of LUT, or emulating via int ops).
+
+**SFPMAD operand constraint:** `TTI_SFPMAD` / `TTI_SFPADD` / `TTI_SFPMUL` take general-purpose LREG operands (LREG0–7). Polynomial coefficients used in `TTI_SFPMAD` must be pre-loaded into LREG0–7 via `TTI_SFPLOADI` before the per-row loop. `_sfpu_load_config32_()` loads into the LUT/config register file, which is only readable via `TTI_SFPLUTFP32` — it does NOT make config-register values accessible as `TTI_SFPMAD` operands. Mixing these two register files produces wrong results silently.
+
+**Exponent extraction path for log-family kernels:** When the kernel must convert an extracted floating-point exponent from integer to float (e.g., for a log implementation), prefer the **biased-exponent path**: `TTI_SFPEXEXP(src, dst, 1)` → biased exponent is always in 0–255 (no sign bit) → `TTI_SFPCAST(dst, dst, 0)` → single INT32→FP32 conversion → `TTI_SFPMAD(LCONST_neg127, dst, LCONST_0, dst, 0)` to debias. This path uses only SFPCAST(mod=0), which has confirmed simulator support. Avoid the alternative unbiased path (`SFPEXEXP(mod=0)` → `SFPCAST(mod=3, SMAG32)` → `SFPCAST(mod=0)`) unless SFPCAST(mod=3) has been independently confirmed on the target simulator — it introduces a two-step conversion with a mode that is not validated by sibling kernels.
 
 Produce a **Semantic → Instruction Mapping** table:
 
@@ -273,7 +282,13 @@ If you cannot translate a specific SFPI construct with an entry in this table, f
 // Optional — include only if LUT/constant pre-loading is needed
 inline void _init_{op}_();
 
-// Inner row processor
+// Inner row processor — ONLY include when the per-row body is ≥2 instructions
+// (the typical case: SFPLOAD → compute → SFPSTORE).
+// If the entire per-row body is a single TTI_ call, omit this helper and inline
+// that instruction directly in the outer loop. The writer's "no single-instruction
+// wrappers" rule takes precedence — do NOT spec a _sfp_rows_ function whose body
+// would be one instruction. Explicitly state in §6a whether the wrapper is needed
+// and why.
 [template <...>]
 inline void _calculate_{op}_sfp_rows_([runtime_args]);
 
@@ -296,14 +311,27 @@ For every function, write the `TTI_` / `TT_` sequence in order, with a comment p
 
 ```
 _calculate_{op}_sfp_rows_:
-    TTI_SFPLOAD(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)   // load tile row from Dest
+    TTI_SFPLOAD(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)    // load tile row from Dest
     TTI_SFPNONLINEAR(LREG0, LREG1, p_sfpnonlinear::EXP_MODE)         // x -> e^x
     TTI_SFPADD(LCONST_1, LREG1, LCONST_1, LREG2, 0)                  // 1 + e^x  (2-cycle)
     TTI_SFPNONLINEAR(LREG2, LREG0, p_sfpnonlinear::RECIP_MODE)       // 1 / (1 + e^x)
-    TTI_SFPSTORE(LREG0, 0, ADDR_MOD_7, 0, 0)                         // store back to Dest
+    TTI_SFPSTORE(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)   // store back to Dest
 ```
 
 Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `TTI_NOP`).
+
+**Immediate-value convention in §6b pseudocode.** When an instruction takes a hex immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias, an imm12 bit-mask — write the pseudocode with a descriptive placeholder name (e.g. `FP16B_INV_PI`, `FP16B_SIN_C3`, `SFPSETCC_IMM_FP32_TEST`) and give its fp16b bit-pattern + decimal identity in a "Named constants" mini-table at the end of §6b:
+
+```
+Named constants this kernel requires:
+| Name                 | fp16b  | Meaning                                   |
+| FP16B_INV_PI         | 0x3EA2 | 1/pi ~= 0.31831                           |
+| FP16B_SIN_C3         | 0xBE2B | -1/6 (Maclaurin coefficient)              |
+| FP16B_RNE_BIAS_POS   | 0x4B40 | +1.5*2^23 (round-to-nearest-even bias)    |
+| SFPSETCC_IMM_FP32_TEST | 0x800 | imm12 bit 11 = "treat LREG as fp32"     |
+```
+
+Use the names in the pseudocode, not the raw hex. This lets the writer lift them straight into `constexpr std::uint32_t` declarations at the top of `namespace sfpu` without having to invent names on the fly. Positional `0` / `1` arguments (mod1, done, dest_reg, imm12) stay as bare literals in the pseudocode — the writer will annotate them inline per its own rules.
 
 ### 6c: Register allocation
 
@@ -337,6 +365,8 @@ Surface every uncertainty before handing off:
 ## Step 7: Format Applicability (MANDATORY)
 
 Start from the FULL Quasar-supported format set (`QUASAR_DATA_FORMAT_ENUM_VALUES` in `tests/python_tests/helpers/format_config.py`). Evaluate each independently — do **not** use the reference's `static_assert` as the filter. Quasar supports formats Blackhole lacks (Int16, MxFp8R, MxFp8P, Tf32).
+
+**Float16 is valid on Quasar (MANDATORY CHECK):** Float16 appears in both `QUASAR_DATA_FORMAT_ENUM_VALUES` (`format_config.py`) and `VALID_QUASAR_DEST_REG_FORMATS` (`data_format_inference.py`). Do NOT exclude Float16 based on inference from any format list — confirm by running `grep -n "Float16" tests/python_tests/helpers/data_format_inference.py` and verifying the format is present in `VALID_QUASAR_DEST_REG_FORMATS`. Float16 exclusions backed by format-list inference rather than a direct read of these files must be flagged as assumptions with a risk of being wrong.
 
 ### SFPU-specific rule
 
@@ -375,6 +405,7 @@ Copy the infrastructure rules that gate test combinations:
 - Float32 → Float16 on Quasar requires `dest_acc=Yes`.
 - Non-Float32 → Float32 on Quasar requires `dest_acc=Yes`.
 - Integer and float formats cannot be mixed in input→output.
+- **SFPU tests use `unpack_to_dest=True` — exclude mixed-bitwidth `dest_acc` combinations.** Non-32-bit formats must pair with `dest_acc=No`; 32-bit formats must pair with `dest_acc=Yes`. The combinations (non-32-bit + `dest_acc=Yes`) and (32-bit + `dest_acc=No`) require the FPU/datacopy path and must not appear in the **Recommended Test Formats** section of the analysis. The tester enforces this via the `_is_invalid_quasar_combination` filter.
 - Any operation-specific constraints you identified.
 
 ---

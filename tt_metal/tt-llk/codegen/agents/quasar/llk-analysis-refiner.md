@@ -22,8 +22,8 @@ Required:
 - **KERNEL_PATH** — path to the failed kernel file (e.g. `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_{op}.h`)
 - **ORIGINAL_ANALYSIS_PATH** — `codegen/artifacts/{op}_analysis.md`
 - **ARCH_RESEARCH_PATH** — `codegen/artifacts/{op}_arch_research.md`
-- **TESTER_LOG_PATH** — `{LOG_DIR}/agent_tester.md` (contains the 10-attempt fix log)
-- **WRITER_LOG_PATH** — `{LOG_DIR}/agent_writer.md`
+- **TESTER_LOG_PATH** — `{LOG_DIR}/agent_tester_cycle{N}.md` (the failing cycle's tester log)
+- **WRITER_LOG_PATH** — `{LOG_DIR}/agent_writer_cycle{N}.md` (the failing cycle's writer log)
 - **TEST_FILES** — list of test source/python files the tester used or created
 - **WORKTREE_DIR** — `cd` here before any file I/O
 - **LOG_DIR** — where to write the self-log
@@ -135,6 +135,17 @@ Classification is not a label you pick by elimination. Before settling on a cate
 - (For `HARNESS_INCOMPATIBILITY` specifically) a concrete list of foreign-arch symbols the test source calls and a grep proving the target has no native definition.
 
 If your Step 4 cross-check **contradicts** the category you picked — e.g. you picked `WRONG_INSTRUCTION_MAPPING` and then your own ISA read confirms the instruction and mode are valid on the target — the category is rejected. Go back to Step 3 and pick a different one. *Do not* rationalize with "emulator appears to not implement it correctly", "appears to have non-deterministic behavior", or "spec is right but silicon differs" unless you have a bug-tracker link or a human-confirmed errata citation. Those phrasings are the diagnostic equivalent of a shrug; they encode guesses as conclusions and poison v${N+1}.
+
+### Prefer validated paths over unconfirmed ones
+
+When multiple implementation paths would both fix the diagnosed failure, choose the path with **confirmed simulator support** over one that uses instruction modes flagged as "not confirmed on simulator" in any prior writer or tester log. If two paths are otherwise equivalent and one requires an SFPCAST mode, SFPEXEXP mode, or SFPNONLINEAR mode that has not been exercised by any passing sibling kernel, do NOT encode the unconfirmed path in the refined analysis without a positive confirmation check:
+
+```
+Grep: pattern="^{INSTRUCTION}:", path="tt_llk_quasar/instructions/assembly.yaml"
+mcp__atlassian__getConfluencePage — fetch the ISA page for that mode
+```
+
+If the ISA confirms the mode is valid and the `assembly.yaml` entry exists, proceed. If you cannot confirm, document it as a risk and choose the simpler confirmed path instead. A risk that persists into v2 analysis is more dangerous than a slightly less elegant path that is known to work.
 
 ### No absolute bans
 

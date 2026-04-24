@@ -133,6 +133,20 @@ def _discover_session(preferred_pid: str | None) -> tuple[str, Path, Path] | Non
                 jsonl, subs = _build_paths(sid, cwd)
                 return sid, jsonl, subs
 
+    # PID matching fails when the bash Bash-tool shell's PPID doesn't match the
+    # claude CLI PID stored in the session file.  Fall back to CWD matching:
+    # prefer the most recently started session whose cwd equals the current
+    # working directory.  This correctly disambiguates concurrent sessions for
+    # different projects.
+    current_cwd = os.getcwd()
+    cwd_matches = [c for c in candidates if c[2] == current_cwd]
+    if cwd_matches:
+        cwd_matches.sort(key=lambda x: x[0], reverse=True)
+        _, sid, cwd, _ = cwd_matches[0]
+        jsonl, subs = _build_paths(sid, cwd)
+        return sid, jsonl, subs
+
+    # Last resort: most recently started session across all projects.
     if candidates:
         candidates.sort(key=lambda x: x[0], reverse=True)
         _, sid, cwd, _ = candidates[0]
@@ -266,29 +280,66 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="If set, patch run.json atomically with the aggregated tokens + cost_usd.",
     )
+    ap.add_argument(
+        "--print-session",
+        action="store_true",
+        default=False,
+        help="Print '<session_id> <project_cwd>' to stdout and exit. Used by the orchestrator "
+        "to capture the session identity at startup so refresh_cost.sh can pass it "
+        "explicitly on later calls (when PID-based discovery may pick the wrong session).",
+    )
     args = ap.parse_args(argv)
 
     since_dt = _parse_ts(args.since) if args.since else None
 
     if args.session_id and args.project_cwd:
         main_jsonl, subs_dir = _build_paths(args.session_id, args.project_cwd)
+        discovered_cwd = args.project_cwd
+        discovered_sid = args.session_id
     else:
         found = _discover_session(args.session_pid)
         if not found:
-            print(
-                json.dumps(
-                    dict(
-                        input=0,
-                        output=0,
-                        cache_read=0,
-                        cache_creation=0,
-                        total=0,
-                        cost_usd=0.0,
+            if args.print_session:
+                print(" ")  # empty pair — caller checks for blank
+            else:
+                print(
+                    json.dumps(
+                        dict(
+                            input=0,
+                            output=0,
+                            cache_read=0,
+                            cache_creation=0,
+                            total=0,
+                            cost_usd=0.0,
+                        )
                     )
                 )
-            )
             return 0
-        _, main_jsonl, subs_dir = found
+        discovered_sid, main_jsonl, subs_dir = found
+        discovered_cwd = str(main_jsonl.parent.parent.name).replace("-", "/")
+
+    if args.print_session:
+        # Recover the original cwd string from the project dir name.
+        # _build_paths maps cwd → proj_name via cwd.replace("_","-").replace("/","-"),
+        # so we cannot perfectly invert it for all paths — instead we read it
+        # from the session file directly when we did PID discovery.
+        if not (args.session_id and args.project_cwd):
+            # Re-read the cwd from the session metadata for accuracy.
+            home = Path(os.path.expanduser("~"))
+            sessions_dir = home / ".claude" / "sessions"
+            real_cwd = discovered_cwd
+            for f in sessions_dir.glob("*.json"):
+                try:
+                    meta = json.loads(f.read_text())
+                    if meta.get("sessionId") == discovered_sid and meta.get("cwd"):
+                        real_cwd = meta["cwd"]
+                        break
+                except Exception:
+                    pass
+        else:
+            real_cwd = args.project_cwd
+        print(f"{discovered_sid} {real_cwd}")
+        return 0
 
     totals = dict(
         input=0, output=0, cache_read=0, cache_creation=0, total=0, cost_usd=0.0

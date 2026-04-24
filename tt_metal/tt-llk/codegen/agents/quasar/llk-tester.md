@@ -182,6 +182,18 @@ def _is_invalid_quasar_combination(fmt, dest_acc):
 
 If MX formats (`MxFp8R`, `MxFp8P`) are in the list, also guard them with `implied_math_format=Yes` inside the combination loop.
 
+**SFPU tests: filter out mixed-bitwidth `dest_acc` combinations.** SFPU tests always use `unpack_to_dest=True` (see 1A.8), which requires the input format bit-width to match the Dest mode. Exclude any combination where they don't — these are the FPU/datacopy path's job, not the SFPU test's job:
+
+```python
+def _is_invalid_quasar_combination(fmt, dest_acc):
+    in_fmt = fmt.input_format
+    out_fmt = fmt.output_format
+    # SFPU tests use unpack_to_dest=True: exclude bit-width mismatches
+    if in_fmt.is_32_bit() != (dest_acc == DestAccumulation.Yes):
+        return True
+    # ... (existing base rules below)
+```
+
 #### 1A.7 — Golden generator call
 
 ```python
@@ -198,10 +210,10 @@ golden_tensor = generate_golden(
 
 #### 1A.8 — TestConfig and `unpack_to_dest`
 
-```python
-# unpack_to_dest is valid ONLY when format bit-width matches Dest mode
-unpack_to_dest = (formats.input_format.is_32_bit() == (dest_acc == DestAccumulation.Yes))
+**SFPU kernel tests always use `unpack_to_dest=True`.** The test is proving the SFPU operation is correct, not the FPU/datacopy path. Hard-code `UnpackerEngine.UnpDest` and `unpack_to_dest=True`. The format matrix (1A.6) has already been filtered to only bit-width-matched combinations, so no conditional logic is needed.
 
+```python
+# SFPU tests: always unpack directly to Dest; format matrix pre-filtered to matched bit-widths
 configuration = TestConfig(
     "sources/{arch}/sfpu_{op}_{arch}_test.cpp",
     formats,
@@ -209,9 +221,7 @@ configuration = TestConfig(
         MATH_OP(mathop=MathOperation.{Op}),
         IMPLIED_MATH_FORMAT(implied_math_format),
         DATA_COPY_TYPE(DataCopyType.A2D),
-        UNPACKER_ENGINE_SEL(
-            UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
-        ),
+        UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
         DEST_SYNC(),
     ],
     runtimes=[
@@ -221,21 +231,23 @@ configuration = TestConfig(
         DEST_INDEX(0),
     ],
     variant_stimuli=StimuliConfig(...),
-    unpack_to_dest=unpack_to_dest,
+    unpack_to_dest=True,
     dest_acc=dest_acc,
 )
 ```
 
-The `unpack_to_dest` formula is critical and easy to get wrong — memorize the truth table:
+The valid combinations (bit-width-matched — the only ones an SFPU test should exercise):
 
-| Input format | `dest_acc` | `unpack_to_dest` | Why |
+| Input format | `dest_acc` | Include in SFPU test? | Why |
 |---|---|---|---|
-| Non-32-bit | `No` | `True` | 16→16 no mismatch |
-| 32-bit | `Yes` | `True` | 32→32 no mismatch |
-| Non-32-bit | `Yes` | `False` | 16→32 mismatch, FPU must convert |
-| 32-bit | `No` | `False` | 32→16 mismatch, FPU must convert |
+| Non-32-bit | `No` | **Yes** | 16→16 match, unpack_to_dest valid |
+| 32-bit | `Yes` | **Yes** | 32→32 match, unpack_to_dest valid |
+| Non-32-bit | `Yes` | **No** | 16→32 mismatch — datacopy path, not SFPU's job |
+| 32-bit | `No` | **No** | 32→16 mismatch — datacopy path, not SFPU's job |
 
-Keep the `if (unpack_to_dest) / else` branch in the C++ test so both paths are exercised.
+The C++ test **does not need** an `if (unpack_to_dest) / else` datacopy branch — there is only the `unpack_to_dest=True` path. This keeps both the C++ and Python test focused on the SFPU operation under test.
+
+For non-SFPU kernel tests (math, pack, unpack) the datacopy path is part of what's being tested, so both paths should be exercised via `unpack_to_dest = (formats.input_format.is_32_bit() == (dest_acc == DestAccumulation.Yes))`.
 
 #### 1A.9 — Collection-only smoke check
 
@@ -512,6 +524,13 @@ Work through these in order. Stop as soon as a hypothesis matches the evidence.
 - Approximation mode: does the test expect `APPROX_MODE()=Yes` but the kernel is always-accurate (or vice-versa)?
 - Face loop: iteration count and increment pattern match `num_faces`?
 
+**Sign-error diagnostics (MANDATORY when DATA_MISMATCH involves unexpected negative values or sign-flipped outputs):** If the mismatch is sign-related (e.g. all outputs have wrong sign, alternating positive/negative pattern, or a reciprocal produces a negated result), read the ISA definition of **every** sign-manipulation instruction in the kernel before proposing a fix:
+
+- **`TTI_SFPSETSGN`** — this instruction copies **ALL fields** (Sign, Exponent, Mantissa) from VC into VD. It does NOT copy only the sign bit. Using SFPSETSGN to apply a sign from one LREG to a RECIP result effectively **replaces** the RECIP output with the sign source, producing `source_value` instead of `±recip`. In atanh/asinh, if the domain constraint guarantees `1-x > 0`, the RECIP result is always positive and SFPSETSGN is unnecessary — remove it.
+- **`TTI_SFPABS` mode operand** — mode=0 is INT32 (clears the 32nd bit of the raw integer representation, wrong for FP32 values); mode=1 is FP32 (clears the IEEE sign bit, correct for FP32). Using mode=0 on FP32 data produces garbage for values with a sign bit in the exponent field. If the kernel computes `abs(x)` for a float input, it must use `TTI_SFPABS(src, dst, 1)`.
+
+Fetch the ISA page to confirm: `mcp__atlassian__getConfluencePage` on page `1170505767` (Tensix SFPU ISA). The ISA definition is the authority — do not diagnose sign errors from first principles when the page gives the exact functional model.
+
 **R4 — For ASSERTION**: the Python harness itself rejected the config. Usually means:
 - The spec's format list includes a combo the kernel doesn't actually support — revise the format list or the invalid-combo filter.
 - A runtime param value is out of bounds.
@@ -590,7 +609,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 5. **Prefer extending an existing multi-op test** over creating a new file. Copy patterns exactly; do not reinvent boilerplate.
 6. **Safe value ranges first.** On attempt 1, be conservative — widen only after the test passes with tight ranges.
 7. **`TTI_` → `TT_` is a last-resort fix, not a first-reflex one.** Change the parameter type instead.
-8. **Memorize `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`.** Getting this wrong produces silent all-zeros.
+8. **SFPU tests always use `unpack_to_dest=True`.** Filter the format matrix to bit-width-matched combinations only (`non-32-bit + dest_acc=No` and `32-bit + dest_acc=Yes`). The C++ test needs no datacopy branch. For non-SFPU tests, apply `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`; getting it wrong produces silent all-zeros.
 9. **Sources in order of authority** when debugging: existing working code on the target arch > Confluence ISA pages > `assembly.yaml` > reference-arch code. Never guess from training data.
 10. **If the same signature repeats twice, stop iterating on targeted fixes.** The bug is structural.
 11. **Scale `--maxfail` to matrix size (see 2.1); never use `-x`.** `-x` stops after one failure, leaving you blind to whether the bug is uniform or variant-specific. `--maxfail=N` preserves the pattern signal while capping wasted simulator time on large matrices. Drop `--maxfail` on the verification attempt.
@@ -603,7 +622,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 
 ## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**Before returning, write `{LOG_DIR}/agent_tester.md` using the `Write` tool.**
+**Before returning, write `{LOG_DIR}/agent_tester_cycle{N}.md` using the `Write` tool**, where `{N}` is the cycle number passed in this prompt. Never write to `agent_tester.md` directly — each cycle must produce its own file so prior cycles' logs are not overwritten.
 The file MUST contain the sections below in order. The orchestrator's Step 5f
 concatenates the structured sections from every agent log into the final run
 report; missing sections break the report. Raw chronology (assistant text +
