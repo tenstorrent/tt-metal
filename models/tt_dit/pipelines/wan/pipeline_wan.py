@@ -528,6 +528,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
         max_sequence_length: int = 512,
+        traced: bool = False,
     ):
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt = [prompt_clean(u) for u in prompt]
@@ -555,7 +556,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         tt_prompt = ttnn.from_torch(
             text_input_ids,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+            device=self.mesh_device if not traced else None,
             mesh_mapper=mesh_mapper,
         )
 
@@ -563,14 +564,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+            device=self.mesh_device if not traced else None,
             mesh_mapper=mesh_mapper,
         )
 
-        prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask)[-1]
-
-        # use the mask to zero out the padding tokens.
-        prompt_embeds = prompt_embeds * ttnn.unsqueeze(tt_mask, -1)
+        prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask, zero_masking=True, traced=traced)[-1]
 
         prompt_embeds = self.encoder_ccl_manager.all_gather(
             prompt_embeds, dim=0, mesh_axis=DP_axis, use_hyperparams=True
@@ -591,6 +589,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         max_sequence_length: int = 512,
+        traced: bool = True,
     ):
         r"""
         Batch encodes the prompt and negative prompt into text encoder hidden states..
@@ -658,6 +657,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             prompt=all_input_prompts,
             num_videos_per_prompt=num_videos_per_prompt,
             max_sequence_length=max_sequence_length,
+            traced=traced,
         )
 
         # When CFG is enabled, we should be able to leave the shards on device.
@@ -878,6 +878,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt_embeds=prompt_embeds,
                 negative_prompt_embeds=negative_prompt_embeds,
                 max_sequence_length=max_sequence_length,
+                traced=traced,
             )
 
         # 4. Prepare schedule
