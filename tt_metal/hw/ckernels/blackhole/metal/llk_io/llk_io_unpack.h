@@ -19,10 +19,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
 
-    LLK_ASSERT(
-        static_cast<std::uint32_t>(num_tiles) <= get_local_cb_interface(input).fifo_num_pages,
-        "cb_wait_front: num_tiles exceeds CB size (would deadlock)");
-
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 

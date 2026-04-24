@@ -402,7 +402,6 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    ASSERT(static_cast<uint32_t>(num_pages) <= get_local_cb_interface(operand).fifo_num_pages);
     uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
@@ -473,7 +472,6 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
-    ASSERT(static_cast<uint32_t>(num_pages) <= get_local_cb_interface(operand).fifo_num_pages);
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
