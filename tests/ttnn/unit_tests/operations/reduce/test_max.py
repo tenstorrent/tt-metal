@@ -126,6 +126,7 @@ def test_max_global(device, batch_size, h, w):
 )
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_max_dim(device, input_shape_and_dim, keepdim):
+    torch.manual_seed(0)
     input_shape, max_dim = input_shape_and_dim
     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=max_dim, keepdim=keepdim)

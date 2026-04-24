@@ -348,6 +348,36 @@ class Generator(WarmupForwardMixin):
 
         return trace_id, (tt_tokens, tt_log_probs), trace_input
 
+    def _row_sharded_batched_prefill(
+        self,
+        tokens,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_lens,
+        enable_trace=True,
+        sampling_params=None,
+    ):
+        """Dispatch to model's row-sharded batched prefill."""
+        assert (
+            self.data_parallel == 1
+        ), "Row-sharded batched prefill requires data_parallel=1 (model handles DP internally)"
+        return self.model[0].row_sharded_batched_prefill(
+            tokens,
+            page_table,
+            kv_cache[0],
+            prompt_lens,
+            prefill_seq_lens,
+            enable_trace=enable_trace,
+            sampling_params=sampling_params,
+            model_args=self.model_args[0],
+            trace_cache={
+                "ids": self.trace_id_prefill,
+                "inputs": self.trace_inputs_prefill,
+                "outputs": self.trace_output_prefill,
+            },
+        )
+
     def _easy_trace_prefill(
         self,
         prefill_ids,
@@ -483,6 +513,29 @@ class Generator(WarmupForwardMixin):
             prompt_lens = prompt_lens.tolist()
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Row-sharded batched prefill: process 1 user per row per iteration.
+        # Only used when device sampling is active (sampling_params is not None)
+        # and the prompt uses the harmony chat template (first token is <|start|>=200006).
+        # Host sampling (sampling_params=None) needs the single-user prefill path
+        # that returns full logits per user.
+        model_0 = self.model[0]
+        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        if (
+            getattr(model_0, "users_row_sharded", False)
+            and batch_size > 1
+            and sampling_params is not None
+            and is_harmony
+        ):
+            return self._row_sharded_batched_prefill(
+                tokens,
+                page_table,
+                kv_cache,
+                prompt_lens,
+                prefill_seq_lens=prefill_seq_lens,
+                enable_trace=enable_trace,
+                sampling_params=sampling_params,
+            )
+
         # Batched prefill: all prompts share the same padded length so they can
         # be processed in a single forward pass. padded_batch is rounded up to
         # the nearest SUPPORTED_PREFILL_BATCH_SIZES entry (not max_batch_size)
@@ -864,6 +917,7 @@ class Generator(WarmupForwardMixin):
                     )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+
         if sampling_executed:
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
