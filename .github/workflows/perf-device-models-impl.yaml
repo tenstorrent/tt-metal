@@ -196,7 +196,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
@@ -205,19 +205,24 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@v4
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: non-civ2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         env:
           HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         with:
@@ -229,7 +234,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: stable_diffusion_xl tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "stable_diffusion_xl"
           commands: |
@@ -239,7 +244,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: stable_diffusion_1_4 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "stable_diffusion_1_4"
           commands: |
@@ -248,7 +253,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: distilbert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "distilbert"
           commands: |
@@ -257,7 +262,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vgg tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "vgg"
           commands: |
@@ -266,7 +271,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vgg_unet tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "vgg_unet"
           commands: |
@@ -275,7 +280,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: bert_tiny tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "bert_tiny"
           commands: |
@@ -284,7 +289,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: squeezebert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "squeezebert"
           commands: |
@@ -294,7 +299,7 @@ jobs:
 
 
       - name: resnet50 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "resnet50"
           commands: |
@@ -303,7 +308,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: ufld_v2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "ufld_v2"
           commands: |
@@ -312,7 +317,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: sentence_bert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "sentence_bert"
           commands: |
@@ -321,7 +326,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: metal_BERT_large_11 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "metal_BERT_large_11"
           commands: |
@@ -330,7 +335,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: mobilenetv2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "mobilenetv2"
           commands: |
@@ -339,7 +344,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vit tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "vit"
           commands: |
@@ -348,7 +353,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vanilla_unet tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "vanilla_unet"
           commands: |
@@ -357,7 +362,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: swin_v2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "swin_v2"
           commands: |
@@ -366,7 +371,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: swin_s tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "swin_s"
           commands: |
@@ -375,7 +380,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vovnet tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "VoVNet"
           commands: |
@@ -384,7 +389,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: efficientnetb0 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "efficientnetb0"
           commands: |
@@ -395,7 +400,7 @@ jobs:
       - name: panoptic_deeplab tests (110 cores)
         env:
           TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "panoptic_deeplab_110_cores"
           commands: |
@@ -403,7 +408,7 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
 
       - name: ops perf tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: ./.github/actions/single-card-perf-test
         with:
           device_perf_model_name: "ops-perf-tests"
           commands: |
@@ -472,5 +477,5 @@ jobs:
         with:
           prefix: "test_reports_"
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()
