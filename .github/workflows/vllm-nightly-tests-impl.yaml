@@ -181,6 +181,26 @@ jobs:
         run: |
           mkdir -p output
 
+      - name: 📥 Prefetch HF weights
+        timeout-minutes: 30
+        run: |
+          # tt_transformers' from_pretrained uses local_files_only=True when
+          # $CI is 'true' (see model_config.py:3017). GitHub Actions sets
+          # CI=true automatically, so HF never downloads on demand. Main CI
+          # satisfies this by mounting pre-populated weights at
+          # /mnt/MLPerf/huggingface; the shield runner doesn't have that mount,
+          # so we snapshot-download into HF_HUB_CACHE here before the server
+          # starts. Idempotent — HF skips files already present.
+          python3 -c "
+          import os
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='${{ matrix.test-group.model }}',
+              cache_dir=os.environ['HF_HUB_CACHE'],
+              token=os.environ.get('HF_TOKEN'),
+          )
+          "
+
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
