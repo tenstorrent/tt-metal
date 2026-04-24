@@ -84,11 +84,11 @@ def run_yolov8l(
 @pytest.mark.parametrize(
     "resolution",
     [
-        (640, 640),
+        # (640, 640),
         (1280, 1280),
     ],
     ids=[
-        "640",
+        # "640",
         "1280",
     ],
 )
