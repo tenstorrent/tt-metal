@@ -148,14 +148,6 @@ class Llama(AbstractModuleBase):
                 gather_output=True,
                 axis_name="tp",
             )
-            # Embedding weight is replicated across TP (VocabParallelEmbedding
-            # is broken under DP+TP), so weight tying with the sharded LM head
-            # is rejected in LlamaConfig.__post_init__.
-            self.tok_emb = Embedding(
-                self.padded_vocab_size,
-                config.hidden_size,
-                weight_init=ttml.init.normal(0.0, 0.02),
-            )
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
             self.fc = LinearLayer(
@@ -164,11 +156,12 @@ class Llama(AbstractModuleBase):
                 False,
                 weight_init=ttml.init.normal(0.0, 0.02),
             )
-            self.tok_emb = Embedding(
-                self.padded_vocab_size,
-                config.hidden_size,
-                weight_init=ttml.init.normal(0.0, 0.02),
-            )
+
+        self.tok_emb = Embedding(
+            self.padded_vocab_size,
+            config.hidden_size,
+            weight_init=ttml.init.normal(0.0, 0.02),
+        )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight

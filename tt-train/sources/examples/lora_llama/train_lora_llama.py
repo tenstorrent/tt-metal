@@ -246,10 +246,16 @@ def main():
 
     # ── Device ────────────────────────────────────────────────────────────────
     shape = args.mesh_shape
+    if args.dp_axis != -1 and not (0 <= args.dp_axis < len(shape)):
+        raise ValueError(f"--dp_axis ({args.dp_axis}) is out of range for --mesh_shape of length {len(shape)}")
+    if args.tp_axis != -1 and not (0 <= args.tp_axis < len(shape)):
+        raise ValueError(f"--tp_axis ({args.tp_axis}) is out of range for --mesh_shape of length {len(shape)}")
+    if args.dp_axis != -1 and args.dp_axis == args.tp_axis:
+        raise ValueError(f"--dp_axis and --tp_axis must differ (both set to {args.dp_axis})")
     axis_names_list = [f"_{i}" for i in range(len(shape))]
-    if 0 <= args.dp_axis < len(shape):
+    if args.dp_axis != -1:
         axis_names_list[args.dp_axis] = "dp"
-    if 0 <= args.tp_axis < len(shape):
+    if args.tp_axis != -1:
         axis_names_list[args.tp_axis] = "tp"
     mesh = ttml.Mesh(shape, tuple(axis_names_list))
     ttml.open_device_mesh(mesh)
