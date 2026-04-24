@@ -54,4 +54,14 @@ static inline uint32_t find_valid_granularity(uint32_t tile_count, uint32_t max_
     return granularity;
 }
 
+// Streaming cb_out sizing: 2-slot ping-pong of matmul row-groups (pending SALAD + matmul
+// in-flight). Must mirror the kernel's qktv_h bump (h=1 -> 2 when dest fits 2*w); callers
+// otherwise undersize cb_out and the V matmul packs past fifo_limit.
+static inline uint32_t streaming_cb_out_tiles(
+    uint32_t out_out_subblock_h, uint32_t out_out_subblock_w, uint32_t dst_size, uint32_t Sq_chunk_t, uint32_t vDHt) {
+    const uint32_t qktv_h =
+        (out_out_subblock_h == 1 && 2 * out_out_subblock_w <= dst_size && Sq_chunk_t >= 2) ? 2u : out_out_subblock_h;
+    return 2u * qktv_h * vDHt;
+}
+
 }  // namespace ttnn::prim::detail
