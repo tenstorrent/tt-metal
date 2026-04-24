@@ -403,7 +403,7 @@ ttnn::Tensor reshape_tiled(
         // Tensors here are rank-3, so fill_implicit_tile_padding stays on its non-recursive path.
         if (!skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
             if (output_tensor_3d.memory_config().is_sharded()) {
-                // TODO(fill_pad): drop this s2i/i2s detour once prim::fill_pad supports
+                // TODO(#43090): drop this s2i/i2s detour once prim::fill_pad supports
                 // sharded buffers without overflowing fill_pad_writer's per-core runtime-arg cap.
                 MemoryConfig interleaved_mem{
                     TensorMemoryLayout::INTERLEAVED, output_tensor_3d.memory_config().buffer_type()};
