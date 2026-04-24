@@ -1667,7 +1667,8 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool flatten_work = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1739,24 +1740,24 @@ void sdpa_inner_loop(
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
             uint32_t q_chunk;
-#if defined(SDPA_FLAT_WORK)
-            // Flat work distribution: q_iter is a global index into B*NQH*q_num_chunks. Only q_chunk
-            // is needed by compute (reader/writer do the full (nb, nq, q_chunk) decomposition to
-            // fetch the right Q/K/V). Mirrors the RING branch's internal remap pattern.
-            // Zigzag sub-mode is carried as compile-time arg 33 (see program factory).
-            constexpr bool flat_use_zigzag = get_compile_time_arg_val(33) == 1;
-            q_chunk = proxy_q_chunk(q_iter, q_num_chunks, flat_use_zigzag, sdpa_proxy_mode);
-#elif defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
+            if constexpr (flatten_work) {
+                // Flat work distribution: q_iter is a global index into B*NQH*q_num_chunks. Only
+                // q_chunk is needed by compute (reader/writer do the full (nb, nq, q_chunk)
+                // decomposition to fetch the right Q/K/V). Mirrors the RING branch's remap pattern.
+                q_chunk = proxy_q_chunk(q_iter, q_num_chunks, use_zigzag_balancing, sdpa_proxy_mode);
             } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
+#if defined BALANCED_Q_PARALLEL
+                uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
+                if (q_iter < q_chunk_div_2) {             // bottom half
+                    q_chunk = local_q_start + q_iter;
+                } else {
+                    uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
+                    q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
+                }
 #else
-            q_chunk = local_q_start + q_iter;
+                q_chunk = local_q_start + q_iter;
 #endif
+            }
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -2179,7 +2180,8 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool flatten_work = false>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2219,6 +2221,7 @@ void sdpa_standard(
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false,
     const bool is_chain_participant = false) {
     sdpa_inner_loop<
         STANDARD,
@@ -2238,7 +2241,8 @@ void sdpa_standard(
         is_chunked,
         scale_fp32,
         sliding_window_size,
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        flatten_work>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2296,7 +2300,7 @@ void sdpa_standard(
         lw_mask,
         is_causal,
         /*is_balanced=*/false,
-        /*use_zigzag_balancing=*/false,
+        use_zigzag_balancing,
         /*is_last_ring_iter=*/true,
         is_chain_participant);
 }

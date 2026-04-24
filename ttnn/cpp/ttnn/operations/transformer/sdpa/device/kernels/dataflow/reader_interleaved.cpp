@@ -84,9 +84,10 @@ void kernel_main() {
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
-    // Flat-distribution zigzag sub-mode (tail arg; only meaningful when SDPA_FLAT_WORK is defined).
-    constexpr bool flat_use_zigzag =
-        get_compile_time_arg_val(chunk_start_idx_args.next_compile_time_args_offset()) == 1;
+    // Flat-work gate + zigzag sub-mode (tail args; zigzag is only meaningful when flatten_work is true).
+    constexpr uint32_t flat_work_cta_base = chunk_start_idx_args.next_compile_time_args_offset();
+    constexpr bool flatten_work = get_compile_time_arg_val(flat_work_cta_base) == 1;
+    constexpr bool flat_use_zigzag = get_compile_time_arg_val(flat_work_cta_base + 1) == 1;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -115,13 +116,15 @@ void kernel_main() {
     uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
     uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
-#if defined(SDPA_FLAT_WORK)
     // Flat work distribution: causal only, non-chunked, no attention sink. num_phases is always 1
     // for this factory, so these args sit right after read_offset_phase_1 with no intervening args.
     // Zigzag sub-mode is compile-time arg flat_use_zigzag (declared above).
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
-#endif
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    if constexpr (flatten_work) {
+        global_q_start = get_arg_val<uint32_t>(argidx++);
+        global_q_count = get_arg_val<uint32_t>(argidx++);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -598,100 +601,100 @@ void kernel_main() {
             valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
         }
 
-#if defined(SDPA_FLAT_WORK)
-        // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Host enforces
-        // !is_chunked and !use_attention_sink, so the hierarchical-only page-table / sink reads
-        // don't apply. q_iter_local resets at every (batch, head) transition so chain forwarding
-        // guards (`q_iter_local < next_core_q_chunks`) count slots within the current head only;
-        // for straddling cores whose range spans multiple heads, this differs from gq.
-        uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
-        uint32_t mask_batch_offset = 0;
-        uint32_t q_iter_local_counter = 0;
-        uint32_t prev_head_id_flat = static_cast<uint32_t>(-1);
-        for (uint32_t gq = 0; gq < global_q_count; ++gq) {
-            const auto decoded = decompose_flat_q_index_with_proxy(
-                global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
-            const uint32_t cur_head_id = decoded.nb * NQH + decoded.nq;
-            if (cur_head_id != prev_head_id_flat) {
-                q_iter_local_counter = 0;
-                prev_head_id_flat = cur_head_id;
-            } else {
-                q_iter_local_counter++;
+        if constexpr (flatten_work) {
+            // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Host enforces
+            // !is_chunked and !use_attention_sink, so the hierarchical-only page-table / sink reads
+            // don't apply. q_iter_local resets at every (batch, head) transition so chain forwarding
+            // guards (`q_iter_local < next_core_q_chunks`) count slots within the current head only;
+            // for straddling cores whose range spans multiple heads, this differs from gq.
+            uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
+            uint32_t mask_batch_offset = 0;
+            uint32_t q_iter_local_counter = 0;
+            uint32_t prev_head_id_flat = static_cast<uint32_t>(-1);
+            for (uint32_t gq = 0; gq < global_q_count; ++gq) {
+                const auto decoded = decompose_flat_q_index_with_proxy(
+                    global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
+                const uint32_t cur_head_id = decoded.nb * NQH + decoded.nq;
+                if (cur_head_id != prev_head_id_flat) {
+                    q_iter_local_counter = 0;
+                    prev_head_id_flat = cur_head_id;
+                } else {
+                    q_iter_local_counter++;
+                }
+                if (decoded.nb != prev_nb_flat) {
+                    prev_nb_flat = decoded.nb;
+                    if constexpr (!broadcast_provided_mask_batch) {
+                        if constexpr (broadcast_provided_mask_heads) {
+                            mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt;
+                        } else {
+                            mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt * NQH;
+                        }
+                    }
+                }
+                process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk, q_iter_local_counter, mask_batch_offset);
             }
-            if (decoded.nb != prev_nb_flat) {
-                prev_nb_flat = decoded.nb;
+        } else {
+            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                if constexpr (is_chunked) {
+                    // Chunked means that we have paged attention
+                    cb_reserve_back(cb_id_page_table, 1);
+                    page_table_ptr = read_page_table_for_batch(
+                        cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
+                    cb_push_back(cb_id_page_table, 1);
+                }
+
+                // Calculate mask batch offset based on broadcasting (using unpadded mask dimensions):
+                // - If batch is broadcasted [1 x ...]: always use batch=0, so offset = 0
+                // - If batch is not broadcasted [b x ...]: use actual batch nb
+                uint32_t mask_batch_offset = 0;
                 if constexpr (!broadcast_provided_mask_batch) {
                     if constexpr (broadcast_provided_mask_heads) {
-                        mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt;
+                        // [b x 1 x s x s]: batch offset without head factor
+                        mask_batch_offset = nb * valid_Sqt * valid_Skt;
                     } else {
-                        mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt * NQH;
+                        // [b x h x s x s]: batch offset with all heads
+                        mask_batch_offset = nb * valid_Sqt * valid_Skt * NQH;
                     }
                 }
-            }
-            process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk, q_iter_local_counter, mask_batch_offset);
-        }
-#else
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            if constexpr (is_chunked) {
-                // Chunked means that we have paged attention
-                cb_reserve_back(cb_id_page_table, 1);
-                page_table_ptr = read_page_table_for_batch(
-                    cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
-                cb_push_back(cb_id_page_table, 1);
-            }
+                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                    // Read attention sink for this Q chunk if enabled
+                    if constexpr (use_attention_sink) {
+                        cb_reserve_back(cb_attention_sink, Sq_chunk_t);
+                        uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
 
-            // Calculate mask batch offset based on broadcasting (using unpadded mask dimensions):
-            // - If batch is broadcasted [1 x ...]: always use batch=0, so offset = 0
-            // - If batch is not broadcasted [b x ...]: use actual batch nb
-            uint32_t mask_batch_offset = 0;
-            if constexpr (!broadcast_provided_mask_batch) {
-                if constexpr (broadcast_provided_mask_heads) {
-                    // [b x 1 x s x s]: batch offset without head factor
-                    mask_batch_offset = nb * valid_Sqt * valid_Skt;
-                } else {
-                    // [b x h x s x s]: batch offset with all heads
-                    mask_batch_offset = nb * valid_Sqt * valid_Skt * NQH;
-                }
-            }
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                // Read attention sink for this Q chunk if enabled
-                if constexpr (use_attention_sink) {
-                    cb_reserve_back(cb_attention_sink, Sq_chunk_t);
-                    uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
+                        // Attention sink has shape [1, NH, 1, 1] - single value per head
+                        const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(0, nq, 0, 0);
+                        noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
+                        noc_async_read_barrier();
 
-                    // Attention sink has shape [1, NH, 1, 1] - single value per head
-                    const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(0, nq, 0, 0);
-                    noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
-                    noc_async_read_barrier();
+                        fill_attention_sink_tiles<attention_sink_tile_bytes>(
+                            cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
 
-                    fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                        cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
-
-                    cb_push_back(cb_attention_sink, Sq_chunk_t);
-                }
-                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                    // BALANCED_Q_PARALLEL evenly distributes light/heavy Q chunks across cores when
-                    // causal+even; otherwise consecutive.
-                    uint32_t q_chunk;
+                        cb_push_back(cb_attention_sink, Sq_chunk_t);
+                    }
+                    for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                        // BALANCED_Q_PARALLEL evenly distributes light/heavy Q chunks across cores
+                        // when causal+even; otherwise consecutive.
+                        uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
-                    const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                    if (q_iter < q_chunk_div_2) {  // bottom half
-                        q_chunk = local_q_start + q_iter;
-                    } else {
-                        const uint32_t back_q_iter = q_iter - q_chunk_div_2;  // back half starts at 0
-                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                    }
+                        const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
+                        if (q_iter < q_chunk_div_2) {  // bottom half
+                            q_chunk = local_q_start + q_iter;
+                        } else {
+                            const uint32_t back_q_iter = q_iter - q_chunk_div_2;  // back half starts at 0
+                            q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
+                        }
 #else
-                    q_chunk = local_q_start + q_iter;
+                        q_chunk = local_q_start + q_iter;
 #endif
-                    // Non-flat mode: one (nb, nq) pair per q_iter, so q_iter is the per-head slot index.
-                    process_q_chunk(nb, nq, q_chunk, q_iter, mask_batch_offset);
+                        // Non-flat mode: one (nb, nq) pair per q_iter, so q_iter is the per-head slot.
+                        process_q_chunk(nb, nq, q_chunk, q_iter, mask_batch_offset);
+                    }
+                }
+                if constexpr (is_chunked) {
+                    cb_pop_front(cb_id_page_table, 1);
                 }
             }
-            if constexpr (is_chunked) {
-                cb_pop_front(cb_id_page_table, 1);
-            }
         }
-#endif
     }  // close phase
 }

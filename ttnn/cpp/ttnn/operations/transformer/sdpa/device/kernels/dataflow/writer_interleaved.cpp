@@ -31,8 +31,10 @@ void kernel_main() {
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
 
     constexpr auto out_args = TensorAccessorArgs<21>();
-    // Flat-distribution zigzag sub-mode (tail arg; only meaningful when SDPA_FLAT_WORK is defined).
-    constexpr bool flat_use_zigzag = get_compile_time_arg_val(out_args.next_compile_time_args_offset()) == 1;
+    // Flat-work gate + zigzag sub-mode (tail args; zigzag is only meaningful when flatten_work is true).
+    constexpr uint32_t flat_work_cta_base = out_args.next_compile_time_args_offset();
+    constexpr bool flatten_work = get_compile_time_arg_val(flat_work_cta_base) == 1;
+    constexpr bool flat_use_zigzag = get_compile_time_arg_val(flat_work_cta_base + 1) == 1;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -46,8 +48,8 @@ void kernel_main() {
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
     uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
     const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
-    // Tail args are optional and their presence is gated by host predicates matching compile-time
-    // defines: num_phases==2, SDPA_FLAT_WORK. Use argidx so the two modes never share a slot.
+    // Tail args are optional and their presence is gated by host predicates matching the flatten_work
+    // CT arg / num_phases==2 (chunked 2-phase). Use argidx so the two modes never share a slot.
     uint32_t argidx = 12;
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
@@ -56,10 +58,12 @@ void kernel_main() {
         write_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
 
-#if defined(SDPA_FLAT_WORK)
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_count = get_arg_val<uint32_t>(argidx++);
-#endif
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    if constexpr (flatten_work) {
+        global_q_start = get_arg_val<uint32_t>(argidx++);
+        global_q_count = get_arg_val<uint32_t>(argidx++);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -151,34 +155,34 @@ void kernel_main() {
             chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_2;
             write_offset = write_offset_phase_2;
         }
-#if defined(SDPA_FLAT_WORK)
-        // decompose_flat_q_index_with_proxy returns q_chunk already shifted into the heavy half for
-        // DOWN; UP and None leave it unshifted.
-        for (uint32_t gq = 0; gq < global_q_count; ++gq) {
-            const auto decoded = decompose_flat_q_index_with_proxy(
-                global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
-            process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk);
-        }
-#else
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                    uint32_t q_chunk;
+        if constexpr (flatten_work) {
+            // decompose_flat_q_index_with_proxy returns q_chunk already shifted into the heavy half
+            // for DOWN; UP and None leave it unshifted.
+            for (uint32_t gq = 0; gq < global_q_count; ++gq) {
+                const auto decoded = decompose_flat_q_index_with_proxy(
+                    global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
+                process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk);
+            }
+        } else {
+            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                    for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                        uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
-                    const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                    if (q_iter < q_chunk_div_2) {  // bottom half
-                        q_chunk = local_q_start + q_iter;
-                    } else {
-                        const uint32_t back_q_iter = q_iter - q_chunk_div_2;  // back half starts at 0
-                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                    }
+                        const uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
+                        if (q_iter < q_chunk_div_2) {  // bottom half
+                            q_chunk = local_q_start + q_iter;
+                        } else {
+                            const uint32_t back_q_iter = q_iter - q_chunk_div_2;  // back half starts at 0
+                            q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
+                        }
 #else
-                    q_chunk = local_q_start + q_iter;
+                        q_chunk = local_q_start + q_iter;
 #endif
-                    process_q_chunk(nb, nq, q_chunk);
+                        process_q_chunk(nb, nq, q_chunk);
+                    }
                 }
             }
         }
-#endif
     }
 }

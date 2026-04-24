@@ -86,8 +86,8 @@ bool can_use_streaming_compute(
     uint32_t Sk,
     uint32_t Sq_chunk_t,
     bool flatten_work) {
-    // Streaming branch doesn't honor SDPA_FLAT_WORK; falling into its hierarchical loops would
-    // silently break the flat-work proxy. Revisit once SDPA_FLAT_WORK is threaded through streaming.
+    // Streaming branch doesn't honor flatten_work; falling into its hierarchical loops would
+    // silently break the flat-work proxy. Revisit once flatten_work is threaded through streaming.
     if (flatten_work) {
         return false;
     }
@@ -651,8 +651,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    // Flat-distribution zigzag sub-mode (tail arg; kernel reads via
+    // Flat-work gate + zigzag sub-mode (tail args; kernel reads via
     // chunk_start_idx_args.next_compile_time_args_offset()).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(flatten_work));
     reader_compile_time_args.push_back(static_cast<uint32_t>(flat_dist.zigzag));
 
     // Create semaphores for KV chain forwarding BEFORE kernel compilation (when chain_enabled)
@@ -705,7 +706,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    // Flat-distribution zigzag sub-mode (tail arg; kernel reads via out_args.next_compile_time_args_offset()).
+    // Flat-work gate + zigzag sub-mode (tail args; kernel reads via
+    // out_args.next_compile_time_args_offset()).
+    writer_compile_time_args.push_back(static_cast<uint32_t>(flatten_work));
     writer_compile_time_args.push_back(static_cast<uint32_t>(flat_dist.zigzag));
 
     const bool uniform_dataformat = check_uniform_dataformat(
@@ -746,7 +749,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_streaming_compute,  // arg 30
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
         (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
-        (std::uint32_t)flat_dist.zigzag,       // arg 33: flat-distribution zigzag sub-mode (see SDPA_FLAT_WORK)
+        (std::uint32_t)flatten_work,           // arg 33: flat-work gate, read by sdpa.cpp
+        (std::uint32_t)flat_dist.zigzag,       // arg 34: flat-distribution zigzag sub-mode, read by sdpa.cpp
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -763,11 +767,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
-    // Flat work distribution gate. The zigzag sub-mode is passed as a compile-time arg
-    // (flat_dist.zigzag) to reader/writer/compute below, mirroring ring_joint_sdpa's pattern.
-    if (flatten_work) {
-        defines["SDPA_FLAT_WORK"] = "1";
-    }
+    // Flat work distribution gate: passed as a compile-time arg bool (see reader/writer/compute
+    // CT arg lists). Kernels use `if constexpr (flatten_work)` rather than `#if defined`.
     if (is_proxy_up) {
         defines["SDPA_RING_PROXY_UP"] = "1";
     } else if (is_proxy_down) {
@@ -780,7 +781,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
     log_debug(
         tt::LogOp,
-        "SDPA_FLAT_WORK: {}",
+        "flatten_work: {}",
         flatten_work ? (flat_dist.zigzag ? "1 (zigzag)" : "1 (linear)") : "0 (hierarchical)");
     log_debug(tt::LogOp, "SDPA_RING_PROXY: {}", is_proxy_up ? "up" : is_proxy_down ? "down" : "none");
 
@@ -1523,7 +1524,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
 
-        // Flat-mode per-core range (only used when SDPA_FLAT_WORK is compiled in).
+        // Flat-mode per-core range (only used when the kernel's flatten_work CT arg is true).
         uint32_t global_q_start = 0;
         uint32_t global_q_count = 0;
         if (flatten_work) {
