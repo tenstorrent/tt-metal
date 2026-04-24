@@ -340,6 +340,27 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
+    // Streaming path: cb_out can be a small ping-pong (2 * qktv_h_eff * vDHt) when
+    // save_to_staging never fires — i.e. ring_size == 1 or max_q_per_core == 1. When both
+    // ring_size > 1 and max_q_per_core > 1 hold, Phase-2's intermediate-save branch packs
+    // the current matmul at offset qktv_h*vDHt into a 2*qktv_h*vDHt ring buffer, which
+    // overruns on the 2nd Q chunk (see CB_OUT_SHRINK_RING_JOINT_BUG.md).
+    const uint32_t streaming_effective_qktv_h =
+        (out_out_subblock_h == 1 && 2 * out_out_subblock_w <= dst_size && Sq_chunk_t >= 2) ? 2u : out_out_subblock_h;
+    constexpr uint32_t streaming_out0_groups = 2;
+    const bool streaming_shrink_safe =
+        use_streaming_compute && (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1);
+    if (streaming_shrink_safe) {
+        out0_t = streaming_out0_groups * streaming_effective_qktv_h * vDHt;
+    }
+    log_debug(
+        tt::LogOp,
+        "cb_out streaming shrink: safe={} groups={} qktv_h_eff={} out0_t(final)={}",
+        streaming_shrink_safe,
+        streaming_out0_groups,
+        streaming_effective_qktv_h,
+        out0_t);
+
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
     log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);

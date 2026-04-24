@@ -174,6 +174,11 @@ void write_out_row_by_row(
                 read_ptr += tile_bytes;
             }
         }
+        // Flush before pop so compute can safely reuse the L1 slot when cb_out wraps.
+        // Without this, a shrunk cb_out (fewer row-group slots than Q chunk rows) lets
+        // compute overwrite an L1 slot while the NoC is still reading it for the
+        // in-flight DMA — producing non-deterministic PCC drops.
+        noc_async_writes_flushed();
         cb_pop_front(cb_out, row_tiles);
     }
 }
