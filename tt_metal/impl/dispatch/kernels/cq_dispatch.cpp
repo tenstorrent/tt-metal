@@ -1423,20 +1423,41 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
-    // Issue #18881: snapshot our NOC1 atomic-acked counter at kernel entry so we can
-    // publish only the *delta* (atomics this kernel issued) to dispatch_s. The absolute
-    // value is seeded from the NIU register at startup and would otherwise double-count
-    // when merged into dispatch_s's local counter (also seeded from the same NIU).
+    // Issue #18881: snapshot our NOC1 counters at kernel entry so we can publish only the deltas
+    // (transactions this kernel issued) to dispatch_s. Some counters are seeded from NIU registers at startup
+    // and would otherwise double-count when merged into dispatch_s's local counters.
     constexpr uint8_t kDispatchDProc = 0;  // dispatch_d runs on BRISC
-    uint32_t dispatch_d_atomics_acked_start = 0;
-    if constexpr (!distributed_dispatcher) {
-        dispatch_d_atomics_acked_start = noc_nonposted_atomics_acked[upstream_noc_index];
-        const uint32_t dispatch_d_counter_val_start =
-            get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
-        DPRINT << "DBG18881 dispatch_d: snapshot at start, upstream_noc_index="
-               << (uint32_t)upstream_noc_index
-               << " local_atomics_acked_start=" << dispatch_d_atomics_acked_start
-               << " dispatch_d_counter_val_start=" << dispatch_d_counter_val_start
+    uint32_t dispatch_d_reads_num_issued_start = 0;
+    uint32_t dispatch_d_nonposted_writes_num_issued_start = 0;
+    uint32_t dispatch_d_nonposted_writes_acked_start = 0;
+    uint32_t dispatch_d_nonposted_atomics_acked_start = 0;
+    uint32_t dispatch_d_posted_writes_num_issued_start = 0;
+    if constexpr (is_d_variant && !distributed_dispatcher) {
+        dispatch_d_reads_num_issued_start = noc_reads_num_issued[upstream_noc_index];
+        dispatch_d_nonposted_writes_num_issued_start = noc_nonposted_writes_num_issued[upstream_noc_index];
+        dispatch_d_nonposted_writes_acked_start = noc_nonposted_writes_acked[upstream_noc_index];
+        dispatch_d_nonposted_atomics_acked_start = noc_nonposted_atomics_acked[upstream_noc_index];
+        dispatch_d_posted_writes_num_issued_start = noc_posted_writes_num_issued[upstream_noc_index];
+        DPRINT << "DBG18881 dispatch_d: snapshot at start"
+               << " upstream_noc_index=" << (uint32_t)upstream_noc_index
+               << " reads=" << dispatch_d_reads_num_issued_start
+               << " nonposted_writes=" << dispatch_d_nonposted_writes_num_issued_start
+               << " nonposted_writes_acked=" << dispatch_d_nonposted_writes_acked_start
+               << " nonposted_atomics_acked=" << dispatch_d_nonposted_atomics_acked_start
+               << " posted_writes=" << dispatch_d_posted_writes_num_issued_start
+               << ENDL();
+        DPRINT << "DBG18881 dispatch_d: counter slot snapshot"
+               << " upstream_noc_index=" << (uint32_t)upstream_noc_index
+               << " reads="
+               << get_noc_counter_val<kDispatchDProc, NocBarrierType::READS_NUM_ISSUED>(upstream_noc_index)
+               << " nonposted_writes="
+               << get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(upstream_noc_index)
+               << " nonposted_writes_acked="
+               << get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_WRITES_ACKED>(upstream_noc_index)
+               << " nonposted_atomics_acked="
+               << get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index)
+               << " posted_writes="
+               << get_noc_counter_val<kDispatchDProc, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index)
                << ENDL();
     }
 
@@ -1521,41 +1542,45 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
-    // Issue #18881: (TEMPORARY) dispatch_d (BRISC) and dispatch_s (NCRISC) share this core, so dispatch_s
-    // can't see the NOC 1 (upstream) atomics dispatch_d issued (e.g. the upstream credit-return
-    // semaphore_inc). Publish our final NOC 1 atomic count via a local L1 store into a slot in
-    // dispatch_s's MEM_NOC_COUNTER_BASE storage (unused by either kernel in DM_DEDICATED_NOC
-    // mode). dispatch_s adds the value to its own noc_nonposted_atomics_acked[NOC1] before its
-    // noc_async_full_barrier() so the barrier reconciles with the NIU hardware ack count.
-    // dispatch_d_shutdown_sem_id signals that the value is ready, so a zero delta is valid.
-    constexpr uint8_t kDispatchSProc = 1;  // dispatch_s runs on NCRISC
-    if constexpr (!distributed_dispatcher) {
-        // const uint32_t niu_atomics = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
+    // Issue #18881: dispatch_d and dispatch_s share this core, so dispatch_s cannot see the NOC 1
+    // transactions dispatch_d issued. Publish dispatch_d's NOC 1 deltas into dispatch_d's normal
+    // counter slots, then signal dispatch_s that the handoff payload is ready.
+    if constexpr (is_d_variant && !distributed_dispatcher) {
+        const uint32_t reads_delta = noc_reads_num_issued[upstream_noc_index] - dispatch_d_reads_num_issued_start;
+        const uint32_t nonposted_writes_delta =
+            noc_nonposted_writes_num_issued[upstream_noc_index] - dispatch_d_nonposted_writes_num_issued_start;
+        const uint32_t nonposted_writes_acked_delta =
+            noc_nonposted_writes_acked[upstream_noc_index] - dispatch_d_nonposted_writes_acked_start;
+        const uint32_t nonposted_atomics_acked_delta =
+            noc_nonposted_atomics_acked[upstream_noc_index] - dispatch_d_nonposted_atomics_acked_start;
+        const uint32_t posted_writes_delta =
+            noc_posted_writes_num_issued[upstream_noc_index] - dispatch_d_posted_writes_num_issued_start;
 
-        const uint32_t dispatch_d_atomics_acked_stop = noc_nonposted_atomics_acked[upstream_noc_index];
-        const uint32_t dispatch_d_counter_val_stop =
-            get_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index);
+        set_noc_counter_val<kDispatchDProc, NocBarrierType::READS_NUM_ISSUED>(upstream_noc_index, reads_delta);
+        set_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(
+            upstream_noc_index, nonposted_writes_delta);
+        set_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_WRITES_ACKED>(
+            upstream_noc_index, nonposted_writes_acked_delta);
+        set_noc_counter_val<kDispatchDProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
+            upstream_noc_index, nonposted_atomics_acked_delta);
+        set_noc_counter_val<kDispatchDProc, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
+            upstream_noc_index, posted_writes_delta);
 
-        // const uint32_t delta = local_atomics - dispatch_d_atomics_acked_start;
-        DPRINT << "DBG18881 dispatch_d: upstream_noc_index=" << (uint32_t)upstream_noc_index
+        DPRINT << "DBG18881 dispatch_d: published deltas"
+               << " upstream_noc_index=" << (uint32_t)upstream_noc_index
                << " my_noc_index=" << (uint32_t)my_noc_index
-               << " dispatch_d_atomics_acked_stop=" << dispatch_d_atomics_acked_stop
-               << " dispatch_d_counter_val_stop=" << dispatch_d_counter_val_stop
+               << " reads=" << reads_delta
+               << " nonposted_writes=" << nonposted_writes_delta
+               << " nonposted_writes_acked=" << nonposted_writes_acked_delta
+               << " nonposted_atomics_acked=" << nonposted_atomics_acked_delta
+               << " posted_writes=" << posted_writes_delta
                << ENDL();
-        uint32_t delta = dispatch_d_atomics_acked_stop - dispatch_d_atomics_acked_start;
-        set_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
-            upstream_noc_index, delta);
-        if constexpr (is_d_variant) {
-            volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
-            *shutdown_sem_addr = *shutdown_sem_addr + 1;
-            DPRINT << "DBG18881 dispatch_d: signaled dispatch_s shutdown semaphore, sem_val="
-                   << *shutdown_sem_addr << ENDL();
-        }
-        DPRINT << "DBG18881 dispatch_d: published, slot_readback="
-               << get_noc_counter_val<kDispatchSProc, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index)
-               << " delta=" << delta
-               << ENDL();
+
+        volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+        *shutdown_sem_addr = *shutdown_sem_addr + 1;
+        DPRINT << "DBG18881 dispatch_d: signaled dispatch_s shutdown semaphore, sem_val="
+               << *shutdown_sem_addr << ENDL();
     }
 
     if (is_h_variant && !is_d_variant) {
