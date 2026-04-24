@@ -42,12 +42,12 @@ constexpr uint32_t MCAST_VALID = 1;
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
 template <uint32_t bits_per_step>
-FORCE_INLINE constexpr uint32_t step_semaphore_inc(uint32_t step) {
-    return 1U << (step * bits_per_step);
+FORCE_INLINE constexpr uint32_t step_semaphore_inc(uint32_t step, uint32_t sub_bit = 0) {
+    return 1U << (step * bits_per_step + sub_bit);
 }
 template <uint32_t bits_per_step>
-FORCE_INLINE constexpr uint32_t step_semaphore_shift(uint32_t step) {
-    return step * bits_per_step;
+FORCE_INLINE constexpr uint32_t step_semaphore_shift(uint32_t step, uint32_t sub_bit = 0) {
+    return step * bits_per_step + sub_bit;
 }
 
 FORCE_INLINE void mask_last_chunk(
@@ -91,11 +91,12 @@ struct FlashMLADecode {
     // Includes both per-core runtime values and compile-time constants.
     // ========================================================================
 
-    template <uint32_t k_page_size_, uint32_t vDHt_, uint32_t cb_out_o_>
+    template <uint32_t k_page_size_, uint32_t vDHt_, uint32_t cb_out_o_, bool use_alt_mcast_vc_ = false>
     struct WriterCTArgs {
         static constexpr uint32_t k_page_size = k_page_size_;
         static constexpr uint32_t vDHt = vDHt_;
         static constexpr uint32_t cb_out_o = cb_out_o_;
+        static constexpr bool use_alt_mcast_vc = use_alt_mcast_vc_;
     };
 
     struct ReaderCTArgs {};
@@ -442,6 +443,8 @@ struct FlashMLADecode {
             constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_out_o);
             constexpr uint32_t o_write_size = out_chunk_tiles * tile_bytes_intermed;
             constexpr uint32_t ms_write_size = tile_bytes_intermed;
+            constexpr uint32_t q_mcast_vc =
+                CTArgs::use_alt_mcast_vc ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_MULTICAST_WRITE_VC;
 
             const uint32_t q_chunk_tiles = args.DHt;
 
@@ -461,15 +464,15 @@ struct FlashMLADecode {
                 if (is_output_core) {
                     cb_wait_front(args.cb_q_in, q_chunk_tiles);
                     if (is_mcast_sender) {
-                        noc_semaphore_wait(q_input_mcast_semaphore_ptr, args.num_mcast_dests);
                         uint64_t q_input_mcast_sem_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
                             args.full_grid_mcast_start_x,
                             args.full_grid_mcast_start_y,
                             args.full_grid_mcast_end_x,
                             args.full_grid_mcast_end_y,
                             args.q_input_mcast_semaphore_addr);
+                        noc_semaphore_wait(q_input_mcast_semaphore_ptr, args.num_mcast_dests);
                         noc_semaphore_inc_multicast(
-                            q_input_mcast_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC_INDEX);
+                            q_input_mcast_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC_INDEX, q_mcast_vc);
                         mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
                         // This is needed because we need to wait for all transactions before resetting the trids
                         // Could move it later but don't think it makes much difference
@@ -571,8 +574,9 @@ struct FlashMLADecode {
             // =================================================================
             // Tree Reduction
             // =================================================================
-            constexpr uint32_t bits_per_step = 1;
-            constexpr uint32_t step_mask = (1U << bits_per_step) - 1;
+            constexpr uint32_t bits_per_step = 2;
+            constexpr uint32_t ms_sub_bit = 0;
+            constexpr uint32_t o_sub_bit = 1;
 
             volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.reducer_semaphore_addr);
@@ -597,21 +601,20 @@ struct FlashMLADecode {
 
                     if (role_code == 1) {
                         DeviceZoneScopedN("tree-reduction-sender");
-                        cb_wait_front(cb_out_o, out_chunk_tiles);
-                        cb_wait_front(args.cb_out_ms, 1);
+                        uint32_t inc_value = step_semaphore_inc<bits_per_step>(step, ms_sub_bit);
                         uint64_t output_write_coord = get_noc_addr(partner_x, partner_y, 0, WRITE_NOC_INDEX);
+                        uint64_t partner_semaphore_addr = output_write_coord | args.reducer_semaphore_addr;
                         uint64_t output_write_addr = output_write_coord | (cb_ms_in_base_addr + step * ms_write_size);
-
+                        cb_wait_front(args.cb_out_ms, 1);
                         noc_async_write<ms_write_size, false, /*posted=*/true>(
                             get_read_ptr(args.cb_out_ms), output_write_addr, ms_write_size, WRITE_NOC_INDEX);
-
+                        noc_semaphore_inc(partner_semaphore_addr, inc_value, WRITE_NOC_INDEX);
+                        inc_value = step_semaphore_inc<bits_per_step>(step, o_sub_bit);
                         output_write_addr = output_write_coord | (cb_out_in_base_addr + step * o_write_size);
+                        cb_wait_front(cb_out_o, out_chunk_tiles);
                         noc_async_write<o_write_size, false, /*posted=*/true>(
                             get_read_ptr(cb_out_o), output_write_addr, o_write_size, WRITE_NOC_INDEX);
-
-                        uint64_t partner_semaphore_addr = output_write_coord | args.reducer_semaphore_addr;
-                        noc_semaphore_inc(
-                            partner_semaphore_addr, step_semaphore_inc<bits_per_step>(step), WRITE_NOC_INDEX);
+                        noc_semaphore_inc(partner_semaphore_addr, inc_value, WRITE_NOC_INDEX);
 
                         noc_async_posted_writes_flushed(WRITE_NOC_INDEX);
                         cb_pop_front(args.cb_out_ms, 1);
@@ -621,17 +624,21 @@ struct FlashMLADecode {
 
                     } else if (role_code == 2) {
                         DeviceZoneScopedN("tree-reduction-receiver");
+                        uint32_t shift_value = step_semaphore_shift<bits_per_step>(step, ms_sub_bit);
                         cb_reserve_back(args.cb_ms_in, 1);
-                        cb_reserve_back(args.cb_out_in, out_chunk_tiles);
-                        while (true) {
+                        uint32_t sem_val;
+                        do {
                             invalidate_l1_cache();
-                            uint32_t sem_val = *in0_receiver_semaphore_addr_ptr;
-                            uint8_t step_sem = (sem_val >> step_semaphore_shift<bits_per_step>(step)) & step_mask;
-                            if (step_sem >= 1) {
-                                break;
-                            }
-                        }
+                            sem_val = *in0_receiver_semaphore_addr_ptr;
+                        } while (((sem_val >> shift_value) & 1U) == 0);
                         cb_push_back(args.cb_ms_in, 1);
+
+                        shift_value = step_semaphore_shift<bits_per_step>(step, o_sub_bit);
+                        cb_reserve_back(args.cb_out_in, out_chunk_tiles);
+                        do {
+                            invalidate_l1_cache();
+                            sem_val = *in0_receiver_semaphore_addr_ptr;
+                        } while (((sem_val >> shift_value) & 1U) == 0);
                         cb_push_back(args.cb_out_in, out_chunk_tiles);
                     }
                 }
