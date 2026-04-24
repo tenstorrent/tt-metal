@@ -120,10 +120,7 @@ def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_
             ttnn.BufferType.L1,
             core_shard_spec,
         )
-        # Lockstep alloc so CB allocator sees these regions (per-core alloc is
-        # invisible to CBs and can silently stomp). Flip back to per-core if any
-        # workload needs core-specific L1 offsets for these meta tensors.
-        # core_mem_config.experimental_set_per_core_allocation(True)
+        core_mem_config.experimental_set_per_core_allocation(True)
         tensors[core_idx] = ttnn.from_torch(
             core_torch,
             dtype=ttnn.uint8,
@@ -156,10 +153,7 @@ def upload_per_core_uint16_tensor(device, all_cores, per_core_data, entries_per_
             ttnn.BufferType.L1,
             core_shard_spec,
         )
-        # Lockstep alloc so CB allocator sees these regions (per-core alloc is
-        # invisible to CBs and can silently stomp). Flip back to per-core if any
-        # workload needs core-specific L1 offsets for these meta tensors.
-        # core_mem_config.experimental_set_per_core_allocation(True)
+        core_mem_config.experimental_set_per_core_allocation(True)
         tensors[core_idx] = ttnn.from_torch(
             core_torch,
             dtype=ttnn.uint8,
@@ -747,19 +741,18 @@ def create_dram_expert_metadata(
         device, compute_cores_list, per_core_block_sizes, num_experts * num_iterations_local
     )
 
-    def _tensor_l1_addr(t, core):
-        # Lockstep tensors return the shared device-wide address via buffer_address();
-        # per-core-allocated tensors require experimental_per_core_buffer_address(core).
-        if hasattr(t, "is_per_core_allocated") and t.is_per_core_allocated():
-            return t.experimental_per_core_buffer_address(core)
-        return t.buffer_address()
-
     expert_offsets_l1_addr_core_values = [
-        (compute_cores_list[i], _tensor_l1_addr(offset_tensors[i], compute_cores_list[i]))
+        (
+            compute_cores_list[i],
+            offset_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
+        )
         for i in range(num_total_cores)
     ]
     block_sizes_l1_addr_core_values = [
-        (compute_cores_list[i], _tensor_l1_addr(block_size_tensors[i], compute_cores_list[i]))
+        (
+            compute_cores_list[i],
+            block_size_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
+        )
         for i in range(num_total_cores)
     ]
 
