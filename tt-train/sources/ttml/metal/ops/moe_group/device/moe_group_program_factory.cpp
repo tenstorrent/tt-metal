@@ -313,14 +313,6 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         if (my_slice_start > total_rows)
             my_slice_start = total_rows;
 
-        // Next core NOC XY for tail-flush chaining (last core gets 0,0).
-        uint32_t next_x = 0, next_y = 0;
-        if (worker_idx + 1U < num_total_cores) {
-            auto next_virt = device->worker_core_from_logical_core(worker_cores_vec[worker_idx + 1U]);
-            next_x = next_virt.x;
-            next_y = next_virt.y;
-        }
-
         // RT args are now only the things that vary per-core (or per-run):
         // tensor buffer addresses and per-core identity/slice bounds.
         // Everything previously here that was globally-constant (sem ids,
@@ -338,8 +330,6 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
             worker_idx,                 // 8 my_core_idx
             my_slice_start,             // 9
             my_slice_end,               // 10
-            next_x,                     // 11 chain: next core NOC for tail flush
-            next_y,                     // 12
         };
 
         // Writer RT args (stride / plan_ready_sem_id are globally-constant →

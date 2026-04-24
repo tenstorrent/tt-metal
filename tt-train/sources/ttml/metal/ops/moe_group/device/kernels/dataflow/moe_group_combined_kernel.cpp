@@ -36,15 +36,14 @@
 //                              mcast_sender_signal_receivers_loopback
 //   24+: TensorAccessorArgs for plan, dispatched, metadata, counts, offsets, leids
 //
-// Runtime args (13 total, same layout on every core — all globally-constant
-// values moved to CT):
+// Runtime args (11 total, same layout on every core — globally-constant
+// values moved to CT; no tail-flush chain any more, so next_core NOC XYs
+// are gone):
 //   0: plan_addr             1: dispatched_addr
 //   2: my_worker_start       3: my_worker_count
 //   4: metadata_addr         5: counts_addr
 //   6: offsets_addr          7: leids_addr
 //   8: my_core_idx           9: my_slice_start      10: my_slice_end
-//   11: next_core_x         12: next_core_y  (tail-flush chain NOC XY;
-//                                              (0,0) for the last core)
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
@@ -126,10 +125,6 @@ void kernel_main() {
     const uint32_t my_core_idx = get_arg_val<uint32_t>(8);
     const uint32_t my_slice_start = get_arg_val<uint32_t>(9);
     const uint32_t my_slice_end = get_arg_val<uint32_t>(10);
-    // Chain args (every core): next core's NOC XY for sequencing tail flushes.
-    // For last core (my_core_idx == num_total_cores-1) these are 0,0 (unused).
-    const uint32_t next_core_x = get_arg_val<uint32_t>(11);
-    const uint32_t next_core_y = get_arg_val<uint32_t>(12);
     constexpr uint32_t worker_stride = num_total_cores;  // was RT arg, always == num_total_cores
 
     // ---- Address generators ----
@@ -355,16 +350,12 @@ void kernel_main() {
         }
     }
 
-    // Tail flush + chain signal — must run on EVERY core, including ones
-    // with my_slice_size == 0, so the chained sem propagates through to
-    // the lead. (fill[e]==0 → nothing to flush, just the chain hop.)
-    // Core 0 flushes first (no wait), then signals core 1. Core 1..N-2
-    // waits, flushes, signals next. Core N-1 waits, flushes, signals lead.
-    if (my_core_idx > 0) {
-        volatile tt_l1_ptr uint32_t* phase3_sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase3_sem_id));
-        noc_semaphore_wait(phase3_sem, 1U);
-    }
+    // Tail flush — runs on every core in parallel. Each core's slice ends
+    // exactly on per_core_start[c+1][e] (tail n_aligned == round_up_align),
+    // so there's no spillover into core c+1's range and no serialisation
+    // required. After flushing, each non-lead core increments lead's
+    // phase3_sem; lead waits for (N-1) increments (fan-in barrier) before
+    // broadcasting plan_ready.
     for (uint32_t e = 0; e < e_local; ++e) {
         if (fill[e] > 0) {
             uint32_t n = fill[e];
@@ -376,32 +367,29 @@ void kernel_main() {
                 (uint32_t)(plan_stage + e * PLAN_CHUNK),
                 plan_base_noc + cursors[e] * sizeof(uint32_t),
                 n_aligned * sizeof(uint32_t));
-            // Advance cursor by n_aligned so it stays 4-aligned and matches
+            // Advance cursor by n_aligned so it stays align-aligned and matches
             // the per-core padded layout that offsets[e+1] was computed with.
             cursors[e] += n_aligned;
             fill[e] = 0;
         }
     }
     noc_async_write_barrier();
-    // Chain: signal the next core (or lead if we're last).
-    if (my_core_idx + 1U < num_total_cores) {
-        uint64_t sem_noc = get_noc_addr(next_core_x, next_core_y, get_semaphore(scan_phase3_sem_id));
-        noc_semaphore_inc(sem_noc, 1U);
-    } else if (num_total_cores > 1U) {
-        // Last core signals lead.
+    // Fan-in: each non-lead core signals lead's phase3_sem. Lead waits for
+    // (N-1) increments in the BARRIER C block below.
+    if (my_core_idx > 0) {
         uint64_t sem_noc = get_noc_addr(lead_core_x, lead_core_y, get_semaphore(scan_phase3_sem_id));
         noc_semaphore_inc(sem_noc, 1U);
     }
 
     // ===========================================================
-    // BARRIER C: lead waits for all scatter, then signals workers
+    // BARRIER C: lead waits for all (N-1) non-lead cores to fan-in
+    // on phase3_sem, then broadcasts plan_ready.
     // ===========================================================
     if (my_core_idx == 0) {
-        // Wait for the last core to finish its tail flush (chained signal).
         if (num_total_cores > 1U) {
             volatile tt_l1_ptr uint32_t* phase3_sem =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase3_sem_id));
-            noc_semaphore_wait(phase3_sem, 1U);
+            noc_semaphore_wait(phase3_sem, num_total_cores - 1U);
         }
         // Signal plan_ready_sem on every core (incl. lead) via ONE multicast.
         uint32_t plan_ready_l1_addr = get_semaphore(plan_ready_sem_id);
