@@ -58,7 +58,7 @@ jobs:
               "runner-label": "pp-shield-testing",
               "mesh-device": "N150",
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--max_num_seqs 32 --max-model-len 65536 --async-scheduling",
+              "additional-server-args": "--max_num_seqs 32 --max-model-len 32768 --async-scheduling",
               "multimodal": false
             },
             {
