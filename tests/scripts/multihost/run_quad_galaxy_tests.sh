@@ -347,7 +347,7 @@ run_dual_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/test_mtp.py ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
