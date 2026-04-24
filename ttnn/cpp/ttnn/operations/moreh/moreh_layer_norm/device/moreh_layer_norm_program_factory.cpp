@@ -222,7 +222,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines["REDUCE_OP"] = "PoolType::AVG";
     if (is_lastdim_layer_norm) {
         compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
     } else {

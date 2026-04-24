@@ -11,7 +11,7 @@
  * It should only be included by untilize_helpers.hpp.
  */
 
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "experimental/circular_buffer.h"
 
 namespace compute_kernel_lib {

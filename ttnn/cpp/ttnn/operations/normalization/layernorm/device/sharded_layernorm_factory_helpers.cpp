@@ -1058,13 +1058,16 @@ void add_cb_descriptors(
             tt::CBIndex::c_3,
             tt::DataFormat::Float16_b,
             cb_config.bfloat16_tile_size));
-        // CB 4: in4 scaler-c
+        // CB 4: in4 scaler-c (global reduce scaler — F32 when intermediates are F32, otherwise BF16)
+        tt::DataFormat scaler_global_format =
+            cb_config.cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        uint32_t scaler_global_tile_size = tt::tile_size(scaler_global_format);
         program_descriptor.cbs.push_back(make_cb_descriptor(
-            cb_config.in2_CB_size,
+            scaler_global_tile_size,
             core_ranges.all_cores,
             tt::CBIndex::c_4,
-            tt::DataFormat::Float16_b,
-            cb_config.bfloat16_tile_size));
+            scaler_global_format,
+            scaler_global_tile_size));
         // CB 11: ex_partial2
         program_descriptor.cbs.push_back(make_cb_descriptor(
             cb_config.ex_partial_CB_size,

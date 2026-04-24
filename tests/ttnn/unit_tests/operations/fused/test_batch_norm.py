@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import pytest
 import ttnn
@@ -467,6 +468,10 @@ def test_batch_norm_output_Default(input_shapes, device):
     "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
+    if input_dtype == "float32" and os.environ.get("TT_METAL_SIMULATOR"):
+        pytest.skip(
+            "Skipping float32 batch_norm compute_config on ttsim - fp16a untested functionality (ttsim-private issue #324)"
+        )
     N, H, W, C = input_shapes
     torch.manual_seed(0)
 

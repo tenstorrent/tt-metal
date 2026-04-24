@@ -18,36 +18,10 @@
 
 namespace ttnn::experimental::prim {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_FATAL(
-        sizeof float_num == sizeof uint32_data,
-        "Float size ({}) must equal uint32 size ({})",
-        sizeof float_num,
-        sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
 FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGatherProgramFactory::create(
     const FusedRmsnormPreAllGatherParams& operation_attributes,
     const FusedRmsnormPreAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -85,7 +59,8 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
 
     tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat reduce_scalar_data_format =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
     uint32_t input_tile_size = tt::tile_size(input_data_format);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
@@ -154,15 +129,11 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
     tt::tt_metal::create_cb(
         output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
 
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_id,
         reduce_scalar_cb_id,
         num_tile_cols,
         dst_reg_count,
-        packed_winv_value,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
 
@@ -183,7 +154,6 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    const bool use_float32_reduction = fp32_dest_acc_en;  // legacy_reduction = false
     std::vector<uint32_t> compute_args = {
         input_cb_id,
         reduce_scalar_cb_id,
@@ -191,7 +161,6 @@ FusedRMSNormPreAllGatherProgramFactory::cached_program_t FusedRMSNormPreAllGathe
         output_cb_id,
         num_tile_cols,
         dst_reg_count,
-        use_float32_reduction,
     };
 
     const auto* compute_kernel_file =

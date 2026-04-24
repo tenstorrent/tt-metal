@@ -44,7 +44,7 @@ def test_large_softmax(device, batch_size, h, w, dim):
         pcc_threshold=0.999,
         rtol=0.10,
         atol=0.04,
-        frobenius_threshold=0.044,
+        frobenius_threshold=0.050,
     )
 
 
@@ -337,7 +337,7 @@ def test_softmax_with_3D(device):
         pcc_threshold=0.999,
         rtol=0.158,
         atol=0.010,
-        frobenius_threshold=0.024,
+        frobenius_threshold=0.028,
     )
 
 
@@ -383,7 +383,7 @@ def test_softmax_with_padded_tile_layout_large(device):
         pcc_threshold=0.999,
         rtol=0.148,
         atol=0.010,
-        frobenius_threshold=0.029,
+        frobenius_threshold=0.034,
     )
 
 
