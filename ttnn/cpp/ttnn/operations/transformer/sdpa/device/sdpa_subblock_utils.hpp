@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "sdpa_streaming_qktv.hpp"
+#include "kernels/sdpa_streaming_qktv.hpp"
 
 namespace ttnn::prim::detail {
 
