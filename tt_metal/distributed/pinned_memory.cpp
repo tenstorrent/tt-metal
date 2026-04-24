@@ -24,6 +24,7 @@
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -251,6 +252,11 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
         bool all_devices_completed = true;
         for (const auto& coord : event.device_range()) {
+            // In multi-host meshes, event.device_range() spans all coordinates including
+            // remote ranks. Skip non-local coordinates — the remote rank manages its own CQs.
+            if (!event.device()->impl().is_local(coord)) {
+                continue;
+            }
             auto* physical_device = event.device()->impl().get_device(coord);
             if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
                 all_devices_completed = false;
@@ -270,7 +276,22 @@ bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty();
 void PinnedMemoryImpl::drain_barrier_events() {
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
-        distributed::EventSynchronize(event);
+        // Skip EventSynchronize if the device has already been closed.  Calling it on a closed
+        // device hits Device::sysmem_manager()'s lazy-reinit path (last_completed_event=0) and
+        // spins forever.  ~FDMeshCommandQueue() already flushed all outstanding work during
+        // close_impl(), so the operations behind these events are complete.  See Finding B.3.
+        if (event.device() && event.device()->is_initialized()) {
+            distributed::EventSynchronize(event);
+        } else {
+            // GAP 9: Log when skipping an event on an uninitialized device.
+            // The DMA behind this event may not have completed — the event was enqueued
+            // but the device was closed before we could synchronize.  ~FDMeshCommandQueue()
+            // should have flushed outstanding work, but log anyway for post-mortem diagnosis.
+            log_warning(
+                tt::LogMetal,
+                "drain_barrier_events: skipping event (id={}) on uninitialized/null device — DMA may not be complete",
+                event.device() ? event.id() : 0);
+        }
         barrier_events_.pop_front();
     }
 }
@@ -335,7 +356,7 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     std::vector<IDevice*> devices;
     devices.reserve(coordinates.size());
     for (const auto& coord : coordinates) {
-        if (view.contains(coord)) {
+        if (view.contains(coord) && view.impl().is_local(coord)) {
             if (auto* device = view.impl().get_device(coord)) {
                 devices.push_back(device);
             }

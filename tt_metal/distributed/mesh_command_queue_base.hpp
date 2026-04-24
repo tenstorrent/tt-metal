@@ -119,7 +119,7 @@ public:
         bool blocking) override;
 
     // Returns true if the CQ is in use (has had commands enqueued).
-    virtual bool in_use() { return false; }
+    bool in_use() const override { return false; }
 };
 
 }  // namespace tt::tt_metal::distributed

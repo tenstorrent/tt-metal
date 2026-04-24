@@ -1592,8 +1592,9 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
                     shape = MeshShape(2, 4);
                 }
 
-                // if odd shape then skip
-                if ((larger_dim % 2 != 0 && larger_dim != 1) || (smaller_dim % 2 != 0 && smaller_dim != 1)) {
+                // if both non-unit dimensions are odd then skip (e.g. 3x3, 5x3)
+                // Mixed shapes like 3x2 (one odd, one even) are valid — e.g. 6-chip runner (3 MMIO + 3 remote)
+                if ((larger_dim % 2 != 0 && larger_dim != 1) && (smaller_dim % 2 != 0 && smaller_dim != 1)) {
                     continue;
                 }
 
@@ -1651,8 +1652,51 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     auto physical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_physical(
         cluster.get_cluster_type(), physical_system_descriptor, asic_id_to_mesh_rank);
 
+    // Diagnostic: log physical adjacency so we can understand what the hardware looks like
+    if (physical_adjacency_matrix.contains(MeshId{0})) {
+        const auto& padj = physical_adjacency_matrix.at(MeshId{0});
+        log_warning(
+            tt::LogFabric,
+            "TopologyMapper: physical adjacency for {} chips:",
+            total_number_of_chips);
+        for (const auto& [asic_id, neighbors] : padj.get_adjacency_map()) {
+            std::string neighbors_str;
+            for (const auto& n : neighbors) {
+                if (!neighbors_str.empty()) neighbors_str += ", ";
+                neighbors_str += std::to_string(n.get());
+            }
+            log_warning(
+                tt::LogFabric,
+                "  chip {} -> [{}]",
+                asic_id.get(),
+                neighbors_str);
+        }
+    }
+
     // Generate possible mesh shapes
     std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
+    {
+        std::string shapes_str;
+        for (const auto& s : mesh_shapes_to_try) {
+            if (!shapes_str.empty()) shapes_str += ", ";
+            shapes_str += std::to_string(s[0]) + "x" + std::to_string(s[1]);
+        }
+        log_warning(tt::LogFabric, "TopologyMapper: will try shapes: [{}]", shapes_str);
+    }
+
+    // FIX K: Compute MMIO chip ASIC IDs upfront so we can detect when topology degradation
+    // excludes them. MMIO devices dispatch via PCIe (not ETH relay) and must always be present
+    // in the fabric cluster — otherwise RelayMux::GenerateStaticConfigs() will TT_FATAL when it
+    // tries to look up their FabricNodeId.
+    std::set<tt::tt_metal::AsicID> mmio_asic_ids;
+    {
+        const auto& unique_chip_ids = cluster.get_unique_chip_ids();
+        for (const auto& [chip_id, _] : cluster.get_chips_with_mmio()) {
+            if (unique_chip_ids.contains(chip_id)) {
+                mmio_asic_ids.insert(tt::tt_metal::AsicID{unique_chip_ids.at(chip_id)});
+            }
+        }
+    }
 
     // Try all possible mesh shapes
     const MeshId mesh_id{0};
@@ -1688,15 +1732,133 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
         }
 
+        log_warning(
+            tt::LogFabric,
+            "TopologyMapper: trying shape {}x{} ({} nodes) for {} physical chips",
+            mesh_shape[0],
+            mesh_shape[1],
+            mesh_shape.mesh_size(),
+            total_number_of_chips);
+
         auto solver_result =
             solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED, true);
+
+        if (!solver_result.success) {
+            log_warning(
+                tt::LogFabric,
+                "TopologyMapper: shape {}x{} solver failed — no valid mapping found",
+                mesh_shape[0],
+                mesh_shape[1]);
+        }
 
         // Return mesh_graph if mapping is successful
         if (solver_result.success) {
             // Check if the final mesh size doesn't match the number of physical chips
             size_t final_mesh_size = mesh_shape.mesh_size();
             if (final_mesh_size < total_number_of_chips) {
-                // Format mesh shape as "2x4" style string
+                // FIX K: When topology degrades to a smaller mesh, check whether any MMIO chips
+                // were left out of the solver's result.  MMIO chips dispatch via PCIe, not ETH
+                // relay, so they must always appear in the fabric cluster.  If one is missing,
+                // re-run the solver with an explicit required-constraint that forces every excluded
+                // MMIO chip to land somewhere in this mesh shape.  On success, return the mesh
+                // with RELAXED topology mode so that build_mapping() does not reject the placement
+                // due to the chip's broken ETH connection counts.
+                std::vector<tt::tt_metal::AsicID> excluded_mmio_asics;
+                for (const auto& mmio_asic_id : mmio_asic_ids) {
+                    if (!solver_result.global_to_target.contains(mmio_asic_id)) {
+                        excluded_mmio_asics.push_back(mmio_asic_id);
+                    }
+                }
+
+                if (!excluded_mmio_asics.empty()) {
+                    log_warning(
+                        tt::LogFabric,
+                        "TopologyMapper auto-discovery: Degraded mesh shape {}x{} ({} nodes) excludes {} "
+                        "MMIO chip(s) with corrupt ETH. Re-trying with forced MMIO inclusion (FIX K).",
+                        mesh_shape[0],
+                        mesh_shape[1],
+                        final_mesh_size,
+                        excluded_mmio_asics.size());
+
+                    // Build the set of all FabricNodeIds reachable in this mesh shape.
+                    std::set<FabricNodeId> all_mesh_fabric_nodes;
+                    for (const auto& cid : chip_ids.values()) {
+                        all_mesh_fabric_nodes.insert(FabricNodeId(mesh_id, cid));
+                    }
+
+                    // Clone the existing constraints and pin each excluded MMIO ASIC to "any node
+                    // in this mesh" (many-target, single-global form of add_required_constraint).
+                    MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> mmio_constraints = constraints;
+                    bool constraints_ok = true;
+                    for (const auto& mmio_asic_id : excluded_mmio_asics) {
+                        if (!mmio_constraints.add_required_constraint(all_mesh_fabric_nodes, mmio_asic_id)) {
+                            log_warning(
+                                tt::LogFabric,
+                                "TopologyMapper FIX K: required-constraint for MMIO ASIC {} conflicts with "
+                                "existing constraints — falling back to degraded mesh without MMIO.",
+                                mmio_asic_id);
+                            constraints_ok = false;
+                            break;
+                        }
+                    }
+
+                    if (constraints_ok) {
+                        auto mmio_solver_result = solve_topology_mapping(
+                            logical_adj,
+                            physical_adj,
+                            mmio_constraints,
+                            ConnectionValidationMode::RELAXED,
+                            /*quiet_mode=*/true);
+
+                        if (mmio_solver_result.success) {
+                            // MMIO chips are now in the mesh.  Use RELAXED reliability mode so
+                            // that build_mapping() accepts the placement despite mismatched ETH
+                            // connection counts on the broken-ETH chip(s).
+                            log_warning(
+                                tt::LogFabric,
+                                "TopologyMapper auto-discovery: Using {}x{} mesh with RELAXED topology "
+                                "mode to keep MMIO chip(s) with broken ETH in the fabric cluster. "
+                                "ETH relay through those chip(s) will be unavailable.",
+                                mesh_shape[0],
+                                mesh_shape[1]);
+                            return MeshGraph::generate_mesh_graph_of_shape(
+                                mesh_shape,
+                                fabric_type,
+                                FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+                                cluster.arch(),
+                                number_of_connections);
+                        }
+
+                        // FIX P (#42429): Throw instead of continuing with excluded MMIO chips.
+                        //
+                        // When MMIO chips cannot be forced into the mesh (because all their
+                        // ETH channels are in base-UMD relay state due to a prior crash), the
+                        // fabric cluster omits them.  Proceeding causes a TT_FATAL crash deep
+                        // inside RelayMux::GenerateStaticConfigs / DispatchTopology when dispatch
+                        // init looks up the MMIO chip ID in the (smaller) control-plane mapping.
+                        //
+                        // Throw a recoverable exception here instead so that gtest marks the
+                        // test as FAILED (not CRASH), the process stays alive for the next test,
+                        // and the hardware-state information is preserved for diagnosis.
+                        //
+                        // Root cause on machine tt-metal-ci-vm-t3k-01: ALL non-MMIO fabric
+                        // ETH channels were in 0x49706550 base-UMD relay state from a prior
+                        // crashed session.  The MMIO chips appeared disconnected so TopologyMapper
+                        // excluded them.  Hardware requires a reset (or the zero-writes done by
+                        // terminate_stale_erisc_routers to edm_status_address must propagate
+                        // so the next session sees a clean 0).
+                        TT_THROW(
+                            "TopologyMapper FIX P (#42429): Could not force MMIO chip(s) into {}x{} mesh even "
+                            "with required constraints — MMIO chip(s) remain excluded, and proceeding would crash "
+                            "inside RelayMux. This hardware is in a degraded state (all non-MMIO ETH channels "
+                            "are in base-UMD relay state from a prior crashed session). Hardware requires a "
+                            "reset or must wait for edm_status_address zero-writes to take effect.",
+                            mesh_shape[0],
+                            mesh_shape[1]);
+                    }
+                }
+
+                // Standard degradation warning (no MMIO exclusion, or MMIO force failed).
                 std::string mesh_shape_str;
                 for (size_t i = 0; i < mesh_shape.dims(); ++i) {
                     if (i > 0) {
@@ -1704,7 +1866,6 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                     }
                     mesh_shape_str += std::to_string(mesh_shape[i]);
                 }
-
                 log_warning(
                     tt::LogFabric,
                     "TopologyMapper auto-discovery: Downgrading to mesh shape {} ({} total nodes) for {} physical "

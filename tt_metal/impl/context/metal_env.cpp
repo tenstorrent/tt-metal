@@ -5,9 +5,12 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <enchantum/enchantum.hpp>
+#include <thread>
 #include <tt_stl/fmt.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <limits>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
@@ -31,6 +34,9 @@
 #include <system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_metal {
 
@@ -94,8 +100,32 @@ MetalEnvImpl::~MetalEnvImpl() {
         s_registry_.erase(this);
     }
     check_use_count_zero();
-    teardown_fabric_objects();
-    cluster_.reset();
+    try {
+        teardown_fabric_objects();
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "~MetalEnvImpl: teardown_fabric_objects() threw: {}. Likely dead ERISC relay on remote chip.",
+            e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogMetal,
+            "~MetalEnvImpl: teardown_fabric_objects() threw non-std exception "
+            "(likely UmdException<RuntimeError> from dead ERISC relay). Ignoring.");
+    }
+    try {
+        cluster_.reset();
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogMetal,
+            "~MetalEnvImpl: cluster_.reset() threw: {}. Likely dead ERISC relay on remote chip.",
+            e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogMetal,
+            "~MetalEnvImpl: cluster_.reset() threw non-std exception "
+            "(likely UmdException<RuntimeError> from dead ERISC relay). Ignoring.");
+    }
     hal_.reset();
     rtoptions_.reset();
 }
@@ -197,7 +227,9 @@ bool MetalEnvImpl::set_fabric_config(
     // Must happen while fabric_config_ is still active and fabric context is alive.
     bool is_tearing_down_fabric =
         fabric_config == tt_fabric::FabricConfig::DISABLED && this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
-    if (is_tearing_down_fabric) {
+    // Only export trimming capture if control_plane_ was actually initialized — if SetUp threw (e.g.
+    // FIX P on degraded hardware) control_plane_ will be null and we must not re-trigger discovery.
+    if (is_tearing_down_fabric && control_plane_) {
         tt::tt_fabric::export_channel_trimming_capture(*this);
     }
 
@@ -263,6 +295,144 @@ bool MetalEnvImpl::set_fabric_config(
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
+    // Before releasing the ETH cores, wait for the fabric router firmware on each chip to
+    // finish its teardown.  The ETH router writes EDMStatus::TERMINATED to edm_status_address
+    // when it exits.  If we skip this wait, the next process that opens the same devices may
+    // find the ETH cores mid-teardown, causing wait_for_fabric_endpoint_ready() in the new
+    // mux kernel to spin forever and triggering ARC "unsafe NOC access" errors on all chips.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    if (control_plane_ != nullptr && fabric_config_ != tt_fabric::FabricConfig::DISABLED) {
+        auto& cluster = this->get_cluster();
+        const auto& fabric_context = this->get_control_plane().get_fabric_context();
+        const auto& builder_context = fabric_context.get_builder_context();
+        const auto [edm_status_address, _unused] = builder_context.get_fabric_router_sync_address_and_status();
+        constexpr uint32_t timeout_ms = 5000;
+        constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+
+        auto& control_plane = this->get_control_plane();
+        uint32_t total_force_reset_count = 0;
+        for (const ChipId chip_id : cluster.all_chip_ids()) {
+            if (builder_context.get_num_fabric_initialized_routers(chip_id) == 0) {
+                continue;
+            }
+            // FIX J: When topology auto-discovery degrades (e.g. 2x4->2x2 due to dead relay paths),
+            // some physical chips are excluded from the fabric cluster.  Calling
+            // get_fabric_node_id_from_physical_chip_id() for an excluded chip triggers TT_FATAL.
+            // Guard with is_physical_chip_in_fabric_cluster() and skip non-cluster chips here.
+            // See: https://github.com/tenstorrent/tt-metal/issues/42429
+            if (!control_plane.is_physical_chip_in_fabric_cluster(chip_id)) {
+                log_warning(
+                    tt::LogMetal,
+                    "[teardown_fabric_config] Chip {} not in fabric cluster (topology may have degraded), skipping "
+                    "TERMINATED wait.",
+                    chip_id);
+                continue;
+            }
+            // Wait for ALL active ETH router channels (not just the master) to write TERMINATED.
+            // The master ETH router propagates the termination signal to subordinate channels via
+            // asynchronous NOC writes (notify_subordinate_routers()), so subordinate channels may
+            // still be running their teardown when the master writes TERMINATED. If we only poll
+            // the master, the next binary's tensix mux kernel may poll a still-tearing-down
+            // subordinate channel and trigger ARC "unsafe NOC access" errors.
+            // See: https://github.com/tenstorrent/tt-metal/issues/42429
+            const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
+            const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+            uint32_t chip_force_reset_count = 0;
+            for (const auto& [chan_id, _direction] : active_eth_channels) {
+                const auto eth_logical_core =
+                    cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+
+                const auto start = std::chrono::steady_clock::now();
+                constexpr uint32_t kSpinsBetweenSleeps = 64;
+                uint32_t spin_counter = 0;
+                bool terminated_cleanly = false;
+                while (true) {
+                    auto status =
+                        cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
+                    if (!status.empty() && status[0] == terminated_val) {
+                        terminated_cleanly = true;
+                        break;
+                    }
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                            .count();
+                    if (elapsed > timeout_ms) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[teardown_fabric_config] Timeout waiting for ETH router TERMINATED on chip {} chan {} "
+                            "(status=0x{:08x}), skipping force-reset (F5a: testing whether force-reset causes hang)",
+                            chip_id,
+                            chan_id,
+                            status.empty() ? 0u : status[0]);
+                        // F5a: deliberately skip assert_risc_reset_at_core here.
+                        // Hypothesis: dropping ETH PHY link via force-reset corrupts ERISC L1 state on
+                        // adjacent chips (partner ERISC left with stale edm_status_address value), which
+                        // causes terminate_stale_erisc_routers on the next fabric bring-up to see
+                        // 840+ stale channels and ultimately trigger the AsyncExecutionWorksCQ0 hang.
+                        // If this hang disappears with F5a, force-reset is the root cause.
+                        ++chip_force_reset_count;
+                        ++total_force_reset_count;
+                        break;
+                    }
+                    // Back off: read_core already round-trips to MMIO. Pause per iteration,
+                    // yield every kSpinsBetweenSleeps iterations to keep CPU + MMIO sane.
+                    if (++spin_counter >= kSpinsBetweenSleeps) {
+                        spin_counter = 0;
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    } else {
+                        ttsl::pause();
+                    }
+                }
+                // Restore ERISC0 to base UMD firmware after clean termination.
+                // When fabric firmware halts BRISC (writes TERMINATED then stops), the ETH heartbeat
+                // stops updating.  If the next process's topology discovery runs before ERISC0 is
+                // restarted, eth_heartbeat_running() times out, chip_locations stays incomplete, and
+                // get_physical_chip_id_from_eth_coord() crashes (TT_FATAL @ tt_cluster.cpp:536).
+                // A brief assert+deassert of ERISC0 reset restarts BRISC into base UMD firmware,
+                // which resumes the heartbeat.  This is safe post-TERMINATED: ERISC has already
+                // halted cleanly, no in-flight NOC writes remain, and resetting only ERISC0 (not the
+                // subordinate ERISC/NCRISC) keeps the ETH PHY link alive per the F5a analysis.
+                // Note: we deliberately skip this for timed-out channels (terminated_cleanly=false)
+                // to preserve the F5a finding that force-resetting mid-teardown ERISC corrupts state.
+                if (terminated_cleanly) {
+                    try {
+                        auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, static_cast<int>(chan_id));
+                        tt_cxy_pair core_loc(chip_id, virtual_core);
+                        cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                        cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[teardown_fabric_config] ERISC0 restore reset failed on chip {} chan {}: {}. "
+                            "Next topology discovery may see stale ETH heartbeat.",
+                            chip_id,
+                            chan_id,
+                            e.what());
+                    }
+                }
+            }
+            if (chip_force_reset_count > 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[teardown_fabric_config] chip {} force-reset {} / {} ETH channels due to teardown timeout",
+                    chip_id,
+                    chip_force_reset_count,
+                    active_eth_channels.size());
+            }
+        }
+        if (total_force_reset_count > 0) {
+            log_warning(
+                tt::LogMetal,
+                "[teardown_fabric_config] total force-reset channels across all chips: {}",
+                total_force_reset_count);
+        } else {
+            log_info(
+                tt::LogMetal,
+                "[teardown_fabric_config] all ETH router channels terminated cleanly (0 force-resets)");
+        }
+    }
+
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;

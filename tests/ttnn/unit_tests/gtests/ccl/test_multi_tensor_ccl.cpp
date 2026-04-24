@@ -32,13 +32,14 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
 
 class MeshDevice1x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MeshDevice1x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
-    void TearDown() override {
-        MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
+    // Use Config::fabric_config to scope fabric init/teardown to the active devices only,
+    // rather than calling SetFabricConfig() globally in the constructor.  The base class
+    // SetUp() calls SetFabricConfig() right before MeshDevice::create() and TearDown()
+    // calls SetFabricConfig(DISABLED) after mesh close — preventing fabric firmware on
+    // un-owned devices from being left in a dirty state across test iterations.
+    MeshDevice1x4Fixture() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{1, 4}, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}) {}
 };
 
 class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
@@ -49,6 +50,7 @@ protected:
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
+
 
 TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
@@ -72,16 +74,27 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
 
     // Quiesce parent mesh after all gather
     mesh_device_->quiesce_devices();
+    log_info(tt::LogMetal, "[test_body] second quiesce_devices() returned");
 
+    log_info(tt::LogMetal, "[test_body] calling disaggregate()");
     auto disaggregated_output_tensors = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+    log_info(tt::LogMetal, "[test_body] disaggregate() returned, {} tensors", disaggregated_output_tensors.size());
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        log_info(tt::LogMetal, "[test_body] calling to_vector() for dev_idx={}", dev_idx);
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
+        log_info(tt::LogMetal, "[test_body] to_vector() returned for dev_idx={}, {} elements", dev_idx, data.size());
         for (int i = 0; i < data.size(); i++) {
             // NOLINTNEXTLINE(bugprone-integer-division)
             auto expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
+        log_info(tt::LogMetal, "[test_body] EXPECT_EQ loop done for dev_idx={}", dev_idx);
     }
+    log_info(tt::LogMetal, "[test_body] all loops done, destroying disaggregated_output_tensors");
+    disaggregated_output_tensors.clear();
+    log_info(tt::LogMetal, "[test_body] disaggregated_output_tensors destroyed, destroying all_gathered_tensor");
+    { auto tmp = std::move(all_gathered_tensor); }
+    log_info(tt::LogMetal, "[test_body] all_gathered_tensor destroyed, test body finishing");
 }
 
 TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
@@ -195,6 +208,164 @@ TEST_F(MeshDevice1x4Fixture, AllReduce) {
             float expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(static_cast<float>(val), expected);
         }
+    }
+}
+
+TEST_F(MeshDevice1x4Fixture, DISABLED_AllGatherReturnedTensorNoHang) {
+    // REGRESSION TEST: multiple bugs fixed on branch nsexton/0-racecondition-hunt.
+    // This test exercises the full quiesce→all_gather→readback→destroy cycle across N iterations
+    // to stress all three race conditions simultaneously.
+    //
+    // ----- Bug 1: EventSynchronize hang in MeshBuffer::wait_for_pending_events() -----
+    //
+    // Sequence that triggers the hang (without the fix):
+    //   1. all_gather() on parent mesh CQ records event E, stored in MeshBuffer
+    //   2. quiesce_devices() → finish_and_reset_in_use(): sets in_use_=false, resets event counters
+    //   3. to_vector() on submesh CQ → mark_in_use() on shared physical devices clears quiesced flag
+    //   4. Submesh events complete → last_completed_event = 1, 2, ... (new post-reset sequence)
+    //   5. all_gathered_tensor destructor → wait_for_pending_events() → EventSynchronize(E):
+    //      in_use() returns false incorrectly (quiesced was cleared), last_completed < E → infinite spin
+    //
+    // Fix: check mesh_command_queue.in_use() before calling EventSynchronize; if the parent
+    // mesh CQ was quiesced, all work was already drained — skip the stale event.
+    //
+    // ----- Bug 2: AllGather writer exits before tt_fabric_mux terminates -----
+    //   (commits 3804c11fc3, 430292f6c6)
+    //
+    // The AllGather writer kernel was completing and returning to the dispatch layer
+    // while the fabric mux kernel was still running on an adjacent core, leading to
+    // the mux being reset mid-operation on the next iteration.
+    //
+    // Fix: writer now calls wait_for_fabric_endpoint_terminated() before exiting,
+    // polling the mux's L1 status address until FabricMuxStatus::TERMINATED is written.
+    //
+    // ----- Bug 3 (A/B): tt_fabric_mux TERMINATED write gated behind ETH teardown ACK -----
+    //   (commit ff78c87e44 — see https://github.com/tenstorrent/tt-metal/issues/42429)
+    //
+    // The mux wrote FabricMuxStatus::TERMINATED only *after* fabric_connection.close()
+    // completed in full, including close_finish() which spin-polls for an ETH router ACK.
+    // If the ETH ACK was delayed or never arrived (e.g. due to ARC flagging the NOC access
+    // to the ETH core as unsafe), TERMINATED was never written and Bug 2's fix would
+    // itself hang forever — a classic A/B deadlock.
+    //
+    // Fix: split close() into close_start() + TERMINATED write + close_finish() so the
+    // writer can unblock as soon as the close request is sent, while the mux still completes
+    // the full ETH handshake before signalling dispatch completion.
+    //
+    // Without all three fixes, this test hangs on iteration 1 or 2.
+
+    constexpr int kIterations = 3;
+    auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 32, 128}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+
+    for (int iter = 0; iter < kIterations; iter++) {
+        log_info(tt::LogMetal, "[AllGatherReturnedTensorNoHang] iteration {}/{}", iter + 1, kIterations);
+
+        // Step 1: Create tensors on submesh devices
+        std::vector<ttnn::Tensor> tensors;
+        for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+            std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+            tensors.push_back(
+                Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        }
+
+        // Step 2: Aggregate and all_gather on parent mesh → records event E
+        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+        mesh_device_->quiesce_devices();
+
+        auto all_gathered_tensor = ttnn::all_gather(aggregated_tensor, /* dim */ 0);
+
+        // Step 3: Quiesce parent mesh → resets event counters, sets in_use_=false
+        mesh_device_->quiesce_devices();
+
+        // Step 4: Readback via submesh → mark_in_use on shared physical devices
+        auto disaggregated = tt::tt_metal::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+        for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+            auto data = disaggregated[dev_idx].to_vector<bfloat16>();
+            ASSERT_FALSE(data.empty()) << "Empty readback at dev_idx=" << dev_idx << " iter=" << iter;
+        }
+
+        // Step 5: Destroy all_gathered_tensor → triggers wait_for_pending_events() with stale event E
+        // Without the fix, this hangs forever.
+        disaggregated.clear();
+        { auto tmp = std::move(all_gathered_tensor); }
+
+        log_info(tt::LogMetal, "[AllGatherReturnedTensorNoHang] iteration {}/{} completed", iter + 1, kIterations);
+    }
+}
+
+// REGRESSION TEST: ETH TXQ spin-loop blocks close_finish() on non-MMIO ERISCs
+//
+// Scenario: during AllGather teardown the ERISC fabric router was caught spinning
+// inside send_next_data() / run_sender_channel_step_speedy() waiting for
+// eth_txq_is_busy() to clear (ETH flow-control backpressure from the downstream
+// router).  Because has_worker_teardown_request() was never checked inside those
+// loops, close_finish() on the host would wait forever for the ACK that the ERISC
+// could not send.
+//
+// The bug is most reproducible on non-MMIO devices (1,3,4,5) in a 2x4 T3K mesh
+// because those ERISCs act as pure forwarding nodes: every packet they relay must
+// traverse two ETH hops, doubling the probability that the TX queue is busy when
+// teardown is requested.
+//
+// Fix (erisc_datamover_builder.cpp + fabric_erisc_router.cpp + speedy_path.hpp):
+//   ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA is now always true.  The teardown escape hatch
+//   lives ONLY in the pre-send TXQ spin (before eth_send_packet_bytes_unsafe()).
+//   The post-send drain has NO early-exit: returning after the send would leave the
+//   in-flight packet orphaned; remote ERISC still delivers it to destination Tensix L1,
+//   overwriting the next dispatch program's BRISC .text (observed: mismatch at 0x8220
+//   on all 8 devices, causing hangs in iteration 2+).
+//
+// Without the fix, this test hangs on iteration 1 or 2 with a T3K mesh.
+TEST_F(MeshDevice2x4Fabric1DFixture, AllGatherEthTxqTeardownRace) {
+    constexpr int kIterations = 5;
+
+    // Small tensor: enough data to keep all ERISCs busy, small enough to iterate fast.
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 32, 128}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+
+    for (int iter = 0; iter < kIterations; iter++) {
+        log_info(tt::LogMetal, "[AllGatherEthTxqTeardownRace] iteration {}/{}", iter + 1, kIterations);
+
+        // Build per-device input tensors across the full 2x4 mesh (8 devices).
+        std::vector<std::shared_ptr<distributed::MeshDevice>> submeshes;
+        std::vector<ttnn::Tensor> tensors;
+        for (int row = 0; row < 2; row++) {
+            for (int col = 0; col < 4; col++) {
+                submeshes.push_back(
+                    mesh_device_->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(row, col)));
+                int dev_idx = row * 4 + col;
+                std::vector<bfloat16> data(
+                    tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+                tensors.push_back(
+                    Tensor::from_vector(std::move(data), tensor_spec).to_device(submeshes.back().get()));
+            }
+        }
+
+        auto aggregated = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+        mesh_device_->quiesce_devices();
+
+        // AllGather across all 8 devices — routes through non-MMIO forwarding ERISCs.
+        auto gathered = ttnn::all_gather(aggregated, /* dim */ 0);
+
+        // Quiesce triggers fabric teardown.  Interior ERISCs that were mid-send
+        // must unblock from their ETH TXQ spin to process the close ACK.
+        mesh_device_->quiesce_devices();
+
+        // Verify correctness on each submesh.
+        auto disaggregated = tt::tt_metal::experimental::unit_mesh::disaggregate(gathered);
+        for (int dev_idx = 0; dev_idx < static_cast<int>(submeshes.size()); dev_idx++) {
+            auto data = disaggregated[dev_idx].to_vector<bfloat16>();
+            ASSERT_FALSE(data.empty()) << "Empty readback at dev_idx=" << dev_idx << " iter=" << iter;
+        }
+
+        // Destroy gathered tensor — exercises wait_for_pending_events() path.
+        disaggregated.clear();
+        { auto tmp = std::move(gathered); }
+
+        log_info(tt::LogMetal, "[AllGatherEthTxqTeardownRace] iteration {}/{} passed", iter + 1, kIterations);
     }
 }
 

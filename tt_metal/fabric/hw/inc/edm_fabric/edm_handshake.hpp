@@ -165,6 +165,9 @@ FORCE_INLINE void sender_side_start(
     initialize_edm_common_datastructures(handshake_register_address);
     eth_wait_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
+        // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8% BW
+        // regression in Ring topology (5.9% overall) on T3000 vs. the NOP-baseline goldens.
+        // Keep identical to main (nop).
         asm volatile("nop");
     }
     eth_send_bytes(handshake_register_address, handshake_register_address, 16);
@@ -197,6 +200,9 @@ FORCE_INLINE void receiver_side_finish(
     uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     eth_wait_for_bytes(16, HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
+        // NOTE: a RISC-V PAUSE hint (.4byte 0x0100000F) here caused a measured 13.8% BW
+        // regression in Ring topology (5.9% overall) on T3000 vs. the NOP-baseline goldens.
+        // Keep identical to main (nop).
         asm volatile("nop");
     }
     eth_receiver_channel_done(0);

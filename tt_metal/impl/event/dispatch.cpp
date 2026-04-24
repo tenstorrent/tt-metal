@@ -68,6 +68,8 @@ void issue_record_event_commands(
     }
 
     // Calculate the actual command size
+    bool distributed_dispatcher =
+        MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     tt::tt_metal::DeviceCommandCalculator calculator;
     for (uint32_t i = 0; i + 1 < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
@@ -84,7 +86,41 @@ void issue_record_event_commands(
     }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
+    log_warning(
+        tt::LogMetal,
+        "[issue_record_event] device={} event={} cq={} distributed_dispatcher={} "
+        "num_worker_counters={} clear_count={} notify_host={}",
+        device_id,
+        event_id,
+        cq_id,
+        distributed_dispatcher,
+        num_worker_counters,
+        clear_count,
+        notify_host);
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
+        auto offset_index = *sub_device_ids[i];
+        log_warning(
+            tt::LogMetal,
+            "[issue_record_event]   sub_device[{}] expected_workers={}",
+            offset_index,
+            expected_num_workers_completed[offset_index]);
+    }
+
+    // Paired before/after logs around issue_queue_reserve so a hang on chip N at
+    // this callsite can be attributed to either (a) the host-side issue-queue-full
+    // path (blocking in issue_queue_reserve because the device dispatcher has not
+    // drained prior commands) or (b) the subsequent on-device wait. A hang between
+    // "[issue_record_event] reserve begin" and "reserve ok" fingerprints (a);
+    // anything later fingerprints (b). See chip3_t3k_ccl_hang plan item 2a.
+    log_warning(
+        tt::LogMetal,
+        "[issue_record_event] reserve begin device={} event={} cq={} sizeB={}",
+        device_id,
+        event_id,
+        cq_id,
+        cmd_sequence_sizeB);
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    log_warning(tt::LogMetal, "[issue_record_event] reserve ok device={} event={} cq={}", device_id, event_id, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
@@ -101,6 +137,17 @@ void issue_record_event_commands(
         const uint32_t wait_flags = CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM |
                                     (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
                                     ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0);
+
+        // In distributed-dispatcher mode (ETH 1CQ), DISPATCH_S forwards worker completion
+        // counts to DISPATCH_D continuously in its cb_acquire_pages_dispatch_s() loop.  An
+        // explicit DISPATCH_S WAIT here is unnecessary — DISPATCH_D's own WAIT_STREAM will
+        // block until DISPATCH_S has forwarded the required count.  Inserting a DISPATCH_S
+        // WAIT would be redundant: process_dispatch_s_wait_cmd now calls
+        // update_worker_completion_count_on_dispatch_d() inside its wait loop, so other
+        // streams do not stall.  However, the DISPATCH_S WAIT is still omitted here because
+        // DISPATCH_D's WAIT already provides the required ordering guarantee, so the extra
+        // round-trip to DISPATCH_S adds latency with no correctness benefit.
+
         if (i == num_worker_counters - 1) {
             command_sequence.add_dispatch_wait_with_prefetch_stall(
                 wait_flags,

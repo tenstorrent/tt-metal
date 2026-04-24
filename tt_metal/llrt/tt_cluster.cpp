@@ -506,7 +506,23 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
-    this->driver_->close_device();
+    // FIX J: driver_->close_device() can throw UmdException (e.g. ETH relay timeout during
+    // RemoteChip::close_device()).  Destructors are implicitly noexcept, so an uncaught
+    // exception here calls std::terminate() -> SIGABRT.  Catch and log instead.
+    // See: https://github.com/tenstorrent/tt-metal/issues/42429
+    try {
+        this->driver_->close_device();
+    } catch (const std::exception& e) {
+        log_warning(
+            tt::LogDevice,
+            "~Cluster: driver_->close_device() threw: {}. Device may be left in unclean state and may need reset.",
+            e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogDevice,
+            "~Cluster: driver_->close_device() threw non-std exception. Device may be left in unclean state and may "
+            "need reset.");
+    }
 
     this->sdesc_per_chip_.clear();
     this->device_to_host_mem_channel_.clear();

@@ -90,7 +90,7 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
         }
     } else {
         // NUMA node reported by UMD does not exist on host. Use round-robin binding policy for this worker thread.
-        log_warning(
+        log_info(
             tt::LogMetal,
             "NUMA node {} for device {} does not exist on host or NUMA is not available.",
             numa_node_for_device,
@@ -121,7 +121,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
     }
     int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
     if (rc) {
-        log_warning(
+        log_info(
             tt::LogMetal,
             "Unable to bind main thread to free CPU cores. May see performance degradation. Error Code: {}",
             rc);
@@ -255,7 +255,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
         skip &= (device_id == mmio_device_id);
     }
     if (target_mmio_ids.size() != ctx_.get_cluster().number_of_pci_devices()) {
-        log_warning(
+        log_info(
             tt::LogMetal,
             "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
             "consider using CreateDevices API.");
@@ -472,13 +472,67 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     }
 
     auto active_devices = this->get_all_active_devices_impl();
+    log_info(
+        tt::LogMetal,
+        "[initialize_fabric_and_dispatch_fw] Starting fabric + dispatch FW initialization for {} "
+        "devices (new session)",
+        active_devices.size());
 
     initializers_[FabricFirmwareInitializer::key] =
         std::make_unique<FabricFirmwareInitializer>(descriptor_, env_impl_.get_control_plane());
+    // Note on teardown-after-failed-init (#42429): if init() throws (e.g. configure_fabric
+    // detects dead ETH channels), FabricFirmwareInitializer::key is NOT added to init_done_,
+    // so close_devices() will skip FabricFirmwareInitializer::teardown().  This is intentional:
+    // when init fails because configure_fabric threw, the ERISCs have been soft-reset into base
+    // UMD firmware which does NOT understand the fabric TERMINATE protocol.  Attempting teardown
+    // (which sends TERMINATE signals and polls for EDMStatus::TERMINATED) on ERISCs running base
+    // firmware would time out on every channel, adding ~N*5s of wasted time and no benefit.
+    //
+    // L1 cleanup status: configure_fabric_cores() zeroed edm_status_address for HEALTHY channels
+    // (those that completed soft reset). Dead channels (probe read timed out) had their L1 clear
+    // SKIPPED — WriteToDeviceL1 would hang on the dead ETH path. However,
+    // terminate_stale_erisc_routers() now zeroes edm_status_address for corrupt-but-reachable
+    // channels (probe read succeeded but status was garbage), breaking the cascade where corrupt
+    // status persisted in L1 across container restarts on bare metal. Truly dead channels
+    // (probe read threw) remain dirty, but those represent hardware failures that require
+    // reset to recover — the cascade prevention covers the software-crash corruption case.
     initializers_[FabricFirmwareInitializer::key]->init(active_devices, init_done_);
     init_done_.insert(FabricFirmwareInitializer::key);
 
-    initializers_[DispatchKernelInitializer::key]->init(active_devices, init_done_);
+    // FIX E (#42429): Filter out non-MMIO devices whose ETH relay path is broken.
+    // DispatchKernelInitializer writes dispatch firmware to all devices (including non-MMIO).
+    // On non-MMIO devices, these writes route through the ETH relay.  If the relay is dead
+    // (relay_broken=true in terminate_stale_erisc_routers), WriteRuntimeArgsToDevice hangs
+    // indefinitely waiting for wait_for_non_mmio_flush — the same failure fixed by FIX C for
+    // ETH firmware, but here for dispatch (WORKER core) firmware on non-MMIO devices.
+    auto* fabric_init =
+        static_cast<FabricFirmwareInitializer*>(initializers_[FabricFirmwareInitializer::key].get());
+    const auto& dead_relay_devices = fabric_init->get_dead_relay_devices();
+    std::vector<Device*> dispatch_devices;
+    if (dead_relay_devices.empty()) {
+        dispatch_devices = active_devices;
+    } else {
+        for (auto* dev : active_devices) {
+            if (dead_relay_devices.count(dev->id()) == 0) {
+                dispatch_devices.push_back(dev);
+            } else if (dev->is_mmio_capable()) {
+                // FIX R (#42429): MMIO-capable devices write dispatch kernels via PCIe, not the
+                // ETH relay path.  Dead ETH channels do not affect MMIO writes, so dispatch kernel
+                // init is safe and MUST run — skipping it leaves stale CQ state from a prior
+                // process run, causing TT_FATAL "Unexpected values for event in completion queue"
+                // on the first CQ read.
+                dispatch_devices.push_back(dev);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "initialize_fabric_and_dispatch_fw: skipping dispatch kernel init for Device {} "
+                    "(dead ETH relay — dispatch writes would hang in wait_for_non_mmio_flush)",
+                    dev->id());
+            }
+        }
+    }
+
+    initializers_[DispatchKernelInitializer::key]->init(dispatch_devices, init_done_);
     init_done_.insert(DispatchKernelInitializer::key);
 
     initializers_[DispatchKernelInitializer::key]->configure();
@@ -690,28 +744,40 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     // in create_unit_meshes.  If an exception interrupts that second phase,
     // cleanup must still succeed for the components that *were* initialized.
     if (init_done_.contains(DispatchKernelInitializer::key)) {
+        log_info(tt::LogMetal, "[close_devices] DispatchKernelInitializer::teardown() start");
         initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+        log_info(tt::LogMetal, "[close_devices] DispatchKernelInitializer::teardown() returned");
     }
 
     if (init_done_.contains(FabricFirmwareInitializer::key)) {
+        log_info(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::teardown() start");
         initializers_[FabricFirmwareInitializer::key]->teardown(init_done_);
+        log_info(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::teardown() returned");
     }
 
     if (init_done_.contains(ProfilerInitializer::key)) {
+        log_info(tt::LogMetal, "[close_devices] ProfilerInitializer::teardown() start");
         initializers_[ProfilerInitializer::key]->teardown(init_done_);
+        log_info(tt::LogMetal, "[close_devices] ProfilerInitializer::teardown() returned");
     }
 
     if (init_done_.contains(CommandQueueInitializer::key)) {
+        log_info(tt::LogMetal, "[close_devices] CommandQueueInitializer::teardown() start");
         initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+        log_info(tt::LogMetal, "[close_devices] CommandQueueInitializer::teardown() returned");
     }
 
     TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
 
     if (initializers_.contains(DispatchKernelInitializer::key)) {
+        log_info(tt::LogMetal, "[close_devices] DispatchKernelInitializer::post_teardown() start");
         initializers_[DispatchKernelInitializer::key]->post_teardown();
+        log_info(tt::LogMetal, "[close_devices] DispatchKernelInitializer::post_teardown() returned");
     }
     if (initializers_.contains(FabricFirmwareInitializer::key)) {
+        log_info(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::post_teardown() start");
         initializers_[FabricFirmwareInitializer::key]->post_teardown();
+        log_info(tt::LogMetal, "[close_devices] FabricFirmwareInitializer::post_teardown() returned");
     }
     if (initializers_.contains(ProfilerInitializer::key)) {
         initializers_[ProfilerInitializer::key]->post_teardown();
@@ -723,7 +789,9 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto* dev = this->get_active_device(dev_id);
+        log_info(tt::LogMetal, "[close_devices] closing device {}", dev_id);
         pass &= dev->close();
+        log_info(tt::LogMetal, "[close_devices] device {} closed", dev_id);
     }
 
     return pass;

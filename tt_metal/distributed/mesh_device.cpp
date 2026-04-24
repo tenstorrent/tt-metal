@@ -672,7 +672,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
     if (!submesh->pimpl_->get_view().get_devices().empty()) {
-        log_trace(
+        log_info(
             LogMetal,
             "Submesh {} instantiated with {} devices",
             submesh->pimpl_->id(),
@@ -852,7 +852,20 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
-            ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+            try {
+                ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "close_impl: ReadMeshDeviceProfilerResults threw during teardown: {}. "
+                    "Profiler data may be incomplete.",
+                    e.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "close_impl: ReadMeshDeviceProfilerResults threw non-std exception during teardown. "
+                    "Profiler data may be incomplete.");
+            }
         }
 
         if (distributed_context_) {
@@ -896,11 +909,20 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
             }
         }
 
+        log_info(LogMetal, "[close_impl] clearing mesh_command_queues_");
         mesh_command_queues_.clear();
-        sub_device_manager_tracker_.reset();
-        scoped_devices_.reset();
-        parent_mesh_.reset();
+        log_info(LogMetal, "[close_impl] mesh_command_queues_ cleared, signaling is_initialized=false");
+        // Signal the device as closed BEFORE freeing allocator state.  Any concurrent
+        // MeshBuffer::deallocate() racing with teardown will now see is_initialized()==false
+        // and take the safe "device already closed" path instead of touching the (now-freed)
+        // sub_device_manager_tracker_ allocators.  See race analysis: Finding B.1.
         is_internal_state_initialized = false;
+        log_info(LogMetal, "[close_impl] resetting sub_device_manager_tracker_");
+        sub_device_manager_tracker_.reset();
+        log_info(LogMetal, "[close_impl] resetting scoped_devices_ (triggers ScopedDevices dtor -> close_devices)");
+        scoped_devices_.reset();
+        log_info(LogMetal, "[close_impl] scoped_devices_.reset() returned");
+        parent_mesh_.reset();
         if (distributed_context_) {
             distributed_context_.reset();
         }
@@ -911,7 +933,9 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // uplifted to the MetalEnv level.
     // https://github.com/tenstorrent/tt-metal/issues/21500
     if (destroy_metal_context_instance_on_close_) {
+        log_info(LogMetal, "[close_impl] calling MetalContext::destroy_instance");
         MetalContext::destroy_instance(false, context_id_);
+        log_info(LogMetal, "[close_impl] MetalContext::destroy_instance returned");
         destroy_metal_context_instance_on_close_ = false;
     }
 
@@ -1419,13 +1443,85 @@ bool MeshDeviceImpl::is_mmio_capable() const {
     return reference_device()->is_mmio_capable();
 }
 
+void MeshDeviceImpl::drain_cqs_for_quiesce() {
+    // Recursively drain submeshes first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->drain_cqs_for_quiesce();
+        }
+    }
+    // Drain this mesh's own command queues.
+    bool have_reset_launch_msg_state = false;
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->wait_for_completion(!have_reset_launch_msg_state);
+        have_reset_launch_msg_state = true;
+    }
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->finish_and_reset_in_use();
+    }
+}
+
+void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
+    // Recursively restart submesh fabric workers first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->restart_fabric_workers_for_quiesce();
+        }
+    }
+    // Phase 1 per-device: terminate + reconfigure + relaunch all cores.
+    // Does NOT wait for handshake completion — that is deferred to
+    // wait_for_fabric_workers_ready_for_quiesce() so that all devices
+    // have their sender and receiver ERISCs running before any handshake poll.
+    //
+    // ORDERING: non-MMIO devices first, MMIO last.
+    // Non-MMIO L1 reads route through the MMIO device's ERISC relay firmware.
+    // If the MMIO device is quiesced first, its ERISCs enter a rebooting state
+    // (STARTED, not READY_FOR_TRAFFIC) and subsequent reads to non-MMIO devices
+    // time out with "Timeout waiting for Ethernet core service remote IO request".
+    auto devices = get_devices();
+    std::stable_sort(devices.begin(), devices.end(), [](IDevice* a, IDevice* b) {
+        // non-MMIO (false) sorts before MMIO (true)
+        return !a->is_mmio_capable() && b->is_mmio_capable();
+    });
+    for (auto* idev : devices) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->quiesce_and_restart_fabric_workers();
+        }
+    }
+}
+
+void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
+    // Recursively wait for submeshes first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->wait_for_fabric_workers_ready_for_quiesce();
+        }
+    }
+    // Phase 2 per-device: poll for ERISC handshake completion + Tensix MUX readiness.
+    // By this point, ALL devices across ALL meshes have completed Phase 1 (relaunch).
+    // Both sender and receiver ERISCs are running, so the natural sender-receiver
+    // handshake will complete without host MAGIC injection.
+    for (auto* idev : get_devices()) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->wait_for_fabric_workers_ready();
+        }
+    }
+}
+
 void MeshDeviceImpl::quiesce_internal() {
     TT_FATAL(
         get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
         "Cannot quiesce when non-default sub-device manager is active");
+
+    // Phase 1: Drain ALL submesh command queues before restarting any fabric
+    // workers. On T3K, device 3's fabric restart disrupts device 5's dispatch
+    // relay path (they are mesh-adjacent); draining all CQs first prevents the
+    // 5-second completion_queue_wait_front hang on device 5.
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->quiesce_devices();
+            submesh_ptr->drain_cqs_for_quiesce();
         }
     }
     bool have_reset_launch_msg_state = false;
@@ -1436,6 +1532,49 @@ void MeshDeviceImpl::quiesce_internal() {
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();
     }
+
+    // Phase 2: All CQs are drained; now safely restart fabric workers.
+    // Two-pass approach: first relaunch all cores on all devices, then wait for
+    // handshake completion on all devices.  This ensures sender and receiver ERISCs
+    // are both running before any handshake poll — fixing the FIX P regression where
+    // per-device sequential processing caused Device 4's receiver to complete the
+    // handshake before Device 0's sender was even launched.
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1 — relaunching fabric workers on all devices");
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->restart_fabric_workers_for_quiesce();
+        }
+    }
+    // ORDERING: non-MMIO first, MMIO last — see comment in restart_fabric_workers_for_quiesce().
+    auto pass1_devices = get_devices();
+    std::stable_sort(pass1_devices.begin(), pass1_devices.end(), [](IDevice* a, IDevice* b) {
+        return !a->is_mmio_capable() && b->is_mmio_capable();
+    });
+    for (auto* idev : pass1_devices) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1 — Device {} starting quiesce_and_restart_fabric_workers", dev->id());
+            dev->quiesce_and_restart_fabric_workers();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1 — Device {} done", dev->id());
+        }
+    }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 1 complete — all devices relaunched, starting Pass 2 (handshake wait)");
+
+    // Phase 3: All devices have relaunched; now wait for handshake completion.
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->wait_for_fabric_workers_ready_for_quiesce();
+        }
+    }
+    for (auto* idev : get_devices()) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} starting wait_for_fabric_workers_ready", dev->id());
+            dev->wait_for_fabric_workers_ready();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 2 — Device {} done", dev->id());
+        }
+    }
+    log_info(tt::LogMetal, "quiesce_internal: Pass 2 complete — all devices ready");
 }
 
 void MeshDeviceImpl::quiesce_devices() {
@@ -1692,6 +1831,9 @@ bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
 void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
+void MeshDevice::drain_cqs_for_quiesce() { pimpl_->drain_cqs_for_quiesce(); }
+void MeshDevice::restart_fabric_workers_for_quiesce() { pimpl_->restart_fabric_workers_for_quiesce(); }
+void MeshDevice::wait_for_fabric_workers_ready_for_quiesce() { pimpl_->wait_for_fabric_workers_ready_for_quiesce(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
     return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);

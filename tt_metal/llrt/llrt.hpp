@@ -63,8 +63,15 @@ void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const Co
 
 namespace internal_ {
 
+// skip_dispatch_alert: if true, suppresses on_dispatch_timeout_detected() on timeout.
+// Use this for internal reset paths (e.g. reset_cores) where a timeout is expected and normal;
+// tt-triage should only fire for unexpected hangs on user-visible dispatch operations.
 void wait_until_cores_done(
-    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
+    ChipId device_id,
+    int run_state,
+    std::unordered_set<CoreCoord>& not_done_phys_cores,
+    int timeout_ms = 0,
+    bool skip_dispatch_alert = false);
 
 void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& logical_cores);
 

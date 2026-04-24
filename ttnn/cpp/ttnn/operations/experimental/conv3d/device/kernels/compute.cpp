@@ -231,6 +231,15 @@ void kernel_main() {
                                     }
 
                                     // Wait for weights — deferred so tilize overlaps with BRISC's DRAM read.
+                                    //
+                                    // Weight-CB contract: the outer loop pops `weight_tiles` exactly
+                                    // once (cb_pop_front(cb_weight_tiled, weight_tiles) below) after
+                                    // all inner matmul iterations complete. `matmul_blocks` must NOT
+                                    // pop any tiles from `cb_weight_tiled` — it only reads them. If
+                                    // `matmul_blocks`'s contract ever changes to consume weight tiles
+                                    // per-call, this loop deadlocks because subsequent inner iterations
+                                    // would cb_wait_front on an already-drained CB while the producer
+                                    // waits for the outer pop.
                                     cb_wait_front(cb_weight_tiled, weight_tiles);
 
                                     // Phase 2: matmul the batch

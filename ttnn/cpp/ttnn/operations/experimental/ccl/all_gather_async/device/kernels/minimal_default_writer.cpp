@@ -667,6 +667,12 @@ void kernel_main() {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+            // Wait for the mux core to fully exit before this kernel returns.
+            // This ensures quiesce_devices()/wait_for_completion() does not unblock until the mux
+            // Tensix core is truly idle, preventing binary integrity failures when the next
+            // AllGather reprograms the same cores on a subsequent iteration.
+            tt::tt_fabric::wait_for_fabric_endpoint_terminated(
+                fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);

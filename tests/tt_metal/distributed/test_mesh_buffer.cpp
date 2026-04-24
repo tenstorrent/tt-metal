@@ -6,6 +6,9 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cstdlib>
+#include <chrono>
+#include <future>
+#include <thread>
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
@@ -1375,6 +1378,115 @@ TEST_F(SDMeshBufferFixture, ShardedBufferWriteReadRoundtrip) {
     EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, mesh_buffer);
 
     EXPECT_EQ(dst, src);
+}
+
+// ─── Race condition regression tests ───────────────────────────────────────
+//
+// These tests exercise the three races fixed in commit 288bae68ec:
+//   B.1 (CRITICAL): close_impl() freed sub_device_manager_tracker_ before
+//       setting is_internal_state_initialized=false → concurrent deallocate()
+//       called allocator_impl() on dangling pointers.
+//   B.4 (HIGH): HYBRID allocator path in deallocate() lacked an is_initialized()
+//       guard, so it could reach allocator_impl() even after the B.1 reorder if
+//       the deallocation arrived inside the mesh_command_queues_.clear() window.
+//   B.3 (HIGH): PinnedMemory::drain_barrier_events() called EventSynchronize()
+//       without checking is_initialized(), causing an infinite spin when the
+//       device was already closed (sysmem_manager_ lazy-reinit → counter=0).
+
+// ---- B.1 / B.4: concurrent deallocate() vs close() -------------------------
+//
+// Strategy: drop the MeshBuffer shared_ptr from a background thread at the same
+// time the main thread calls close().  Before the fix, close_impl() freed
+// sub_device_manager_tracker_ BEFORE setting is_internal_state_initialized=false,
+// so a concurrent deallocate() in that window would see is_initialized()==true
+// and call allocator_impl() on dangling pointers (use-after-free).
+//
+// After the fix the flag is set BEFORE the tracker is reset, so the concurrent
+// deallocate() takes the safe "device already closed" branch.  No crash or hang.
+//
+// Note: most effective with TSAN enabled; without it, the test exercises the
+// code path and verifies correctness via lack of crash / sanitizer hit.
+TEST_F(MeshBufferTestSuite, DeallocateDuringClose) {
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    DeviceLocalBufferConfig per_device_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    ReplicatedBufferConfig global_config{.size = single_tile_size};
+
+    // Keep the buffer alive via shared_ptr so we can drop it from a thread.
+    auto buf = MeshBuffer::create(global_config, per_device_config, mesh_device_.get());
+
+    // Drop the buffer from a background thread while the main thread closes
+    // the device.  The two operations race.
+    std::thread dropper([&buf]() {
+        buf.reset();  // → MeshBuffer::deallocate() → would call allocator_impl() if unguarded
+    });
+
+    // Close concurrently.  is_initialized() must flip to false BEFORE
+    // sub_device_manager_tracker_ is freed (fix B.1).
+    mesh_device_->close();
+    dropper.join();
+
+    mesh_device_.reset();  // prevent TearDown from double-closing
+}
+
+// ---- B.3: PinnedMemory::lock() after device close ---------------------------
+//
+// Strategy: dispatch a write through a PinnedMemory (adds a barrier event), then
+// close the device, then call lock().  Before the fix, lock() → drain_barrier_events()
+// → EventSynchronize() on the closed device → sysmem_manager_ lazy-reinit →
+// last_completed_event=0 → infinite spin.  The test uses std::async + a 10-second
+// deadline to catch the hang.
+TEST_F(MeshBufferTestSuite, PinnedMemoryLockAfterDeviceClose) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "NOC pinning not supported on this system";
+    }
+
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    constexpr int device_read_align = 64;
+
+    DeviceLocalBufferConfig per_device_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig global_config{.size = single_tile_size};
+    auto mesh_buffer = MeshBuffer::create(global_config, per_device_config, mesh_device_.get());
+
+    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        single_tile_size / sizeof(uint32_t), 0xdeadbeef);
+
+    distributed::MeshCoordinate coord(0, 0);
+    HostBuffer host_buffer(
+        tt::stl::Span<uint32_t>(src->data(), src->size()), tt::tt_metal::MemoryPin(src));
+
+    // Create PinnedMemory and do a non-blocking write.  This adds a barrier_event
+    // to the PinnedMemory — the event that drain_barrier_events() must sync on.
+    auto pinned = tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device_,
+        MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
+        host_buffer,
+        /*map_to_noc=*/true);
+    ASSERT_TRUE(pinned);
+
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
+    mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+
+    // Barrier events are added during enqueue_write.  Confirm at least one is pending.
+    EXPECT_TRUE(pinned->lock_may_block());
+
+    // Close the device.  All outstanding work is flushed by ~FDMeshCommandQueue()
+    // inside close_impl(), but the PinnedMemory still holds the now-stale barrier events.
+    mesh_device_->close();
+    mesh_device_.reset();  // prevent double-close in TearDown
+
+    // Call lock() from a background thread so we can apply a deadline.
+    // Before fix B.3: EventSynchronize on a closed device → infinite spin.
+    // After fix B.3:  drain_barrier_events() skips EventSynchronize when
+    //                 !device->is_initialized() → returns immediately.
+    constexpr auto kDeadline = std::chrono::seconds(10);
+    auto fut = std::async(std::launch::async, [&pinned]() { pinned->lock(); });
+    ASSERT_EQ(fut.wait_for(kDeadline), std::future_status::ready)
+        << "REGRESSION B.3: PinnedMemory::lock() hung after device close — "
+           "drain_barrier_events() is spinning on a closed device. "
+           "See pinned_memory.cpp and the is_initialized() guard.";
 }
 
 }  // namespace

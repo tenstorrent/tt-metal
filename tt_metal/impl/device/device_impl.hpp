@@ -149,7 +149,23 @@ public:
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
     bool compile_fabric();
-    void configure_fabric();
+    // pre_dead_channels: ETH channel IDs confirmed dead by terminate_stale_erisc_routers()
+    // (probe read timed out).  configure_fabric_cores() skips assert_risc_reset_at_core()
+    // for these channels to prevent the indefinite hang observed on T3K Device 4 ch7.
+    // skip_soft_reset_channels: ETH channel IDs with base-UMD relay firmware (edm_status=0x49706550).
+    // FIX M (#42429): configure_fabric_cores() must NOT soft-reset these — their BRISC is the relay
+    // endpoint for non-MMIO reads; halting it cascades into a full hang on deassert_risc_reset_at_core.
+    void configure_fabric(
+        const std::unordered_set<uint32_t>& pre_dead_channels = {},
+        const std::unordered_set<uint32_t>& skip_soft_reset_channels = {});
+    // Terminate fabric MUX tensix worker cores and re-launch them fresh.
+    // Called during quiesce to ensure MUX channel state is reset between iterations.
+    // Phase 1: quiesce_and_restart_fabric_workers() — terminate + reconfigure + relaunch all cores.
+    // Phase 2: wait_for_fabric_workers_ready() — poll for handshake completion + health check.
+    // The mesh-level caller MUST run Phase 1 on ALL devices before running Phase 2 on any
+    // device, so that sender and receiver ERISCs are both running before the handshake poll.
+    void quiesce_and_restart_fabric_workers();
+    void wait_for_fabric_workers_ready();
     // Puts device into reset
     bool close() override;
 
@@ -244,6 +260,10 @@ private:
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
+    // FIX P2 (#42429): ETH channel IDs confirmed dead during configure_fabric() — no firmware
+    // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
+    // expect them to reach READY_FOR_TRAFFIC.
+    std::unordered_set<uint32_t> fabric_pre_dead_channels_;
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;

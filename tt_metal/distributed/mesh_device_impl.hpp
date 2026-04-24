@@ -372,6 +372,11 @@ public:
      * called.
      */
     void quiesce_devices();
+    // Internal helpers used by quiesce_internal() to separate drain from fabric
+    // restart across submeshes.
+    void drain_cqs_for_quiesce();
+    void restart_fabric_workers_for_quiesce();
+    void wait_for_fabric_workers_ready_for_quiesce();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const std::shared_ptr<MeshDevice>& parent_mesh,

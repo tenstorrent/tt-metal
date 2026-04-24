@@ -181,6 +181,64 @@ inline void log_operation(
 
 #endif
 
+inline void track_completion_event_on_tensor(
+    const Tensor& tensor, const tt::tt_metal::distributed::MeshEvent& completion_event) {
+    if (!tensor.is_allocated() || tensor.storage_type() != StorageType::DEVICE) {
+        return;
+    }
+
+    auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
+    for (const auto& device_tensor : device_tensors) {
+        if (device_tensor.storage_type() != StorageType::DEVICE) {
+            continue;
+        }
+        auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+        if (mesh_buffer) {
+            mesh_buffer->add_pending_event(completion_event);
+        }
+    }
+}
+
+template <typename T>
+inline void track_completion_event_on_tensors(
+    const T& object, const tt::tt_metal::distributed::MeshEvent& completion_event) {
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) { track_completion_event_on_tensor(tensor, completion_event); }, object);
+}
+
+// Returns true if any tensor reachable from `object` owns a MeshBuffer that would actually
+// register the pending event (i.e. leak-owned device storage). If nothing needs tracking, the
+// caller can skip the host-side enqueue_record_event_to_host round-trip entirely — that call
+// is the per-op hot-path cost introduced to close the buffer-reuse race.
+inline bool tensor_needs_completion_tracking(const Tensor& tensor) {
+    if (!tensor.is_allocated() || tensor.storage_type() != StorageType::DEVICE) {
+        return false;
+    }
+    auto device_tensors = ttnn::distributed::get_device_tensors(tensor);
+    for (const auto& device_tensor : device_tensors) {
+        if (device_tensor.storage_type() != StorageType::DEVICE) {
+            continue;
+        }
+        if (device_tensor.device_storage().get_mesh_buffer_leak_ownership()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <typename T>
+inline bool any_tensor_needs_completion_tracking(const T& object) {
+    bool needs = false;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            if (!needs && tensor_needs_completion_tracking(tensor)) {
+                needs = true;
+            }
+        },
+        object);
+    return needs;
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -216,7 +274,39 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+    log_info(tt::LogMetal, "[device_operation] EnqueueMeshWorkload start");
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+    log_info(tt::LogMetal, "[device_operation] EnqueueMeshWorkload done");
+
+    // Record a host-visible completion event after the workload so buffers referenced by
+    // this op cannot be deallocated and immediately reused while the device is still using
+    // their addresses on this CQ.
+    //
+    // Skip during trace capture: enqueue_record_event_to_host() TT_FATALs when trace_id is
+    // set ("Event Synchronization is not supported during trace capture"). Buffer lifetime
+    // during trace execution is managed by the trace infrastructure, which keeps all captured
+    // buffer addresses alive for the lifetime of the trace — the eager-mode reuse race cannot
+    // occur during capture.
+    //
+    // Gate on whether any tensor actually owns a MeshBuffer that would register the event.
+    // If none do (e.g. host-only tensor_args, fully-consumed/dealt-with outputs), skip the
+    // host round-trip entirely — the cost of enqueue_record_event_to_host dominates on tight
+    // inference / prefill loops. See PR review H-5 for perf rationale.
+    if (!mesh_cq.trace_id().has_value() && (detail::any_tensor_needs_completion_tracking(tensor_args) ||
+                                            detail::any_tensor_needs_completion_tracking(tensor_return_value))) {
+        // Restrict the event to only the sub-devices used by this workload.  Including unrelated
+        // sub-devices (e.g. fabric MUX cores on a different sub-device) in the wait count causes
+        // DISPATCH_D to spin on a done-signal count that those cores never contribute to.
+        auto workload_sub_device_ids = workload.determine_sub_device_ids(mesh_device);
+        std::vector<tt::tt_metal::SubDeviceId> sub_device_id_vec(
+            workload_sub_device_ids.begin(), workload_sub_device_ids.end());
+        log_info(tt::LogMetal, "[device_operation] enqueue_record_event_to_host start");
+        auto completion_event = mesh_cq.enqueue_record_event_to_host(sub_device_id_vec);
+        log_info(tt::LogMetal, "[device_operation] enqueue_record_event_to_host done");
+        detail::track_completion_event_on_tensors(tensor_args, completion_event);
+        detail::track_completion_event_on_tensors(tensor_return_value, completion_event);
+    }
 
     TracyOpMeshWorkload(
         mesh_device,

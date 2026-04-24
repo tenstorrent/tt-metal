@@ -125,6 +125,10 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
+// stream_wrap_gt: wrapping greater-than comparison for stream overlay registers.
+// Stream counters wrap at MEM_WORD_ADDR_WIDTH bits (hardware-defined counter width).
+// NOT interchangeable with wrap_gt() (from cq_common.hpp) which uses a different
+// counter width for CB semaphores.
 FORCE_INLINE
 uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
     constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
@@ -281,10 +285,17 @@ void process_go_signal_mcast_cmd() {
 FORCE_INLINE
 void process_dispatch_s_wait_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    // Limited Usage of Wait CMD: dispatch_s should get a wait command only if it's not on the
-    // same core as dispatch_d and is used to clear the worker count
+    // dispatch_s should only get a wait command in distributed-dispatcher mode (ETH 1CQ),
+    // where dispatch_s and dispatch_d run on DIFFERENT cores. Supports WAIT_STREAM with or
+    // without CLEAR_STREAM:
+    //   - With CLEAR_STREAM: waits, forwards count to dispatch_d, then resets dispatch_s counter.
+    //   - Without CLEAR_STREAM: waits, forwards count to dispatch_d, leaves dispatch_s counter intact
+    //     (used by event recording to snapshot the current worker count without disrupting cumulative tracking).
+    // For WORKER dispatch (same Tensix core, BRISC=dispatch_d + NCRISC=dispatch_s), dispatch_d reads
+    // the shared stream registers directly. Sending a WAIT to dispatch_s here would race with dispatch_d's
+    // CLEAR_STREAM: dispatch_d clears the stream before dispatch_s reads it → dispatch_s hangs.
     ASSERT(
-        (cmd->wait.flags == (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM)) &&
+        (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM) &&
         distributed_dispatcher);
     uint32_t stream = cmd->wait.stream;
     uint32_t index = stream - first_stream_used;
@@ -292,15 +303,25 @@ void process_dispatch_s_wait_cmd() {
         (volatile uint32_t*)STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 
     // Wait for workers to complete
+    uint32_t heartbeat = 0;
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
+        invalidate_l1_cache();
+        update_worker_completion_count_on_dispatch_d();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
-    // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
-    // counter. dispatch_d will clear it's own counter
+    // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before
+    // (optionally) clearing the counter. dispatch_d will clear its own counter.
     update_worker_completion_count_on_dispatch_d<true>();
-    // Reset SPACE_AVAILABLE to 0.
-    NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
-    worker_count_update_for_dispatch_d[index] =
-        0;  // Local worker count update for dispatch_d should reflect state of worker semaphore on dispatch_s
+    if (cmd->wait.flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
+        // PROTOCOL INVARIANT: dispatch_d must never directly clear dispatch_s's stream
+        // registers via NOC write. Only dispatch_s clears its own registers (here).
+        // dispatch_d clears its own copy independently. Violating this invariant
+        // would cause worker_count_update_for_dispatch_d to go stale.
+        // Reset SPACE_AVAILABLE to 0.
+        NOC_STREAM_WRITE_REG(stream, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
+        worker_count_update_for_dispatch_d[index] =
+            0;  // Local worker count update for dispatch_d should reflect state of worker semaphore on dispatch_s
+    }
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 

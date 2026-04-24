@@ -892,7 +892,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // TODO print allocations
 
     // TODO: promote to user-configurable parameter (user could be just control plane based on arch in this case)
-    // specifies if we do spin waits on eth_txq_busy in send_next_data
+    // Specifies if we do spin waits on eth_txq_busy in send_next_data.
+    // Set to false: the can_send predicate already gates entry on !eth_txq_is_busy(),
+    // and a single (non-looping) teardown check right before eth_send_packet_bytes_unsafe()
+    // prevents committing a packet after teardown is requested.  This avoids the infinite
+    // spin that caused Galaxy FABRIC_2D init hangs (TXQ never free during setup on 32-chip).
+    // See fabric_erisc_router.cpp send_next_data() and fabric_erisc_router_speedy_path.hpp
+    // run_sender_channel_step_speedy() for the pre-send teardown check.
     const bool eth_txq_spin_wait_send_next_data = false;
     const bool eth_txq_spin_wait_receiver_send_completion_ack = false;
 

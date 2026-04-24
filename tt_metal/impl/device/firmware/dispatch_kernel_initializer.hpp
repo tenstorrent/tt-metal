@@ -44,6 +44,11 @@ private:
 
     void wait_for_dispatch_cores() const;
 
+    // Inject stream acks to unblock dispatch cores stuck waiting for worker completion
+    // during teardown (e.g. fabric torn down before dispatch finishes).
+    // Safe ONLY during teardown — do not call mid-operation.
+    void rescue_stuck_dispatch_cores(IDevice* device) const;
+
     void process_termination_signals() const;
 
     bool using_fast_dispatch() const;

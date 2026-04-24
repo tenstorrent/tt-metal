@@ -153,6 +153,59 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
     }
 }
 
+TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeChainedOpsWithBufferReuse) {
+    // Regression test for multi-CQ buffer lifetime safety.
+    // Validates that when chained ops (sqrt -> neg) are dispatched on CQ0, the intermediate
+    // buffer's DRAM address is not recycled by same-sized allocations while the ops are still
+    // in flight. The pending-event tracking on MeshBuffer must prevent premature deallocation.
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+
+    uint32_t buf_size_datums = 1024 * 1024;
+    uint32_t datum_size_bytes = 2;
+    ttnn::QueueId io_cq = ttnn::QueueId(1);
+    ttnn::QueueId workload_dispatch_cq = ttnn::QueueId(0);
+    ttnn::Shape shape{1, 1, 1024, 1024};
+
+    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+    auto expected_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
+
+    float input_val = 16.0f;
+    float expected_val = -sqrtf(input_val);  // neg(sqrt(16)) = -4
+    for (uint32_t i = 0; i < buf_size_datums; i++) {
+        host_data[i] = bfloat16(input_val);
+        expected_data[i] = bfloat16(expected_val);
+    }
+
+    TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+    TensorSpec tensor_spec(shape, tensor_layout);
+
+    for (int loop = 0; loop < 20; loop++) {
+        auto input_tensor = create_device_tensor(tensor_spec, device_);
+        ttnn::write_buffer(io_cq, input_tensor, {host_data});
+        auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));
+        ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
+
+        // Chain two ops: sqrt then neg. The intermediate (sqrt output) buffer
+        // is freed when output_tensor is reassigned by neg. The pending event
+        // mechanism must prevent that address from being recycled prematurely.
+        Tensor output_tensor;
+        ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
+
+        // Deliberately force early destruction of the intermediate by immediately
+        // reassigning. Then allocate a same-sized buffer to maximize the chance
+        // that the allocator recycles the freed address.
+        ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::neg(output_tensor); });
+        auto pressure_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(device_, tensor_spec);
+
+        auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
+        ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
+        ttnn::read_buffer(io_cq, output_tensor, {readback_data});
+        EXPECT_EQ(std::memcmp(readback_data.get(), expected_data.get(), buf_size_datums * datum_size_bytes), 0)
+            << "Data mismatch at loop " << loop;
+    }
+}
+
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // Test functionality for the buffer destructor, which will call deallocate asynchronously
     // We must ensure that the deallocate step, which can run after the buffer has been destroyed

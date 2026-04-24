@@ -330,11 +330,15 @@ void kernel_main() {
 
     // wait for fabric router to be ready before setting up the connection
     if constexpr (wait_for_fabric_endpoint) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        bool erisc_ready = tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_connection.edm_noc_x,
             fabric_connection.edm_noc_y,
             fabric_router_status_address,
             local_fabric_router_status_address);
+        if (!erisc_ready) {
+            status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+            return;
+        }
     }
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;

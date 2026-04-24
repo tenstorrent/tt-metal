@@ -5,6 +5,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
+#include <array>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -16,6 +18,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -144,6 +147,27 @@ public:
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Pending Event Tracking for Multi-CQ Safety
+    //
+    // In multi-CQ scenarios, operations on one CQ may reference a buffer while another CQ
+    // deallocates and reallocates the same address. To prevent this race, we track the latest
+    // pending event ID per CQ (lock-free via std::atomic<uint32_t>).
+    // Wormhole and Blackhole support at most 2 hardware CQs, so a fixed-size array suffices.
+    // The buffer's address cannot be safely reused until all pending events complete.
+
+    // Registers a host-visible completion event for work that references this buffer.
+    // Deallocation will wait for the latest pending event on each CQ before releasing
+    // the address back to the allocator.
+    void add_pending_event(const MeshEvent& event);
+
+    // Waits for all pending events to complete. Called during deallocation to ensure
+    // no operations are still in-flight before releasing the buffer address.
+    void wait_for_pending_events();
+
+    // Returns true if there are pending events that must complete before deallocation.
+    bool has_pending_events() const;
+
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
@@ -195,6 +219,27 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+
+    // Pending event tracking for multi-CQ safety (lock-free).
+    // Stores the latest in-flight event ID per CQ. 0 = no pending event.
+    // IDs are monotonically increasing; CAS-updated so only the latest is kept.
+    // Wormhole/Blackhole support at most 2 hardware CQs — fixed array, no heap.
+    //
+    // Each slot is padded to a full cache line (64 bytes) to prevent false sharing:
+    // CQ0 and CQ1 are written by different dispatch threads; without padding they
+    // would share a cache line and cause unnecessary coherence traffic.
+    static constexpr size_t kMaxMeshCQs = 2;
+    struct alignas(64) CacheLinePaddedEventId {  // 64 hardcoded for compatibility; std::hardware_destructive_interference_size not available before clang-19
+        std::atomic<uint32_t> value{};
+    };
+    mutable std::array<CacheLinePaddedEventId, kMaxMeshCQs> pending_event_ids_{};
+
+    // Deallocation-race sentinel (seq_cst closes the add/drain window).
+    // Set to true by deallocate() BEFORE draining pending_event_ids_.
+    // add_pending_event() checks this AFTER its CAS; if true, it self-synchronizes
+    // immediately to cover the case where the drain already ran and missed the event.
+    // See detailed proof in mesh_buffer.cpp.
+    std::atomic<bool> deallocation_in_progress_{false};
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,

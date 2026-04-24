@@ -107,9 +107,19 @@ void forward_data(
     // To be root-caused in the future.
     uint8_t channel_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
+    // Invalidate the L1 data cache unconditionally before checking worker connections.
+    // check_worker_connections() reads the connection_live_semaphore from L1, which is written by
+    // the worker via NOC writes. Without this invalidation, when has_unsent_payload=false the MUX
+    // reads stale cached values and misses connect/teardown signals from the worker indefinitely.
+    //
+    // Performance note: moving invalidation out of the `has_unsent_payload` branch adds a cache
+    // invalidation on every call regardless of work. This is the correctness-first choice; if
+    // the mux bandwidth tests regress, revisit by invalidating only on the idle path (i.e. inside
+    // `!has_unsent_payload`) after verifying that the payload path already contains a barrier or
+    // invalidation upstream that covers the connection_live_semaphore read.
+    invalidate_l1_cache();
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
-        invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();
@@ -209,11 +219,15 @@ void kernel_main() {
 
     // wait for fabric router to be ready before setting up the connection
     if constexpr (wait_for_fabric_endpoint) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        bool erisc_ready = tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_connection.edm_noc_x,
             fabric_connection.edm_noc_y,
             fabric_router_status_address,
             local_fabric_router_status_address);
+        if (!erisc_ready) {
+            status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+            return;
+        }
     }
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
@@ -269,10 +283,25 @@ void kernel_main() {
 #endif
     }
 
-    fabric_connection.close();
+    // Signal TERMINATED *after* sending the close request to the fabric EDM but *before*
+    // waiting for the EDM's teardown ACK (close_finish).  This breaks the potential deadlock:
+    //
+    //   Old ordering:  close_start → close_finish (polls ETH ACK) → TERMINATED write
+    //     Problem: if the ETH ACK never arrives, TERMINATED is never written, and any
+    //     downstream kernel polling wait_for_fabric_endpoint_terminated() hangs forever.
+    //
+    //   New ordering:  close_start → TERMINATED write → close_finish (polls ETH ACK)
+    //     The writer kernel sees TERMINATED and exits as soon as the EDM has received the
+    //     teardown request.  The mux still completes the full close() handshake before
+    //     exiting and signalling its own dispatch completion, so the dispatch_wait(N) fence
+    //     on the host side continues to guarantee the ETH teardown is done before the next
+    //     EnqueueProgram.  See: https://github.com/tenstorrent/tt-metal/issues/42429
+    fabric_connection.close_start();
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+
+    fabric_connection.close_finish();
     set_l1_data_cache<false>();
 }

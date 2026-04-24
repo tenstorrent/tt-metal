@@ -9,7 +9,10 @@
 
 #include <core_descriptor.hpp>
 #include <host_api.hpp>
+#include <chrono>
 #include <initializer_list>
+#include <thread>
+#include <tt_stl/tt_pause.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -20,6 +23,7 @@
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <map>
@@ -59,6 +63,12 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
+#include "fabric/fabric_tensix_builder_impl.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_host_utils.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -374,28 +384,158 @@ bool Device::compile_fabric() {
     return fabric_program_ != nullptr;
 }
 
-void Device::configure_fabric() {
+void Device::configure_fabric(
+    const std::unordered_set<uint32_t>& pre_dead_channels,
+    const std::unordered_set<uint32_t>& skip_soft_reset_channels) {
     if (fabric_program_ == nullptr) {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    // FIX P2 (#42429): Persist pre_dead_channels so quiesce Phase 5 can skip them.
+    // These channels have no fabric firmware loaded; Phase 5's READY_FOR_TRAFFIC check must
+    // not throw for them (they will never reach that state).
+    fabric_pre_dead_channels_ = pre_dead_channels;
+
+    // Returns FabricCoresHealth describing per-channel reset results.
+    // newly_dead_channels: channels that NEWLY failed soft reset in this call (not pre-known).
+    // If only pre-known dead channels exist, we can continue in degraded mode with a warning;
+    // if newly-discovered dead channels appear, we must TT_THROW (all subsequent L1 writes to
+    // this device would route through the dead ETH path and hang indefinitely).  See #42429.
+    //
+    // pre_dead_channels: channels already confirmed dead by terminate_stale_erisc_routers().
+    // Passed through so configure_fabric_cores() can skip assert_risc_reset_at_core() for them
+    // and avoid the indefinite hang observed on T3K Device 4 ch7 (#42429).
+    // skip_soft_reset_channels: channels with base-UMD relay firmware (0x49706550).
+    // FIX M (#42429): soft reset would halt the relay BRISC and cascade → hang.
+    const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_channels);
+    if (!health.all_channels_healthy) {
+        if (!health.newly_dead_channels.empty()) {
+            // Truly unexpected new dead channels: ALL L1 writes to this device now route through
+            // the dead ETH path and will hang.  Hard-throw immediately.
+            TT_THROW(
+                "configure_fabric: Device {} has {} newly-dead ETH channel(s) (soft reset timed out "
+                "for channels not in pre_dead_channels). Cannot write fabric firmware — all L1 writes "
+                "would hang on the dead ethernet path. Hardware requires a reset to recover.",
+                this->id_,
+                health.newly_dead_channels.size());
+        }
+        // All dead channels were pre-confirmed by terminate_stale_erisc_routers(); continue in
+        // degraded mode.  Firmware will not be loaded on those channels but the remaining
+        // channels are healthy and writes to them are safe.
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric: Device {} running in degraded mode — {} pre-confirmed dead ETH "
+            "channel(s) skipped. Fabric firmware will not be loaded on those channels.",
+            this->id_,
+            pre_dead_channels.size());
+    }
+
+    // FIX C (#42429): Build the set of all dead ETH channels (pre-known + any newly found)
+    // so we can skip write_launch_msg_to_core for dead ETH cores.  Attempting to write launch
+    // messages to an ERISC core whose ETH relay is broken causes the NOC write to route through
+    // the dead channel and hang (same failure mode as the l1_barrier above).
+    const auto& all_dead_channels = pre_dead_channels.empty() ? health.newly_dead_channels
+                                                                : pre_dead_channels;
+    // Look up SOC descriptor once for the ETH-core→channel reverse mapping.
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    const auto& soc_desc_for_dead = env_impl.get_cluster().get_soc_desc(this->id_);
 
     fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+    // FIX D2 (#42429): Build the set of dead ETH logical cores so WriteRuntimeArgsToDevice
+    // and ConfigureDeviceWithProgram can skip them.  Both functions write to L1 through the
+    // ETH relay on non-MMIO devices; writing to a dead relay channel hangs indefinitely.
+    // FIX C (write_launch_msg_to_core) already guards the launch-message writes below — these
+    // two calls need the same treatment.
+    std::unordered_set<CoreCoord> dead_eth_logical_cores;
+    if (!all_dead_channels.empty()) {
+        const auto& logical_cores_in_prog = fabric_program_->impl().logical_cores();
+        const auto& hal_for_dead = env_impl.get_hal();
+        for (uint32_t pct_idx = 0; pct_idx < logical_cores_in_prog.size(); pct_idx++) {
+            if (hal_for_dead.get_core_type(pct_idx) != CoreType::ETH) {
+                continue;
+            }
+            for (const auto& lc : logical_cores_in_prog[pct_idx]) {
+                try {
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(lc.x, lc.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (all_dead_channels.count(eth_chan)) {
+                        dead_eth_logical_cores.insert(lc);
+                    }
+                } catch (...) {
+                    // Cannot resolve channel — conservatively skip this core.
+                    dead_eth_logical_cores.insert(lc);
+                }
+            }
+        }
+        if (!dead_eth_logical_cores.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "configure_fabric: Device {} skipping WriteRuntimeArgsToDevice and "
+                "ConfigureDeviceWithProgram for {} dead ETH logical core(s) to avoid relay hang",
+                this->id_,
+                dead_eth_logical_cores.size());
+        }
+    }
 
-    // Note: the l1_barrier below is needed to be sure writes to cores that
-    // don't get the GO mailbox have all landed
-    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
-    env_impl.get_cluster().l1_barrier(this->id());
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_, dead_eth_logical_cores);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_, dead_eth_logical_cores);
+
+    // Only issue l1_barrier if we have no dead ETH channels on this device.  l1_barrier
+    // calls driver_->l1_membar which internally calls wait_for_non_mmio_flush — on a non-MMIO
+    // device with stuck relay commands that call blocks until the relay drains, which can hang
+    // indefinitely if the relay ERISC is dead.
+    if (all_dead_channels.empty()) {
+        env_impl.get_cluster().l1_barrier(this->id());
+    } else {
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric: Device {} skipping l1_barrier (dead ETH channels present — "
+            "l1_membar/wait_for_non_mmio_flush would hang on dead relay path)",
+            this->id_);
+    }
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            // FIX C: skip write_launch_msg_to_core for ETH cores whose channel is dead.
+            // write_launch_msg_to_core calls tt_cluster::write_core → WriteToDevice → UMD
+            // write_to_device.  On a non-MMIO device, this routes through the ETH relay;
+            // if the relay ERISC is dead the write hangs indefinitely (no per-write timeout).
+            if (core_type == CoreType::ETH && !all_dead_channels.empty()) {
+                // Get the ETH channel for this logical core and skip if it is dead.
+                try {
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (all_dead_channels.count(eth_chan)) {
+                        log_debug(
+                            tt::LogMetal,
+                            "configure_fabric: Device {} skipping write_launch_msg_to_core for "
+                            "dead ETH core ({},{}) channel {}",
+                            this->id_,
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (const std::exception& e) {
+                    // If we can't resolve the channel, skip the write conservatively.
+                    log_warning(
+                        tt::LogMetal,
+                        "configure_fabric: Device {} cannot resolve ETH channel for logical core "
+                        "({},{}) — skipping write_launch_msg_to_core to avoid potential hang: {}",
+                        this->id_,
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
+                    continue;
+                }
+            }
+
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
@@ -411,6 +551,990 @@ void Device::configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+}
+
+void Device::quiesce_and_restart_fabric_workers() {
+    // Diagnostic: env toggle lets CI / repro runs skip this restart path entirely to isolate
+    // whether the Tensix MUX restart is the cause of a post-quiesce hang. When set, we return
+    // before any fabric MUX termination. See plan Experiment B.
+    if (const char* env = std::getenv("TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART");
+        env != nullptr && env[0] != '\0' && env[0] != '0') {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return: "
+            "TT_METAL_DISABLE_QUIESCE_FABRIC_RESTART={} (restart path disabled)",
+            this->id(),
+            env);
+        return;
+    }
+
+    auto fabric_config = MetalContext::instance().get_fabric_config();
+    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L426: "
+            "!is_tt_fabric_config(fabric_config={})",
+            this->id(),
+            static_cast<uint32_t>(fabric_config));
+        return;
+    }
+
+    auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
+    const bool has_tensix_mux = (tensix_config_mode != tt::tt_fabric::FabricTensixConfig::DISABLED);
+    if (!has_tensix_mux) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} FabricTensixConfig::DISABLED — "
+            "no Tensix MUX cores; running ERISC-only path (Phase 2.5 + Phase 3 ETH cores only). "
+            "Phases 1/2/4 (Tensix MUX) are skipped.",
+            this->id());
+        // Do NOT return: Phase 2.5 (ERISC termination) is still required to drain in-flight ETH
+        // packets before Phase 3 overwrites ERISC L1. Without it, orphaned packets corrupt the
+        // next iteration's BRISC .text at 0x8220, causing hangs in AllGather teardown races.
+    }
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+
+    if (builder_ctx.get_num_fabric_initialized_routers(this->id()) == 0) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L439: "
+            "get_num_fabric_initialized_routers == 0",
+            this->id());
+        return;
+    }
+
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
+    const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+
+    // Diagnostic entry snapshot (#42429): read every active ERISC channel's edm_status_address
+    // BEFORE any phase runs.  This lets us distinguish "prior test left channels in bad state"
+    // vs "failing test caused the problem" — per Neil's request.
+    {
+        const auto router_sync_addr_diag =
+            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        const auto& soc_desc_entry = env_impl.get_cluster().get_soc_desc(this->id());
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+            "{} active ERISC channel(s), edm_status_addr=0x{:08x}",
+            this->id(),
+            active_channels.size(),
+            router_sync_addr_diag);
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_lc_diag = soc_desc_entry.get_eth_core_for_channel(
+                eth_chan_id, CoordSystem::LOGICAL);
+            std::vector<uint32_t> diag_buf(1, 0U);
+            // Wrap in try/catch: non-MMIO reads route through the MMIO device's ERISC relay.
+            // If the MMIO device was quiesced earlier in Pass 1, its ERISCs may not yet be
+            // READY_FOR_TRAFFIC and UMD will timeout.  The ENTRY snapshot is diagnostic only —
+            // log a warning but do NOT abort the quiesce.
+            try {
+                detail::ReadFromDeviceL1(
+                    this, eth_lc_diag, router_sync_addr_diag, 4, diag_buf, CoreType::ETH);
+            } catch (const std::exception& ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                    "eth_chan {} L1 read failed (relay not ready?): {}",
+                    this->id(),
+                    eth_chan_id,
+                    ex.what());
+                diag_buf[0] = 0xDEADBEEF;
+            }
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                "eth_chan {} (logical={}) edm_status=0x{:08x}",
+                this->id(),
+                eth_chan_id,
+                eth_lc_diag.str(),
+                diag_buf[0]);
+        }
+    }
+
+    // Phase 1: Send IMMEDIATELY_TERMINATE to each MUX worker core
+    // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
+    if (has_tensix_mux) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+            auto [term_addr, term_signal] = tensix_config.get_termination_address_and_signal(core_id);
+            std::vector<uint32_t> term_buf(1, term_signal);
+            auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+
+            // Diagnostic: log pre-terminate status so we can confirm the MUX was READY_FOR_TRAFFIC
+            // (not already dead/stuck) before we send the termination signal.
+            auto config = tensix_config.get_config(core_id);
+            uint32_t status_addr_p1 = static_cast<uint32_t>(config->get_status_address());
+            std::vector<uint32_t> pre_status(1, 0);
+            detail::ReadFromDeviceL1(this, mux_core, status_addr_p1, 4, pre_status, CoreType::WORKER);
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 1: pre-terminate status=0x{:08x}",
+                this->id(),
+                eth_chan_id,
+                pre_status[0]);
+
+            detail::WriteToDeviceL1(this, mux_core, term_addr, term_buf, CoreType::WORKER);
+        }
+
+        env_impl.get_cluster().l1_barrier(this->id());
+    }
+
+    // Phase 2: Poll each MUX core until its status is TERMINATED.
+    //
+    // On timeout we DO NOT throw: this function is called from MeshDevice::quiesce_internal
+    // between iterations; throwing mid-quiesce leaves the device half-torn-down and surfaces
+    // as a confusing exception from user-facing `quiesce_devices()`.  Instead, mirror the ETH
+    // router path in MetalEnvImpl::teardown_fabric_config and force-reset the stuck Tensix
+    // MUX core so the next bring-up starts from a clean state. The caller continues to
+    // re-configure and re-launch the fabric workers in Phase 3.
+    // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
+    if (has_tensix_mux) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+            auto config = tensix_config.get_config(core_id);
+            uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+            auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+
+            std::vector<uint32_t> status_buf(1, 0);
+            const auto start = std::chrono::steady_clock::now();
+            constexpr uint32_t timeout_ms = 5000;
+            constexpr uint32_t kSpinsBetweenSleeps = 64;
+            uint32_t spin_counter = 0;
+            bool terminated = false;
+            while (true) {
+                detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED)) {
+                    terminated = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                if (elapsed > timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
+            }
+
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2: {} (status=0x{:08x})",
+                this->id(),
+                eth_chan_id,
+                terminated ? "TERMINATED cleanly" : "TIMEOUT",
+                status_buf[0]);
+
+            if (!terminated) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX TERMINATED on "
+                    "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX to prevent "
+                    "stale NOC traffic into worker L1",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+            }
+
+            // Always halt the MUX BRISC before Phase 3 overwrites its L1, regardless of whether
+            // termination was clean or timed out.
+            //
+            // The CCL MUX kernel writes TERMINATED *before* close_finish() completes (close_finish
+            // spins on worker_teardown_addr waiting for the ERISC ACK).  So even when Phase 2 sees
+            // a clean TERMINATED, the BRISC is still running close_finish().  If we proceed directly
+            // to Phase 3's ConfigureDeviceWithProgram, the still-running BRISC executes whatever
+            // instructions now reside in its overwritten L1, generating invalid NOC traffic — including
+            // writes to ARC_RESET_SCRATCH_ADDR (0x880030060) — that corrupt ERISC or ARC state.
+            //
+            // Halting the core here makes Phase 3's L1 overwrite safe.  The BRISC will be deasserted
+            // after write_launch_msg_to_core in Phase 3, which starts the new CCL MUX kernel from its
+            // reset vector with clean state.
+            try {
+                const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    this->id(), mux_core, CoreType::WORKER);
+                env_impl.get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
+                    "eth_chan {}: {}",
+                    this->id(),
+                    eth_chan_id,
+                    e.what());
+            }
+        }
+    }
+
+    // Phase 2.5: Terminate ERISC fabric routers before re-loading firmware.
+    //
+    // The Tensix MUX BRISC was halted in Phase 2, but the ERISC routers were not
+    // explicitly told to stop.  Phase 3 calls configure_fabric_cores() which
+    // unconditionally overwrites every active ERISC's L1 with fresh firmware.  If an
+    // ERISC is still executing (e.g. draining the ETH TXQ after a send) when its L1 is
+    // overwritten, it continues running with corrupted program state and generates invalid
+    // NOC traffic — including writes to ARC scratch (0x880030060) — that corrupts device
+    // state and causes the next iteration's AllGather to hang.
+    //
+    // We send the TERMINATE signal directly to each active ERISC channel and wait for
+    // it to write EDMStatus::TERMINATED before proceeding.  On timeout we log a warning
+    // and continue — configure_fabric_cores() will still safely overwrite L1 and boot
+    // fresh firmware.  We do NOT assert_risc_reset_at_core on WH: resetting an ERISC
+    // tears down the ETH PHY link and breaks non-MMIO L1 access for the whole mesh.
+    {
+        const auto [erisc_term_addr, erisc_term_signal] =
+            builder_ctx.get_fabric_router_termination_address_and_signal();
+        const auto router_sync_addr =
+            builder_ctx.get_fabric_router_sync_address_and_status().first;
+        constexpr uint32_t terminated_val = static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED);
+        // 2000ms: extended from 150ms to observe actual termination latency.
+        // ERISCs typically respond in <1ms; a longer window lets us see whether a slow
+        // or unresponsive ERISC eventually self-terminates, which guides whether we need
+        // a hardware reset vs. just waiting longer. Fast cases still exit the loop
+        // immediately on the first successful read — no performance regression.
+        constexpr uint32_t erisc_timeout_ms = 2000;
+        // Log current status every 200ms if ERISC has not yet terminated.
+        constexpr uint32_t kTermIntermediateLogMs = 200;
+        constexpr uint32_t kSpinsBetweenSleeps = 64;
+
+        std::vector<uint32_t> term_buf(1, static_cast<uint32_t>(erisc_term_signal));
+
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_logical_core = env_impl.get_cluster()
+                                              .get_soc_desc(this->id())
+                                              .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+
+            std::vector<uint32_t> status_buf(1, 0);
+            detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+
+            if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "ERISC already clean (status=0x{:08x}), skipping",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+                continue;
+            }
+
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                "ERISC active (status=0x{:08x}), sending TERMINATE",
+                this->id(),
+                eth_chan_id,
+                status_buf[0]);
+
+            detail::WriteToDeviceL1(this, eth_logical_core, erisc_term_addr, term_buf, CoreType::ETH);
+
+            const auto start = std::chrono::steady_clock::now();
+            uint32_t spin_counter = 0;
+            bool terminated = false;
+            int64_t last_term_log_ms = -1;
+            while (true) {
+                detail::ReadFromDeviceL1(
+                    this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                if (status_buf[0] == terminated_val) {
+                    terminated = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+                // Log every kTermIntermediateLogMs so we can observe actual termination latency
+                // in CI logs and determine whether timeout thresholds need adjustment.
+                if (elapsed / kTermIntermediateLogMs >
+                    last_term_log_ms / static_cast<int64_t>(kTermIntermediateLogMs)) {
+                    last_term_log_ms = elapsed;
+                    log_info(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "still waiting for TERMINATED after {}ms — current status=0x{:08x}",
+                        this->id(),
+                        eth_chan_id,
+                        elapsed,
+                        status_buf[0]);
+                }
+                if (elapsed > erisc_timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
+            }
+
+            const auto p25_elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count();
+            if (terminated) {
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "ERISC TERMINATED in {}ms",
+                    this->id(),
+                    eth_chan_id,
+                    p25_elapsed);
+            } else {
+                // Do NOT assert_risc_reset_at_core on WH ERISCs: resetting tears down the
+                // ETH PHY link, breaking non-MMIO L1 access for the entire mesh.
+                // configure_fabric_cores() in Phase 3 will safely overwrite L1.
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "ERISC did not terminate within {}ms (status=0x{:08x}) — continuing "
+                    "without reset (WH: resetting ERISC tears down ETH PHY link)",
+                    this->id(),
+                    eth_chan_id,
+                    erisc_timeout_ms,
+                    status_buf[0]);
+            }
+        }
+    }
+
+    // Phase 3: Re-configure and re-launch the fabric workers
+    // Reset termination signals, clear channel state, and re-send launch messages
+    // for WORKER cores in the fabric program.
+    if (fabric_program_ == nullptr) {
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} early-return at guard L564: "
+            "fabric_program_ == nullptr (Phase 1/2 ran but Phase 3/4 skipped)",
+            this->id());
+        return;
+    }
+
+    log_info(tt::LogMetal, "quiesce_and_restart_fabric_workers: Device {} entering Phase 3 (re-configure + re-launch)", this->id());
+
+    // FIX N (#42429): For non-MMIO devices, skip soft reset in configure_fabric_cores.
+    //
+    // assert_risc_reset on a non-MMIO ETH channel resets the entire ETH core including
+    // the NOC router.  The subsequent deassert_risc_reset write must be delivered via
+    // the UMD relay — through that same NOC which is now in reset — causing
+    // RemoteCommunicationLegacyFirmware::wait_for_non_mmio_flush to time out and
+    // permanently damaging the relay endpoint, making ALL subsequent non-MMIO writes fail.
+    //
+    // After Phase 2.5 the ETH channels are in TERMINATED state.  TERMINATED firmware
+    // sits in a halt loop that polls for launch messages.  write_launch_msg_to_core
+    // (issued explicitly below, after L1 is loaded) is sufficient to restart the fabric
+    // router without soft reset.
+    // FIX M confirmed this mechanism works: base-UMD → fabric firmware transition via
+    // write_launch_msg_to_core alone succeeded in CI run #24830129500.
+    tt::tt_fabric::FabricCoresHealth quiesce_health;
+    {
+        std::unordered_set<uint32_t> quiesce_skip_reset_chans;
+        if (!this->is_mmio_capable()) {
+            for (const auto& [chan, unused_direction] : active_channels) {
+                quiesce_skip_reset_chans.insert(chan);
+            }
+        }
+        quiesce_health = tt::tt_fabric::configure_fabric_cores(this, {}, quiesce_skip_reset_chans);
+    }
+    // Log configure_fabric_cores health — newly_dead_channels here means configure itself
+    // killed channels (e.g. assert_risc_reset_at_core timed out).  These channels will be
+    // skipped in write_launch_msg_to_core below and won't reach READY_FOR_TRAFFIC.
+    log_info(
+        tt::LogMetal,
+        "quiesce_and_restart_fabric_workers: Device {} Phase 3: configure_fabric_cores complete — "
+        "newly_dead={}",
+        this->id(),
+        quiesce_health.newly_dead_channels.size());
+    if (!quiesce_health.newly_dead_channels.empty()) {
+        std::string newly_dead_str;
+        for (auto ch : quiesce_health.newly_dead_channels) {
+            newly_dead_str += fmt::format("{} ", ch);
+        }
+        log_warning(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3: configure_fabric_cores newly-dead "
+            "channels: [{}] — write_launch_msg will be skipped for these",
+            this->id(),
+            newly_dead_str);
+    }
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+
+    env_impl.get_cluster().l1_barrier(this->id());
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used = fabric_program_->impl().logical_cores();
+    const auto& hal = env_impl.get_hal();
+    const auto& soc_desc_q = env_impl.get_cluster().get_soc_desc(this->id());
+
+    // Re-launch worker cores from the fabric program.
+    // WORKER (Tensix MUX) cores were halted in Phase 2; deassert BRISC reset after writing
+    // the launch message so the new kernel starts executing.
+    for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+        CoreType core_type = hal.get_core_type(pct_idx);
+        if (core_type != CoreType::WORKER) {
+            continue;
+        }
+        for (const auto& logical_core : logical_cores_used[pct_idx]) {
+            auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                this->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+
+            // Deassert BRISC reset so the new CCL MUX kernel executes.  The BRISC was halted at
+            // the end of Phase 2 (after seeing TERMINATED) to prevent the old kernel's
+            // close_finish() from executing garbled instructions while Phase 3 overwrites its L1.
+            // Now that the new binary is loaded and the launch message is written, start the core.
+            // We deassert only BRISC (not NCRISC/TRISC) since the CCL MUX kernel runs on BRISC.
+            try {
+                env_impl.get_cluster().deassert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), physical_core), tt::umd::RiscType::BRISC);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: deassert_risc_reset_at_core failed on Device {} "
+                    "core ({},{}): {}",
+                    this->id(),
+                    physical_core.x,
+                    physical_core.y,
+                    e.what());
+            }
+        }
+    }
+
+    // FIX O (#42429): Re-launch ETH ERISC cores from the fabric program.
+    //
+    // configure_fabric_cores() only performs soft reset (or skips it for non-MMIO) and
+    // clears L1.  It does NOT send write_launch_msg_to_core to ETH cores — that is done
+    // explicitly here and in configure_fabric().
+    //
+    // After Phase 2.5, ERISC channels are in TERMINATED state with BRISC polling for a
+    // launch message.  Without this loop, no launch message is ever sent, BRISC stays in
+    // its poll loop, status address stays at 0x00000000, and Phase 5 throws:
+    //   "Fabric health check failed — 4 ERISC channel(s) not at READY_FOR_TRAFFIC (0x00000000)"
+    //
+    // ETH cores must NOT have deassert_risc_reset_at_core called here — their BRISC was not
+    // halted in Phase 2 (resetting ERISC tears down the ETH PHY link on WH).
+    for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+        CoreType core_type = hal.get_core_type(pct_idx);
+        if (core_type != CoreType::ETH) {
+            continue;
+        }
+        for (const auto& logical_core : logical_cores_used[pct_idx]) {
+            // Skip channels that newly died during configure_fabric_cores() — writing launch
+            // messages through a dead ETH relay hangs indefinitely.
+            if (!quiesce_health.newly_dead_channels.empty()) {
+                try {
+                    auto eth_chan = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (quiesce_health.newly_dead_channels.count(eth_chan)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} skipping "
+                            "write_launch_msg_to_core for dead ETH core ({},{}) channel {}",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} cannot resolve ETH channel "
+                        "for logical core ({},{}) — skipping write_launch_msg_to_core",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
+                    continue;
+                }
+            }
+
+            auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+
+            // Pre-launch status read: confirm ERISC is in TERMINATED (0xA4B4C4D4) or 0x0
+            // before we send the launch message.  Any other value means Phase 2.5 didn't
+            // terminate the ERISC cleanly and we may be overwriting a live core.
+            {
+                const auto [erisc_sync_addr_pre, unused_pre] =
+                    builder_ctx.get_fabric_router_sync_address_and_status();
+                std::vector<uint32_t> pre_launch_buf(1, 0U);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
+                } catch (...) {
+                    pre_launch_buf[0] = 0xDEADBEEF;
+                }
+                log_info(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
+                    "write_launch_msg_to_core ETH logical ({},{}) pre_status=0x{:08x}",
+                    this->id(),
+                    logical_core.x,
+                    logical_core.y,
+                    pre_launch_buf[0]);
+            }
+
+            tt::llrt::write_launch_msg_to_core(
+                this->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
+                "write_launch_msg_to_core ETH logical ({},{}) done",
+                this->id(),
+                logical_core.x,
+                logical_core.y);
+        }
+    }
+
+    // FIX P REMOVED (#42429): The per-device MAGIC injection (FIX P) was removed because it
+    // caused a regression on T3K when BOTH MMIO and non-MMIO devices have
+    // get_num_fabric_initialized_routers > 0 (i.e. both run through quiesce).  FIX P
+    // completed Device 4's receiver handshake BEFORE Device 0's sender ERISCs were
+    // relaunched.  When Device 0's Phase 3 then launched its senders, they wrote MAGIC to
+    // Device 4 — but Device 4 was already at READY_FOR_TRAFFIC and no longer in the
+    // receiver loop.  Device 0's senders waited forever for REMOTE_HANDSHAKE_COMPLETE.
+    //
+    // The fix is structural: the mesh-level caller now runs Phase 3 (relaunch) on ALL
+    // devices first, then runs wait_for_fabric_workers_ready() on all devices.  This
+    // ensures both sender and receiver ERISCs are running before the host polls for
+    // handshake completion.  The natural sender-receiver handshake completes without
+    // host intervention, and wait_for_fabric_workers_ready() replicates the
+    // wait_for_fabric_router_sync() pattern (poll LOCAL_HANDSHAKE_COMPLETE on master,
+    // write READY_FOR_TRAFFIC).
+
+    log_info(
+        tt::LogMetal,
+        "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete — "
+        "all cores relaunched. Handshake completion deferred to wait_for_fabric_workers_ready().",
+        this->id());
+}
+
+void Device::wait_for_fabric_workers_ready() {
+    // This method is the second pass of the two-pass quiesce restart.
+    // quiesce_and_restart_fabric_workers() (first pass) terminates and relaunches ALL cores
+    // on ALL devices.  This method then waits for readiness — matching the initial startup
+    // pattern where configure_fabric() runs on all devices, then wait_for_fabric_router_sync()
+    // polls them in tunnel order (farthest-first).
+    //
+    // The caller (MeshDevice::wait_for_fabric_workers_ready_for_quiesce) must invoke this on
+    // all devices AFTER all devices have completed quiesce_and_restart_fabric_workers().
+
+    auto fabric_config = MetalContext::instance().get_fabric_config();
+    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
+        return;
+    }
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+
+    if (builder_ctx.get_num_fabric_initialized_routers(this->id()) == 0) {
+        return;
+    }
+
+    const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
+    const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+
+    auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
+    const bool has_tensix_mux = (tensix_config_mode != tt::tt_fabric::FabricTensixConfig::DISABLED);
+
+    // Phase 4: Wait for each MUX core to reach READY_FOR_TRAFFIC before returning.
+    //
+    // Without this wait, the next dispatch op can arrive while the MUX is still in its
+    // startup path (waiting for ERISC, opening the EDM connection, etc.).  The dispatch
+    // relay kernel calls wait_for_fabric_endpoint_ready(mux) — an unbounded spin on
+    // device — and hangs if the MUX hasn't written READY_FOR_TRAFFIC yet.
+    //
+    // Use the same bounded-poll + force-reset pattern as Phase 2 so a stuck MUX can
+    // never hang the host indefinitely.
+    // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
+    if (has_tensix_mux) {
+        const auto& tensix_config = builder_ctx.get_tensix_config();
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            auto core_id = tensix_config.get_core_id_for_channel(this->id(), eth_chan_id);
+            auto config = tensix_config.get_config(core_id);
+            uint32_t status_addr = static_cast<uint32_t>(config->get_status_address());
+            auto mux_core = tensix_config.get_core_for_channel(this->id(), eth_chan_id);
+
+            std::vector<uint32_t> status_buf(1, 0);
+            const auto start = std::chrono::steady_clock::now();
+            constexpr uint32_t timeout_ms = 5000;
+            constexpr uint32_t kSpinsBetweenSleeps = 64;
+            uint32_t spin_counter = 0;
+            bool ready = false;
+            while (true) {
+                detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
+                if (status_buf[0] == static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC)) {
+                    ready = true;
+                    break;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                if (elapsed > timeout_ms) {
+                    break;
+                }
+                if (++spin_counter >= kSpinsBetweenSleeps) {
+                    spin_counter = 0;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                } else {
+                    ttsl::pause();
+                }
+            }
+
+            const auto p4_elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            log_info(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 4: {} in {}ms (status=0x{:08x})",
+                this->id(),
+                eth_chan_id,
+                ready ? "READY_FOR_TRAFFIC" : "TIMEOUT",
+                p4_elapsed,
+                status_buf[0]);
+
+            if (!ready) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Timeout waiting for fabric MUX READY_FOR_TRAFFIC on "
+                    "Device {} eth_chan {} (status=0x{:08x}), force-resetting Tensix MUX core",
+                    this->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+                try {
+                    const auto virtual_mux_coord = env_impl.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                        this->id(), mux_core, CoreType::WORKER);
+                    env_impl.get_cluster().assert_risc_reset_at_core(
+                        tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
+                        "eth_chan {}: {}",
+                        this->id(),
+                        eth_chan_id,
+                        e.what());
+                }
+            }
+        }
+    }
+
+    // Phase 5: Wait for ERISC handshake completion — replicates wait_for_fabric_router_sync().
+    //
+    // At this point, ALL devices have completed Phase 3 (the mesh-level caller ensures this).
+    // Both sender and receiver ERISCs are running and will naturally complete the EDM
+    // handshake (sender writes MAGIC to receiver's local_value via eth_send_packet, receiver
+    // responds by copying its scratch to sender's local_value).
+    //
+    // We poll the master ERISC channel for LOCAL_HANDSHAKE_COMPLETE, then write
+    // READY_FOR_TRAFFIC — exactly what wait_for_fabric_router_sync() does at initial startup.
+    // After that, a final per-channel health check confirms all channels are healthy.
+    {
+        const auto [router_sync_addr, sync_status] =
+            builder_ctx.get_fabric_router_sync_address_and_status();
+        constexpr uint32_t expected_ready =
+            static_cast<uint32_t>(tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        // 10s matches the fabric router sync timeout used at initial startup.
+        constexpr uint32_t kSyncTimeoutMs = 10000;
+        constexpr uint32_t kSpinLimit = 64U;
+        // Log intermediate status every 2.5s so we can see whether the ERISC is stuck at
+        // STARTED (0xA0B0C0D0), 0x0 (never launched), or something unexpected.
+        constexpr uint32_t kIntermediateLogIntervalMs = 2500;
+
+        const auto master_chan = builder_ctx.get_fabric_master_router_chan(this->id());
+        const auto& soc_desc_p5 = env_impl.get_cluster().get_soc_desc(this->id());
+        const auto master_logical_core =
+            soc_desc_p5.get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
+
+        // Skip the handshake poll if the master channel is pre-known dead.
+        const bool master_is_dead = fabric_pre_dead_channels_.count(master_chan) > 0;
+        if (!master_is_dead) {
+            log_info(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5: polling master chan {} for "
+                "LOCAL_HANDSHAKE_COMPLETE (expected=0x{:08x})",
+                this->id(),
+                master_chan,
+                sync_status);
+
+            std::vector<uint32_t> sync_buf(1, 0U);
+            const auto sync_start = std::chrono::steady_clock::now();
+            uint32_t sync_spin = 0U;
+            int64_t last_log_ms = -1;
+            while (true) {
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, master_logical_core, router_sync_addr, 4, sync_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: read failed on master "
+                        "chan {} — {}.  Treating as timeout.",
+                        this->id(),
+                        master_chan,
+                        e.what());
+                    break;
+                }
+                if (sync_buf[0] == sync_status) {
+                    break;
+                }
+                // Also accept READY_FOR_TRAFFIC — this can happen if a peer device's
+                // wait_for_fabric_workers_ready already wrote READY_FOR_TRAFFIC to its master
+                // and the master propagated it here.
+                if (sync_buf[0] == expected_ready) {
+                    break;
+                }
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::steady_clock::now() - sync_start)
+                                         .count();
+                // Periodic intermediate log every kIntermediateLogIntervalMs — tells us whether
+                // ERISC is stuck at STARTED (launched but no peer), at 0x0 (launch msg never
+                // arrived), or at some unexpected value.
+                if (elapsed / kIntermediateLogIntervalMs > last_log_ms / static_cast<int64_t>(kIntermediateLogIntervalMs)) {
+                    last_log_ms = elapsed;
+                    log_info(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: still waiting for "
+                        "LOCAL_HANDSHAKE_COMPLETE on master chan {} after {}ms — "
+                        "current status=0x{:08x} (expected=0x{:08x})",
+                        this->id(),
+                        master_chan,
+                        elapsed,
+                        sync_buf[0],
+                        sync_status);
+                }
+                if (elapsed > kSyncTimeoutMs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) waiting "
+                        "for LOCAL_HANDSHAKE_COMPLETE on master chan {} (status=0x{:08x}, "
+                        "expected=0x{:08x}). Continuing to health check.",
+                        this->id(),
+                        kSyncTimeoutMs,
+                        master_chan,
+                        sync_buf[0],
+                        sync_status);
+                    break;
+                }
+                if (++sync_spin >= kSpinLimit) {
+                    sync_spin = 0U;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            }
+
+            // Write READY_FOR_TRAFFIC to master channel — master firmware distributes to all
+            // subordinates via notify_subordinate_routers(), matching wait_for_fabric_router_sync().
+            if (sync_buf[0] == sync_status || sync_buf[0] == expected_ready) {
+                auto ready_sig = builder_ctx.get_fabric_router_ready_address_and_signal();
+                if (ready_sig) {
+                    std::vector<uint32_t> ready_buf(1, static_cast<uint32_t>(ready_sig->second));
+                    detail::WriteToDeviceL1(
+                        this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5: master chan {} sync "
+                    "complete (0x{:08x}), READY_FOR_TRAFFIC written",
+                    this->id(),
+                    master_chan,
+                    sync_buf[0]);
+            }
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5: master chan {} is pre-known "
+                "dead — skipping handshake poll",
+                this->id(),
+                master_chan);
+        }
+
+        // Phase 5b: Post-ready ERISC health check.
+        //
+        // After the handshake poll + READY_FOR_TRAFFIC write, verify that ALL active ERISC
+        // channels have reached READY_FOR_TRAFFIC.  Extended to 2000ms (was 500ms) to observe
+        // how long propagation from master to subordinate channels actually takes and whether
+        // 500ms was cutting off channels that would have become healthy shortly after.
+        constexpr uint32_t kHealthCheckTimeoutMs = 2000;
+        // Log unhealthy channels every 200ms for observability.
+        constexpr uint32_t kHCIntermediateLogMs = 200;
+
+        struct UnhealthyChannel {
+            uint32_t eth_chan_id;
+            uint32_t actual_status;
+        };
+
+        struct ChanToCheck {
+            uint32_t eth_chan_id;
+            CoreCoord eth_logical_core;
+        };
+        std::vector<ChanToCheck> chans;
+        for (const auto& [eth_chan_id, direction] : active_channels) {
+            const auto eth_logical_core =
+                soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+            chans.push_back({eth_chan_id, eth_logical_core});
+        }
+
+        // Poll all channels until healthy or timeout.
+        std::vector<size_t> pending;
+        pending.reserve(chans.size());
+        for (size_t i = 0; i < chans.size(); i++) {
+            pending.push_back(i);
+        }
+
+        std::vector<UnhealthyChannel> unhealthy;
+        const auto hc_start = std::chrono::steady_clock::now();
+        uint32_t hc_spin = 0U;
+        int64_t last_hc_log_ms = -1;
+        while (!pending.empty()) {
+            std::vector<size_t> still_pending;
+            std::vector<std::pair<uint32_t, uint32_t>> still_pending_statuses;  // (chan, status)
+            for (size_t idx : pending) {
+                const auto& ch = chans[idx];
+                std::vector<uint32_t> status_buf(1, 0);
+                detail::ReadFromDeviceL1(
+                    this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                if (status_buf[0] != expected_ready) {
+                    still_pending.push_back(idx);
+                    still_pending_statuses.push_back({ch.eth_chan_id, status_buf[0]});
+                }
+            }
+            pending = std::move(still_pending);
+            if (pending.empty()) {
+                break;
+            }
+            const auto hc_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - hc_start)
+                                        .count();
+            // Log every kHCIntermediateLogMs to observe actual time-to-healthy
+            if (hc_elapsed / kHCIntermediateLogMs >
+                last_hc_log_ms / static_cast<int64_t>(kHCIntermediateLogMs)) {
+                last_hc_log_ms = hc_elapsed;
+                std::string pending_str;
+                for (const auto& [cid, st] : still_pending_statuses) {
+                    pending_str += fmt::format(" chan{}=0x{:08x}", cid, st);
+                }
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5b: {}ms elapsed, "
+                    "{} channel(s) still not READY_FOR_TRAFFIC:{}",
+                    this->id(),
+                    hc_elapsed,
+                    still_pending_statuses.size(),
+                    pending_str);
+            }
+            if (hc_elapsed > kHealthCheckTimeoutMs) {
+                // Final read for diagnostic.
+                for (size_t idx : pending) {
+                    const auto& ch = chans[idx];
+                    std::vector<uint32_t> status_buf(1, 0);
+                    detail::ReadFromDeviceL1(
+                        this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                    unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
+                }
+                break;
+            }
+            if (++hc_spin >= kSpinLimit) {
+                hc_spin = 0U;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+        }
+
+        if (!unhealthy.empty()) {
+            // FIX P2 (#42429): Separate pre-known-dead channels from genuinely new failures.
+            // Pre-dead channels were identified during configure_fabric() (probe timed out or
+            // corrupt state) and never received firmware — they will never reach READY_FOR_TRAFFIC.
+            // Only channels that WERE loaded with firmware but failed to become healthy are errors.
+            std::vector<UnhealthyChannel> truly_unhealthy;
+            std::vector<UnhealthyChannel> pre_dead_unhealthy;
+            for (const auto& u : unhealthy) {
+                if (fabric_pre_dead_channels_.count(u.eth_chan_id)) {
+                    pre_dead_unhealthy.push_back(u);
+                } else {
+                    truly_unhealthy.push_back(u);
+                }
+            }
+            if (!pre_dead_unhealthy.empty()) {
+                std::string dead_details;
+                for (const auto& u : pre_dead_unhealthy) {
+                    dead_details += fmt::format(
+                        "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                }
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5: {} pre-known-dead ERISC "
+                    "channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) — expected, no firmware was "
+                    "loaded for these channels (#42429):\n{}",
+                    this->id(),
+                    pre_dead_unhealthy.size(),
+                    expected_ready,
+                    dead_details);
+            }
+            if (!truly_unhealthy.empty()) {
+                std::string details;
+                for (const auto& u : truly_unhealthy) {
+                    details += fmt::format(
+                        "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                }
+                // Interpret the observed status before throwing so the reader knows
+                // whether this is a timing issue or genuine hardware/firmware failure.
+                // STARTED (0xa0b0c0d0) = launched but handshake not complete → timing issue
+                // 0x0 = launch message never arrived → firmware loading failure
+                // 0x49705180 = L1 corrupt (prior crash left garbage) → needs tt-smi -r
+                // Other values = unexpected firmware state
+                TT_THROW(
+                    "Fabric health check failed after quiesce restart on Device {} — "
+                    "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) after {}ms. "
+                    "Check status values: STARTED=0xa0b0c0d0 (handshake incomplete, timing issue); "
+                    "0x0 (launch msg lost); 0x49705180 (L1 corrupt — run tt-smi -r); "
+                    "other = unexpected firmware state.\n{}",
+                    this->id(),
+                    truly_unhealthy.size(),
+                    expected_ready,
+                    kHealthCheckTimeoutMs,
+                    details);
+            }
+        }
+
+        log_info(
+            tt::LogMetal,
+            "wait_for_fabric_workers_ready: Device {} Phase 5: {} ERISC channels healthy, "
+            "{} pre-known dead (no firmware, skipped)",
+            this->id(),
+            chans.size() - fabric_pre_dead_channels_.size(),
+            fabric_pre_dead_channels_.size());
+    }
+
+    log_info(tt::LogMetal, "Fabric workers ready on Device {}", this->id_);
 }
 
 bool Device::initialize(

@@ -113,7 +113,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
-    prefetch_q_dev_fences(num_hw_cqs) {
+    prefetch_q_dev_fences(num_hw_cqs),
+    prefetch_q_in_flight(num_hw_cqs, 0),
+    cq_to_quiesced(std::make_unique<std::atomic<bool>[]>(num_hw_cqs)) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -334,6 +336,14 @@ uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
     return last_completed_event;
 }
 
+void SystemMemoryManager::set_quiesced(uint8_t cq_id, bool val) {
+    this->cq_to_quiesced[cq_id].store(val, std::memory_order_release);
+}
+
+bool SystemMemoryManager::is_quiesced(uint8_t cq_id) const {
+    return this->cq_to_quiesced[cq_id].load(std::memory_order_acquire);
+}
+
 void SystemMemoryManager::reset(const uint8_t cq_id) {
     if (is_mock_device()) {
         return;
@@ -344,6 +354,14 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     cq_interface.issue_fifo_wr_toggle = false;
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
     cq_interface.completion_fifo_rd_toggle = false;
+    // Reset starts a fresh CQ session: clear the quiesced flag so the next
+    // EventSynchronize / wait_for_pending_events actually waits on new events
+    // instead of short-circuiting on a stale quiesce publication.
+    this->cq_to_quiesced[cq_id].store(false, std::memory_order_release);
+    // Reset the prefetch queue in-flight counter. Firmware re-initializes its
+    // rd_ptr to the limit sentinel (base + N*entry_size) when the dispatch kernel
+    // is reloaded, so the host counter must also start at 0 to stay consistent.
+    this->prefetch_q_in_flight[cq_id] = 0;
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
@@ -644,49 +662,145 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     const uint32_t prefetch_q_rd_ptr =
         ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
-    // Helper to wait for fetch queue space, if needed
-    uint32_t fence;
-    auto wait_for_fetch_q_space = [&]() {
-        if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
-            return;
+    // Compute queue bounds once, shared by lambdas below.
+    const uint32_t prefetch_q_base =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    const uint32_t prefetch_q_entries = ctx.dispatch_mem_map().prefetch_q_entries();
+    const uint32_t entry_size = sizeof(DispatchSettings::prefetch_q_entry_type);
+    const uint32_t prefetch_q_limit = prefetch_q_base + prefetch_q_entries * entry_size;
+
+    // Computes the number of entries firmware consumed between fences updates.
+    //
+    // Firmware rd_ptr semantics: after consuming slot X the firmware
+    //   1. Clears slot X to 0
+    //   2. Writes address(X) to PREFETCH_Q_RD_PTR_ADDR  <-- cached as prefetch_q_dev_fences
+    //   3. Advances its read pointer to X+1
+    //
+    // prefetch_q_limit is the initial sentinel (firmware has consumed nothing yet).
+    // Real fences values are in [base, limit-entry_size].
+    auto count_consumed = [&](uint32_t old_fences, uint32_t new_fences) -> uint32_t {
+        if (old_fences == prefetch_q_limit) {
+            // Transition from sentinel: slot indices 0..(new_fences-base)/entry_size were consumed.
+            return (new_fences - prefetch_q_base) / entry_size + 1;
         }
-        ZoneScopedN("wait_for_fetch_q_space");
-
-        // Body of the operation
-        auto fetch_operation_body = [&]() {
-            ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
-            this->prefetch_q_dev_fences[cq_id] = fence;
-        };
-
-        // Condition to check if should continue waiting
-        auto fetch_wait_condition = [&]() -> bool {
-            return this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id];
-        };
-
-        // Handler for timeout
-        auto fetch_on_timeout = [this]() {
-            tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
-            TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
-        };
-
-        // Get dispatch progress for timeout detection
-        auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
-
-        auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
-
-        loop_and_wait_with_timeout(
-            fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
+        if (new_fences >= old_fences) {
+            return (new_fences - old_fences) / entry_size;
+        }
+        // Wrapped: (limit - old_fences) + (new_fences - base), divided by entry_size.
+        return (prefetch_q_limit - old_fences + new_fences - prefetch_q_base) / entry_size;
     };
 
-    wait_for_fetch_q_space();
-    // Wrap FetchQ if possible
-    uint32_t prefetch_q_base =
-        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                   sizeof(DispatchSettings::prefetch_q_entry_type));
+    // Reads the current fences from hardware and decrements in_flight by the number of
+    // entries consumed since the last read.
+    //
+    // Edge case — full-wrap aliasing: when firmware consumes exactly N entries between two
+    // consecutive reads, the fence address wraps back to the same value (old_fences).
+    // count_consumed(old, old) == 0, so in_flight would not be decremented even though N
+    // entries were consumed, causing a deadlock.
+    //
+    // Disambiguation: if fence == old_fences while in_flight >= N (queue full), check the
+    // slot that firmware should have consumed first in the current batch.  Firmware clears
+    // each slot to 0 before updating the fence pointer, so:
+    //   slot != 0  →  firmware hasn't consumed it yet (CASE A: 0 consumed, keep spinning)
+    //   slot == 0  →  firmware already cleared it (CASE B: N consumed, aliased)
+    //
+    // To guard against the TOCTOU window where firmware is between clearing the slot (line 453
+    // of cq_prefetch.cpp) and writing the fence (line 456), re-read the fence after the slot
+    // check.  If the fence changed in that window, handle it as a normal update instead.
+    uint32_t fence;
+    auto refresh_in_flight = [&]() {
+        ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
+        uint32_t old_fences = this->prefetch_q_dev_fences[cq_id];
+        if (fence != old_fences) {
+            uint32_t consumed = count_consumed(old_fences, fence);
+            this->prefetch_q_in_flight[cq_id] =
+                (consumed <= this->prefetch_q_in_flight[cq_id]) ? this->prefetch_q_in_flight[cq_id] - consumed : 0;
+            this->prefetch_q_dev_fences[cq_id] = fence;
+        } else if (this->prefetch_q_in_flight[cq_id] >= prefetch_q_entries) {
+            // fence == old_fences while the queue appears full.  Check whether firmware
+            // consumed all N entries and the fence address wrapped back to the same slot.
+            // The next slot firmware should read is the one immediately after old_fences.
+            uint32_t next_slot = (old_fences + entry_size >= prefetch_q_limit)
+                                     ? prefetch_q_base
+                                     : old_fences + entry_size;
+            uint32_t slot_val = 0;
+            ctx.get_cluster().read_core(
+                &slot_val, sizeof(uint32_t), this->prefetcher_cores[cq_id], next_slot);
+            if (slot_val == 0) {
+                // Slot is clear.  Re-read the fence to close the TOCTOU window: if firmware
+                // was mid-consume (cleared slot but not yet updated fence), the re-read will
+                // see the updated fence and fall through to the normal update path.
+                uint32_t fence2;
+                ctx.get_cluster().read_core(
+                    &fence2, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
+                if (fence2 != old_fences) {
+                    uint32_t consumed = count_consumed(old_fences, fence2);
+                    this->prefetch_q_in_flight[cq_id] =
+                        (consumed <= this->prefetch_q_in_flight[cq_id])
+                            ? this->prefetch_q_in_flight[cq_id] - consumed
+                            : 0;
+                    this->prefetch_q_dev_fences[cq_id] = fence2;
+                    fence = fence2;
+                } else {
+                    // CASE B confirmed: firmware consumed all N entries and the fence
+                    // address aliased back to old_fences.  Reset in_flight to 0.
+                    this->prefetch_q_in_flight[cq_id] = 0;
+                }
+            }
+            // CASE A (slot_val != 0): firmware hasn't consumed the slot yet.
+            // in_flight stays unchanged; caller will keep spinning.
+        }
+    };
+
+    // The queue is full when all N slots contain unprocessed entries.
+    // We track this via prefetch_q_in_flight rather than comparing ptrs to fences/firmware_current,
+    // because those address comparisons cannot distinguish depth=0 from depth=N (aliasing).
+    auto is_full = [&]() -> bool {
+        return this->prefetch_q_in_flight[cq_id] >= prefetch_q_entries;
+    };
+
+    // Fast path: if in_flight < N, the queue definitely has space. No HW read needed.
+    if (!is_full()) {
+        // Fall through to wrap check.
+    } else {
+        // in_flight reached capacity. Read hardware fences to get an accurate count —
+        // in_flight may be stale high if no waits have occurred in a while.
+        refresh_in_flight();
+
+        if (is_full()) {
+            ZoneScopedN("wait_for_fetch_q_space");
+
+            auto fetch_operation_body = [&]() { refresh_in_flight(); };
+            auto fetch_wait_condition = [&]() -> bool { return is_full(); };
+
+            auto fetch_on_timeout = [&]() {
+                log_warning(
+                    tt::LogDispatch,
+                    "fetch_queue_reserve_back timeout: cq_id={} in_flight={} ptrs=0x{:08x} "
+                    "fences=0x{:08x} base=0x{:08x} limit=0x{:08x} N={}",
+                    (int)cq_id,
+                    this->prefetch_q_in_flight[cq_id],
+                    this->prefetch_q_dev_ptrs[cq_id],
+                    this->prefetch_q_dev_fences[cq_id],
+                    prefetch_q_base,
+                    prefetch_q_limit,
+                    prefetch_q_entries);
+                tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
+                TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
+            };
+
+            auto get_dispatch_progress = [&]() -> uint32_t {
+                return get_cq_dispatch_progress(this->device_id, cq_id);
+            };
+            auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
+            loop_and_wait_with_timeout(
+                fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
+        }
+    }
+
+    // Wrap the write pointer back to base when it reaches the limit sentinel.
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        wait_for_fetch_q_space();
     }
 }
 
@@ -810,6 +924,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     }
     this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
+    ++this->prefetch_q_in_flight[cq_id];
 }
 
 bool SystemMemoryManager::is_dram_backed() const {

@@ -167,10 +167,16 @@ void FabricBuilderContext::set_num_fabric_initialized_routers(ChipId chip_id, si
 
 uint32_t FabricBuilderContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
     TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
-    TT_FATAL(
-        num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
-        "Error, querying num initialized routers for an unknown device {}",
-        chip_id);
+    // FIX P (#42429): Return 0 for chips that were never initialized (UNINITIALIZED_ROUTERS sentinel).
+    //
+    // When TopologyMapper excludes an MMIO chip from the fabric cluster (e.g. all its ETH
+    // channels are in base-UMD relay state), that chip's router count is never set.
+    // Callers such as Device::quiesce_and_restart_fabric_workers guard on "== 0" to
+    // early-return for non-fabric devices — returning 0 here gives the correct behaviour
+    // without crashing during teardown after a TT_THROW from TopologyMapper.
+    if (num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS) {
+        return 0;
+    }
     return num_initialized_routers_[chip_id];
 }
 
@@ -196,7 +202,8 @@ std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear()
     std::vector<size_t> addresses_to_clear = {
         router_config_->edm_local_sync_address,
         router_config_->edm_local_tensix_sync_address,
-        router_config_->termination_signal_address};
+        router_config_->termination_signal_address,
+        router_config_->edm_status_address};
 
     if (router_config_->sender_txq_id != router_config_->receiver_txq_id) {
         addresses_to_clear.push_back(router_config_->to_sender_channel_remote_ack_counters_base_addr);

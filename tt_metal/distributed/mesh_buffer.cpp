@@ -4,8 +4,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
+#include <mesh_event.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
@@ -13,6 +15,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
@@ -238,6 +241,15 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     state_(std::move(other.state_)) {
+    // std::atomic is non-movable; transfer each slot manually.
+    // Caller must guarantee no concurrent access to either object during the move.
+    for (size_t i = 0; i < kMaxMeshCQs; ++i) {
+        pending_event_ids_[i].value.store(
+            other.pending_event_ids_[i].value.exchange(0, std::memory_order_relaxed),
+            std::memory_order_relaxed);
+    }
+    // The moved-to object is freshly constructed — deallocation is not in progress.
+    deallocation_in_progress_.store(false, std::memory_order_relaxed);
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -253,7 +265,15 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
         state_ = std::move(other.state_);
-
+        // std::atomic is non-movable; transfer each slot manually.
+        // Caller must guarantee no concurrent access to either object during the move.
+        for (size_t i = 0; i < kMaxMeshCQs; ++i) {
+            pending_event_ids_[i].value.store(
+                other.pending_event_ids_[i].value.exchange(0, std::memory_order_relaxed),
+                std::memory_order_relaxed);
+        }
+        // After move-assign, deallocation is not in progress on this object.
+        deallocation_in_progress_.store(false, std::memory_order_relaxed);
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
@@ -261,13 +281,122 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     return *this;
 }
 
+void MeshBuffer::add_pending_event(const MeshEvent& event) {
+    const uint32_t cq = event.mesh_cq_id();
+    TT_FATAL(cq < kMaxMeshCQs, "CQ id {} exceeds kMaxMeshCQs ({})", cq, kMaxMeshCQs);
+    const uint32_t new_id = event.id();
+
+    // CAS loop: only advance the stored ID if new_id is strictly greater.
+    // memory_order_seq_cst on success participates in the total order with the
+    // seq_cst drain in wait_for_pending_events() and the seq_cst store of
+    // deallocation_in_progress_ in deallocate(), closing the add/drain race window.
+    // See proof below.
+    uint32_t current = pending_event_ids_[cq].value.load(std::memory_order_relaxed);
+    while (current < new_id &&
+           !pending_event_ids_[cq].value.compare_exchange_weak(
+               current, new_id, std::memory_order_seq_cst, std::memory_order_relaxed)) {
+    }
+
+    // Deallocation race guard.
+    //
+    // Without this check, the following window exists:
+    //   Thread A: enqueue_record_event_to_host() → [api_mutex released] → add_pending_event(E)
+    //   Thread B: deallocate() → sets deallocation_in_progress_ → drain slots (gets 0) → frees buffer
+    //   Thread A: stores E → returns → device still executing → buffer address reused → corruption
+    //
+    // Closed by seq_cst total order:
+    //   Thread B program order: deallocation_in_progress_.store(true, seq_cst) → exchange(0, seq_cst)
+    //   Thread A program order: CAS(seq_cst) → load(deallocation_in_progress_, seq_cst)
+    //
+    //   For the bad case (exchange sees 0 = CAS not yet done):
+    //     In seq_cst total order: dealloc_store → exchange → [CAS] → load
+    //     Since dealloc_store precedes CAS precedes load in total order, the seq_cst load MUST
+    //     observe true → Thread A self-synchronizes before returning. ✓
+    //
+    //   For the good case (exchange sees new_id = CAS already done):
+    //     Thread B waits. Thread A's load may also see true (harmless double-wait). ✓
+    if (deallocation_in_progress_.load(std::memory_order_seq_cst)) {
+        EventSynchronize(event);
+    }
+}
+
+void MeshBuffer::wait_for_pending_events() {
+    auto mesh_device = mesh_device_.lock();
+    if (!mesh_device) {
+        return;  // MeshDevice destroyed, nothing to wait for
+    }
+    if (!mesh_device->is_initialized()) {
+        // Device was closed (e.g. ttnn.close_device() called before Python GC runs on tensors).
+        // close_impl() already flushed all outstanding work via ~FDMeshCommandQueue(), so the
+        // operations behind these events have already completed.  Calling EventSynchronize() here
+        // would hit Device::sysmem_manager()'s lazy-reinit path — new SystemMemoryManager starts
+        // with last_completed_event=0, so the busy-spin "while (0 < event_N)" never exits → 40 min
+        // CI hang.  Skip safely: the work is done, the device just isn't alive anymore.
+        return;
+    }
+
+    // For the device_operation.hpp dispatch path, enqueue_record_event_to_host() is called
+    // without an explicit range, so it always targets the full mesh.
+    const MeshCoordinateRange device_range(mesh_device->shape());
+
+    // Drain each slot with seq_cst to participate in the total order with the
+    // seq_cst CAS in add_pending_event and the seq_cst store of deallocation_in_progress_
+    // in deallocate(). See proof in add_pending_event.
+    for (uint32_t cq_id = 0; cq_id < kMaxMeshCQs; ++cq_id) {
+        const uint32_t event_id =
+            pending_event_ids_[cq_id].value.exchange(0, std::memory_order_seq_cst);
+        if (event_id == 0) {
+            continue;
+        }
+        // If the parent mesh CQ has been quiesced (in_use_==false) and no new work submitted
+        // on the parent mesh CQ since, then finish_and_reset_in_use() already drained all
+        // outstanding work — including the work behind this event — and reset the event counters.
+        // Calling EventSynchronize() here would spin forever because:
+        //   1. The per-device quiesced flag may have been cleared by a submesh mark_in_use()
+        //      (submeshes share the same physical devices and their sysmem_managers), and
+        //   2. The event counter was reset to 0 by finish_and_reset_in_use(), so
+        //      last_completed_event (now tracking the new submesh event sequence) will never
+        //      reach the pre-reset event_id stored in this buffer.
+        // Skip safely: all work on the parent mesh CQ has already completed.
+        if (!mesh_device->mesh_command_queue(cq_id).in_use()) {
+            continue;
+        }
+        EventSynchronize(MeshEvent(event_id, mesh_device.get(), cq_id, device_range));
+    }
+}
+
+bool MeshBuffer::has_pending_events() const {
+    for (const auto& id : pending_event_ids_) {
+        if (id.value.load(std::memory_order_relaxed) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void MeshBuffer::deallocate() {
+    if (std::holds_alternative<DeallocatedState>(state_)) {
+        return;
+    }
+
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
-        // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
-        // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-        // 2. During teardown, device state may be partially destroyed, causing segfaults.
-        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
+        // Signal that deallocation is in progress BEFORE draining pending_event_ids_.
+        // This participates in the seq_cst total order with the CAS in add_pending_event:
+        // any add_pending_event that runs after this store will observe true and
+        // self-synchronize, closing the window between drain and a late add_pending_event call.
+        deallocation_in_progress_.store(true, std::memory_order_seq_cst);
+
+        // Wait for all pending operations to complete before deallocating.
+        // This prevents address reuse while operations are still in-flight on other CQs.
+        wait_for_pending_events();
+
+        // Guard allocator calls with is_initialized(): if close_impl() raced with deallocate(),
+        // sub_device_manager_tracker_ may now be null even though mesh_device_ is still alive.
+        // close_impl() now sets is_internal_state_initialized=false BEFORE resetting the tracker,
+        // so this check is a safe barrier.  See race analysis: Findings B.1 / B.4.
+        if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid() &&
+            mesh_device->is_initialized()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
@@ -289,6 +418,11 @@ void MeshBuffer::deallocate() {
         }
 
         state_ = DeallocatedState{};
+        // Clear the flag now that the buffer is fully torn down. Leaving it true forces any
+        // late add_pending_event() on this (already-dead) buffer down the slow self-sync
+        // path, which is safe but surprising and shows up as extra-sync pressure if a
+        // stale MeshBuffer pointer outlives its state_.
+        deallocation_in_progress_.store(false, std::memory_order_release);
         return;
     }
 
@@ -298,6 +432,7 @@ void MeshBuffer::deallocate() {
         owned_state.backing_buffer->mark_as_deallocated();
     }
     state_ = DeallocatedState{};
+    deallocation_in_progress_.store(false, std::memory_order_release);
 }
 
 MeshDevice* MeshBuffer::device() const {
