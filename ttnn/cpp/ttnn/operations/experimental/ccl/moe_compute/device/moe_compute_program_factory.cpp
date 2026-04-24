@@ -62,8 +62,7 @@ get_cores(
      */
 
     // Cores
-    const std::vector<CoreCoord> tilize_cores = {
-        CoreCoord(6, 9), CoreCoord(6, 8)};  //, CoreCoord(5, 9), CoreCoord(5, 8)};
+    const std::vector<CoreCoord> tilize_cores = {CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)};
     const std::vector<CoreCoord> matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
@@ -1028,9 +1027,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t output_height_shard_dim = args.output_height_shard_dim;
 
     // this logic is awkward. needs to match selective_reduce_combine_program_factory. TODO (AM) clean up
+    constexpr auto double_buffer = 2;
     const auto shards = tilize_output_tensor.memory_config().shard_spec()->grid.num_cores();
     const auto token_expert_row_offset = tilize_output_tensor.logical_shape().volume() / shards /
-                                         (hidden_size / combine_data_parallel_cores / experts_per_device) /
+                                         (hidden_size / combine_data_parallel_cores / double_buffer) /
                                          combine_token_parallel_cores;
 
     std::cout << "compute token_expert_row_offset: " << token_expert_row_offset << "\n";

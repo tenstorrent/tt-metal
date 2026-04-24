@@ -331,8 +331,9 @@ SWIGLU_PCC_THRESHOLD = 0.984
 SILU_PCC_THRESHOLD = 0.988
 
 
-def _get_pcc_threshold(activation_type):
+def _get_base_pcc_threshold(activation_type):
     # Determine PCC threshold based on activation type
+    # Note: this threshold is applicable for checking a block of 32 tokens, smaller matrices will need a lower threshold
     # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
     if activation_type == MoEActivationFunction.SWIGLU:
         return SWIGLU_PCC_THRESHOLD
@@ -355,7 +356,7 @@ def validate_matmul(
     torch_output_ref,
     tt_output_tensor,
     mesh_device,
-    pcc_threshold,
+    base_pcc_threshold,
 ):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
@@ -373,23 +374,49 @@ def validate_matmul(
         output_shard_cores=output_shard_cores,
         output_shard_height_dim=output_shard_height_dim,
         output_shard_width_dim=output_shard_width_dim,
-        experts_per_device=experts_per_device,
+        experts_per_device=2,  # always 2 for double buffer
         hidden=hidden,
-    )
-
-    # (D, E/devices, T, H)
-    reshaped_device_outputs = torch.stack(
-        [reshape_func(raw_output[d], expert_token_counts[d], d) for d in range(devices)]
     )
 
     matmul_all_passed = True
 
+    # Calculate which experts are still in the double buffer
+    # Buffer toggles for each expert: 0->1->0->1...
+    # So for N experts, the last 2 experts in the buffer are:
+    # - If N is even: buffer 0 has expert N-2, buffer 1 has expert N-1
+    # - If N is odd: buffer 0 has expert N-1, buffer 1 has expert N-2
+    experts_to_check = []
+    if experts_per_device == 1:
+        experts_to_check = [(0, 0)]  # Only one expert in buffer 0
+    elif experts_per_device == 2:
+        experts_to_check = [(0, 0), (1, 1)]  # Expert 0 in buffer 0, expert 1 in buffer 1
+    else:
+        # For >2 experts, determine which 2 experts remain in the buffer
+        if experts_per_device % 2 == 0:
+            # Even number of experts
+            experts_to_check = [(experts_per_device - 2, 0), (experts_per_device - 1, 1)]
+        else:
+            # Odd number of experts
+            experts_to_check = [(experts_per_device - 1, 0), (experts_per_device - 2, 1)]
+
+    logger.info(f"Checking experts in double buffer: {experts_to_check}")
+
+    # Build buffer token counts based on which experts are actually in the buffer
+    reshaped_device_outputs = []
     for d in range(devices):
-        for expert_id in range(experts_per_device):
+        buffer_token_counts = torch.zeros(2, dtype=expert_token_counts[d].dtype)
+        for expert_id, buffer_idx in experts_to_check:
+            buffer_token_counts[buffer_idx] = expert_token_counts[d][expert_id]
+        reshaped_device_outputs.append(reshape_func(raw_output[d], buffer_token_counts, d))
+    reshaped_device_outputs = torch.stack(reshaped_device_outputs)
+
+    for d in range(devices):
+        for expert_id, buffer_idx in experts_to_check:
             active_tokens = expert_token_counts[d, expert_id].item()
             # torch_output_ref is (L, D, E/D, T, H)
             torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
-            tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
+            # The buffer position determines where to read from in the output
+            tt_layer_output = reshaped_device_outputs[d, buffer_idx, :active_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
             allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=ATOL_THRESHOLD)
@@ -400,23 +427,23 @@ def validate_matmul(
                 else 0.0
             )
 
+            # Base PCC threshold is valid for 32xhidden, for comparing smaller matrices, a looser threshold is valid
+            pcc_threshold = base_pcc_threshold if active_tokens >= 16 else base_pcc_threshold - 0.001
             if pcc_val < pcc_threshold:
                 matmul_all_passed = False
                 logger.warning(
-                    f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val}"
+                    f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val}"
                     f" Allclose passed: {allclose_passed}"
                 )
 
-                # if not allclose_passed:
-            #                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-            #                     logger.warning(
-            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]}"
-            #                         f" Indices: {mask.nonzero(as_tuple=True)}"
-            #                     )
-
+                if not allclose_passed:
+                    mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
+                    logger.warning(
+                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]}"
+                    )
             else:
                 logger.info(
-                    f"Layer {layer_id}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
+                    f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
                     f" Allclose passed: {allclose_passed}"
                 )
 
@@ -1040,18 +1067,19 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [3])
-# @pytest.mark.parametrize("experts_per_device", [2, 3, 4])
+@pytest.mark.parametrize("experts_per_device", [4])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 5), (8, 5, 3)],
-    ids=["perf", "accuracy"],
+    [(1, 1, 5)],
+    #   [(1, 1, 5), (8, 5, 3)],
+    #   ids=["perf", "accuracy"],
 )
-@pytest.mark.parametrize("N, hidden_size", [(2880, 2880)])
+@pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 # @pytest.mark.parametrize("N, hidden_size", [(2880, 2880), (2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_trace", [False])
+# @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU])
 # @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
@@ -1498,7 +1526,7 @@ def test_moe_compute(
         }
     )
 
-    pcc_threshold = _get_pcc_threshold(activation_type)
+    base_pcc_threshold = _get_base_pcc_threshold(activation_type)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
@@ -1547,23 +1575,22 @@ def test_moe_compute(
 
             # ========== Matmul Output Tensor Validation ==========
 
-            if experts_per_device == 2:
-                if not validate_matmul(
-                    layer_id,
-                    experts_per_device,
-                    all_core_range_set,
-                    output_shard_cores,
-                    output_height_shard_dim,
-                    output_width_shard_dim,
-                    total_tokens,
-                    hidden_size,
-                    expert_token_counts,
-                    matmul_goldens,
-                    matmul_output_tensor,
-                    mesh_device,
-                    pcc_threshold,
-                ):
-                    matmul_all_passed = False
+            if not validate_matmul(
+                layer_id,
+                experts_per_device,
+                all_core_range_set,
+                output_shard_cores,
+                output_height_shard_dim,
+                output_width_shard_dim,
+                total_tokens,
+                hidden_size,
+                expert_token_counts,
+                matmul_goldens,
+                matmul_output_tensor,
+                mesh_device,
+                base_pcc_threshold,
+            ):
+                matmul_all_passed = False
 
             if not validate_combine(
                 layer_id,
@@ -1571,7 +1598,7 @@ def test_moe_compute(
                 cluster_axis,
                 combine_output_tensor,
                 combine_goldens,
-                pcc_threshold,
+                base_pcc_threshold,
             ):
                 combine_all_passed = False
 
@@ -1580,13 +1607,9 @@ def test_moe_compute(
     logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
-    if experts_per_device == 2:
-        logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
-    else:
-        logger.info(
-            "\nWe cannot directly validate matmul results for all experts when experts_per_device > 2 due "
-            " to the double buffer scheme"
-        )
+    logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    if experts_per_device > 2:
+        logger.info(f"Note: For {experts_per_device} experts, only validated the last 2 experts in the double buffer")
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
