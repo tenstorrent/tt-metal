@@ -1450,11 +1450,25 @@ void Device::wait_for_fabric_workers_ready() {
         // channel or hang indefinitely (relay ERISC still alive but peer fabric firmware never
         // responds to UMD relay protocol) — both outcomes block the quiesce path.
         if (phase5_relay_read_threw) {
-            log_warning(
-                tt::LogMetal,
-                "wait_for_fabric_workers_ready: Device {} Phase 5b: skipping health check — "
-                "Phase 5 relay read threw (UMD relay path broken after Phase 3 firmware load). "
-                "Reads would hang or accumulate 5s timeouts per channel.",
+            // Phase 5 relay read failed — the UMD relay path to this non-MMIO device is
+            // broken.  Proceeding to AllGather on fabric that cannot be verified would risk
+            // silent data corruption or a harder-to-diagnose hang downstream.  Abort here
+            // with a clear error so the test fails fast with a useful message rather than
+            // hanging indefinitely or corrupting data silently.
+            //
+            // NOTE: If Phase 5's own read hangs (rather than throws — possible when the relay
+            // ERISC is alive but forwards to a peer running fabric firmware), we never reach
+            // this throw.  That scenario requires either a non-blocking UMD probe API or a
+            // thread-based timeout on ReadFromDeviceL1, which is not yet implemented.
+            TT_THROW(
+                "wait_for_fabric_workers_ready: Device {}: Phase 5 relay read failed — "
+                "UMD relay path to this non-MMIO device is broken (relay ERISC on the MMIO "
+                "device now runs fabric firmware, so subsequent reads via that relay either "
+                "throw a 5s UMD timeout or hang indefinitely).  "
+                "Cannot verify fabric health.  Aborting to prevent AllGather proceeding on "
+                "degraded fabric.  If this fires consistently, check whether "
+                "terminate_stale_erisc_routers skipped soft-resetting a channel that should "
+                "have been reset before Phase 3 firmware load.",
                 this->id());
         } else {
         constexpr uint32_t kHealthCheckTimeoutMs = 2000;
@@ -1494,6 +1508,39 @@ void Device::wait_for_fabric_workers_ready() {
             for (size_t idx : pending) {
                 const auto& ch = chans[idx];
                 std::vector<uint32_t> status_buf(1, 0);
+
+                // Per-read deadline guard: if the Phase 5b budget has already been
+                // consumed before this read begins, mark the channel unhealthy and skip
+                // the read entirely.  This prevents accumulating kHealthCheckTimeoutMs
+                // per remaining channel when a prior read in the same round took the full
+                // UMD relay timeout (~5 s each), which would otherwise block for
+                // (N_remaining_channels × 5 s) before the outer timeout fires.
+                //
+                // NOTE: this guard does not protect against a read that *starts* within
+                // budget but then hangs indefinitely (e.g., relay ERISC alive but
+                // forwarding to a peer running fabric firmware).  That scenario requires
+                // either a non-blocking UMD probe API or a thread-based read timeout,
+                // neither of which is implemented here.  The primary defence against that
+                // hang is the phase5_relay_read_threw guard above (Phase 5b is skipped
+                // entirely when Phase 5's own read threw).
+                const auto pre_read_elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - hc_start)
+                        .count();
+                if (pre_read_elapsed > kHealthCheckTimeoutMs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline "
+                        "exceeded ({}ms) before reading chan {} — treating as "
+                        "not-READY_FOR_TRAFFIC without attempting read",
+                        this->id(),
+                        pre_read_elapsed,
+                        ch.eth_chan_id);
+                    still_pending.push_back(idx);
+                    still_pending_statuses.push_back({ch.eth_chan_id, 0xdeadbeef});
+                    continue;
+                }
+
                 try {
                     detail::ReadFromDeviceL1(
                         this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
@@ -1541,22 +1588,46 @@ void Device::wait_for_fabric_workers_ready() {
                     pending_str);
             }
             if (hc_elapsed > kHealthCheckTimeoutMs) {
-                // Final read for diagnostic.
+                // Final diagnostic read — best-effort snapshot of each remaining channel.
+                // Apply the same per-read deadline guard: skip the read and record
+                // 0xdeadbeef if another channel's read already consumed the budget.
                 for (size_t idx : pending) {
                     const auto& ch = chans[idx];
                     std::vector<uint32_t> status_buf(1, 0);
-                    try {
-                        detail::ReadFromDeviceL1(
-                            this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
-                    } catch (const std::exception& e) {
+                    const auto diag_elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - hc_start)
+                            .count();
+                    constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
+                    if (diag_elapsed > kDiagBudgetMs) {
                         log_warning(
                             tt::LogMetal,
-                            "wait_for_fabric_workers_ready: Device {} Phase 5b: final diagnostic "
-                            "read failed on chan {} — recording as 0xdeadbeef: {}",
+                            "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
+                            "diagnostic deadline ({}ms) exceeded before reading chan {} — "
+                            "recording as 0xdeadbeef without read",
                             this->id(),
-                            ch.eth_chan_id,
-                            e.what());
+                            kDiagBudgetMs,
+                            ch.eth_chan_id);
                         status_buf[0] = 0xdeadbeef;
+                    } else {
+                        try {
+                            detail::ReadFromDeviceL1(
+                                this,
+                                ch.eth_logical_core,
+                                router_sync_addr,
+                                4,
+                                status_buf,
+                                CoreType::ETH);
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogMetal,
+                                "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
+                                "diagnostic read failed on chan {} — recording as 0xdeadbeef: {}",
+                                this->id(),
+                                ch.eth_chan_id,
+                                e.what());
+                            status_buf[0] = 0xdeadbeef;
+                        }
                     }
                     unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
                 }
