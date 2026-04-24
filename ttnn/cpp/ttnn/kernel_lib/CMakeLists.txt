@@ -9,13 +9,6 @@ file(
 )
 list(SORT kernel_lib_jit_api)
 
-set_target_properties(
-    ttnn_kernel_lib
-    PROPERTIES
-        INTERFACE_HEADER_SETS_TO_VERIFY
-            jit_api
-)
-
 target_sources(
     ttnn_kernel_lib
     INTERFACE
