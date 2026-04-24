@@ -491,6 +491,7 @@ def run_demo(
     sampling_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
     sampling_top_k: int = DEFAULT_SAMPLING_TOP_K,
     sampling_top_p: float = DEFAULT_SAMPLING_TOP_P,
+    decode_prefill_verify: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -521,6 +522,19 @@ def run_demo(
         raise SystemExit(
             "--sampling-top-k=0 is not supported when sampling on device. Use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
         )
+    if decode_prefill_verify:
+        if random_weights:
+            raise SystemExit("--decode-prefill-verify requires full-model mode (disable --random-weights)")
+        if token_accuracy:
+            raise SystemExit("--decode-prefill-verify cannot be combined with --token-accuracy")
+        if enable_mtp:
+            raise SystemExit("--decode-prefill-verify requires --enable-mtp off (MTP user layout not supported yet)")
+        if sampling_temperature > 0:
+            logger.warning(
+                "decode_prefill_verify: greedy sampling (temperature=0) is recommended so top-1 agreement "
+                "matches decode argmax; continuing with temperature={}",
+                sampling_temperature,
+            )
 
     # Validate model directory per mode
     validate_model_path(
@@ -808,6 +822,25 @@ def run_demo(
                         }
                     )
                 results.append(result)
+
+            if decode_prefill_verify and gen is not None and not random_weights:
+                if gen.enable_mtp:
+                    raise RuntimeError("decode_prefill_verify requires enable_mtp=False on the generator")
+                first_prompt_ids = gen._encode_prompt(prompt_list[0])
+                agreement = gen.verify_decode_prefill_agreement(
+                    first_prompt_ids,
+                    results[0]["tokens"],
+                    user_id=0,
+                    top_k_check=5,
+                )
+                results[0].update(agreement)
+                logger.info(
+                    "Decode/prefill agreement (user 0): top1={:.4f} top5={:.4f} mean_logprob={:.4f} over {} tokens",
+                    agreement["decode_prefill_agreement_top1_rate"],
+                    agreement["decode_prefill_agreement_topk_rate"],
+                    agreement["decode_prefill_agreement_mean_logprob"],
+                    agreement["decode_prefill_agreement_num_tokens"],
+                )
 
             if checkpoint_fh is not None:
                 for i, result in enumerate(results):
