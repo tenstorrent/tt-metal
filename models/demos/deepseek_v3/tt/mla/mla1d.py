@@ -1958,7 +1958,7 @@ class MLA1D(AbstractModule):
                 logger.debug(f"page_table.shape={page_table.shape}")
                 user_page_table = ttnn.slice(
                     page_table,
-                    [user_batch_idx, chunk_start_block],
+                    [user_batch_idx, 0],
                     [user_batch_idx + 1, chunk_end_block],
                 )
                 batch_out = cls._fwd_prefill_output_from_q_and_kvpe(
