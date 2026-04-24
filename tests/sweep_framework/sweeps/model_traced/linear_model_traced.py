@@ -347,9 +347,11 @@ def run(
         if memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
         elif original_memory_config is not None:
-            # The master trace had memory_config but it was cleared (e.g. sharded).
-            # Pass DRAM fallback so the kwarg is present in the sweep call.
-            linear_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            # The master trace had memory_config (e.g. L1/WIDTH_SHARDED) but it was
+            # cleared because program_config is None.  Pass the original so the
+            # tracer records matching kwargs.  If the op fails with the sharded
+            # config, the fallback path below will retry without it.
+            linear_kwargs["memory_config"] = original_memory_config
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
@@ -361,10 +363,8 @@ def run(
 
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
-        elif has_compute_kernel_config:
-            # Master trace had compute_kernel_config=None explicitly. Pass it so the
-            # sweep trace matches. (has_compute_kernel_config distinguishes None from absent.)
-            linear_kwargs["compute_kernel_config"] = None
+        # Don't pass compute_kernel_config=None — the tracer would record an
+        # extra_key that the master trace doesn't have (master omits absent kwargs).
 
         if core_grid is not None:
             linear_kwargs["core_grid"] = core_grid

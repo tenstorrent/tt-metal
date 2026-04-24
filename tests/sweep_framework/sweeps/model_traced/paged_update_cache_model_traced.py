@@ -17,6 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    replicate_with_topology,
     mesh_tensor_to_torch,
 )
 
@@ -179,15 +180,20 @@ def run(
             # would expand+shard it, causing logical_shape() to return the global
             # shape (e.g. dim[2]=32 instead of 1).  Replicate to match master trace.
             input_b_placement = kwargs.get("input_b_tensor_placement", input_a_tensor_placement)
-            _has_shard = input_b_placement and "PlacementShard" in str(input_b_placement.get("placement", ""))
-            if _has_shard and shape_b != shape_a:
-                input_tensor_b = ttnn.from_torch(
+            # The update tensor (arg1) is a small per-device tensor (e.g. dim[2]=1
+            # for a single-token update).  The master model creates it per-device so
+            # logical_shape() returns the per-device shape.  create_tensor_on_mesh
+            # would expand+shard it, causing logical_shape() to return the global
+            # shape (e.g. dim[2]=32 instead of 1).  Replicate when shapes differ to
+            # keep the per-device shape, and restore topology for trace matching.
+            if shape_b != shape_a:
+                input_tensor_b = replicate_with_topology(
                     torch_input_tensor_b,
-                    dtype=dtype_b,
-                    layout=layout_b,
-                    device=device,
-                    memory_config=mem_config_b,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    device,
+                    dtype_b,
+                    layout_b,
+                    mem_config_b,
+                    input_b_placement,
                 )
             else:
                 input_tensor_b = create_tensor_on_mesh(
