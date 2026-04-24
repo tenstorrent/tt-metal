@@ -568,10 +568,8 @@ def create_torch_w2(L, E, N, K):
         torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
         logger.info(f"[WEIGHT_INIT] w2: RANDOM - mode={mode}")
 
-    # torch_w2[:,0,:,:] = torch.ones_like(torch_w2[:,0,:,:] )
+    # torch_w2 = torch.ones_like(torch_w2)
     # torch_w2[:,1,:,:] *=2
-
-    # return torch.ones_like(torch_w2)
 
     return torch_w2
 
@@ -1042,20 +1040,18 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("experts_per_device", [3])
 # @pytest.mark.parametrize("experts_per_device", [2, 3, 4])
-@pytest.mark.parametrize("experts_per_device", [2])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 1)],
-    #     [(1, 1, 5), (8, 5, 3)],
-    #     ids=["perf", "accuracy"],
+    [(1, 1, 5), (8, 5, 3)],
+    ids=["perf", "accuracy"],
 )
 @pytest.mark.parametrize("N, hidden_size", [(2880, 2880)])
-# @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
+# @pytest.mark.parametrize("N, hidden_size", [(2880, 2880), (2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False])
-# @pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU])
 # @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
