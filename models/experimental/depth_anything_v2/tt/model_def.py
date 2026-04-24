@@ -95,8 +95,8 @@ def ttnn_conv2d(
             bias = ttnn.reshape(bias, (1, 1, bias.shape[0], bias.shape[1]))
 
     # ---- input: (B, C, H, W) -> (B, H, W, C) --------------------------------
-    x = ttnn.transpose(x, -3, -1)  # (B, C, W, H)
-    x = ttnn.transpose(x, -2, -1)  # (B, H, W, C)
+    x = ttnn.transpose(x, -2, -1)  # (B, C, W, H)
+    x = ttnn.transpose(x, -3, -1)  # (B, H, W, C)
 
     out_tensor, [out_h, out_w] = ttnn.conv2d(
         input_tensor=x,
@@ -459,6 +459,10 @@ def vit_patch_embeddings(config, pixel_values, parameters, device):
 
 def vit_embeddings(config, pixel_values, parameters, device):
     """Combine patch embeddings, CLS token, and position embeddings."""
+    assert pixel_values.shape[0] == 1, (
+        f"Only batch_size=1 is supported (CLS token and position embeddings are not broadcast). "
+        f"Got batch_size={pixel_values.shape[0]}."
+    )
 
     # 1. Patch embeddings: (B, 1376, 1024)
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters["patch_embeddings"], device)
@@ -622,7 +626,7 @@ class TtDepthAnythingV2:
     """
 
     def __init__(self, config, parameters, device):
-        self.config = get_model_config(1, device)
+        self.config = get_model_config(batch_size=1, device=device)
         self.device = device
         # Recursively move all weights to device and wrap dicts with DictNamespace.
         self.parameters = self._move_to_device(parameters, device)

@@ -98,7 +98,11 @@ def main():
     print(f"Device opened.")
 
     # 3. Convert weights & init TT model
-    sys.path.insert(0, "/workdir/tt-metal")
+    # Ensure repo root is on the path (editable install or repo-root execution
+    # handles this automatically; fall back to TT_METAL_ROOT env-var if needed).
+    tt_metal_root = os.environ.get("TT_METAL_ROOT")
+    if tt_metal_root and tt_metal_root not in sys.path:
+        sys.path.insert(0, tt_metal_root)
     from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2, custom_preprocessor
 
     print("Converting weights...")
