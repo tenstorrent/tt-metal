@@ -41,6 +41,11 @@ void kernel_main() {
     if constexpr (use_dfbs) {
         experimental::DataflowBuffer dfb(cb_id);
         uint32_t ublock_size_bytes = dfb.get_entry_size();
+        // stride_factor = stride_in_entries: how many entry-sized slots one
+        // producer skips per tile. For a DFB with N producers interleaved
+        // round-robin, stride_factor = N, and each producer walks DRAM tiles
+        // [producer_idx, producer_idx+N, producer_idx+2N, ...].
+        uint32_t stride_factor = dfb.get_stride_size() / ublock_size_bytes;
         uint32_t tlocal_src_addr = src_addr + (producer_idx * dram_page_stride);
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
@@ -52,7 +57,7 @@ void kernel_main() {
             noc.async_read_barrier();
             dfb.push_back(ublock_size_tiles);
 #endif
-            tlocal_src_addr += dram_page_stride;
+            tlocal_src_addr += dram_page_stride * stride_factor;
         }
         dfb.finish();
     }
