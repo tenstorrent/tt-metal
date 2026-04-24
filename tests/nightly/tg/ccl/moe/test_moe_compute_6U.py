@@ -1075,7 +1075,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     #   [(1, 1, 5), (8, 5, 3)],
     #   ids=["perf", "accuracy"],
 )
-@pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
+@pytest.mark.parametrize("N, hidden_size", [(2880, 2880)])
 # @pytest.mark.parametrize("N, hidden_size", [(2880, 2880), (2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False])
