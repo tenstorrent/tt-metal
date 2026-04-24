@@ -36,6 +36,10 @@ tests/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeown
 tests/scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/ttsim-skip-list.yaml @mcraigheadTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -298,6 +302,7 @@ tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-mov
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/nightly/blackhole/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass

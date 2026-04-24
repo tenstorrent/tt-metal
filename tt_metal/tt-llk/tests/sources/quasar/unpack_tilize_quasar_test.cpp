@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES>(buf_desc_id);
+        _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, C_DIM_FACES>(buf_desc_id, FULL_CT_DIM, BLOCK_CT_DIM);
         for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
         {
             _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(y * y_stride_external);

@@ -167,6 +167,9 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
 uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
     auto* cluster_desc = cluster.get_cluster_description();
+    if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
+        chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
+    }
     uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
     return bus_id;
 }

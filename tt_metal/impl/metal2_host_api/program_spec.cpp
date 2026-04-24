@@ -451,6 +451,38 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.unique_id);
     }
 
+    // Validate named RTA/CRTA schema and named CTAs
+    for (const auto& kernel : spec.kernels) {
+        // All three kinds share the args:: namespace — their names must be mutually unique.
+        std::unordered_map<std::string, const char*> seen;  // name -> kind
+        auto check_name = [&](const std::string& name, const char* kind) {
+            TT_FATAL(
+                IsValidCppIdentifier(name),
+                "KernelSpec '{}' {} name '{}' is not a valid C++ identifier.",
+                kernel.unique_id,
+                kind,
+                name);
+            auto [it, inserted] = seen.try_emplace(name, kind);
+            TT_FATAL(
+                inserted,
+                "KernelSpec '{}' has a naming collision: '{}' is declared as both a {} and a {}.",
+                kernel.unique_id,
+                name,
+                it->second,
+                kind);
+        };
+        for (const auto& name : kernel.runtime_arguments_schema.named_runtime_args) {
+            check_name(name, "named RTA");
+        }
+        for (const auto& name : kernel.runtime_arguments_schema.named_common_runtime_args) {
+            check_name(name, "named CRTA");
+        }
+        for (const auto& [name, value] : kernel.compile_time_arg_bindings) {
+            (void)value;
+            check_name(name, "named CTA");
+        }
+    }
+
     // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
@@ -1176,26 +1208,31 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 // MakeGen1DataMovementConfig: Create a DataMovementConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
+// (Temporary) Shims
+// ProgramSpec APIs use vector<pair> for conceptually map-like data structures.
+// This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
+// For now, just convert to the map types that the core runtime expects.
+// TODO: Fix this inefficiency eventually.
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
+    const KernelSpec::CompileTimeArgBindings& bindings) {
+    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+}
+std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
+    return std::map<std::string, std::string>(defines.begin(), defines.end());
+}
+
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
     const auto& gen1 = dm_config.gen1_data_movement_config.value();
-
-    // Convert defines from vector<pair> to map (yuck)
-    // API uses vector<pair> for ease of Program caching.
-    // TODO: Make the lower level runtime support vector<pair> to avoid pointless conversion.
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
 
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = defines_map,
-        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1214,14 +1251,6 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         unpack_modes[dfb_id] = mode;
     }
 
-    // Convert defines from vector<pair> to map (yuck)
-    // API uses vector<pair> for ease of Program caching.
-    // TODO: Make the lower level runtime support vector<pair> to avoid pointless conversion.
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
     return ComputeConfig{
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
@@ -1230,8 +1259,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = defines_map,
-        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1243,17 +1272,11 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
 experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
-    // Convert defines from vector<pair> to map (yuck)
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .compile_args = {},  // only named_compile_args is used
-        .defines = defines_map,
-        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
@@ -1282,12 +1305,6 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         unpack_modes[dfb_id] = mode;
     }
 
-    // Convert defines from vector<pair> to map (yuck)
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = compute_config.math_fidelity,
@@ -1297,8 +1314,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
-        .defines = defines_map,
-        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1395,8 +1412,16 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
             MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
 
+        // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time
+        // to emit kernel_args_generated.h and factor into the kernel cache key.
+        const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
+        const auto& named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
+
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
+
+        // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
+        constexpr bool is_metal2_kernel = true;
 
         if (is_gen2_arch()) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
@@ -1404,20 +1429,36 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                    kernel_src, node_ranges, config, processors, dfb_handles);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    named_rtas,
+                    named_crtas);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                    kernel_src, node_ranges, config, processors, dfb_handles);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    named_rtas,
+                    named_crtas);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
-                kernel = std::make_shared<DataMovementKernel>(kernel_src, node_ranges, config, dfb_handles);
+                kernel = std::make_shared<DataMovementKernel>(
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
-                kernel = std::make_shared<ComputeKernel>(kernel_src, node_ranges, config, dfb_handles);
+                kernel = std::make_shared<ComputeKernel>(
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
             }
         }
 
@@ -1425,14 +1466,57 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
         program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
 
-        // Register the RTA+CRTA schema
-        const auto& schema = kernel_spec.runtime_arguments_schema;
-        std::unordered_map<CoreCoord, size_t> num_rtas_per_node;
-        for (const auto& [node_coord, num_args] : schema.num_runtime_args_per_node) {
-            num_rtas_per_node[node_coord] = num_args;
+        // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
+        // Used by ValidateProgramRunParams and SetProgramRunParameters to validate and serialize
+        // the user-provided values at dispatch time.
+        //
+        // User-facing vararg RTA specification (see kernel_spec.hpp):
+        //   - num_runtime_varargs (scalar): default count applied to every node the kernel
+        //     runs on.
+        //   - num_runtime_varargs_per_node (optional): sparse per-node overrides on top of
+        //     the scalar default. Unlisted nodes fall back to the scalar.
+        // We apply the scalar first across target_nodes, then overlay each override entry.
+        // An explicit override of 0 erases the scalar-default entry so run-params treats
+        // that node as having no varargs (rather than requiring an "empty" value list).
+        // Overlapping override entries (two entries covering the same node) are an error.
+        const auto& user_schema = kernel_spec.runtime_arguments_schema;
+        detail::ProgramImpl::KernelRTASchema runtime_schema;
+        runtime_schema.named_runtime_args = user_schema.named_runtime_args;
+        runtime_schema.named_common_runtime_args = user_schema.named_common_runtime_args;
+        if (user_schema.num_runtime_varargs > 0) {
+            const NodeRangeSet target_nodes = to_node_range_set(kernel_spec.target_nodes);
+            for (const NodeRange& range : target_nodes.ranges()) {
+                for (const NodeCoord& node : range) {
+                    runtime_schema.num_runtime_varargs_per_node[node] = user_schema.num_runtime_varargs;
+                }
+            }
         }
-        program_impl->register_kernel_rta_schema(
-            kernel_spec.unique_id, num_rtas_per_node, schema.num_common_runtime_args);
+        if (user_schema.num_runtime_varargs_per_node.has_value()) {
+            std::unordered_set<NodeCoord> seen_overrides;
+            for (const auto& [nodes_spec, num_varargs] : *user_schema.num_runtime_varargs_per_node) {
+                const NodeRangeSet expanded = to_node_range_set(nodes_spec);
+                for (const NodeRange& range : expanded.ranges()) {
+                    for (const NodeCoord& node : range) {
+                        const bool inserted = seen_overrides.insert(node).second;
+                        TT_FATAL(
+                            inserted,
+                            "KernelSpec '{}' num_runtime_varargs_per_node has overlapping entries "
+                            "for node {}",
+                            kernel_spec.unique_id,
+                            node.str());
+                        if (num_varargs > 0) {
+                            runtime_schema.num_runtime_varargs_per_node[node] = num_varargs;
+                        } else {
+                            // Explicit zero override: drop any scalar-default entry so
+                            // run-params treats this node as missing (→ 0 expected).
+                            runtime_schema.num_runtime_varargs_per_node.erase(node);
+                        }
+                    }
+                }
+            }
+        }
+        runtime_schema.num_common_runtime_varargs = user_schema.num_common_runtime_varargs;
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 
     return Program(std::move(program_impl));

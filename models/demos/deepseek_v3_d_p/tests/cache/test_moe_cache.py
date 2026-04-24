@@ -96,7 +96,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)  # SP on axis 0, TP on axis 1
             ),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             dtype=ttnn.bfloat16,
         )

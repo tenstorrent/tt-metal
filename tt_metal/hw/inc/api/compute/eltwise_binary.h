@@ -238,7 +238,12 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
+    #ifndef ARCH_QUASAR
+        constexpr bool acc_to_dest = true;
+    #else
+        constexpr bool acc_to_dest = false;
+    #endif
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
         MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
     } else {
@@ -274,8 +279,12 @@ template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-#ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)));
+    #ifndef ARCH_QUASAR
+        constexpr bool acc_to_dest = true;
+    #else
+        constexpr bool acc_to_dest = false;
+    #endif
+    UNPACK((llk_unpack_A<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(in_cb_id, in_tile_index)));
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL) {
         MATH((llk_math_eltwise_binary<eltwise_binary_type, BroadcastType::NONE, DST_ACCUM_MODE, MATH_FIDELITY, binary_reuse_dest>(
             in_cb_id, in_cb_id, dst_tile_index, true)));
@@ -283,7 +292,6 @@ ALWI void binary_dest_reuse_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uin
         MATH((llk_math_eltwise_binary<eltwise_binary_type, BroadcastType::NONE, DST_ACCUM_MODE, MathFidelity::LoFi, binary_reuse_dest>(
             in_cb_id, in_cb_id, dst_tile_index, true)));
     }
-#endif  // TODO (GS): Add Quasar dest reuse implementation
 }
 
 }  // namespace ckernel

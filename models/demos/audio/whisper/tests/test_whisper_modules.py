@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import glob
+import os
+
 import pytest
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -566,7 +569,26 @@ def test_ttnn_whisper(
     input_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     config = whisper_config_for_tests(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    # Use load_from_disk() when the Arrow cache exists under HF_HOME/datasets — pure
+    # read, no lock file. Falls back to load_dataset() which writes a lock to
+    # HF_DATASETS_CACHE (=/tmp in CI) if no Arrow cache is found.
+    _hf_datasets = os.path.join(os.environ.get("HF_HOME", ""), "datasets")
+    _arrow_dirs = (
+        [
+            os.path.dirname(p)
+            for p in glob.glob(
+                os.path.join(_hf_datasets, "hf-internal-testing___parquet", "clean-*", "**", "dataset_info.json"),
+                recursive=True,
+            )
+        ]
+        if os.path.isdir(_hf_datasets)
+        else []
+    )
+    ds = (
+        load_from_disk(sorted(_arrow_dirs)[-1])
+        if _arrow_dirs
+        else load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    )
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     input_features = input_features.repeat(batch_size, 1, 1)

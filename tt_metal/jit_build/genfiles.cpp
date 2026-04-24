@@ -7,7 +7,6 @@
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
 #include <algorithm>
-#include <cerrno>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -23,7 +22,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -34,7 +32,6 @@
 #include <tt_stl/unreachable.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
-#include "common/filesystem_utils.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
@@ -64,50 +61,36 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 }
 
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
-string build_trisc_prolog(const char* trisc_define) {
+// Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
+string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
-    prolog << "#include \"kernel_bindings_generated.h\"\n";
+    if (is_metal2_kernel) {
+        prolog << "#include \"kernel_bindings_generated.h\"\n";
+        prolog << "#include \"kernel_args_generated.h\"\n";
+    }
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
 
-// Writes content to a file, throwing on failure.
-// Skips the write entirely when the file already exists with identical content,
-// which avoids invalidating NFS attribute/data caches on unchanged genfiles.
-void write_file(const std::filesystem::path& path, const std::string& content) {
-    {
-        std::ifstream existing;
-        std::error_code open_ec;
-        const bool existing_is_open = tt::filesystem::safe_open(existing, path, std::ios::binary, open_ec);
-
-        if (existing_is_open) {
-            std::string old_content((std::istreambuf_iterator<char>(existing)), std::istreambuf_iterator<char>());
-            if (old_content == content) {
-                return;
-            }
-        }
-    }
-
+// Writes content to a file, throwing on failure
+void write_file(const string& path, const string& content) {
     jit_build::utils::FileRenamer tmp(path);
-    std::ofstream f(tmp.path(), std::ios::binary | std::ios::trunc);
+    std::ofstream f(tmp.path());
     if (!f) {
-        throw std::runtime_error("Cannot create file: " + path.string());
+        throw std::runtime_error("Cannot create file: " + path);
     }
-
-    f.write(content.data(), static_cast<std::streamsize>(content.size()));
+    f << content;
     if (!f) {
-        throw std::runtime_error("Failed to write file: " + path.string());
-    }
-
-    f.close();
-    if (f.fail()) {
-        throw std::runtime_error("Failed to finalize file: " + path.string());
+        throw std::runtime_error("Failed to write file: " + path);
     }
 }
 
-void write_kernel_bindings_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
-    const fs::path path = out_dir / "kernel_bindings_generated.h";
+// METAL 2.0 only:
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_bindings_generated.h.
+void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
+    const string path = out_dir + "kernel_bindings_generated.h";
     vector<pair<string, uint16_t>> entries;
     settings.process_dataflow_buffer_local_accessor_handles(
         [&entries](const string& name, uint16_t id) { entries.emplace_back(name, id); });
@@ -132,6 +115,86 @@ void write_kernel_bindings_generated_header(const std::filesystem::path& out_dir
     write_file(path, content.str());
 }
 
+// METAL 2.0 only:
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
+// in, so that vararg indices in kernel code are stable across schema changes.
+//
+// The generated header itself is never hashed; the kernel cache key is derived in
+// Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
+// So we don't need to massage the generation order for hash stability — we just emit what
+// we're given.
+//
+// NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
+//       Legacy kernels do not get kernel_args_generated.h.
+void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
+    const fs::path path = out_dir / "kernel_args_generated.h";
+
+    // Named RTAs/CRTAs come straight from the settings as ordered vectors.
+    const vector<string>& rta_names = settings.get_named_runtime_args();
+    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+
+    // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
+    // The order in which we emit them doesn't matter: CTA values are baked into the header
+    // as independent constexpr constants; they don't affect RTA/CRTA byte offsets.
+    vector<pair<string, uint32_t>> cta_entries;
+    settings.process_named_compile_time_args(
+        [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
+            for (const auto& [name, value] : named_args) {
+                cta_entries.emplace_back(name, value);
+            }
+        });
+
+    ostringstream content;
+    content << "// AUTO-GENERATED — do not edit.\n\n"
+               "#pragma once\n\n"
+               "#include \"experimental/kernel_args.h\"\n\n";
+
+    // Named args namespace: emit only when the kernel has at least one named arg or CTA.
+    // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
+    // so we keep emitting those unconditionally.
+    const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
+    if (has_named_args) {
+        content << "namespace args {\n";
+
+        // Named RTAs
+        // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
+        // (Only uint32_t arg types are currently supported, but we later want to extend this.)
+        uint32_t rta_offset = 0;
+        for (const auto& name : rta_names) {
+            content << "constexpr experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
+            rta_offset += sizeof(uint32_t);
+        }
+        // Named CRTAs
+        uint32_t crta_offset = 0;
+        for (const auto& name : crta_names) {
+            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            crta_offset += sizeof(uint32_t);
+        }
+        // Named CTAs
+        // No offsets to deal with here; CTA values are emitted directly into the generated header.
+        for (const auto& [name, value] : cta_entries) {
+            content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
+        }
+
+        content << "}  // namespace args\n\n";
+    }
+
+    // Vararg helpers — always emitted.
+    // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
+    // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
+    // there are no named args, the offset is zero and these helpers are just thin wrappers
+    // around get_arg_val / get_common_arg_val.
+    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size());
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
+            << " + idx); }\n"
+            << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
+            << named_crta_words << " + idx); }\n";
+
+    write_file(path, content.str());
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -139,12 +202,21 @@ void jit_build_genfiles_kernel_include(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
-    fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
-    write_kernel_bindings_generated_header(out_dir, settings);
-    fs::path kernel_header = out_dir / "kernel_includes.hpp";
+    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
-    const string kernel_header_content = string("#include \"kernel_bindings_generated.h\"\n") + kernel_src_to_include;
+    // Metal 2.0 generated headers and their includes are emitted only for Metal 2.0 kernels.
+    // Legacy kernels created via the old host API are fenced out of this code path.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    string kernel_header_content;
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+        kernel_header_content =
+            string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
+    }
+    kernel_header_content += get_kernel_source_to_include(kernel_src);
+
+    string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
 }
 
@@ -153,18 +225,25 @@ void jit_build_genfiles_triscs_src(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    const fs::path out_dir = fs::path(env.get_out_kernel_root_path()) / settings.get_full_kernel_name();
-    write_kernel_bindings_generated_header(out_dir, settings);
-    const fs::path unpack_cpp = out_dir / "chlkc_unpack.cpp";
-    const fs::path math_cpp = out_dir / "chlkc_math.cpp";
-    const fs::path pack_cpp = out_dir / "chlkc_pack.cpp";
-    const fs::path isolate_sfpu_cpp = out_dir / "chlkc_isolate_sfpu.cpp";
+    const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+
+    // Metal 2.0 generated headers are emitted and referenced only for Metal 2.0 kernels.
+    const bool is_metal2 = settings.is_metal2_kernel();
+    if (is_metal2) {
+        write_kernel_bindings_generated_header(out_dir, settings);
+        write_kernel_args_generated_header(out_dir, settings);
+    }
+
+    const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
+    const string math_cpp = out_dir + "chlkc_math.cpp";
+    const string pack_cpp = out_dir + "chlkc_pack.cpp";
+    const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
 
     // Build prologs for each TRISC
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
-    const string math_prolog = build_trisc_prolog("TRISC_MATH");
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
+    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2);
+    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2);
+    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2);
+    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
@@ -177,17 +256,17 @@ void jit_build_genfiles_triscs_src(
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
-    const fs::path generated_defines_fname = out_dir / "defines_generated.h";
+    const string generated_defines_fname = out_dir + "defines_generated.h";
     jit_build::utils::FileRenamer tmp(generated_defines_fname);
     std::ofstream gen_defines_file(tmp.path());
     if (!gen_defines_file) {
-        throw std::runtime_error("Cannot create file: " + generated_defines_fname.string());
+        throw std::runtime_error("Cannot create file: " + generated_defines_fname);
     }
     settings.process_defines([&gen_defines_file](const string& define, const string& value) {
         gen_defines_file << "#define " << define << " " << value << endl;
     });
     if (!gen_defines_file) {
-        throw std::runtime_error("Failed to write file: " + generated_defines_fname.string());
+        throw std::runtime_error("Failed to write file: " + generated_defines_fname);
     }
 }
 
@@ -465,39 +544,45 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     const uint32_t max_cbs = env.get_max_cbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
-    const fs::path descriptors_path = fs::path(options.path) / "chlkc_descriptors.h";
+    const string descriptors_path = options.path + "chlkc_descriptors.h";
+    jit_build::utils::FileRenamer tmp(descriptors_path);
+    ofstream out(tmp.path());
+    if (!out) {
+        throw std::runtime_error("Cannot create file: " + descriptors_path);
+    }
 
     auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
 
-    std::ostringstream buf;
-    buf << "#pragma once\n\n"
+    out << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
            "#include \"llk_defs.h\"\n";
-    emit_math_scalar_descriptors(buf, desc);
-    buf << "#endif\n\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
 
-    buf << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(buf, fmts.unpack_src, fmts.unpack_dst, max_cbs);
-    emit_unpack_tile_dims(buf, desc, max_cbs);
-    buf << "#endif\n\n";
+    out << "#if !defined(UCK_CHLKC_PACK)\n";
+    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
+    emit_unpack_tile_dims(out, desc, max_cbs);
+    out << "#endif\n\n";
 
-    buf << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(buf, fmts.pack_src, fmts.pack_dst, max_cbs);
-    emit_pack_tile_dims(buf, desc, max_cbs);
+    out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
+    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
+    emit_pack_tile_dims(out, desc, max_cbs);
     // For Blackhole tilize workaround, PACK needs access to unpack_src_format to determine
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
-    buf << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(buf, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
-    buf << "#endif\n";    // if pack
-    buf << "#endif\n\n";  // if not math and not unpack
+    out << "#if defined(UCK_CHLKC_PACK)\n";
+    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    out << "#endif\n";   // if pack
+    out << "#endif\n\n"; // if not math and not unpack
 
-    buf << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
+    out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
-    emit_compute_scalar_descriptors(buf, options);
-    buf << "#endif\n";
+    emit_compute_scalar_descriptors(out, options);
+    out << "#endif\n";
 
-    write_file(descriptors_path, buf.str());
+    if (!out) {
+        throw std::runtime_error("Failed to write file: " + descriptors_path);
+    }
 }
 
 }  // namespace
@@ -507,7 +592,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
-    tt::filesystem::safe_create_directories(options.path);
+    fs::create_directories(options.path);
     generate_all_descriptors(env, options);
 }
 // clang-format on
