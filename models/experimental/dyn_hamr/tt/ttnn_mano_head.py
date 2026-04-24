@@ -131,7 +131,12 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     # the end instead of three.
     dec_w = torch.cat([head.decpose.weight, head.decshape.weight, head.deccam.weight], dim=0).t()
     dec_b = torch.cat([head.decpose.bias, head.decshape.bias, head.deccam.bias], dim=0)
+    # Zero query token is always zeros, so token @ w == 0.  Precompute
+    # the initial decoder input: bias + pos_embedding (constant per model).
+    x_init_cpu = (td.to_token_embedding.bias.detach().float()
+                  + td.pos_embedding.squeeze(0).squeeze(0).detach().float())  # (1024,)
     params: Dict[str, Any] = {
+        "x_init": _t(x_init_cpu.to(torch.bfloat16).unsqueeze(0).unsqueeze(0), device),  # (1,1,1024)
         "to_token_embedding": {
             "weight": _t(td.to_token_embedding.weight.t(), device),  # (1, 1024)
             "bias": _t(td.to_token_embedding.bias, device),          # (1024,)
@@ -277,17 +282,8 @@ def forward_device(
 
     Split out so the trace-capture path can record only device ops.
     """
-    B = feature_tokens.shape[0]
-    if cached_token and cached_token[0].shape[0] == B:
-        token = cached_token[0]
-    else:
-        token = ttnn.from_torch(
-            torch.zeros(B, 1, 1, dtype=torch.bfloat16),
-            device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
-        )
-    x = token @ params["to_token_embedding"]["weight"]
-    x = x + params["to_token_embedding"]["bias"]
-    x = x + params["pos_embedding"]
+    # x_init = bias + pos_embedding (precomputed; zero-token matmul is always 0).
+    x = params["x_init"]
     for i in range(depth):
         x = _decoder_block(x, feature_tokens, params["layers"][i])
     dec = ttnn.experimental.minimal_matmul(
