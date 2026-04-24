@@ -131,7 +131,14 @@ struct MatmulExpertCompressedDRAM {
         // TP8 path (``enable_routing=false``) where each device runs all chunks 0..N-1
         // sequentially with no gate-routed indices. ``enable_routing=true`` (MoE) leaves
         // it at the default and reads ``index_ptr[exp_i + index_offset]`` from L1 as before.
-        uint32_t enable_indexing_ = 1>
+        uint32_t enable_indexing_ = 1,
+        // Hot experts: skip raw_idx that matches any hot_expert_N when num_hot_experts > 0.
+        // Defaults to 0 (no hot experts) so callers that don't pass these compile unchanged.
+        uint32_t num_hot_experts_ = 0,
+        uint32_t hot_expert_0_ = 0,
+        uint32_t hot_expert_1_ = 0,
+        uint32_t hot_expert_2_ = 0,
+        uint32_t hot_expert_3_ = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -189,6 +196,11 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
         static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
         static constexpr bool enable_indexing = enable_indexing_ != 0;
+        static constexpr uint32_t num_hot_experts = num_hot_experts_;
+        static constexpr uint32_t hot_expert_0 = hot_expert_0_;
+        static constexpr uint32_t hot_expert_1 = hot_expert_1_;
+        static constexpr uint32_t hot_expert_2 = hot_expert_2_;
+        static constexpr uint32_t hot_expert_3 = hot_expert_3_;
     };
 
     template <
@@ -233,7 +245,13 @@ struct MatmulExpertCompressedDRAM {
         uint32_t gather_sync_sem_addr_,
         uint32_t cb_internal_acc_,
         // Compute-side mirror of ``ReaderCTArgs::enable_indexing``. See doc there.
-        uint32_t enable_indexing_ = 1>
+        uint32_t enable_indexing_ = 1,
+        // Hot experts: same as ReaderCTArgs.
+        uint32_t num_hot_experts_ = 0,
+        uint32_t hot_expert_0_ = 0,
+        uint32_t hot_expert_1_ = 0,
+        uint32_t hot_expert_2_ = 0,
+        uint32_t hot_expert_3_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -282,6 +300,11 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t gather_sync_sem_addr = gather_sync_sem_addr_;
         static constexpr uint32_t cb_internal_acc = cb_internal_acc_;
         static constexpr bool enable_indexing = enable_indexing_ != 0;
+        static constexpr uint32_t num_hot_experts = num_hot_experts_;
+        static constexpr uint32_t hot_expert_0 = hot_expert_0_;
+        static constexpr uint32_t hot_expert_1 = hot_expert_1_;
+        static constexpr uint32_t hot_expert_2 = hot_expert_2_;
+        static constexpr uint32_t hot_expert_3 = hot_expert_3_;
     };
 
     struct WriterCTArgs {};
@@ -398,9 +421,29 @@ struct MatmulExpertCompressedDRAM {
                     raw_idx = exp_i;  // sequential 0..N-1 (no SRAM bit, no L1 read)
                 }
                 if (is_sram_expert(raw_idx)) {
-                    continue;  // bit15=1 → SRAM expert, skip
+                    continue;  // bit7=1 → SRAM expert, skip
                 }
-                uint32_t expert_idx = raw_idx;  // bit15=0, raw value is global expert ID
+                if constexpr (CTArgs::num_hot_experts >= 1) {
+                    if (raw_idx == CTArgs::hot_expert_0) {
+                        continue;
+                    }
+                }
+                if constexpr (CTArgs::num_hot_experts >= 2) {
+                    if (raw_idx == CTArgs::hot_expert_1) {
+                        continue;
+                    }
+                }
+                if constexpr (CTArgs::num_hot_experts >= 3) {
+                    if (raw_idx == CTArgs::hot_expert_2) {
+                        continue;
+                    }
+                }
+                if constexpr (CTArgs::num_hot_experts >= 4) {
+                    if (raw_idx == CTArgs::hot_expert_3) {
+                        continue;
+                    }
+                }
+                uint32_t expert_idx = raw_idx;  // bit7=0, raw value is global expert ID
                 // For K-split, expert_offsets already points at this K-slice's start (set in op.py).
                 uint32_t expert_in1_addr = expert_offsets[expert_idx];
                 uint32_t dram_read_offset = 0;
@@ -612,7 +655,7 @@ struct MatmulExpertCompressedDRAM {
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
 
-            // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
+            // Index tensor encodes SRAM/DRAM via bit 7: 1=SRAM, 0=DRAM.
             // index_offset is used in TP=false mode, to offset to the correct expert.
             constexpr uint32_t meta_words_per_block = CTArgs::meta_words_per_block;
             constexpr uint32_t in0_page_size = CTArgs::in0_page_size;
@@ -669,7 +712,28 @@ struct MatmulExpertCompressedDRAM {
                         }));
                         MATH(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                         PACK(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                        if (!(is_sram_expert(raw_idx_i))) {
+                        bool is_hot_skip = false;
+                        if constexpr (CTArgs::num_hot_experts >= 1) {
+                            if (raw_idx_i == CTArgs::hot_expert_0) {
+                                is_hot_skip = true;
+                            }
+                        }
+                        if constexpr (CTArgs::num_hot_experts >= 2) {
+                            if (raw_idx_i == CTArgs::hot_expert_1) {
+                                is_hot_skip = true;
+                            }
+                        }
+                        if constexpr (CTArgs::num_hot_experts >= 3) {
+                            if (raw_idx_i == CTArgs::hot_expert_2) {
+                                is_hot_skip = true;
+                            }
+                        }
+                        if constexpr (CTArgs::num_hot_experts >= 4) {
+                            if (raw_idx_i == CTArgs::hot_expert_3) {
+                                is_hot_skip = true;
+                            }
+                        }
+                        if (!(is_sram_expert(raw_idx_i)) && !is_hot_skip) {
                             num_dram_experts++;
                         }
                     }
@@ -711,6 +775,26 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
+                    if constexpr (CTArgs::num_hot_experts >= 1) {
+                        if (raw_idx == CTArgs::hot_expert_0) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 2) {
+                        if (raw_idx == CTArgs::hot_expert_1) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 3) {
+                        if (raw_idx == CTArgs::hot_expert_2) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 4) {
+                        if (raw_idx == CTArgs::hot_expert_3) {
+                            continue;
+                        }
+                    }
 
                     cb_reserve_back(CTArgs::cb_out, cb_out_num_pages);
 
@@ -725,7 +809,12 @@ struct MatmulExpertCompressedDRAM {
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
                         CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
                     uint32_t fmt_meta_offset = 0;
-                    uint32_t act_rd_ptr = in0_base + exp_i * num_tiles_k * in0_page_size;
+                    // Compact read: gate/up DRAM matmul writes a slot per DRAM expert
+                    // (SRAM/hot-skipped experts produce no slot, padding fills the tail).
+                    // Use dram_idx (compact index) so we line up with that layout instead
+                    // of exp_i (positional). Without this, every non-zero exp_i past the
+                    // first skipped expert reads the wrong gate*up product.
+                    uint32_t act_rd_ptr = in0_base + dram_idx * num_tiles_k * in0_page_size;
 
                     for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
                         tile_regs_acquire();
@@ -858,6 +947,26 @@ struct MatmulExpertCompressedDRAM {
                     }
                     if (is_sram_expert(raw_idx)) {
                         continue;
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 1) {
+                        if (raw_idx == CTArgs::hot_expert_0) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 2) {
+                        if (raw_idx == CTArgs::hot_expert_1) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 3) {
+                        if (raw_idx == CTArgs::hot_expert_2) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 4) {
+                        if (raw_idx == CTArgs::hot_expert_3) {
+                            continue;
+                        }
                     }
 
                     UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
@@ -1006,6 +1115,26 @@ struct MatmulExpertCompressedDRAM {
 
                     if (is_sram_expert(raw_idx)) {
                         continue;
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 1) {
+                        if (raw_idx == CTArgs::hot_expert_0) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 2) {
+                        if (raw_idx == CTArgs::hot_expert_1) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 3) {
+                        if (raw_idx == CTArgs::hot_expert_2) {
+                            continue;
+                        }
+                    }
+                    if constexpr (CTArgs::num_hot_experts >= 4) {
+                        if (raw_idx == CTArgs::hot_expert_3) {
+                            continue;
+                        }
                     }
 
                     UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));

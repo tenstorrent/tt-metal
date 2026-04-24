@@ -44,6 +44,7 @@ struct ResidualAdd {
         uint32_t out_cb;           // add output
         uint32_t total_in1_tiles;  // total tiles in residual CB
         uint32_t core_idx;         // index into residual CB (= core_idx * out_w)
+        uint32_t sram_in_cb = 0;   // optional SRAM expert down_proj output (per-core, out_w tiles)
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -51,7 +52,9 @@ struct ResidualAdd {
     // SkipAdd: when true, copies in0→out and pops in1 without adding.
     // Used on non-root devices in multi-device reduce so residual is only
     // counted once after the cross-device sum.
-    template <typename CTArgs, bool IsActiveCore, bool SkipAdd = false>
+    // Has3Inputs: when true, also adds sram_in_cb (per-core out_w tiles) — used to
+    // fold SRAM routed expert contribution into the shared expert output pipeline.
+    template <typename CTArgs, bool IsActiveCore, bool SkipAdd = false, bool Has3Inputs = false>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -67,9 +70,12 @@ struct ResidualAdd {
 
             cb_wait_front(args.in0_cb, out_w);
             cb_wait_front(args.in1_cb, args.total_in1_tiles);
+            if constexpr (Has3Inputs) {
+                cb_wait_front(args.sram_in_cb, out_w);
+            }
 
             if constexpr (SkipAdd) {
-                // Pass-through: copy in0 to out, discard in1
+                // Pass-through: copy in0 to out, discard in1 (and sram_in if present)
                 reconfig_data_format<false, true>(args.in0_cb, args.in0_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
                 pack_block_contiguous_init(args.out_cb);
@@ -83,8 +89,28 @@ struct ResidualAdd {
                 tile_regs_wait();
                 pack_block_contiguous(0, args.out_cb, out_w);
                 tile_regs_release();
+            } else if constexpr (Has3Inputs) {
+                // 3-way add: dst = sram_in (copy) + in0 + in1 (acc_to_dest)
+                reconfig_data_format<false, true>(args.in0_cb, args.in1_cb);
+                pack_reconfig_data_format<true>(args.out_cb);
+                pack_block_contiguous_init(args.out_cb);
+                cb_reserve_back(args.out_cb, out_w);
+
+                copy_tile_to_dst_init_short(args.sram_in_cb);
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < out_w; j++) {
+                    copy_tile(args.sram_in_cb, j, j);
+                }
+                add_tiles_init(args.in0_cb, args.in1_cb, true /* acc_to_dest */);
+                for (uint32_t j = 0; j < out_w; j++) {
+                    add_tiles(args.in0_cb, args.in1_cb, j, args.core_idx * out_w + j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_block_contiguous(0, args.out_cb, out_w);
+                tile_regs_release();
             } else {
-                // Normal: matmul_out + shard(residual)
+                // Normal 2-way: matmul_out + shard(residual)
                 reconfig_data_format<false, true>(args.in0_cb, args.in1_cb);
                 pack_reconfig_data_format<true>(args.out_cb);
                 pack_block_contiguous_init(args.out_cb);
@@ -104,6 +130,9 @@ struct ResidualAdd {
 
             cb_pop_front(args.in0_cb, out_w);
             cb_pop_front(args.in1_cb, args.total_in1_tiles);
+            if constexpr (Has3Inputs) {
+                cb_pop_front(args.sram_in_cb, out_w);
+            }
             cb_push_back(args.out_cb, out_w);
 #endif
         }

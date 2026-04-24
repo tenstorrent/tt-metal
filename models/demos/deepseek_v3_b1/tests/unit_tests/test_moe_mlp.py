@@ -889,9 +889,20 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize(
+    "sram_expert_ids",
+    [
+        pytest.param(frozenset(), id="no_sram"),
+        pytest.param(frozenset([1]), id="sram_expert_1"),
+        pytest.param(frozenset([1, 4]), id="sram_experts_1_4"),
+    ],
+)
+@pytest.mark.parametrize("hot_expert_ids", [None, [1]], ids=["no_hot", "hot_skip_1"])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, sram_expert_ids, hot_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -945,6 +956,32 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
+
+    if sram_expert_ids:
+        # Mark SRAM experts in gate_indices tensor by setting bit 7 (0x80).
+        # The tensor is (16, 16) uint16 where element [k % 16, k // 16] == k (global expert id).
+        # For SRAM experts, encode bits 0..6 with the compact slot index (position within
+        # sorted sram_expert_ids), NOT the global expert id — the SRAM matmul kernel uses
+        # those bits to index sram_base_addrs (a per-core list with one entry per SRAM expert
+        # in sorted order). Encoding global id would index out-of-bounds → 0 → garbage weights.
+        indices = torch.arange(256, dtype=torch.int32).reshape(16, 16)
+        gate_indices_torch = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
+        sram_sorted = sorted(sram_expert_ids)
+        for compact_slot, expert_id in enumerate(sram_sorted):
+            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x80 | compact_slot
+        r = r._replace(
+            ttnn_gate_indices=ttnn.from_torch(
+                gate_indices_torch,
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=r.ttnn_gate_indices.memory_config(),
+                tile=ttnn.Tile([16, 16]),
+                mesh_mapper=mesh_mapper,
+            )
+        )
+        logger.info(f"Marked experts {sorted(sram_expert_ids)} as SRAM in gate_indices tensor")
+
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
     s = create_shared_expert_tensors(
@@ -1099,6 +1136,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        hot_expert_ids=hot_expert_ids,
+        sram_expert_ids=sram_expert_ids,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1106,11 +1145,22 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     # ── Verify results ──
     # Read gate scores/indices from device
     device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-    _ = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    device_gate_scores = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    _scores0 = device_gate_scores[0].flatten()[:8]
+    logger.info(f"DIAG raw tt_scores by rank: {_scores0.tolist()}")
     root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)
-    tt_top8_sorted = torch.sort(tt_top8).values
-    expected_top8_sorted = torch.sort(torch.tensor(expected_expert_ids, dtype=torch.int64)).values
+    # Strip the SRAM-marker bit (0x80) before comparing — SRAM-flagged experts have it set.
+    tt_top8_sorted = torch.sort(tt_top8 & 0x7F).values
+    logger.info(f"DIAG raw tt_top8 by rank: {tt_top8.tolist()}")
+    # Build expected list: DRAM experts contribute global id; SRAM experts contribute compact slot
+    # (since the test encodes 0x80 | compact_slot for SRAM positions, not global id).
+    sram_set = set(sram_expert_ids or [])
+    sram_sorted_for_assert = sorted(sram_set)
+    expected_with_compact = [
+        sram_sorted_for_assert.index(eid) if eid in sram_set else eid for eid in expected_expert_ids
+    ]
+    expected_top8_sorted = torch.sort(torch.tensor(expected_with_compact, dtype=torch.int64)).values
     assert torch.equal(tt_top8_sorted, expected_top8_sorted), (
         f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, " f"got={tt_top8_sorted.tolist()}"
     )
@@ -1135,6 +1185,14 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         gate_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.expert_weights_dict.items()}
         up_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.up_proj_weights_dict.items()}
         down_dict_d = {e: w[:, :, down_slice_start:down_slice_end, :] for e, w in r.down_proj_weights_dict.items()}
+
+        # Hot experts are skipped by the DRAM matmul reader (Phase 2 chunk 1A) — zero their
+        # weights in the golden so the expected output matches what the cold kernel computes.
+        if hot_expert_ids:
+            _hot = set(hot_expert_ids)
+            gate_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in gate_dict_d.items()}
+            up_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in up_dict_d.items()}
+            down_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in down_dict_d.items()}
 
         _, _, device_expected = MoeOp.golden(
             r.torch_input,

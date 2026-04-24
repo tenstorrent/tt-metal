@@ -14,45 +14,72 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
 #endif
 
 namespace deepseek_b1_ops {
 
 // ============================================================================
-// GatedReduce micro-op: SiLU(sum(group1)) * sum(group2)
+// GatedReduce micro-op: SiLU(sum(group1_e)) * sum(group2_e) [* scalar_e], per expert.
 //
-// Performs gated local reduction over two groups of input tiles:
-//   1. Reduces group1 tiles with pairwise add, applies SiLU
-//   2. Reduces group2 tiles with pairwise add (no activation)
-//   3. Multiplies the two results
+// Performs gated local reduction over two groups of input tiles for each of
+// `num_experts` experts (per-expert blocks concatenated in each group CB):
+//   1. Per expert: reduce group1 tiles with pairwise add, apply SiLU
+//   2. Per expert: reduce group2 tiles with pairwise add (no activation)
+//   3. Per expert: multiply and emit one output tile (optionally scaled by per-expert scalar)
 //
-// Produces k_num_tiles output tiles (one per K iteration).
-// Each iteration consumes tiles_per_k tiles from each group CB.
+// num_experts == 1 produces SiLU(sum(g1)) * sum(g2) — identical to the
+// shared-expert behavior. num_experts > 1 is the routed/SRAM multi-expert path.
+//
+// Produces num_experts * k_num_tiles output tiles. Each expert/K iteration
+// consumes tiles_per_k tiles from each group CB.
+//
+// Per-K-iter cb_wait_front/cb_pop_front pattern: cb_wait_front/cb_pop_front
+// expand to UNPACK-only ops on TRISC, so MATH/PACK race ahead. Bulk
+// wait/pop with offset indexing leaves the read pointer unadvanced between
+// K-iterations and pulls stale SRC data — see commit 1c4ee30b982 for the
+// regression incident.
 //
 // CB Layout:
-//   group1_cb:   Gate partials (tiles_per_k tiles consumed per iteration)
-//   group2_cb:   Up partials (tiles_per_k tiles consumed per iteration)
+//   group1_cb:   Gate partials (tiles_per_k tiles per K-iter, per expert)
+//   group2_cb:   Up partials (tiles_per_k tiles per K-iter, per expert)
 //   intermed_cb: Intermediate buffer (2 tiles, reused each iteration)
-//   out_cb:      Output (1 tile produced per iteration)
+//   out_cb:      Output (num_experts * k_num_tiles tiles produced)
+//   scalar_cb:   Optional per-expert scalars (num_experts pages, BRISC fills from scalar_src_cb)
 // ============================================================================
 struct GatedReduce {
     struct ReaderCTArgs {};
-    struct WriterCTArgs {};
+    struct WriterCTArgs {
+        static constexpr uint32_t num_experts = 1;
+        static constexpr bool enable_scalar = false;
+    };
 
-    template <uint32_t TilesPerK, uint32_t KNumTiles>
+    template <uint32_t NumExperts, uint32_t EnableScalar = 1>
+    struct ScalarWriterCTArgs {
+        static constexpr uint32_t num_experts = NumExperts;
+        static constexpr bool enable_scalar = EnableScalar != 0;
+    };
+
+    template <uint32_t TilesPerK, uint32_t KNumTiles, uint32_t NumExperts = 1, uint32_t EnableScalar = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t tiles_per_k = TilesPerK;
         static constexpr uint32_t k_num_tiles = KNumTiles;
+        static constexpr uint32_t num_experts = NumExperts;
+        static constexpr bool enable_scalar = EnableScalar != 0;
     };
 
     struct ReaderArgs {};
-    struct WriterArgs {};
+    struct WriterArgs {
+        uint32_t scalar_src_cb;
+        uint32_t scalar_cb;
+    };
 
     struct ComputeArgs {
         uint32_t group1_cb;    // gate partials CB
         uint32_t group2_cb;    // up partials CB
         uint32_t intermed_cb;  // intermediate CB (2 tiles, reused)
-        uint32_t out_cb;       // output CB (1 tile per iteration)
+        uint32_t out_cb;       // output CB (num_experts * k_num_tiles tiles)
+        uint32_t scalar_cb = 0;  // optional per-expert scalar pages
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -68,10 +95,30 @@ struct GatedReduce {
 
     private:
         void impl(const RTArgs& args) {
-#if defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_BRISC)
+            if constexpr (CTArgs::enable_scalar) {
+                cb_wait_front(args.scalar_src_cb, 1);
+
+                uint32_t cb_read_addr = get_read_ptr(args.scalar_src_cb);
+                volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
+
+                for (uint32_t e = 0; e < CTArgs::num_experts; e++) {
+                    cb_reserve_back(args.scalar_cb, 1);
+                    volatile tt_l1_ptr uint16_t* dst_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(args.scalar_cb));
+                    dst_ptr[0] = src_ptr[e];
+                    cb_push_back(args.scalar_cb, 1);
+                }
+
+                cb_pop_front(args.scalar_src_cb, 1);
+            }
+#elif defined(COMPILE_FOR_TRISC)
             constexpr uint32_t tiles_per_k = CTArgs::tiles_per_k;
             constexpr uint32_t k_num_tiles = CTArgs::k_num_tiles;
+            constexpr uint32_t num_experts = CTArgs::num_experts;
             static_assert(tiles_per_k >= 2 && tiles_per_k % 2 == 0, "tiles_per_k must be even and >= 2");
+            static_assert(num_experts >= 1, "num_experts must be >= 1");
+            static_assert(num_experts <= 8, "GatedReduce supports up to 8 experts");
 
             // Init once before the loop
             // Assumes all input cbs are configured the same, and the intermediate cb is configured the same as the
@@ -80,57 +127,72 @@ struct GatedReduce {
             pack_reconfig_data_format<true>(args.out_cb);
             silu_tile_init();
 
-            for (uint32_t k = 0; k < k_num_tiles; k++) {
-                // Group 1: reduce + SiLU
-                add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
+            for (uint32_t e = 0; e < num_experts; e++) {
+                for (uint32_t k = 0; k < k_num_tiles; k++) {
+                    // Group 1: reduce K-slice partials for this expert, then SiLU.
+                    add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
 
-                cb_wait_front(args.group1_cb, tiles_per_k);
-                cb_reserve_back(args.intermed_cb, 1);
+                    cb_wait_front(args.group1_cb, tiles_per_k);
+                    cb_reserve_back(args.intermed_cb, 1);
 
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < tiles_per_k; i += 2) {
-                    add_tiles(args.group1_cb, args.group1_cb, i, i + 1, 0);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < tiles_per_k; i += 2) {
+                        add_tiles(args.group1_cb, args.group1_cb, i, i + 1, 0);
+                    }
+                    silu_tile(0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, args.intermed_cb);
+                    tile_regs_release();
+
+                    cb_pop_front(args.group1_cb, tiles_per_k);
+                    cb_push_back(args.intermed_cb, 1);
+
+                    // Group 2: reduce K-slice partials for the same expert.
+                    cb_wait_front(args.group2_cb, tiles_per_k);
+                    cb_reserve_back(args.intermed_cb, 1);
+
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < tiles_per_k; i += 2) {
+                        add_tiles(args.group2_cb, args.group2_cb, i, i + 1, 0);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, args.intermed_cb);
+                    tile_regs_release();
+
+                    cb_pop_front(args.group2_cb, tiles_per_k);
+                    cb_push_back(args.intermed_cb, 1);
+
+                    // Multiply: SiLU(gate_e) * up_e [* scalar_e]. Keep experts separate for down-proj.
+                    cb_wait_front(args.intermed_cb, 2);
+                    if constexpr (CTArgs::enable_scalar) {
+                        cb_wait_front(args.scalar_cb, e + 1);
+                        deepseek_mul_tiles_bcast_scalar_init_short(args.intermed_cb, args.scalar_cb);
+                    } else {
+                        mul_tiles_init(args.intermed_cb, args.intermed_cb);
+                    }
+                    cb_reserve_back(args.out_cb, 1);
+
+                    tile_regs_acquire();
+                    if constexpr (CTArgs::enable_scalar) {
+                        deepseek_mul_tiles_bcast_scalar(args.intermed_cb, args.scalar_cb, 0, e, 0);
+                        deepseek_binary_dest_reuse_tiles_init(args.intermed_cb);
+                        deepseek_binary_dest_reuse_tiles(args.intermed_cb, 1, 0);
+                    } else {
+                        mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, args.out_cb);
+                    tile_regs_release();
+
+                    cb_pop_front(args.intermed_cb, 2);
+                    cb_push_back(args.out_cb, 1);
                 }
-                silu_tile(0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, args.intermed_cb);
-                tile_regs_release();
-
-                cb_pop_front(args.group1_cb, tiles_per_k);
-                cb_push_back(args.intermed_cb, 1);
-
-                // Group 2: reduce (skip re-init add for different CB assuming they're configured the same)
-
-                cb_wait_front(args.group2_cb, tiles_per_k);
-                cb_reserve_back(args.intermed_cb, 1);
-
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < tiles_per_k; i += 2) {
-                    add_tiles(args.group2_cb, args.group2_cb, i, i + 1, 0);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, args.intermed_cb);
-                tile_regs_release();
-
-                cb_pop_front(args.group2_cb, tiles_per_k);
-                cb_push_back(args.intermed_cb, 1);
-
-                // Multiply: SiLU(g1) * g2
-                mul_tiles_init(args.intermed_cb, args.intermed_cb);
-                cb_wait_front(args.intermed_cb, 2);
-                cb_reserve_back(args.out_cb, 1);
-
-                tile_regs_acquire();
-                mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, args.out_cb);
-                tile_regs_release();
-
-                cb_pop_front(args.intermed_cb, 2);
-                cb_push_back(args.out_cb, 1);
+            }
+            if constexpr (CTArgs::enable_scalar) {
+                cb_pop_front(args.scalar_cb, num_experts);
             }
 #endif
         }

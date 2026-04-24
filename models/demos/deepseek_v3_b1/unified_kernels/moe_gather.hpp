@@ -146,6 +146,7 @@ struct MoeGather {
                     dst_off += args.expert_dst_stride;
                 }
                 // BH does not support posted atomics due to a bug
+                DPRINT << "INC" << ENDL();
                 noc_semaphore_inc(dst_semaphore_noc_addr, 1);
 
                 // Pop the source CB after sending
@@ -165,12 +166,14 @@ struct MoeGather {
 
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << "Waiting for: " << args.noc0_num_senders << " senders" << ENDL();
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
 
                 if (args.noc1_num_senders > 0) {
                     volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
                         (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
+                    DPRINT << "Waiting for: " << args.noc1_num_senders << " senders" << ENDL();
                     noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
                     noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
                 }

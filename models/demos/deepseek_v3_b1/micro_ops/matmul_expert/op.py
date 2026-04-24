@@ -1139,10 +1139,14 @@ def create_dram_expert_tensors_multi_device(
 
 
 def encode_expert_indices(expert_ids, is_dram_flags):
-    """Encode SRAM/DRAM routing into expert index values via bit 15.
+    """Encode SRAM/DRAM routing into expert index values via bit 7.
 
-    SRAM experts get bit 15 set + compact slot index in bits 0-14: 0x8000 | slot_idx.
-    DRAM experts keep their global expert ID unchanged (bit 15 = 0).
+    SRAM experts get bit 7 set + compact slot index in bits 0-6: 0x80 | slot_idx.
+    DRAM experts keep their global expert ID unchanged (bit 7 = 0).
+
+    The marker lives in the low byte because the gate kernel's SFPU sort strips
+    bits 8..15 of uint16 indices (see expert_index_encoding.hpp). Caps experts
+    at 128.
 
     Args:
         expert_ids: list/tensor of global expert IDs (the active experts to encode).
@@ -1162,7 +1166,7 @@ def encode_expert_indices(expert_ids, is_dram_flags):
     for eid in expert_ids:
         eid = int(eid)
         if not is_dram_flags[eid]:
-            encoded.append(0x8000 | sram_slot_map[eid])
+            encoded.append(0x80 | sram_slot_map[eid])
         else:
             encoded.append(eid)
     return encoded

@@ -1062,7 +1062,7 @@ def _build_activation_tensor(torch_a, mesh_device, compute_core_grid, num_cores,
 def _build_index_tensor(active_expert_ids, mesh_device, compute_core_grid, num_cores, is_dram_flags):
     """Create HEIGHT_SHARDED uint16 index tensor, replicated across devices.
 
-    SRAM experts (is_dram_flags[eid]==0) get bit 15 set in the index value.
+    SRAM experts (is_dram_flags[eid]==0) get bit 15 set with a one-based slot in the index value.
     """
     encoded_ids = encode_expert_indices(active_expert_ids, is_dram_flags)
     index_torch = torch.zeros(num_cores, 16, dtype=torch.int32)
