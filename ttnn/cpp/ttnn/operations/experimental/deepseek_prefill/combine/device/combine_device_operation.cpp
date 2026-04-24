@@ -28,8 +28,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
 
     // Validate dtypes
     TT_FATAL(
-        tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT16,
-        "Dispatched buffer must be BFLOAT16, got {}",
+        tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT16 ||
+            tensor_args.dispatched_buffer.dtype() == DataType::BFLOAT8_B,
+        "Dispatched buffer must be BFLOAT16 or BFLOAT8_B, got {}",
         tensor_args.dispatched_buffer.dtype());
     TT_FATAL(
         tensor_args.dispatched_metadata.dtype() == DataType::INT32,
