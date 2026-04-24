@@ -167,10 +167,25 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
 uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
     auto* cluster_desc = cluster.get_cluster_description();
+
+    // Debug: dump is_chip_mmio_capable map (chips_with_mmio keys)
+    std::cout << "[get_bus_id] input chip_id=" << chip_id << "\n";
+    std::cout << "[get_bus_id] chips_with_mmio (key=chip_id -> value):\n";
+    for (const auto& [k, v] : cluster_desc->get_chips_with_mmio()) {
+        std::cout << "  chip " << k << " -> " << v << "\n";
+    }
+    // Debug: dump chip_to_bus_id map
+    std::cout << "[get_bus_id] chip_to_bus_id:\n";
+    for (const auto& [k, v] : cluster_desc->get_chip_to_bus_id()) {
+        std::cout << "  chip " << k << " -> 0x" << std::hex << v << std::dec << "\n";
+    }
+
     if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
         chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
+        std::cout << "[get_bus_id] chip is not mmio capable, redirected to closest mmio chip_id=" << chip_id << "\n";
     }
     uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
+    std::cout << "[get_bus_id] output chip_id=" << chip_id << " bus_id=0x" << std::hex << bus_id << std::dec << "\n";
     return bus_id;
 }
 
