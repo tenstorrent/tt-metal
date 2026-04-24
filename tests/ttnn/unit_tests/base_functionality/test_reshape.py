@@ -109,8 +109,12 @@ def test_reshape_block_shard(
 
 
 def test_issue_42840_regression_buffer_leak(device):
-    """Regression test for issue #42840: with block-sharded tiled tensors corrupts the output's tile-padding
-    rows with real input data. The padding rows must be zero but contain values from earlier input tiles."""
+    """Regression test for issue #42840: reshaping block-sharded tiled tensors corrupted the output's
+    tile-padding rows with real input data. The padding rows must be zero but contained values from earlier
+    input tiles."""
+    if device.core_grid.y < 8:
+        pytest.skip("Requires 8x8 core grid")
+
     PROBE = {float(t + 1) for t in range((1576 + 31) // 32)}  # {1.0 … 50.0}
 
     x = torch.zeros(1576, 2304, dtype=torch.bfloat16)
