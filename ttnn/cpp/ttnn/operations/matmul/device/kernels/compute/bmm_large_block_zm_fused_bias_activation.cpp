@@ -39,6 +39,7 @@
 
 #ifdef FUSE_BIAS
 #include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
+#include "experimental/circular_buffer.h"
 #endif
 
 #include "api/compute/eltwise_binary.h"
