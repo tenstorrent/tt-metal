@@ -29,6 +29,7 @@ the step (``[0, 1]``, uniform target ``n_activated / num_experts``).
 from __future__ import annotations
 
 import csv
+import os
 from typing import Iterable
 
 
@@ -61,12 +62,13 @@ def log_step_expert_balance(csv_path: str, step: int, moe_layers: Iterable) -> N
     if not layers:
         return
 
+    file_exists = os.path.exists(csv_path)
     file_mode = "a" if step > 1 else "w"
 
     # Line-buffered so partial runs still produce a readable file.
     with open(csv_path, file_mode, newline="", buffering=1) as fh:
         writer = csv.writer(fh)
-        if step == 1:
+        if step == 1 or not file_exists:
             writer.writerow(_HEADER)
         for layer_idx, moe in enumerate(layers):
             probs = moe.read_activation_probabilities()

@@ -22,8 +22,11 @@
 
 ## Purpose
 
-The goal of Mixture-of-Experts is to balance tokens across multiple experts (as opposed to just one).
-To work well, we must make sure that all experts are being activated: if a small subset of experts absorbed most tokens while other went unused then MoE model would collapse silently.
+Mixture-of-Experts routes each token to a small subset of specialized experts,
+enabling models to scale capacity without proportionally scaling compute.
+For this to work well, the routing must stay balanced across experts: if a small
+subset absorbed most tokens while others went unused, the MoE model would
+collapse silently.
 This tool makes that visible by logging per-expert activation probabilities at training time and rendering them as heatmaps.
 
 Use it to:
@@ -172,6 +175,6 @@ Healthy routing looks like a roughly uniform color across all experts. A single 
 
 ## See Also
 
-- [TRAINING_LOG_COMPARISON.md](TRAINING_LOG_COMPARISON.md) — compare loss curves and step times across runs
-- [PROFILER.md](PROFILER.md) — kernel-level profiling
-- [MEMORY_TRACKING.md](MEMORY_TRACKING.md) — memory usage analysis
+- [TRAINING_LOG_COMPARISON.md](../TRAINING_LOG_COMPARISON.md) — compare loss curves and step times across runs
+- [PROFILER.md](../PROFILER.md) — kernel-level profiling
+- [MEMORY_TRACKING.md](../MEMORY_TRACKING.md) — memory usage analysis
