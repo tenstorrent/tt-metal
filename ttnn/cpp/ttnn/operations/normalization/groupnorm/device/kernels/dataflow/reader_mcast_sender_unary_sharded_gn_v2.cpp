@@ -23,6 +23,15 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(7);
+    // Per-core slots in cb_ex_external are hardcoded to a 16-byte pitch (see the
+    // `l1_write_addr_external += 16` increments below).  Each NOC read writes
+    // datum_size_bytes into its slot, so datum_size_bytes > 16 would overflow
+    // into the next core's slot and silently corrupt the reduction.  The slot
+    // pitch itself would need to grow to support larger datums.
+    static_assert(
+        datum_size_bytes <= 16,
+        "cb_ex_external slot pitch is hardcoded to 16 bytes; "
+        "datum_size_bytes must be <= 16 or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t tile_height = get_compile_time_arg_val(9);
 
