@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Optional
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat, FormatConfig
+from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
     from .compute_node import ComputeNode
@@ -58,15 +59,22 @@ class FuserSentinel:
         Returns:
             FormatConfig with inferred unpack, math, and pack formats
         """
+
+        src_a_format = compute_node.src_a.data_format
+        src_b_format = compute_node.src_b.data_format if compute_node.src_b else None
+
+        if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+            # DEST_TO_SRCA routes src_a L1 data to srcB, so srcB format
+            # must match src_a's format, not src_b's.
+            src_a_format = src_b_format
+
         return infer_data_formats(
-            input_format=compute_node.src_a.data_format,
+            input_format=src_a_format,
+            input_format_B=src_b_format,
             output_format=operation.output.data_format,
             is_fp32_dest_acc_en=config.dest_acc,
             unpacking_to_dest=compute_node.unpack_to_dest.value,
             chip_arch=config.architecture,
-            input_format_B=(
-                compute_node.src_b.data_format if compute_node.src_b else None
-            ),
         )
 
     def _compute_format_config_from_output(
@@ -118,7 +126,7 @@ class FuserSentinel:
 
     @property
     def math_format(self) -> str:
-        return self._fmt(self._math_format.math)
+        return self._fmt(self._math_format.pack_src)
 
     @property
     def pack_src_format(self) -> str:
@@ -212,9 +220,6 @@ class FuserSentinel:
         Returns:
             C++ reconfig call(s), or "" if formats match current state
         """
-        if compute_node.src_a is None:
-            return ""
-
         new_fmt = self._compute_format_config(config, operation, compute_node)
 
         if not self._unpack_changed(new_fmt):
@@ -234,13 +239,18 @@ class FuserSentinel:
                 f");\n"
             )
 
-        if compute_node.src_b is not None and (
+        srcb_tile_size = (
+            compute_node.src_a.tile_size
+            if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            else (compute_node.src_b.tile_size if compute_node.src_b else None)
+        )
+        if srcb_tile_size is not None and (
             old.unpack_B_src != new_fmt.unpack_B_src
             or old.unpack_B_dst != new_fmt.unpack_B_dst
         ):
             code += (
                 f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
-                f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {compute_node.src_b.tile_size}\n"
+                f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {srcb_tile_size}\n"
                 f");\n"
             )
 
@@ -281,7 +291,7 @@ class FuserSentinel:
         dest_acc = config.dest_acc.cpp_enum_value
         return (
             f"_llk_math_hw_configure_<{dest_acc}>(\n"
-            f"    {self._fmt(fmt.math)}, {self._fmt(fmt.math)}\n"
+            f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_src)}\n"
             f");\n"
         )
 
@@ -308,13 +318,13 @@ class FuserSentinel:
 
         new_fmt = self._compute_format_config(config, operation, compute_node)
 
-        if self._math_format.math == new_fmt.math:
+        if self._math_format.pack_src == new_fmt.pack_src:
             return ""
 
         dest_acc = config.dest_acc.cpp_enum_value
         code = (
             f"_llk_math_reconfig_data_format_<{dest_acc}, false>(\n"
-            f"    {self._fmt(new_fmt.math)}, {self._fmt(new_fmt.math)}\n"
+            f"    {self._fmt(new_fmt.pack_src)}, {self._fmt(new_fmt.pack_src)}\n"
             f");\n"
         )
         self._math_format = new_fmt

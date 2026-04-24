@@ -141,7 +141,6 @@ class FpuMathSchema(BaseModel):
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
     enforce_fp32_accumulation: Optional[EnforceFP32Accumulation] = None
-    clear_fp32_dst_acc: Optional[ClearFP32DstAcc] = None
     acc_to_dest: Optional[AccToDest] = None
     unpack_transpose_within_face: Transpose = Transpose.No
     unpack_transpose_faces: Transpose = Transpose.No
@@ -295,6 +294,13 @@ class FpuMathSchema(BaseModel):
         else:
             raise ValueError(f"Unknown FPU operation: {self.operation}")
 
+        clear_fp32_dst_acc = (
+            ClearFP32DstAcc.Yes
+            if self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            or self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB
+            else ClearFP32DstAcc.No
+        )
+
         kwargs = {}
         if self.unpacker:
             kwargs["unpacker"] = self.unpacker.to_runtime()
@@ -314,8 +320,8 @@ class FpuMathSchema(BaseModel):
             kwargs["math_fidelity"] = self.math_fidelity
         if self.enforce_fp32_accumulation:
             kwargs["enforce_fp32_accumulation"] = self.enforce_fp32_accumulation
-        if self.clear_fp32_dst_acc:
-            kwargs["clear_fp32_dst_acc"] = self.clear_fp32_dst_acc
+        if clear_fp32_dst_acc:
+            kwargs["clear_fp32_dst_acc"] = clear_fp32_dst_acc
         if self.acc_to_dest:
             kwargs["acc_to_dest"] = self.acc_to_dest
 

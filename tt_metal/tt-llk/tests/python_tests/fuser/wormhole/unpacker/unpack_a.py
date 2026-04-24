@@ -16,7 +16,7 @@ from helpers.golden_generators import (
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import BroadcastType, Transpose
+from helpers.llk_params import BroadcastType, EltwiseBinaryReuseDestType, Transpose
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
@@ -81,6 +81,10 @@ class UnpackerA(Unpacker):
                     input_dimensions=compute_unit.src_a.dimensions,
                 )
             tensor_b = None
+
+        if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+            tensor_b = tensor_a
+            tensor_a = None
 
         return tensor_a, tensor_b
 
