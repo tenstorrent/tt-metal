@@ -5,6 +5,9 @@
 import ttnn
 from models.demos.yolov11l.tt.common import TtnnConv, deallocate_tensors
 
+# Permute after S2I uses typecast CBs; large QKV tiles in L1 overlap that region (1280 input).
+_ATTN_L1_MAX_FLAT_SPATIAL = 512
+
 
 class TtnnAttention:
     def __init__(self, device, parameter, conv_pt):
@@ -18,7 +21,10 @@ class TtnnAttention:
 
     def __call__(self, device, x, batch_size=1):
         qkv = self.qkv(device, x)
-        qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        flat_spatial = qkv.shape[2]
+        use_l1_interleaved = flat_spatial <= _ATTN_L1_MAX_FLAT_SPATIAL
+        qkv_mem = ttnn.L1_MEMORY_CONFIG if use_l1_interleaved else ttnn.DRAM_MEMORY_CONFIG
+        qkv = ttnn.sharded_to_interleaved(qkv, memory_config=qkv_mem)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))
         qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
         q, k, v = (
@@ -27,10 +33,16 @@ class TtnnAttention:
             qkv[:, :, self.head_dim :, :],
         )
         q_permuted = ttnn.permute(q, (0, 1, 3, 2))
+        if use_l1_interleaved:
+            q_permuted = ttnn.to_memory_config(q_permuted, ttnn.L1_MEMORY_CONFIG)
+            k = ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
         attn = ttnn.multiply(attn, self.scale)
         attn = ttnn.softmax(attn, dim=-1)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
+        if use_l1_interleaved:
+            v = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
+            attn = ttnn.to_memory_config(attn, ttnn.L1_MEMORY_CONFIG)
         x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
         x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
         x1 = ttnn.permute(x1, (0, 1, 3, 2))
