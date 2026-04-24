@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from ttnn.device import is_blackhole as ttnn_is_blackhole
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
@@ -19,8 +21,10 @@ from models.demos.wormhole.bge_m3.tt.device_kernels import (
 )
 
 # SDPA tiling (``main``-compatible path): fixed **Q chunk = 128** and largest **K** in (256, 128) that
-# divides ``seq_len``; ``exp_approx_mode=True``. That pairing passes full-model PCC at S8192 on Wormhole.
-# Picking **Q=256** + ``exp_approx_mode=False`` (an optimization on this branch) regresses S8192 PCC.
+# divides ``seq_len``; ``exp_approx_mode=True`` on **Wormhole** for 128-aligned lengths (S8192 PCC).
+# Picking **Q=256** + ``exp_approx_mode=False`` on Wormhole regresses S8192 PCC.
+# **Blackhole** uses ``exp_approx_mode=False`` for 128-aligned lengths: approx softmax hurts S4096+ PCC
+# (~0.91 vs 0.94) on P150 while N150 Wormhole still uses the approx path above.
 #
 # For S32/S64 (not divisible by 128), use flexible Q/K from (256..32) so tiles divide the runtime length.
 _SDPA_Q_CHUNK_MAIN = 128
@@ -45,8 +49,13 @@ def _sdpa_chunks_for_seq_len(seq_len: int) -> tuple[int, int]:
     return q_chunk, k_chunk
 
 
-def _sdpa_exp_approx_for_seq_len(seq_len: int) -> bool:
-    """``main`` sets ``exp_approx_mode=True`` for 128-aligned encoder runs (incl. S8192); short S32/S64 use False."""
+def _sdpa_exp_approx_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice | None = None) -> bool:
+    """Wormhole: ``exp_approx_mode=True`` when ``seq_len`` is 128-aligned (incl. S8192). Short S32/S64: False.
+
+    Blackhole: always False (exact softmax path) so S4096+ PCC stays above 0.94 on P150.
+    """
+    if mesh_device is not None and ttnn_is_blackhole(mesh_device):
+        return False
     return seq_len % 128 == 0
 
 
@@ -65,7 +74,7 @@ def _sdpa_compute_grid_for_seq_len(_seq_len: int, mesh_device: ttnn.MeshDevice |
 
     Use the full device compute grid for every sequence length. An older **S512-only** cap
     (smaller worker grid) hurt 512-token throughput; chunk sizes and ``exp_approx_mode`` still
-    follow ``_sdpa_chunks_for_seq_len`` / ``_sdpa_exp_approx_for_seq_len`` and are unchanged for S8192.
+    follow ``_sdpa_chunks_for_seq_len`` / ``_sdpa_exp_approx_for_seq_len``; Wormhole S8192 policy unchanged.
     """
     return _sdpa_storage_grid(mesh_device)
 
@@ -76,7 +85,7 @@ def _sdpa_program_config_for_seq_len(seq_len: int, mesh_device: ttnn.MeshDevice 
         compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(seq_len, mesh_device),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=_sdpa_exp_approx_for_seq_len(seq_len),
+        exp_approx_mode=_sdpa_exp_approx_for_seq_len(seq_len, mesh_device),
     )
 
 
@@ -412,7 +421,7 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
             compute_with_storage_grid_size=_sdpa_compute_grid_for_seq_len(128, mesh_device),
             q_chunk_size=q0,
             k_chunk_size=k0,
-            exp_approx_mode=_sdpa_exp_approx_for_seq_len(128),
+            exp_approx_mode=_sdpa_exp_approx_for_seq_len(128, mesh_device),
         )
 
     if config.qkv_compute_kernel_cfg is None:
