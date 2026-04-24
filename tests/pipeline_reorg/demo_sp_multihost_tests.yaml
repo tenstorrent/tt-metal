@@ -12,7 +12,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
 # ============================================================================
-# BH SP1 Multihost Pipeline Tests
+# BH SP1 Multihost Pipeline Tests (4 connected galaxies)
 # ============================================================================
 
 - name: "Physical Discovery Test"
@@ -39,15 +39,18 @@
 
 - name: "Pipeline Test (DeepSeek V3 B1)"
   cmd: |
+    cat /ci/ttrun/hostfile
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
     mkdir -p $PIPELINE_DIR
-    python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+    python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
       --mpi-user user \
       --hostfile /ci/ttrun/hostfile \
       --worker-tt-metal-home /home/user/tt-metal \
       --output-dir $PIPELINE_DIR \
-      models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+      /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+    cd $PIPELINE_DIR
     tt-run --skip-executable-check \
       --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
       --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
@@ -58,3 +61,56 @@
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sp1
+
+# ============================================================================
+# BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
+# ============================================================================
+
+- name: "Physical Discovery Test (SP4)"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+  skus:
+    bh_sp4:
+      timeout: 15
+  owner_id: U08RL15T4N8
+  team: scaleout
+  sp_config: sp4
+
+- name: "System Health Check (SP4)"
+  cmd: |
+    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_sp4:
+      timeout: 15
+  owner_id: U08RL15T4N8
+  team: scaleout
+  sp_config: sp4
+
+- name: "Pipeline Test (DeepSeek V3 B1 Superpod)"
+  cmd: |
+    set -x
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
+    mkdir -p $PIPELINE_DIR
+
+    echo "=== SP4 superpod: running generate_blitz_decode_pipeline_configs ==="
+    python3 /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+      --mpi-user user \
+      --hostfile /ci/ttrun/hostfile \
+      --worker-tt-metal-home /home/user/tt-metal \
+      --output-dir $PIPELINE_DIR \
+      /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
+
+    echo "=== SP4 superpod: running tt-run ==="
+    TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --skip-executable-check \
+      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+      --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
+      /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+  skus:
+    bh_sp4:
+      timeout: 60
+  owner_id: U08E1JCMAJF
+  team: scaleout
+  sp_config: sp4

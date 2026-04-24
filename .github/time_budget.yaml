@@ -100,7 +100,8 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_sp1: 90
+    bh_sp1: 120
+    bh_sp4: 120
 
 runtime:
   sanity:
@@ -156,7 +157,7 @@ models:
     wh_galaxy: 0
     wh_galaxy_perf: 150
     wh_galaxy_release: 345
-    bh_galaxy: 30
+    bh_galaxy: 100
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
