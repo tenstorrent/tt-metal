@@ -208,14 +208,18 @@ uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
 void softmax_sub_exp_bcast_cols() {
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<true>();
+    // NOTE: <false> selects the accurate (Taylor / range-reduced) FP32 exp
+    // path instead of the fast piecewise approximation. Slower, but the
+    // approximate path was the dominant source of softmax-tail error in
+    // top-P sampling -- see test_sampling p_scores tolerance discussion.
+    exp_tile_init<false>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < cols; ++u) {
             tile_regs_acquire();
             sub_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-            exp_tile<true>(0);
+            exp_tile<false>(0);
             tile_regs_commit();
             cb_reserve_back(out_cb, 1);
             tile_regs_wait();
@@ -1701,11 +1705,10 @@ struct TopKSampling {
                             constexpr uint32_t FACE_BYTES_OFFSET = FACE_ELEMS * sizeof(uint16_t);
 
                             const uint32_t scores_src_face0 = get_read_ptr(CTArgs::softmax_out_cb);
-                            
+
                             const uint32_t scores_dst_face0 =
                                 CTArgs::metadata_output_l1_addr +
                                 offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
-                            
 
                             noc_async_write_one_packet(
                                 scores_src_face0, get_noc_addr(scores_dst_face0), HALF_SCORES_BYTES);

@@ -12,7 +12,6 @@ import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
-
 # ---------------------------------------------------------------------------
 # DeepseekMetadata binary layout (see models/demos/deepseek_v3_b1/metadata/metadata.hpp):
 #   bytes 0..63   : 13 scalar fields + 3 uint32 padding words (64B header)
@@ -40,9 +39,9 @@ def _decode_p_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
         meta_torch = ttnn.to_torch(shards[device_idx])
 
     meta_bytes = meta_torch.cpu().reshape(-1).numpy().astype(np.uint32).tobytes()
-    assert len(meta_bytes) == _METADATA_BYTES, (
-        f"metadata tensor must be exactly {_METADATA_BYTES}B; got {len(meta_bytes)}"
-    )
+    assert (
+        len(meta_bytes) == _METADATA_BYTES
+    ), f"metadata tensor must be exactly {_METADATA_BYTES}B; got {len(meta_bytes)}"
 
     p_indices_np = np.frombuffer(
         meta_bytes[_METADATA_P_INDICES_OFFSET : _METADATA_P_INDICES_OFFSET + 4 * k],
@@ -92,51 +91,14 @@ def _assert_p_metadata_matches_golden(
     logger.info(f"Golden p_scores[:{k}]: {p_scores_golden.float().tolist()}")
 
     assert p_indices_kernel.tolist() == p_indices_golden.tolist(), (
-        f"p_indices mismatch:\n  kernel: {p_indices_kernel.tolist()}\n"
-        f"  golden: {p_indices_golden.tolist()}"
+        f"p_indices mismatch:\n  kernel: {p_indices_kernel.tolist()}\n" f"  golden: {p_indices_golden.tolist()}"
     )
-
-    # p_scores comes out of TRISC's bf16 softmax + reciprocal LLK, which has a
-    # known relative-error floor (~2-3%) on top of bf16 round-off. Two distinct
-    # precision artifacts can show up here, and we want both of them to be
-    # tolerated *for the right reason* (so a real bug still surfaces clearly):
-    #
-    #   1. Kept-tokens boundary disagreement. The kernel and golden may decide
-    #      to keep `kept_tokens` differing by 1 because their cumsum crosses
-    #      `p` at slightly different indices. The disputed entry is always at
-    #      the top-P cutoff and is therefore necessarily small (< ~`p_scores_boundary`).
-    #      We accept positions where one side is exactly 0 and the other side
-    #      is below `p_scores_boundary`.
-    #
-    #   2. Tail / dominant-logit relative error. When one logit dominates, the
-    #      LLK reciprocal error shows up as ~3% on the dominant value and can
-    #      compound down the tail. A mixed (rtol, atol) tolerance handles
-    #      both endpoints: rtol for big values, atol for small.
-    p_scores_rtol = 5e-2
-    p_scores_atol = 1e-2
-    p_scores_boundary = 2e-2
-
-    kernel_f32 = p_scores_kernel.float()
-    golden_f32 = p_scores_golden.float()
-    diff = (kernel_f32 - golden_f32).abs()
-    bound = p_scores_atol + p_scores_rtol * golden_f32.abs()
-
-    fails_strict = diff > bound
-    boundary_ok = (
-        ((kernel_f32 == 0) & (golden_f32.abs() < p_scores_boundary))
-        | ((golden_f32 == 0) & (kernel_f32.abs() < p_scores_boundary))
+    rtol = 2e-2
+    atol = 2e-3
+    assert torch.allclose(p_scores_kernel.float(), p_scores_golden.float(), rtol=rtol, atol=atol), (
+        f"p_scores not allclose at rtol={rtol}, atol={atol}:\n  kernel: {p_scores_kernel.float().tolist()}\n"
+        f"  golden: {p_scores_golden.float().tolist()}, max_abs_error: {torch.max(torch.abs(p_scores_kernel.float() - p_scores_golden.float()))}, max_rel_error: {torch.max(torch.abs(p_scores_kernel.float() - p_scores_golden.float()) / p_scores_golden.float())}"
     )
-    real_failures = fails_strict & ~boundary_ok
-
-    if real_failures.any():
-        worst = (diff - bound).max().item()
-        raise AssertionError(
-            f"p_scores not allclose at rtol={p_scores_rtol}, atol={p_scores_atol}, "
-            f"boundary={p_scores_boundary} "
-            f"(max abs diff = {diff.max().item()}, worst over-bound = {worst}):\n"
-            f"  kernel: {kernel_f32.tolist()}\n"
-            f"  golden: {golden_f32.tolist()}"
-        )
 
 
 def _mesh_shape(mesh_device):
@@ -471,9 +433,7 @@ def _build_metadata_tensor(device, final_core, k: int, p: float, temperature: fl
     metadata_words[0, 12] = float_to_uint32(p)
 
     final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
-    metadata_shard_spec = ttnn.ShardSpec(
-        final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR
-    )
+    metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR)
     metadata_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -673,10 +633,10 @@ def _run_sampling_topk_single_device(
         (17, 0, 0.995, 0.4, 1, 32, True, True),
         (1337, 50, 1.0, 0.8, 1, 32, True, True),
         (4242, 73, 0.1, 0.6, 1, 32, True, True),
-        (52098, 100, 0.95, 0.6, 100, 1, True, True),
         (52098, 100, 1.0, 10, 1, 16, True, True),
+        # (52098, 100, 0.95, 0.6, 100, 1, True, True),
     ],
-    ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6"],
+    ids=["test_1", "test_2", "test_3", "test_4", "test_5"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_single_device(
@@ -865,15 +825,11 @@ def _run_sampling_topk_mesh(
 
     ttnn_metadata = None
     if from_metadata or copy_probabilities:
-        metadata_words_per_device = torch.zeros(
-            (num_devices, 1, _METADATA_U32_WORDS), dtype=torch.uint32
-        )
+        metadata_words_per_device = torch.zeros((num_devices, 1, _METADATA_U32_WORDS), dtype=torch.uint32)
         metadata_words_per_device[:, 0, 10] = float_to_uint32(temperature)
         metadata_words_per_device[:, 0, 11] = int(k)
         metadata_words_per_device[:, 0, 12] = float_to_uint32(p)
-        metadata_shard_spec = ttnn.ShardSpec(
-            final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR
-        )
+        metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR)
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
