@@ -18,7 +18,7 @@ Tensor fill_implicit_tile_padding(
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
     uint32_t padded_width =
-        tt::div_up(input_tensor.logical_shape()[-1], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+        tt::div_up(input_tensor.logical_shape()[-1], tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
     if (padded_width == input_tensor.logical_shape()[-1] && padded_height == input_tensor.logical_shape()[-2]) {
         return input_tensor;
     }
