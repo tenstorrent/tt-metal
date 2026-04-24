@@ -192,7 +192,8 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         if (desc.cbs[ci].buffer) {
-            UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *desc.cbs[ci].buffer);
+            UpdateDynamicCircularBufferAddress(
+                program, program_cbs[ci]->id(), *desc.cbs[ci].buffer, desc.cbs[ci].address_offset);
         }
     }
 }
@@ -291,7 +292,7 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         if (desc.cbs[ci].buffer) {
-            result.cbs.push_back({program_cbs[ci]->id(), desc.cbs[ci].buffer});
+            result.cbs.push_back({program_cbs[ci]->id(), desc.cbs[ci].buffer, desc.cbs[ci].address_offset});
         }
     }
 
@@ -303,7 +304,7 @@ void apply_resolved_bindings(Program& program, const ResolvedBindings& bindings)
         (*b.data)[b.arg_idx] = b.buffer->address();
     }
     for (const auto& cb : bindings.cbs) {
-        UpdateDynamicCircularBufferAddress(program, cb.cb_id, *cb.buffer);
+        UpdateDynamicCircularBufferAddress(program, cb.cb_id, *cb.buffer, cb.address_offset);
     }
 }
 

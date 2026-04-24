@@ -220,6 +220,7 @@ struct ResolvedRtArgBinding {
 struct ResolvedCbBinding {
     uintptr_t cb_id = 0;
     Buffer* buffer = nullptr;
+    uint32_t address_offset = 0;
 };
 
 // All resolved bindings for one program.  Non-empty only when the factory
