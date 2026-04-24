@@ -143,9 +143,9 @@ constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
 constexpr uint32_t TRID_LAST = 3;
 
-// Row-by-row drain of output tiles from cb_out to DRAM.
-// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
-// Overlaps DMA with compute: writes issue as soon as each row is ready.
+// Row-by-row drain of cb_out to DRAM; writes overlap with compute's next row-group push.
+// Flush-before-pop: required for a shrunk cb_out so compute can't overwrite a slot the
+// NoC is still sourcing. A non-divisible tail is drained as a smaller final group.
 template <typename ReaderType>
 void write_out_row_by_row(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
@@ -156,13 +156,16 @@ void write_out_row_by_row(
     const uint32_t sbh) {
     const uint32_t out_rows = out_slice.get_d2_size();
     const uint32_t out_cols = out_slice.get_d3_size();
-    const uint32_t row_tiles = sbh * out_cols;
-    const uint32_t num_row_groups = out_rows / sbh;
+    const uint32_t num_full_groups = out_rows / sbh;
+    const uint32_t remainder_rows = out_rows - num_full_groups * sbh;
+    const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
 
-    for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
-        cb_wait_front(cb_out, row_tiles);
+    for (uint32_t rg = 0; rg < num_groups; ++rg) {
+        const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
+        const uint32_t tiles_this_group = rows_this_group * out_cols;
+        cb_wait_front(cb_out, tiles_this_group);
         uint32_t read_ptr = get_read_ptr(cb_out);
-        for (uint32_t r = 0; r < sbh; r++) {
+        for (uint32_t r = 0; r < rows_this_group; r++) {
             for (uint32_t col = 0; col < out_cols; ++col) {
                 cat_out_generator.maybe_write_tile(
                     out_slice.d0,
@@ -174,7 +177,8 @@ void write_out_row_by_row(
                 read_ptr += tile_bytes;
             }
         }
-        cb_pop_front(cb_out, row_tiles);
+        noc_async_writes_flushed();
+        cb_pop_front(cb_out, tiles_this_group);
     }
 }
 

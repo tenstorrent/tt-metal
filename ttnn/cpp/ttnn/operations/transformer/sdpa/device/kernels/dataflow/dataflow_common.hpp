@@ -1104,6 +1104,54 @@ void write_block(
     cb_pop_front(cb_out, out_chunk_tiles);
 }
 
+// Row-grouped drain: waits/pops sbh tile-rows at a time so cb_out can be sized to a few
+// row-groups instead of the full Q chunk. Rows in [write_rows, total_rows) are padding —
+// popped but not written. Flush-before-pop guards compute from overwriting an in-flight
+// slot. Non-divisible tail drained as a smaller final group.
+template <typename TensorAccessorType>
+void write_block_row_grouped(
+    const TensorAccessorType& out_writer,
+    const uint32_t cb_out,
+    const uint32_t total_rows,
+    const uint32_t write_rows,
+    const uint32_t cols,
+    const uint32_t out_tile_id,
+    const uint32_t tile_bytes,
+    const uint32_t sbh,
+    const uint32_t barrier_threshold) {
+    const uint32_t num_full_groups = total_rows / sbh;
+    const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
+    const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
+    uint32_t tile_id = out_tile_id;
+    uint32_t barrier_count = 0;
+    uint32_t rows_drained = 0;
+
+    for (uint32_t rg = 0; rg < num_groups; ++rg) {
+        const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
+        const uint32_t tiles_this_group = rows_this_group * cols;
+        cb_wait_front(cb_out, tiles_this_group);
+        uint32_t l1_read_addr = get_read_ptr(cb_out);
+        for (uint32_t r = 0; r < rows_this_group; ++r) {
+            if (rows_drained < write_rows) {
+                for (uint32_t col = 0; col < cols; ++col) {
+                    noc_async_write_tile(tile_id, out_writer, l1_read_addr + col * tile_bytes);
+                    ++tile_id;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_writes_flushed();
+                        barrier_count = 0;
+                    }
+                }
+            }
+            l1_read_addr += cols * tile_bytes;
+            ++rows_drained;
+        }
+        // Flush before pop so compute can safely reuse the L1 slot.
+        noc_async_writes_flushed();
+        cb_pop_front(cb_out, tiles_this_group);
+    }
+    noc_async_write_barrier();
+}
+
 template <uint32_t tile_bytes>
 void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
     /*
