@@ -249,8 +249,21 @@ static uint64_t rt_binding_key(uint32_t kernel_idx, CoreCoord core, uint32_t arg
            ((uint64_t)(core.y & 0xffu) << 32) | (uint64_t)arg_idx;
 }
 
-ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& desc) {
+ResolvedBindings resolve_bindings(
+    Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers) {
     ResolvedBindings result;
+
+    // Map each Buffer* to its index in tensor_buffers.  Every binding Buffer* must be
+    // present; TT_FATAL fires if a factory used a non-tensor buffer in emplace_runtime_args.
+    auto find_idx = [&](Buffer* buf, std::string_view context) -> uint32_t {
+        auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), buf);
+        TT_FATAL(
+            it != tensor_buffers.end(),
+            "Buffer* in {} not found in tensor_args/tensor_return_value enumeration. "
+            "All buffer bindings must come directly from input/output tensors.",
+            context);
+        return static_cast<uint32_t>(it - tensor_buffers.begin());
+    };
 
     // Track every registered (kernel, core, arg_idx) position and every buffer address.
     // Used below to detect unregistered positions that hold a buffer address — i.e.,
@@ -281,7 +294,7 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
                 b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
                 b.buffer->address());
 
-            result.rt_args.push_back({&data, b.arg_idx, b.buffer});
+            result.rt_args.push_back({&data, b.arg_idx, find_idx(b.buffer, "buffer_bindings")});
             registered_positions.insert(rt_binding_key(k, b.core, b.arg_idx));
             registered_addresses.insert(b.buffer->address());
         }
@@ -299,7 +312,7 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
                 b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
                 b.buffer->address());
 
-            result.rt_args.push_back({&data, b.arg_idx, b.buffer});
+            result.rt_args.push_back({&data, b.arg_idx, find_idx(b.buffer, "common_buffer_bindings")});
             registered_positions.insert(rt_binding_key(k, kCommonArgSentinel, b.arg_idx));
             registered_addresses.insert(b.buffer->address());
         }
@@ -349,19 +362,22 @@ ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& des
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         if (desc.cbs[ci].buffer) {
-            result.cbs.push_back({program_cbs[ci]->id(), desc.cbs[ci].buffer, desc.cbs[ci].address_offset});
+            result.cbs.push_back(
+                {program_cbs[ci]->id(), find_idx(desc.cbs[ci].buffer, "cbs"), desc.cbs[ci].address_offset});
         }
     }
 
     return result;
 }
 
-void apply_resolved_bindings(Program& program, const ResolvedBindings& bindings) {
+void apply_resolved_bindings(
+    Program& program, const ResolvedBindings& bindings, const std::vector<Buffer*>& current_buffers) {
     for (const auto& b : bindings.rt_args) {
-        (*b.data)[b.arg_idx] = b.buffer->address();
+        (*b.data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
-        UpdateDynamicCircularBufferAddress(program, cb.cb_id, *cb.buffer, cb.address_offset);
+        UpdateDynamicCircularBufferAddress(
+            program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
     }
 }
 

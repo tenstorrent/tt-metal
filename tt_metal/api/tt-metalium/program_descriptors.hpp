@@ -224,17 +224,20 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
 
 // A buffer binding resolved to a direct pointer into a cached Program's
 // runtime args storage.  Created once on cache miss; used on every cache hit.
+// tensor_buffer_idx indexes into the vector returned by collect_tensor_buffers()
+// at both resolve time and apply time — no raw Buffer* stored here.
 struct ResolvedRtArgBinding {
     RuntimeArgsData* data = nullptr;
     uint32_t arg_idx = 0;
-    Buffer* buffer = nullptr;
+    uint32_t tensor_buffer_idx = 0;
 };
 
 // A CB dynamic-address binding resolved to a CB id for direct update.
 // cb_id is CBHandle (uintptr_t) — a 64-bit handle, not an index.
+// tensor_buffer_idx indexes into the same collect_tensor_buffers() vector.
 struct ResolvedCbBinding {
     uintptr_t cb_id = 0;
-    Buffer* buffer = nullptr;
+    uint32_t tensor_buffer_idx = 0;
     uint32_t address_offset = 0;
 };
 
@@ -247,16 +250,22 @@ struct ResolvedBindings {
 };
 
 // Walk desc.kernels[k].buffer_bindings and desc.cbs[i].buffer, resolve each
-// to a pointer/id into the already-built program, and return the result.
+// to a stable pointer/id into the already-built program, and return the result.
+// tensor_buffers is an ordered enumeration of all Buffer* reachable from the
+// current call's tensor_args and tensor_return_value (built by the adapter via
+// collect_tensor_buffers).  Every binding Buffer* must appear in tensor_buffers;
+// the matching index is stored in place of the raw pointer.
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
-ResolvedBindings resolve_bindings(Program& program, const ProgramDescriptor& desc);
+ResolvedBindings resolve_bindings(
+    Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers);
 
 // Apply resolved bindings to the cached program on a cache hit.
+// current_buffers must be the output of collect_tensor_buffers() for the
+// current call's tensors — same enumeration order as at resolve time.
 // Writes buffer->address() directly into the program's runtime args storage
 // and calls UpdateDynamicCircularBufferAddress for any dynamic CBs.
-// ~1-2 µs for typical matmul factories; replaces the full create_descriptor()
-// + apply_descriptor_runtime_args() round-trip on the hot path.
-void apply_resolved_bindings(Program& program, const ResolvedBindings& bindings);
+void apply_resolved_bindings(
+    Program& program, const ResolvedBindings& bindings, const std::vector<Buffer*>& current_buffers);
 
 }  // namespace tt::tt_metal
 
