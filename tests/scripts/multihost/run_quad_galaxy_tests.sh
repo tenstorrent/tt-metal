@@ -697,14 +697,14 @@ run_quad_deepseekv3_integration_tests() {
 
 run_all_needed_local_tests() {
     local saved_upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-}"
-    export DEEPSEEK_DEMO_UPR_MODE="8"
+    export DEEPSEEK_DEMO_UPR_MODE="all"
 
-    # run_dual_teacher_forced_test
+    run_dual_teacher_forced_test
     run_dual_demo_test
-    # run_dual_demo_stress_test
-    # run_quad_teacher_forced_test
+    run_dual_demo_stress_test
+    run_quad_teacher_forced_test
     run_quad_demo_test
-    # run_quad_demo_stress_test
+    run_quad_demo_stress_test
 
     if [[ -n "${saved_upr_mode}" ]]; then
         export DEEPSEEK_DEMO_UPR_MODE="${saved_upr_mode}"
