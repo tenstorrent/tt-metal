@@ -46,10 +46,8 @@ inline void llk_unpack_A_init(
         llk_unpack_dbg_feature_disable();
     }
 
-    LLK_ASSERT(
-        (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
-            operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces)),
-        "");
+    LLK_ASSERT_BLOCK(is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
+        operand_unpack_src_format, operand_unpack_dst_format, face_r_dim, num_faces));
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
@@ -73,13 +71,11 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
 
-    LLK_ASSERT(
-        (is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
-            unpack_src_format[operand_id],
-            unpack_dst_format[operand_id],
-            get_operand_face_r_dim(operand_id),
-            get_operand_num_faces(operand_id))),
-        "");
+    LLK_ASSERT_BLOCK(is_unpacker_A_configured_correctly<UnpackerProgramType::ProgramByTile>(
+        unpack_src_format[operand_id],
+        unpack_dst_format[operand_id],
+        get_operand_face_r_dim(operand_id),
+        get_operand_num_faces(operand_id)));
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
