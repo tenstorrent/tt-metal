@@ -1377,6 +1377,7 @@ class MasterConfigLoader:
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
                                 "tensor_placement": tensor_config.tensor_placement,
+                                "storage_type": tensor_config.storage_type,
                             }
                         )
                     else:
@@ -1431,6 +1432,9 @@ class MasterConfigLoader:
                     config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                     config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                     config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
+                    storage = tensor.get("storage_type", "StorageType.DEVICE")
+                    if storage and "HOST" in str(storage):
+                        config_dict[f"input_{suffix}_storage_type"] = storage
 
                 if "output_memory_config" not in config_dict:
                     if "memory_config" in config_dict:
