@@ -692,6 +692,21 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     // Reads the current fences from hardware and decrements in_flight by the number of
     // entries consumed since the last read.
+    //
+    // Edge case — full-wrap aliasing: when firmware consumes exactly N entries between two
+    // consecutive reads, the fence address wraps back to the same value (old_fences).
+    // count_consumed(old, old) == 0, so in_flight would not be decremented even though N
+    // entries were consumed, causing a deadlock.
+    //
+    // Disambiguation: if fence == old_fences while in_flight >= N (queue full), check the
+    // slot that firmware should have consumed first in the current batch.  Firmware clears
+    // each slot to 0 before updating the fence pointer, so:
+    //   slot != 0  →  firmware hasn't consumed it yet (CASE A: 0 consumed, keep spinning)
+    //   slot == 0  →  firmware already cleared it (CASE B: N consumed, aliased)
+    //
+    // To guard against the TOCTOU window where firmware is between clearing the slot (line 453
+    // of cq_prefetch.cpp) and writing the fence (line 456), re-read the fence after the slot
+    // check.  If the fence changed in that window, handle it as a normal update instead.
     uint32_t fence;
     auto refresh_in_flight = [&]() {
         ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
@@ -701,6 +716,39 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             this->prefetch_q_in_flight[cq_id] =
                 (consumed <= this->prefetch_q_in_flight[cq_id]) ? this->prefetch_q_in_flight[cq_id] - consumed : 0;
             this->prefetch_q_dev_fences[cq_id] = fence;
+        } else if (this->prefetch_q_in_flight[cq_id] >= prefetch_q_entries) {
+            // fence == old_fences while the queue appears full.  Check whether firmware
+            // consumed all N entries and the fence address wrapped back to the same slot.
+            // The next slot firmware should read is the one immediately after old_fences.
+            uint32_t next_slot = (old_fences + entry_size >= prefetch_q_limit)
+                                     ? prefetch_q_base
+                                     : old_fences + entry_size;
+            uint32_t slot_val = 0;
+            ctx.get_cluster().read_core(
+                &slot_val, sizeof(uint32_t), this->prefetcher_cores[cq_id], next_slot);
+            if (slot_val == 0) {
+                // Slot is clear.  Re-read the fence to close the TOCTOU window: if firmware
+                // was mid-consume (cleared slot but not yet updated fence), the re-read will
+                // see the updated fence and fall through to the normal update path.
+                uint32_t fence2;
+                ctx.get_cluster().read_core(
+                    &fence2, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
+                if (fence2 != old_fences) {
+                    uint32_t consumed = count_consumed(old_fences, fence2);
+                    this->prefetch_q_in_flight[cq_id] =
+                        (consumed <= this->prefetch_q_in_flight[cq_id])
+                            ? this->prefetch_q_in_flight[cq_id] - consumed
+                            : 0;
+                    this->prefetch_q_dev_fences[cq_id] = fence2;
+                    fence = fence2;
+                } else {
+                    // CASE B confirmed: firmware consumed all N entries and the fence
+                    // address aliased back to old_fences.  Reset in_flight to 0.
+                    this->prefetch_q_in_flight[cq_id] = 0;
+                }
+            }
+            // CASE A (slot_val != 0): firmware hasn't consumed the slot yet.
+            // in_flight stays unchanged; caller will keep spinning.
         }
     };
 
