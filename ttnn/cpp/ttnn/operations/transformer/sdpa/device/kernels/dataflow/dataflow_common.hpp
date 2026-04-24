@@ -1107,7 +1107,8 @@ void write_block(
 // Row-grouped drain: waits/pops sbh tile-rows at a time so cb_out can be sized to a few
 // row-groups instead of the full Q chunk. Rows in [write_rows, total_rows) are padding —
 // popped but not written. Flush-before-pop guards compute from overwriting an in-flight
-// slot. Non-divisible tail drained as a smaller final group.
+// slot. Non-divisible tail drained as a smaller final group — sbh here is the host-side
+// subblock, which the kernel may bump internally, so a remainder is possible.
 template <typename TensorAccessorType>
 void write_block_row_grouped(
     const TensorAccessorType& out_writer,
