@@ -1,5 +1,6 @@
 set(LLRT_SRC
     llrt.cpp
+    cmac_boot_params.cpp
     core_descriptor.cpp
     firmware_capability.cpp
     rtoptions.cpp
