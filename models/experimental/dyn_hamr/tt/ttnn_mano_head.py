@@ -171,65 +171,75 @@ def _merge_heads(ctx, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
 def _decoder_block(x, context, p: Dict[str, Any]):
     dev = x.device()
     ckcfg = _fused_compute_config(dev)
+    _L1 = ttnn.L1_MEMORY_CONFIG
 
     # SA: N=1, so attn output == V; skip SDPA entirely.
-    h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"])
+    h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"], memory_config=_L1)
     qkv = ttnn.experimental.minimal_matmul(
         h, p["sa_qkv_w"],
         config=_mm_cfg(1, 1024, 1536, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
     _, _, v = ttnn.transformer.split_query_key_value_and_split_heads(
-        qkv, num_heads=NUM_HEADS, transpose_key=False,
+        qkv, num_heads=NUM_HEADS, transpose_key=False, memory_config=_L1,
     )
-    v = ttnn.transformer.concatenate_heads(v)
+    v = ttnn.transformer.concatenate_heads(v, memory_config=_L1)
     sa = ttnn.experimental.minimal_matmul(
         v, p["sa_out_w"],
         bias_tensor=p["sa_out_b"],
         config=_mm_cfg(1, 512, 1024, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
-    x = x + sa
+    x = ttnn.add(x, sa, memory_config=_L1)
 
     # Cross-attention via SDPA.
-    h = ttnn.layer_norm(x, weight=p["norm_ca"]["weight"], bias=p["norm_ca"]["bias"])
+    h = ttnn.layer_norm(x, weight=p["norm_ca"]["weight"], bias=p["norm_ca"]["bias"], memory_config=_L1)
     q = ttnn.experimental.minimal_matmul(
         h, p["ca_q_w"],
         config=_mm_cfg(1, 1024, 512, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
     kv = ttnn.experimental.minimal_matmul(
         context, p["ca_kv_w"],
         config=_mm_cfg(192, 1280, 1024, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
     q_h, k_h, v_h = _split_qk_qv_sdpa(q, kv)
-    ca = ttnn.transformer.scaled_dot_product_attention(q_h, k_h, v_h, is_causal=False, scale=HEAD_DIM ** -0.5)
+    ca = ttnn.transformer.scaled_dot_product_attention(
+        q_h, k_h, v_h, is_causal=False, scale=HEAD_DIM ** -0.5, memory_config=_L1,
+    )
     ca = _merge_heads(ca)
     ca = ttnn.experimental.minimal_matmul(
         ca, p["ca_out_w"],
         bias_tensor=p["ca_out_b"],
         config=_mm_cfg(1, 512, 1024, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
-    x = x + ca
+    x = ttnn.add(x, ca, memory_config=_L1)
 
     # FFN with fused GELU.
-    h = ttnn.layer_norm(x, weight=p["norm_ff"]["weight"], bias=p["norm_ff"]["bias"])
+    h = ttnn.layer_norm(x, weight=p["norm_ff"]["weight"], bias=p["norm_ff"]["bias"], memory_config=_L1)
     h = ttnn.experimental.minimal_matmul(
         h, p["ff_fc1_w"],
         bias_tensor=p["ff_fc1_b"],
         config=_mm_cfg(1, 1024, 1024, dev),
         compute_kernel_config=ckcfg,
         fused_activation=(ttnn.UnaryOpType.GELU, False),
+        memory_config=_L1,
     )
     h = ttnn.experimental.minimal_matmul(
         h, p["ff_fc2_w"],
         bias_tensor=p["ff_fc2_b"],
         config=_mm_cfg(1, 1024, 1024, dev),
         compute_kernel_config=ckcfg,
+        memory_config=_L1,
     )
-    return x + h
+    return ttnn.add(x, h, memory_config=_L1)
 
 
 def _rot6d_to_rotmat_torch(x6: torch.Tensor) -> torch.Tensor:
@@ -273,6 +283,7 @@ def forward_device(
         bias_tensor=params["dec_b"],
         config=_mm_cfg(1, 1024, 128, device),
         compute_kernel_config=_fused_compute_config(device),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     return dec
 
