@@ -42,24 +42,6 @@ static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
     return 0;
 }
 
-// Largest n = rows * cols with rows <= max_rows, cols <= max_cols, dim % n == 0,
-// and (dim / n) % align == 0. Returns {rows, cols} or {0, 0} if no valid grid exists.
-static std::pair<uint32_t, uint32_t> find_best_n_2d(
-    uint32_t dim, uint32_t max_rows, uint32_t max_cols, uint32_t align) {
-    uint32_t best_n = 0, best_rows = 0, best_cols = 0;
-    for (uint32_t rows = 1; rows <= max_rows; rows++) {
-        for (uint32_t cols = 1; cols <= max_cols; cols++) {
-            uint32_t n = rows * cols;
-            if (n > best_n && dim % n == 0 && (dim / n) % align == 0) {
-                best_n = n;
-                best_rows = rows;
-                best_cols = cols;
-            }
-        }
-    }
-    return {best_rows, best_cols};
-}
-
 // Flatten PadValue to float for fill_implicit_tile_padding.
 static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
     return std::visit(
