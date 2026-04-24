@@ -312,6 +312,72 @@ def test_sdpa_chunked(
     )
 
 
+def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
+    """
+    Legacy scalar chunk_start_idx changes chunked SDPA's compile-time effective
+    K length, so different scalar offsets must not share one program cache entry.
+    """
+    b, nh, nkv, q_chunk_size, k_chunk_size, page_block_size, d = 1, 1, 1, 128, 128, 128, 128
+    num_pages = 2
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    torch.manual_seed(0)
+    tt_q = ttnn.from_torch(
+        torch.randn(b, nh, q_chunk_size, d),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_k = ttnn.from_torch(
+        torch.randn(num_pages, nkv, page_block_size, d),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_v = ttnn.from_torch(
+        torch.randn(num_pages, nkv, page_block_size, d),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    page_table = ttnn.Tensor(torch.arange(num_pages, dtype=torch.int32).reshape(b, num_pages), ttnn.int32).to(device)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        for chunk_start_idx in (0, q_chunk_size):
+            ttnn.transformer.chunked_scaled_dot_product_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                page_table,
+                chunk_start_idx,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+            ttnn.synchronize_device(device)
+
+        assert device.num_program_cache_entries() == 2, (
+            "Legacy scalar chunk_start_idx changes chunked SDPA program geometry and must be part of "
+            f"the cache key, got {device.num_program_cache_entries()} entries"
+        )
+    finally:
+        device.disable_and_clear_program_cache()
+        device.enable_program_cache()
+
+
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
@@ -361,7 +427,9 @@ def test_sdpa_chunked_iterate_batch(
             grid_size=(1, 1),
         )
 
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
+    expected_entries = s // prefill_chunk_size
+    assert (
+        device.num_program_cache_entries() == expected_entries
+    ), "Program cache should have {} entry/entries but has {}".format(
+        expected_entries, device.num_program_cache_entries()
     )
