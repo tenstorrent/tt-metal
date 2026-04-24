@@ -1527,7 +1527,7 @@ void kernel_main() {
     // dispatch_s's MEM_NOC_COUNTER_BASE storage (unused by either kernel in DM_DEDICATED_NOC
     // mode). dispatch_s adds the value to its own noc_nonposted_atomics_acked[NOC1] before its
     // noc_async_full_barrier() so the barrier reconciles with the NIU hardware ack count.
-    // Sentinel +1 so the slot value is always nonzero once published.
+    // dispatch_d_shutdown_sem_id signals that the value is ready, so a zero delta is valid.
     constexpr uint8_t kDispatchSProc = 1;  // dispatch_s runs on NCRISC
     if constexpr (!distributed_dispatcher) {
         // const uint32_t niu_atomics = NOC_STATUS_READ_REG(upstream_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
