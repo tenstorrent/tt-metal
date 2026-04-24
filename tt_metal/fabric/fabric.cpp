@@ -93,6 +93,10 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     return mesh_shapes;
 }
 
+std::vector<MeshId> get_all_fabric_mesh_ids() {
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph().get_mesh_ids();
+}
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
