@@ -166,6 +166,7 @@ target_sources(
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
+        cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
         core/tensor/tensor_utils.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
@@ -700,7 +701,6 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward
         TTNN::Ops::Eltwise::Unary
-        TTNN::Ops::Eltwise::UnaryNG
         TTNN::Ops::Eltwise::Unary::Backward
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
@@ -956,7 +956,6 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
