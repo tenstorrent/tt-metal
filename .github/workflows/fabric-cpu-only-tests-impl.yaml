@@ -9,7 +9,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 15
+        default: 20
       build-artifact-name:
         required: true
         type: string
