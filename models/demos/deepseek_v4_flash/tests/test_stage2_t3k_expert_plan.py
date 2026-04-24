@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from safetensors import safe_open
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
 from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, v4_router
@@ -25,6 +26,7 @@ from models.demos.deepseek_v4_flash.ttnn_expert_group import (
     route_weights_by_expert,
     unique_route_expert_ids,
 )
+from models.demos.deepseek_v4_flash.ttnn_moe_block import TtMoEFeedForwardBlock
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
 
@@ -224,6 +226,58 @@ def test_t3k_router_feeds_planned_routed_expert_group(
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
 
 
+def test_t3k_moe_ffn_block_routes_plans_shared_and_host_combines(
+    tiny_tt_preprocessed_checkpoint: Path,
+    t3k_mesh,
+) -> None:
+    """Single-module smoke; requires T3K because routed experts use planned disjoint 1x1 submeshes."""
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    router_weights = load_router_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=0)
+
+    hidden_size = router_weights.gate_weight.shape[-1]
+    seq_len = 32
+    torch_input = torch.linspace(-0.2, 0.3, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    input_ids = torch.zeros(1, seq_len, dtype=torch.int64)
+
+    expected_route_weights, expected_route_indices = v4_router(
+        torch_input[:, 0],
+        router_weights.gate_weight,
+        topk=int(manifest["config"]["num_experts_per_tok"]),
+        route_scale=float(manifest["config"]["routed_scaling_factor"]),
+        scoring_func=str(manifest["config"]["scoring_func"]),
+        input_ids=input_ids,
+        tid2eid=router_weights.tid2eid,
+    )
+    active_expert_ids = unique_route_expert_ids(expected_route_indices)
+    weights_by_expert = {
+        expert_id: _load_expert_weights(tiny_tt_preprocessed_checkpoint, expert_id) for expert_id in active_expert_ids
+    }
+    shared_expert = _load_shared_expert_weights(tiny_tt_preprocessed_checkpoint)
+    expected = combine_routed_experts(
+        torch_input[:, 0],
+        expected_route_weights,
+        expected_route_indices,
+        {expert_id: (weights["w1"], weights["w2"], weights["w3"]) for expert_id, weights in weights_by_expert.items()},
+        shared_expert=shared_expert,
+        swiglu_limit=float(manifest["config"]["swiglu_limit"]),
+    ).reshape_as(torch_input)
+
+    block = TtMoEFeedForwardBlock.from_preprocessed(tiny_tt_preprocessed_checkpoint, mesh_device=t3k_mesh, layer=0)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=block.primary_submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    torch_output = block(tt_input, input_ids=input_ids)
+
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
+
+
 def _load_expert_weights(preprocessed_path: Path, expert_id: int) -> dict[str, torch.Tensor]:
     return {
         projection: load_packed_expert_weight(
@@ -231,3 +285,13 @@ def _load_expert_weights(preprocessed_path: Path, expert_id: int) -> dict[str, t
         ).dequantize(dtype=torch.bfloat16)
         for projection in ("w1", "w2", "w3")
     }
+
+
+def _load_shared_expert_weights(preprocessed_path: Path) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    manifest = load_tt_manifest(preprocessed_path)
+    non_expert_path = preprocessed_path / manifest["artifacts"]["non_expert_safetensors"][0]
+    with safe_open(non_expert_path, framework="pt", device="cpu") as handle:
+        return tuple(
+            handle.get_tensor(f"layers.0.ffn.shared_experts.{projection}.weight").to(torch.bfloat16)
+            for projection in ("w1", "w2", "w3")
+        )

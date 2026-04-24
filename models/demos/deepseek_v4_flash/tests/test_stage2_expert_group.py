@@ -15,6 +15,11 @@ from models.demos.deepseek_v4_flash.ttnn_expert_group import (
     route_weights_by_expert,
     unique_route_expert_ids,
 )
+from models.demos.deepseek_v4_flash.ttnn_moe_block import (
+    build_moe_decode_plan,
+    default_moe_primary_submesh_coord,
+    validate_moe_primary_submesh_disjoint,
+)
 
 
 class _FakeExpert:
@@ -93,3 +98,21 @@ def test_route_weights_by_expert_builds_planned_group_inputs() -> None:
         route_weights_by_expert(route_weights[..., :1], route_indices)
     with pytest.raises(ValueError, match="non-negative"):
         route_weights_by_expert(route_weights, torch.full_like(route_indices, -1))
+
+
+def test_moe_decode_plan_builds_route_mapping_and_validates_primary_submesh() -> None:
+    route_weights = torch.tensor([[[0.2, 0.8], [0.4, 0.6], [0.5, 0.25]]], dtype=torch.float32)
+    route_indices = torch.tensor([[[2, 0], [0, 2], [2, 2]]], dtype=torch.int64)
+
+    decode_plan = build_moe_decode_plan(route_weights, route_indices, mesh_shape=(2, 4), replicas_per_expert=1)
+
+    assert decode_plan.expert_plan.activated_expert_ids == (2, 0)
+    assert decode_plan.expert_plan.devices_for_expert(2) == ((0, 0),)
+    assert decode_plan.expert_plan.devices_for_expert(0) == ((1, 0),)
+    torch.testing.assert_close(decode_plan.route_weights_by_expert[0], torch.tensor([[[0.8], [0.4], [0.0]]]))
+    torch.testing.assert_close(decode_plan.route_weights_by_expert[2], torch.tensor([[[0.2], [0.6], [0.75]]]))
+
+    assert default_moe_primary_submesh_coord((2, 4)) == (0, 3)
+    validate_moe_primary_submesh_disjoint((0, 3), decode_plan.expert_plan)
+    with pytest.raises(ValueError, match="overlaps a routed expert"):
+        validate_moe_primary_submesh_disjoint((0, 0), decode_plan.expert_plan)

@@ -32,6 +32,8 @@ class TtSharedExpertMLP(LightweightModule):
         self.dtype = dtype
         self.memory_config = memory_config
         self.swiglu_limit = float(swiglu_limit)
+        self.intermediate_size = int(w1.shape[0])
+        self.hidden_size = int(w1.shape[-1])
         self.w1 = _to_tt_linear_weight(w1, device=device, dtype=dtype, memory_config=memory_config)
         self.w2 = _to_tt_linear_weight(w2, device=device, dtype=dtype, memory_config=memory_config)
         self.w3 = _to_tt_linear_weight(w3, device=device, dtype=dtype, memory_config=memory_config)
