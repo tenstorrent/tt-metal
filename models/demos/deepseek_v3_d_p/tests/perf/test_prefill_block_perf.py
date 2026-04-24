@@ -27,7 +27,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
     [
         (
             f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer0 and gate_device and no_ref and isl_25k'",
-            1,  # TODO: set baseline after first run
+            23_624_505,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense",
             1,
@@ -37,7 +37,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
-            1,  # TODO: set baseline after first run
+            174_728_188,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe",
             1,
