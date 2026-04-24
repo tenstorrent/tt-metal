@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import numpy as np
 import torch
 from diffusers.models import AutoencoderKLMochi
 from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
 from transformers import T5EncoderModel, T5TokenizerFast
@@ -23,85 +20,9 @@ from ...models.transformers.transformer_mochi import MochiTransformer3DModel
 from ...models.vae.vae_mochi import MochiVAEDecoder
 from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
+from ...solvers import EulerSolver, schedules
 from ...utils import cache
-
-
-# from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
-def linear_quadratic_schedule(num_steps, threshold_noise, linear_steps=None):
-    if linear_steps is None:
-        linear_steps = num_steps // 2
-    linear_sigma_schedule = [i * threshold_noise / linear_steps for i in range(linear_steps)]
-    threshold_noise_step_diff = linear_steps - threshold_noise * num_steps
-    quadratic_steps = num_steps - linear_steps
-    quadratic_coef = threshold_noise_step_diff / (linear_steps * quadratic_steps**2)
-    linear_coef = threshold_noise / linear_steps - 2 * threshold_noise_step_diff / (quadratic_steps**2)
-    const = quadratic_coef * (linear_steps**2)
-    quadratic_sigma_schedule = [
-        quadratic_coef * (i**2) + linear_coef * i + const for i in range(linear_steps, num_steps)
-    ]
-    sigma_schedule = linear_sigma_schedule + quadratic_sigma_schedule
-    sigma_schedule = [1.0 - x for x in sigma_schedule]
-    return sigma_schedule
-
-
-# Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
-def retrieve_timesteps(
-    scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    timesteps: Optional[List[int]] = None,
-    sigmas: Optional[List[float]] = None,
-    **kwargs,
-):
-    r"""
-    Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
-    custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
-
-    Args:
-        scheduler (`SchedulerMixin`):
-            The scheduler to get timesteps from.
-        num_inference_steps (`int`):
-            The number of diffusion steps used when generating samples with a pre-trained model. If used, `timesteps`
-            must be `None`.
-        device (`str` or `torch.device`, *optional*):
-            The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
-        timesteps (`List[int]`, *optional*):
-            Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
-            `num_inference_steps` and `sigmas` must be `None`.
-        sigmas (`List[float]`, *optional*):
-            Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
-            `num_inference_steps` and `timesteps` must be `None`.
-
-    Returns:
-        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
-        second element is the number of inference steps.
-    """
-    if timesteps is not None and sigmas is not None:
-        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
-    if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accepts_timesteps:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" timestep schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    elif sigmas is not None:
-        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accept_sigmas:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" sigmas schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    else:
-        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-    return timesteps, num_inference_steps
+from ...utils.tracing import Tracer
 
 
 class MochiPipeline(DiffusionPipeline):
@@ -113,8 +34,6 @@ class MochiPipeline(DiffusionPipeline):
     Args:
         transformer ([`MochiTransformer3DModel`]):
             Conditional Transformer architecture to denoise the encoded video latents.
-        scheduler ([`FlowMatchEulerDiscreteScheduler`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
         vae ([`AutoencoderKLMochi`]):
             Variational Auto-Encoder (VAE) Model to encode and decode videos to and from latent representations.
         text_encoder ([`T5EncoderModel`]):
@@ -190,8 +109,7 @@ class MochiPipeline(DiffusionPipeline):
         if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
             self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
 
-        # Load scheduler (Torch)
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name, subfolder="scheduler")
+        self._solver = EulerSolver()
 
         # Load pretrained T5 text encoder and tokenizer (Torch)
         self.text_encoder = T5EncoderModel.from_pretrained(
@@ -225,6 +143,7 @@ class MochiPipeline(DiffusionPipeline):
             parallel_config=parallel_config,
             is_fsdp=True,
         )
+        self._transformer_tracer = Tracer(self.transformer.forward, device=mesh_device, prep_run=False)
 
         # Load state dict into TT transformer
         cache.load_model(
@@ -240,6 +159,7 @@ class MochiPipeline(DiffusionPipeline):
         torch_vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
         if use_reference_vae:
             self.vae = torch_vae
+            self._vae_decoder_tracer = None
         else:
             # Reshape the device mesh to the VAE mesh shape:
             if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
@@ -267,6 +187,7 @@ class MochiPipeline(DiffusionPipeline):
                 scaling_factor=torch_vae.config.scaling_factor,
             )
             self.vae.load_torch_state_dict(torch_vae.decoder.state_dict())
+            self._vae_decoder_tracer = Tracer(self.vae.forward, device=self.mesh_device, prep_run=False)
 
             # Reshape the device mesh back to the DiT mesh shape:
             if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
@@ -277,12 +198,22 @@ class MochiPipeline(DiffusionPipeline):
 
         # Register components for pipeline
         self.register_modules(
-            scheduler=self.scheduler,
             text_encoder=self.text_encoder,
             tokenizer=self.tokenizer,
             transformer=self.transformer,
             vae=self.vae,
         )
+
+        self._allocate_persistent_buffers()
+
+    def _allocate_persistent_buffers(self) -> None:
+        """Allocate persistent buffers by running a pipeline pass without tracing.
+
+        This is important so they do not get allocated after trace capture, which would lead to
+        them being overwritten during trace execution.
+        """
+        logger.info("Pipeline allocation run...")
+        self.run_single_prompt(prompt="", num_inference_steps=2, num_frames=168, seed=0, traced=False)
 
     @staticmethod
     def create_pipeline(
@@ -416,6 +347,7 @@ class MochiPipeline(DiffusionPipeline):
         max_sequence_length: int = 256,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        disable_attention_mask: bool = False,
     ):
         device = "cpu"
         dtype = dtype or self.text_encoder.dtype
@@ -435,6 +367,9 @@ class MochiPipeline(DiffusionPipeline):
         text_input_ids = text_inputs.input_ids
         prompt_attention_mask = text_inputs.attention_mask
         prompt_attention_mask = prompt_attention_mask.bool().to(device)
+
+        if disable_attention_mask:
+            prompt_attention_mask.fill_(value=True)
 
         # The original Mochi implementation zeros out empty negative prompts
         # but this can lead to overflow when placing the entire pipeline under the autocast context
@@ -479,6 +414,7 @@ class MochiPipeline(DiffusionPipeline):
         max_sequence_length: int = 256,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        disable_attention_mask: bool = False,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -521,6 +457,7 @@ class MochiPipeline(DiffusionPipeline):
                 max_sequence_length=max_sequence_length,
                 device=device,
                 dtype=dtype,
+                disable_attention_mask=disable_attention_mask,
             )
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
@@ -545,6 +482,7 @@ class MochiPipeline(DiffusionPipeline):
                 max_sequence_length=max_sequence_length,
                 device=device,
                 dtype=dtype,
+                disable_attention_mask=disable_attention_mask,
             )
 
         return prompt_embeds, prompt_attention_mask, negative_prompt_embeds, negative_prompt_attention_mask
@@ -675,9 +613,13 @@ class MochiPipeline(DiffusionPipeline):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 256,
         traced: bool = False,
+        vae_traced: bool | None = None,
+        encoder_traced: bool | None = None,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
+        vae_traced = vae_traced if vae_traced is not None else traced
+        encoder_traced = encoder_traced if encoder_traced is not None else traced
         height = height or self.default_height
         width = width or self.default_width
 
@@ -726,6 +668,7 @@ class MochiPipeline(DiffusionPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask,
             max_sequence_length=max_sequence_length,
             device=device,
+            disable_attention_mask=traced,
         )
         if profiler:
             profiler.end("encoder", profiler_iteration)
@@ -752,6 +695,9 @@ class MochiPipeline(DiffusionPipeline):
                 ccl_manager=self.ccl_manager,
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
+            )
+            self._transformer_tracer = Tracer(
+                self.transformer.forward, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
             )
 
             # Load state dict into TT transformer
@@ -789,24 +735,11 @@ class MochiPipeline(DiffusionPipeline):
 
         # 5. Prepare timestep
         # from https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
-        threshold_noise = 0.025
-        sigmas = linear_quadratic_schedule(num_inference_steps, threshold_noise)
-        sigmas = np.array(sigmas)
+        sigmas, alphas = schedules.linear_quadratic(num_inference_steps, threshold_noise=0.025)
+        sigmas, alphas = alphas, sigmas  # equivalent to diffuser's invert_sigmas=True
+        self._solver.set_schedule(sigmas, alphas)
+        timesteps = [s * 1000 for s in sigmas[:-1]]
 
-        print(f"given num_inference_steps: {num_inference_steps} and threshold_noise: {threshold_noise}")
-        print(f"sigmas: {sigmas}")
-
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            device,
-            timesteps,
-            sigmas,
-        )
-        print(f"timesteps: {timesteps}")
-        print(f"num_inference_steps: {num_inference_steps}")
-
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
 
         # 6. Denoising loop
@@ -822,7 +755,7 @@ class MochiPipeline(DiffusionPipeline):
                 self._current_timestep = 1000 - t
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
+                timestep = torch.tensor(t).expand(latent_model_input.shape[0]).to(latents.dtype)
 
                 print("Input to transformer:")
                 print(f"latent_model_input.shape: {latent_model_input.shape}")
@@ -831,23 +764,23 @@ class MochiPipeline(DiffusionPipeline):
                 print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
                 print(f"attention_kwargs: {attention_kwargs}")
 
-                noise_pred_uncond = self.transformer(
+                noise_pred_uncond = self._transformer_forward(
                     spatial=latent_model_input[:1],
                     prompt=prompt_embeds[:1],
                     timestep=timestep[:1],
                     prompt_attention_mask=prompt_attention_mask[:1],
+                    traced=traced,
                 )
-                noise_pred_text = self.transformer(
+                noise_pred_text = self._transformer_forward(
                     spatial=latent_model_input[1:],
                     prompt=prompt_embeds[1:],
                     timestep=timestep[1:],
                     prompt_attention_mask=prompt_attention_mask[1:],
+                    traced=traced,
                 )
                 print(f"noise_pred_uncond.shape: {noise_pred_uncond.shape}")
                 print(f"noise_pred_text.shape: {noise_pred_text.shape}")
                 # Mochi CFG + Sampling runs in FP32
-                noise_pred_uncond = noise_pred_uncond.to(torch.float32)
-                noise_pred_text = noise_pred_text.to(torch.float32)
 
                 assert self.do_classifier_free_guidance == True
                 if self.do_classifier_free_guidance:
@@ -856,7 +789,7 @@ class MochiPipeline(DiffusionPipeline):
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents.to(torch.float32), return_dict=False)[0]
+                latents = self._solver.step(step=i, latent=latents.to(torch.float32), velocity_pred=noise_pred)
                 latents = latents.to(latents_dtype)
 
                 if latents.dtype != latents_dtype:
@@ -873,9 +806,7 @@ class MochiPipeline(DiffusionPipeline):
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
 
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
+                progress_bar.update()
         if profiler:
             profiler.end("denoising", profiler_iteration)
 
@@ -903,6 +834,8 @@ class MochiPipeline(DiffusionPipeline):
             if self.reload_dit_model:
                 logger.info("Freeing MochiTransformer3DModel")
                 self.transformer = None
+                self._transformer_tracer.release_trace()
+                self._transformer_tracer = None
 
             # Reshape the device mesh to the VAE mesh shape:
             if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
@@ -910,7 +843,15 @@ class MochiPipeline(DiffusionPipeline):
 
             if profiler:
                 profiler.start("vae", profiler_iteration)
-            video = self.vae.decode(latents, return_dict=False)[0]
+
+            if isinstance(self.vae, MochiVAEDecoder):
+                tt_latents = self.vae.prepare_input(latents)
+                vae_forward = self._vae_decoder_tracer if vae_traced else self.vae.forward
+                tt_output = vae_forward(tt_latents)
+                video = self.vae.postprocess_output(tt_output, latents.shape)
+            else:
+                video = self.vae.decode(latents, return_dict=False)[0]
+
             if profiler:
                 profiler.end("vae", profiler_iteration)
 
@@ -930,3 +871,38 @@ class MochiPipeline(DiffusionPipeline):
 
     def synchronize_devices(self):
         ttnn.synchronize_device(self.mesh_device)
+
+    def _transformer_forward(
+        self,
+        *,
+        spatial: torch.Tensor,
+        prompt: torch.Tensor,
+        timestep: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+        traced: bool,
+    ) -> torch.Tensor:
+        assert self.transformer is not None
+        assert self._transformer_tracer is not None
+
+        B, C, T, H, W = spatial.shape
+
+        rope_cos_1HND, rope_sin_1HND, trans_mat = self.transformer.prepare_rope_features(T, H, W)
+        temb_11BD, prompt_1BLP = self.transformer.prepare_timestep_text_features(
+            timestep, prompt, prompt_attention_mask
+        )
+        spatial_1BNI, N = self.transformer.preprocess_spatial_input(spatial)
+
+        forward = self._transformer_tracer if traced else self.transformer.forward
+
+        proj_out_1BNI = forward(
+            temb_11BD=temb_11BD,
+            prompt_1BLP=prompt_1BLP,
+            rope_cos_1HND=rope_cos_1HND,
+            rope_sin_1HND=rope_sin_1HND,
+            spatial_1BNI=spatial_1BNI,
+            trans_mat=trans_mat,
+            N=N,
+        )
+
+        out = self.transformer.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
+        return out.to(torch.float32)

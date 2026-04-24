@@ -28,7 +28,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor, from_torch, unflatten
-from ....utils.tracing import traced_function
+from ....utils.tracing import Tracer, traced_function
 from .attention_wan import WanAttention
 
 
@@ -386,6 +386,7 @@ class WanTransformer3DModel(Module):
     def get_rope_features(self, hidden_states):
         if tuple(hidden_states.shape) not in self.cached_rope_features:
             rope_features = self.prepare_rope_features(hidden_states)
+            Tracer.warn_if_live(self.mesh_device)
             self.cached_rope_features[tuple(hidden_states.shape)] = rope_features
         return self.cached_rope_features[tuple(hidden_states.shape)]
 
@@ -591,7 +592,9 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep):
+    def inner_step(
+        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep, gather_output=True
+    ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -633,12 +636,13 @@ class WanTransformer3DModel(Module):
             spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config, dtype=ttnn.float32
         )
 
-        # Gather fp32 spatial output across sequence parallel devices (remains on device)
-        spatial_1BNI = self.ccl_manager.all_gather_persistent_buffer(
-            proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
-        )
+        if gather_output:
+            # Gather fp32 spatial output across sequence parallel devices (remains on device)
+            proj_out_1BNI = self.ccl_manager.all_gather_persistent_buffer(
+                proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+            )
 
-        return spatial_1BNI
+        return proj_out_1BNI
 
     # Prep run is False because we warmup the entire pipeline first. Remove if this is not desired.
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
@@ -654,6 +658,8 @@ class WanTransformer3DModel(Module):
         trans_mat: ttnn.Tensor,
         timestep: ttnn.Tensor,
         guidance_scale: float,
+        *,
+        gather_output: bool = True,
     ) -> ttnn.Tensor:
         cond = self.inner_step(
             spatial_1BNI,
@@ -663,12 +669,20 @@ class WanTransformer3DModel(Module):
             trans_mat,
             N,
             timestep,
+            gather_output=gather_output,
         )
         if not do_classifier_free_guidance:
             return cond
 
         uncond = self.inner_step(
-            spatial_1BNI, negative_prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep
+            spatial_1BNI,
+            negative_prompt_1BLP,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            N,
+            timestep,
+            gather_output=gather_output,
         )
 
         combined = ttnn.lerp(uncond, cond, guidance_scale)

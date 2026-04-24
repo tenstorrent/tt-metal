@@ -18,6 +18,7 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -526,7 +527,7 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
     # convert to causal attention mask
     attention_mask = attention_mask.reshape([batch_size, 1, 1, seq_len])
     attention_mask = ttnn.expand(attention_mask, [-1, -1, seq_len, -1])
-    attention_mask = ttnn.tril(attention_mask)
+    attention_mask = tensor.tril(attention_mask)
 
     attention_mask = (attention_mask - 1.0) * math.inf
 
