@@ -351,13 +351,12 @@ __attribute__((noinline)) void finish_profiler() {
             }
 
             if (do_noc && is_dram_set) {
-                const auto s = TensorAccessor(
-                    tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
-                    profiler_control_buffer[dramProfilerAddressIndex],
-                    pageSize);
-
-                uint64_t dram_bank_dst_noc_addr =
-                    s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+                // Bypass TensorAccessor — for the profiler's access pattern
+                // (bank_id < num_banks, bank_base = 0) this is equivalent to
+                // get_noc_addr_from_bank_id<DRAM=true>, with much smaller code.
+                uint64_t dram_bank_dst_noc_addr = get_noc_addr_from_bank_id</*DRAM=*/true>(
+                    core_flat_id / profiler_core_count_per_dram,
+                    profiler_control_buffer[dramProfilerAddressIndex] + dram_offset);
 
                 profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data),
@@ -421,12 +420,9 @@ __attribute__((noinline)) void quick_push() {
                            HOST_BUFFER_END_INDEX * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                            profiler_control_buffer[HOST_BUFFER_END_INDEX] * sizeof(uint32_t);
 
-    const auto s = TensorAccessor(
-        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
-        profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram);
-
-    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+    // Bypass TensorAccessor — see finish_profiler for rationale.
+    uint64_t dram_bank_dst_noc_addr = get_noc_addr_from_bank_id</*DRAM=*/true>(
+        core_flat_id / profiler_core_count_per_dram, profiler_control_buffer[DRAM_PROFILER_ADDRESS] + dram_offset);
 
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
@@ -665,7 +661,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Dispatch and enabled
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedN(name)                                                         \
+#define DeviceZoneScopedN(name)                                                          \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));           \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
