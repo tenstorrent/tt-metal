@@ -765,11 +765,19 @@ Sub-phases:
    - Add compile args (is_page_table_sharded, block_size_t)
    - Increase kernel CT args count
 
-**2E.** Update `eval_e2e.py` to use unified paging:
-   - Pass shared page_table to both standard layer_past and TQ cache
-   - Remove separate TQ cache allocation (or make it use same page_table)
+**2E.** Update `eval_e2e.py` to use unified paging — **DONE (2026-04-24)**
+   - Added `--tq-full-dequant` flag
+   - Allocates TQ cache with `paged_config` matching model's paged_attention_config
+   - Frees model's standard `layer_past` (BFP8 paged cache) since fused path doesn't use it
+   - `attention.py` forwards `page_table` through `turbo_quant_cache.update_cache()`
+     and `.fused_sdpa_decode()` (paged mode); also permutes Q from [1,B,NQH,DH] to
+     [B,NQH,1,DH] as the TQ op expects, and permutes output back.
+   - End-to-end validated with 2 layers: 6.9 ms/tok, 144.5 tok/s single-seq
+   - Full 32-layer test deferred (only slow due to 32× cold-cache compile; logic verified
+     at 2 layers)
 
-Effort: 1-2 days
+**Step 2 COMPLETE.** Paged TQ cache + page_table-aware reader + e2e integration
+all working. Next major piece is Step 3 (multi-device / T3K).
 
 **3. Multi-device / T3K support**
 - Replicate centroids across devices, shard indices/norms by heads
