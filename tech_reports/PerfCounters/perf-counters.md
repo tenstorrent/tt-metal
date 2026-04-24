@@ -36,6 +36,30 @@ python -m tracy --profiler-capture-perf-counters=all \
 
 Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
+### Environment Variable
+
+`TT_METAL_PROFILE_PERF_COUNTERS` is a bitfield that selects which counter groups are captured. Multiple groups are combined with OR.
+
+| Bit | Value | Group |
+|-----|-------|-------|
+| `1 << 0` | 1 | FPU |
+| `1 << 1` | 2 | PACK |
+| `1 << 2` | 4 | UNPACK |
+| `1 << 3` | 8 | L1 bank 0 (ring0 NOC, L1 arbitration) |
+| `1 << 4` | 16 | L1 bank 1 (ring1 NOC, TDMA extended) |
+| `1 << 5` | 32 | INSTRN (instruction thread) |
+| `1 << 6` | 64 | L1 bank 2 (BH only: NOC Ring 2) |
+| `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
+| `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
+
+Recommended value for a broad capture: `47` (`0x2F`) — FPU | PACK | UNPACK | L1_0 | INSTRN.
+
+```bash
+export TT_METAL_PROFILE_PERF_COUNTERS=47
+```
+
+**L1 bank mutual exclusion:** all L1 banks share the same hardware mux (selected via `MUX_CTRL`), so only one L1 bank may be enabled per run. The env-var path throws if more than one L1 bit is set. To capture multiple L1 banks, run the profiler twice and merge results; the `python -m tracy --profiler-capture-perf-counters=...` CLI does this automatically when both `l1_0` and `l1_1` are requested (see `process_model_log.run_device_profiler`).
+
 ### Architecture Summary
 
 | | Wormhole | Blackhole |
@@ -1094,6 +1118,32 @@ Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
 - Between: Mixed workload.
 
 **Use case:** Single-number summary of fidelity impact on math execution.
+
+---
+
+## Hardware Register Reference
+
+Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD`) is programmed via three RISC-V debug registers. The programming sequence in `start_perf_counter()` / `stop_perf_counter()` follows this map.
+
+### Control registers (`RISCV_DEBUG_REG_PERF_CNT_<X>0..2`)
+
+| Register | Field | Description |
+|---|---|---|
+| `RISCV_DEBUG_REG_PERF_CNT_<X>0` | — | Reference period in cycles. |
+| `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bits [7:0] | Mode: `0` = continuous, `1` = count until refclk cycles hit, `2` = continuous (no refclk maintenance). |
+| `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bits [12:8] | Bank select — selects which counter within the bank to read out. |
+| `RISCV_DEBUG_REG_PERF_CNT_<X>1` | Bit [16] | Output format: `0` = req count on `_OUT_H_<X>`, `1` = grant count. |
+| `RISCV_DEBUG_REG_PERF_CNT_<X>2` | Bit [0] | Start (rising edge only; 0→1 transition also clears the counters). |
+| `RISCV_DEBUG_REG_PERF_CNT_<X>2` | Bit [1] | Stop (rising edge only). |
+
+### Data registers
+
+| Register | Value |
+|---|---|
+| `RISCV_DEBUG_REG_PERF_CNT_OUT_L_<X>` | `ref_cnt` (elapsed cycles between start and stop). |
+| `RISCV_DEBUG_REG_PERF_CNT_OUT_H_<X>` | `req_cnt` if control bit [16]=0, otherwise `grant_cnt`. |
+
+Because the software must toggle bit [16] and re-read to get both `req` and `grant`, each counter is read twice. The intermediate register writes are fenced by a readback poll in `read_single_group()` to ensure the hardware has committed the new mux selection before the output registers are sampled — `volatile` reads alone do not provide MMIO ordering guarantees on RISC-V.
 
 ---
 
