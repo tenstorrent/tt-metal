@@ -721,3 +721,11 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, PersistentInput) {
     auto actual = run_eltwise_test(mesh_device, cfg, {a, b}, n_out);
     validate_pcc(actual, expected);
 }
+
+// NOTE: compute_compile_gate.cpp is a standalone kernel_lib parse/instantiation
+// regression gate. It is not wired into this gtest yet because the rest of this
+// file currently has drift against the live CircularBufferConfig / bfloat16
+// APIs (builds fail on Test 1–7 too). Once this gtest is repaired and built in
+// CI, add a TEST_F that launches compute_compile_gate.cpp with a 1-tile
+// identity passthrough — that alone catches future sfpu_helpers.inl /
+// eltwise_helpers.inl regressions before they reach any op.

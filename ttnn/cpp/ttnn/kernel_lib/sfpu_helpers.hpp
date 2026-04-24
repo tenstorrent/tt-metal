@@ -1041,8 +1041,8 @@ struct LgammaStirling : UnaryOp<LgammaStirling<Slot>, Slot> {
     ALWI void call(uint32_t d0) const;
 };
 
-template <Dst Slot = Dst::D0>
-struct FillTileInt : UnaryOp<FillTileInt<Slot>, Slot> {
+template <Dst Slot = Dst::D0, DataFormat DF = DataFormat::Int32>
+struct FillTileInt : UnaryOp<FillTileInt<Slot, DF>, Slot> {
     uint32_t value;
     ALWI void init() const;
     ALWI void call(uint32_t d0) const;

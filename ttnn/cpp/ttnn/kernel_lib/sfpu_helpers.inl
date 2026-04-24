@@ -497,10 +497,10 @@ ALWI void LgammaStirling<Slot>::init() const { lgamma_stirling_tile_init(); }
 template <Dst Slot>
 ALWI void LgammaStirling<Slot>::call(uint32_t d0) const { lgamma_stirling_tile(d0); }
 
-template <Dst Slot>
-ALWI void FillTileInt<Slot>::init() const { fill_tile_init(); }
-template <Dst Slot>
-ALWI void FillTileInt<Slot>::call(uint32_t d0) const { fill_tile_int(d0, this->value); }
+template <Dst Slot, DataFormat DF>
+ALWI void FillTileInt<Slot, DF>::init() const { fill_tile_init(); }
+template <Dst Slot, DataFormat DF>
+ALWI void FillTileInt<Slot, DF>::call(uint32_t d0) const { fill_tile_int<DF>(d0, this->value); }
 
 template <Dst In0, Dst In1, Dst Out>
 ALWI void LgammaStirlingFloat<In0, In1, Out>::init() const { lgamma_stirling_float_tile_init(); }
