@@ -191,7 +191,7 @@ class TtMultiHeadAttentionModel:
             )
             qkv_bias_cache_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}_v2.tensorbin"
+                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.tensorbin"
             )
 
         def compute_qkv_weight():
@@ -250,7 +250,7 @@ class TtMultiHeadAttentionModel:
         )
 
         qkv_bias = load_or_compute_and_cache(
-            qkv_bias_cache_path,
+            None,
             compute_qkv_bias,
             device=device,
             mem_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],

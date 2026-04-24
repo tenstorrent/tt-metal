@@ -106,14 +106,14 @@ class TtFeedForwardModel:
                 f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             ff1_bias_path = str(
-                f"{tt_cache_path}/" f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}_v2.tensorbin"
+                f"{tt_cache_path}/" f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.tensorbin"
             )
             ff2_weight_path = str(
                 f"{tt_cache_path}/"
                 f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             ff2_bias_path = str(
-                f"{tt_cache_path}/" f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}_v2.tensorbin"
+                f"{tt_cache_path}/" f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.tensorbin"
             )
 
         def compute_ff1_weight():
@@ -167,7 +167,7 @@ class TtFeedForwardModel:
             mem_config=model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"],
         )
         encoder0_ff1_bias = load_or_compute_and_cache(
-            ff1_bias_path,
+            None,
             compute_ff1_bias,
             device=device,
             mem_config=model_config["OP9_FF1_MM_BIAS_MEMCFG"],
@@ -179,7 +179,7 @@ class TtFeedForwardModel:
             mem_config=model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"],
         )
         encoder0_ff2_bias = load_or_compute_and_cache(
-            ff2_bias_path,
+            None,
             compute_ff2_bias,
             device=device,
             mem_config=model_config["OP10_FF2_MM_BIAS_MEMCFG"],
