@@ -1,0 +1,8 @@
+﻿ttnn.bcast
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bcast:
+
+.. autooperation:: ttnn.bcast
