@@ -26,11 +26,11 @@ evals) and adds TT-specific guidance from `tt-guidelines.md`.
 ## Pipeline
 
 ```
-design → align → write → shrink → validate
+design → align → write → optimize → validate
 ```
 
-The design phase is where the real work happens. The shrink phase is where
-bloat gets caught before it ships.
+The design phase is where the real work happens. The optimize phase is
+where bloat and scatter get caught before they ship.
 
 ## Phase 1: Design Alignment
 
@@ -82,20 +82,32 @@ Only after receiving explicit approval to proceed:
 2. **Load `tt-guidelines.md`** and apply TT-specific constraints.
 3. Write SKILL.md + sub-files.
 
-## Phase 3: Shrink (gate)
+## Phase 3: Optimize (gate)
 
 Applies equally to new skills and to edits of existing skills.
+
+### Size check
 
 1. `wc -l` every file touched. Every file must be at or under its target
    in `tt-guidelines.md § Token Economy`. Over target → return to Phase 2.
 2. For each net-added paragraph, ask: *what behavior changes if a reader
    skips this?* Cut decorative context.
-3. Collapse repeated framings. If the same rule appears twice, delete one.
-4. Prefer tables over prose for enumerable facts.
-5. Replace duplicated content with cross-references.
+3. Prefer tables over prose for enumerable facts.
+
+### Dedup sweep
+
+4. List every rule, invariant, command, path, or env var that appears in
+   the touched files. For each, verify it lives in exactly one file per
+   `tt-guidelines.md § Single Canonical Location`.
+5. **Recipe/knowledge cross-check:** for each edited SKILL.md, grep the
+   corresponding `knowledge/recipes/<repo>/` and `knowledge/<domain>/` for
+   overlapping command strings, file paths, env var names, CLI flags.
+6. Duplication found → return to Phase 2. Rewrite the non-canonical file
+   as a one-line cross-reference; do not restate.
 
 **Gate:** Phase 4 does not run until Phase 3 reports pass. Do not skip on
-edits — growth-per-edit is the bloat pattern.
+edits — growth-per-edit is the bloat pattern, and rule-scatter is the
+dedup pattern.
 
 ## Phase 4: Validate
 

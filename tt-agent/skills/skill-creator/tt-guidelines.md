@@ -52,6 +52,44 @@ For NOC read/write API: tt_metal/hw/inc/api/dataflow/dataflow_api.h
 
 ---
 
+## Single Canonical Location
+
+Content Placement picks the *directory*. This rule picks the *file* when
+content could live in more than one.
+
+**Rule:** each rule, invariant, command, path, or env var lives in exactly
+one file. All other mentions are one-line cross-references that state
+*where* the content lives, not *what* it says.
+
+**Heuristic for picking the canonical file:** *which file would need to be
+updated first if this content became wrong?* That file owns it.
+
+| Content | Canonical file | If this becomes wrong... |
+|---|---|---|
+| `python -m tracy ...` command | `knowledge/recipes/tt-metal/profiler.md` | recipe updates first |
+| `TT_METAL_DPRINT_CORES` env conflict | same recipe | recipe updates first |
+| Comment-hygiene rule | `skills/optimizer/playbook.md` | playbook updates first |
+| "One variable per iteration" | `skills/optimizer/iterate.md` | iteration subagent updates first |
+| L1 capacity = 1.5 MB (silicon fact) | `knowledge/hardware/wormhole.md` | hardware file updates first |
+| L1 usable = 1.2 MB (optimization budget) | `skills/optimizer/playbook.md` | playbook updates first (derived guidance) |
+
+**Cross-reference format** (in non-canonical files):
+
+Wrong — restates the content:
+> Pre-divide bias by num_devices because AllReduce sum multiplies it.
+
+Right — points to the canonical file:
+> See `playbook.md` § "Pre-divide cross-device bias by num_devices".
+
+Readers who need the detail follow the pointer. Readers who don't save
+the tokens.
+
+The rule forces the question to be asked. It doesn't eliminate judgment
+— when a session surfaces drift, the fix is "ask the question and move
+the content", not "follow a fixed ladder".
+
+---
+
 ## Workflow Skills
 
 Must define explicit convergence criteria:
@@ -187,5 +225,6 @@ Before finalizing any skill:
 - [ ] Autonomous skills declare and run the Developer-Rule Conflict Protocol
 - [ ] Every file within size target, or overrun justified in-file
 - [ ] Each rule ≤1 example; tables used where enumerable
-- [ ] No content duplicated across files — cross-references instead
+- [ ] Each rule/invariant/command appears in exactly one file per § Single Canonical Location
+- [ ] Skill files don't restate content owned by `knowledge/recipes/` or `knowledge/<domain>/` — cross-reference only
 - [ ] `pytest tt-agent/tests/test_skill_frontmatter.py` passes
