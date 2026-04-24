@@ -38,6 +38,15 @@ def is_quad_mesh_env() -> bool:
     return os.getenv("MESH_DEVICE") == "QUAD"
 
 
+# We cann't warmup prefill for all possible prompt lengths, only warmup for the selective prompt lengths.
+# LINEAR_ADDITIVE: tile, 2*tile, 3*tile, ... hf_config.max_seq_len
+# LINEAR_MULTIPLES: tile, 2*tile, 4*tile, 8*tile, ... hf_config.max_seq_len
+PREFILL_WARMUP_MODE_LINEAR_ADDITIVE = "LINEAR_ADDITIVE"
+PREFILL_WARMUP_MODE_LINEAR_MULTIPLES = "LINEAR_MULTIPLES"
+DEFAULT_PREFILL_WARMUP_MODE_VLLM = PREFILL_WARMUP_MODE_LINEAR_MULTIPLES
+DEFAULT_PREFILL_WARMUP_MODE_DEMO = PREFILL_WARMUP_MODE_LINEAR_ADDITIVE
+
+
 def is_quad_mesh(mesh_device: ttnn.MeshDevice) -> bool:
     """Check whether the mesh device has a QUAD configuration (16x8)."""
     return mesh_device.shape[0] == 16 and mesh_device.shape[1] == 8
@@ -61,6 +70,17 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 DEFAULT_SAMPLING_TOP_K = 32
 
 
+def align_up(value: int, align_value: int) -> int:
+    """Round value up to the next multiple of align_value, with a minimum of align_value."""
+    return max(align_value, (value + align_value - 1) // align_value * align_value)
+
+
+def get_min_alignment_value_for_prefill(rows: int) -> int:
+    """for quad mesh, we need to align each seq_len chunk per row to the tile size
+    for other meshes, we align the entire seq_len to the tile size"""
+    return int(ttnn.TILE_SIZE) * rows if rows == 16 else int(ttnn.TILE_SIZE)
+
+
 def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
     """Round ``seq_len`` up to a multiple of ``TILE_SIZE * num_mesh_rows`` (mesh axis 0).
 
@@ -71,10 +91,8 @@ def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
     rows = int(num_mesh_rows)
     if rows <= 0:
         raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
-    # for quad mesh, we need to align each seq_len chunk per row to the tile size
-    # for other meshes, we align the entire seq_len to the tile size
-    alignment = int(ttnn.TILE_SIZE) * rows if rows == 16 else int(ttnn.TILE_SIZE)
-    return ((seq_len_i + alignment - 1) // alignment) * alignment
+    alignment = get_min_alignment_value_for_prefill(num_mesh_rows)
+    return align_up(seq_len_i, alignment)
 
 
 def make_deepseek_sampling_args(
