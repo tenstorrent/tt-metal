@@ -55,11 +55,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#if defined(PROFILE_PERF_COUNTERS)
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)  // perf counter readout code needs >6KB
-#else
 #define MEM_BRISC_FIRMWARE_SIZE (6 * 1024)
-#endif
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 2048
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
