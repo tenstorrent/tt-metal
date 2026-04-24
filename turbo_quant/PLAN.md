@@ -1,5 +1,58 @@
 # TurboQuant KV Cache Quantization
 
+## ⏸ Session pause (2026-04-24) — resume here tomorrow
+
+**Where we are:** Full Dequant path (Section 6, Step 3) works end-to-end on
+N150 and mesh-compatible on N150×4, but has a **non-linear scaling problem**.
+
+**Latest commits on `mtairum/kvcache_turboquant`:**
+| Commit | What |
+|--|--|
+| `3da187312b0` | Step 1 (Multi-chunk online softmax fix — cos 0.998+) |
+| `c833e062f15` | Step 2 core (paged TQ cache + page_table-aware reader) |
+| `39e590d6f03` | Step 2E (eval_e2e `--tq-full-dequant` flag + attention.py plumbing) |
+| `a5160d2fd60` | Step 3A (mesh_mapper=ReplicateTensorToMesh for paged cache) |
+| `ff548d2d19c` | Shared TQ cache across layers + `tq_layer_idx` attr |
+| `2a7fbbbb76b` | PLAN: scaling characterization + 8L data |
+
+**Scaling data (N150, single device, --no-trace, `--tq-full-dequant`):**
+| Layers | ms/tok | Δ per layer |
+|-:|-:|-:|
+| 2 | 7 | — (fast path) |
+| 3 | 121 | **+114** (big jump) |
+| 4 | 238 | +117 |
+| 8 | 707 | +117 |
+| 32 projected | ~3500 | ~100× baseline 37 ms/tok |
+
+Multi-device (N150×4, 2-layer) also hangs — scales with layers × devices total
+fused-SDPA invocations per step.
+
+**Next debug actions (pick one):**
+1. **Tracy-profile a 3-layer run** — find where the 114 ms/layer goes. Launch
+   with `TT_METAL_TRACY=1` or profile from Python side. Check if each layer's
+   `fused_sdpa_decode` is hitting the program cache or recompiling.
+2. **Check program cache hit rate** — print `device.get_program_cache().num_entries()`
+   before + after decode, or set `TT_METAL_PROGRAM_CACHE_STATS=1`.
+3. **Fold the `ttnn.permute(Q, (1,2,0,3))` into `fused_sdpa_decode`** so we save
+   one Python-dispatch op per layer per step. If dispatch-bound, this ≈ 30 ms ×
+   32 layers reduction.
+4. **Profile trace-mode** — earlier trace hung in `execute_trace`. Smaller
+   model (2 or 3 layers) + trace may narrow down whether it's a trace-only
+   issue or same core bottleneck.
+
+**Useful repro commands:**
+```bash
+# Single device, specific layer count
+timeout 240 python -u turbo_quant/eval_e2e.py --tq-full-dequant --num-layers 3 --max-new-tokens 5 --max-seq-len 128 --no-trace
+
+# 4-device mesh (needs env)
+TT_NUM_DEVICES=4 timeout 300 python -u turbo_quant/eval_e2e.py --tq-full-dequant --num-layers 2 --max-new-tokens 5 --max-seq-len 128 --no-trace
+```
+
+Full details in Section 6 below.
+
+---
+
 ## 1. Paper Reference & Summary
 
 **TurboQuant**: Data-oblivious online vector quantization for KV cache compression.
