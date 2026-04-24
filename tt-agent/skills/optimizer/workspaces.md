@@ -54,7 +54,7 @@ at session start:
 
 1. `$CCACHE_DIR` set → use it.
 2. Else → `<parent-of-workspaces>/.ccache/`. Create if missing. Export.
-3. Log the resolved path in `trend-<scope>.md` header.
+3. Log the resolved path in `overview-<scope>.md` header.
 
 Export `CCACHE_DIR` explicitly to every `tt:run` invocation and every
 dispatched subagent — non-interactive subprocesses and MCP job contexts

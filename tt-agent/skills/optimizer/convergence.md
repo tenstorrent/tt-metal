@@ -75,7 +75,7 @@ Last <stall_ask> iterations improved best by less than <threshold>%.
 Recent trials:
 <table of last 5: commit, hypothesis, metric>
 
-Trend file: ~/.tt-agent/notes/trend-<scope>.md
+Overview file: ~/.tt-agent/notes/overview-<scope>.md
 Workspaces: <list>
 
 Options:
@@ -92,15 +92,15 @@ Wait for developer choice. On timeout, keep state and stay idle.
 1. Keep the failing commit — do not revert.
 2. Findings note: failing SHA, diff vs previous-best, exact PCC value,
    note to treat as evidence (not a fix).
-3. Trend `best` row stays at last passing commit. Workspace HEAD is at
-   failing commit for easy inspection.
+3. Overview `best` row stays at last passing commit. Workspace HEAD is
+   at failing commit for easy inspection.
 
-## Trend file format
+## Overview file format
 
-`~/.tt-agent/notes/trend-<scope>.md` — overwritten every iteration.
+`~/.tt-agent/notes/overview-<scope>.md` — overwritten every iteration.
 
 ```markdown
-# Trend: <scope>
+# Overview: <scope>
 
 **Session started:** YYYY-MM-DD HH:MM:SS
 **Repo:** tt-metal
@@ -148,6 +148,7 @@ last 50). Contribution and forensic tables never truncated.
 
 ## Interruption
 
-Trend file and commits are written synchronously per iteration. Resume by
-re-reading `trend-<scope>.md` and the branch HEAD — invoking the optimizer
+The overview file and commits are written synchronously per iteration.
+Resume by re-reading `overview-<scope>.md` and the branch HEAD — invoking
+the optimizer
 with the same scope and goal picks up from current best.

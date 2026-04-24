@@ -78,7 +78,7 @@ Invoke `tt:run` to execute the unit test (PCC check runs inside). Invoke
 ### 6. Record
 
 - Commit: `opt(<scope>): <one-line hypothesis> — <metric> (<Δ%> vs best)`.
-- Append row to `trend-<scope>.md` (format in `convergence.md`) with
+- Append row to `overview-<scope>.md` (format in `convergence.md`) with
   utilization columns: `DRAM %`, `FLOPs %`, `Abs TFLOPs`, `Bound`, `Cores`.
   For parallel workspaces include the workspace letter in the `WS` column.
 - Emit one line to the developer in real time:
@@ -102,7 +102,7 @@ Apply `convergence.md`:
 ### 8. Next iteration
 
 Next hypothesis can be informed by all prior trials (self + siblings).
-Read the trend file at each iteration — sibling evidence is signal.
+Read the overview file at each iteration — sibling evidence is signal.
 
 If 3 consecutive trials in this workspace regressed, pause and rethink
 direction before another incremental variation. Record the rethink in the
@@ -116,7 +116,7 @@ subject's first word:
 - `opt(<scope>): forensic — <what was tried>` for kept-but-failed trials
 - `opt(<scope>): revert — <...>` for explicit reverts on the same branch
 
-The trend-file "Forensic failures" table is regenerated from `git log`
+The overview file's "Forensic failures" table is regenerated from `git log`
 by filtering on these prefixes.
 
 ## Parallel workspace interaction

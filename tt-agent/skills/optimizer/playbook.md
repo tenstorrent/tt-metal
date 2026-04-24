@@ -2,7 +2,7 @@
 
 Guidelines distilled from prior optimizer sessions. Each entry names the
 pattern, the expected gain, and when to deviate. When a guideline can't be
-followed, document the reason in the trend-file commit.
+followed, document the reason in the overview file commit.
 
 ## Matmul memory layout
 
@@ -136,7 +136,7 @@ Same trick applies to any reduced intermediate followed by a bias/scale add.
 - `num_buffers_per_channel`: 2 → 4 regressed +47μs
 
 Small targeted sweep (3-4 values per knob) rather than a directional tune.
-Record the full sweep in the trend-file so future sessions don't re-walk
+Record the full sweep in the overview file so future sessions don't re-walk
 regressions.
 
 ## Correctness

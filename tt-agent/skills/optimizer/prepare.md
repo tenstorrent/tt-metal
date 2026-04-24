@@ -7,7 +7,7 @@ note in `~/.tt-agent/notes/` that the Baseline phase reads.
 
 1. **Research the target op.** Invoke `tt:learn("<target> — config knobs,
    valid dim constraints, kernel variants")`. Record the note path in the
-   trend file. The first iteration's hypothesis queue depends on this.
+   overview file. The first iteration's hypothesis queue depends on this.
 
 2. **Sibling-implementation scan.** If the target is "reused from X with
    changes" (very common in tt-metal — most multimodal and model variants
@@ -25,7 +25,7 @@ note in `~/.tt-agent/notes/` that the Baseline phase reads.
    progcfg, compare to `self.<weight>.shape[-1]` of the loaded tensor.
    `ModelArgs` fields are computed at config time and can truncate
    (int-div) or drift from actual weight shape. Prefer the weight-shape
-   value in progcfgs. If a mismatch exists, flag it in the trend file —
+   value in progcfgs. If a mismatch exists, flag it in the overview file —
    a standalone fix PR may be warranted.
 
 4. **Authoritative docs sweep.** Ask the developer whether internal guides

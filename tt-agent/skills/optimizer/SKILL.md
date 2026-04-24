@@ -50,7 +50,7 @@ reset tool is callable:
 - `select:tt_device_job_run,tt_device_job_run_bg,tt_device_job_wait,tt_device_job_kill,tt_device_job_logs` — tt:run dispatches through these.
 
 Mandatory when a CCL hypothesis is on the queue. Record load in the first
-trend-file entry.
+overview-file entry.
 
 ## Inputs
 
@@ -74,12 +74,12 @@ trend-file entry.
 | Extract* | Capture model inputs, write unit test, verify ±10% | `extract.md` | test path + tensor path |
 | Baseline | Profile the unit test | `tt:profiler` | `profile-<scope>-<ts>.md`, baseline row |
 | Spawn* | Clone + branch + build per hypothesis | `workspaces.md` | N workspaces, N branches |
-| Iterate | Hypothesize → implement → build → profile → commit → record | `iterate.md` (+ `playbook.md`, `convergence.md`) | commits, profile notes, trend rows |
+| Iterate | Hypothesize → implement → build → profile → commit → record | `iterate.md` (+ `playbook.md`, `convergence.md`) | commits, profile notes, overview rows |
 | Review | Review-to-done loop on winning branch | `skills/code-review/review-loop.md` | `findings-review-<ts>-<scope>.md` |
 
 \* conditional — Extract runs only if no unit test exists; Spawn only for parallelism > 1.
 
-After each phase, summarize in 3-5 lines in the trend file and move on.
+After each phase, summarize in 3-5 lines in the overview file and move on.
 Phase inputs are consumed, not carried forward.
 
 ## Outputs
@@ -88,7 +88,7 @@ Phase inputs are consumed, not carried forward.
 
 | File | Purpose |
 |---|---|
-| `trend-<scope>.md` | Single-glance trajectory. Overwritten every iteration. See `convergence.md` for format. |
+| `overview-<scope>.md` | **Start here.** Single-glance trajectory + live status. Overwritten every iteration. Format in `convergence.md`. |
 | `profile-<scope>-<ts>.md` | One per iteration, written by `tt:profiler`. |
 | `findings-optimizer-<scope>-<ts>.md` | Final report: summary, winning commit(s), workspace paths, cleanup instructions. |
 
@@ -104,14 +104,14 @@ See `convergence.md`. Summary:
 
 - Continue while best improved ≥ 2% in the last 5 iterations.
 - At 10 iterations without improvement, ask the developer.
-- PCC < 0.999 → immediate abort. Commit kept; trend rolls back to prior best.
+- PCC < 0.999 → immediate abort. Commit kept; overview rolls back to prior best.
 
-No hard iteration cap. Developer can interrupt anytime; trend file and
+No hard iteration cap. Developer can interrupt anytime; overview file and
 commits are current after every iteration.
 
 ## Caller Contract
 
-- **Developer**: reads `trend-<scope>.md` anytime. On stall prompt,
+- **Developer**: reads `overview-<scope>.md` anytime. On stall prompt,
   responds with direction or stop. At success, cherry-picks or merges
   the winning commit; otherwise deletes branches and workspaces per
   the findings note.
