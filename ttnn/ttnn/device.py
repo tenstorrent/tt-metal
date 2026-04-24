@@ -23,6 +23,7 @@ get_optimal_dram_bank_to_logical_worker_assignment = (
 )
 enable_asynchronous_slow_dispatch = ttnn._ttnn.device.enable_asynchronous_slow_dispatch
 disable_asynchronous_slow_dispatch = ttnn._ttnn.device.disable_asynchronous_slow_dispatch
+is_asynchronous_slow_dispatch_enabled = ttnn._ttnn.device.is_asynchronous_slow_dispatch_enabled
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config

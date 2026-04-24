@@ -16,7 +16,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -190,67 +190,6 @@ Tensor _make_global_from_hw_impl(
 }  // namespace ttnn::detail
 
 namespace ttnn {
-
-// TODO: In future will uplift the op once the floor and tan has supported.
-// digamma support for the range of (1, inf)
-Tensor digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor input = input_a.dtype() == DataType::BFLOAT8_B ? ttnn::fill_implicit_tile_padding(input_a, 1.0f) : input_a;
-    Tensor t_log_out = ttnn::log(input, true, output_mem_config);  // negative log is not useful here
-
-    // 1/2(z)
-    Tensor input_recip = ttnn::reciprocal(input, output_mem_config);
-    Tensor output = ttnn::multiply(input_recip, 0.5f, std::nullopt, output_mem_config);
-    Tensor tmp = ttnn::square(input_recip, output_mem_config);
-    Tensor val_square = tmp;
-    // (1/12) * x^2
-    output = ttnn::subtract(output, ttnn::multiply(tmp, 0.083333333f), std::nullopt, output_mem_config);
-
-    // (1/120) * x^4
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::add(
-        output,
-        ttnn::multiply(tmp, 0.008333333333333333f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    //(1/252) * x^6
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::subtract(
-        output,
-        ttnn::multiply(tmp, 0.003968253968253968f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    // (1/240) *x^8
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::add(
-        output,
-        ttnn::multiply(tmp, 0.004166666666666667f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    //(1/132) * x^10
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::subtract(output, ttnn::multiply(tmp, 0.007575757575757576), std::nullopt, output_mem_config);
-
-    //(691/32760) * x^12
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::add(
-        output,
-        ttnn::multiply(tmp, 0.021092796092796094, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    //(1/12) * x^14
-    tmp = ttnn::multiply(tmp, val_square, std::nullopt, output_mem_config);
-    output = ttnn::subtract(
-        output,
-        ttnn::multiply(tmp, 0.08333333333333333, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-
-    return ttnn::subtract(t_log_out, output, std::nullopt, output_mem_config);
-}
 
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
@@ -486,7 +425,7 @@ Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCon
     float fact_val = std::tgamma(1.0f + k);       // k!
     float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)
     float scale = fact_val * pos_neg;
-    return ttnn::detail::unary_impl(
+    return ttnn::operations::unary_ng::detail::unary_ng_impl(
         input_a,
         {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::POLYGAMMA, {n, scale})},
         output_mem_config);

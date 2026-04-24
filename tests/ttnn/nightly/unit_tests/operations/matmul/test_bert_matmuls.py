@@ -11,13 +11,10 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
     pytorch_ops,
     tt_lib_ops,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_equal,
-    comp_pcc,
-)
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from loguru import logger
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -101,6 +98,7 @@ def test_bert_linear_batch7(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -209,9 +207,7 @@ def test_bert_linear_batch7(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(pt_out, tt_out, check_allclose=False, check_frobenius=False, check_ulp=False)
 
 
 def run_bert_linear_batch4(
@@ -337,9 +333,15 @@ def run_bert_linear_batch4(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        pt_out,
+        tt_out,
+        atol=0.009 * K,
+        rtol=18.452 * K,
+        frobenius_threshold=0.001 * K,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 def not_fit_l1(M, K, N, fp32):
@@ -396,6 +398,7 @@ def test_bert_linear_batch4(
     fp32_acc_mode,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     for i in range(1):
         logger.info(i)
         if not not_fit_l1(M, K, N, fp32_acc_mode):
@@ -467,6 +470,7 @@ def test_bert_linear_batch4_fp32_input_output(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -559,6 +563,6 @@ def test_bert_linear_batch4_fp32_input_output(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
-    logger.info(output)
-    assert passing
+    assert_numeric_metrics(
+        pt_out, tt_out, atol=8911.281 * K, rtol=0.001 * K, frobenius_threshold=0.001 * K, check_ulp=False
+    )

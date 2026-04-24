@@ -56,7 +56,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     - Per device: (1, 1, isl_per_chip, 1792) - 7168 / 4 = 1792
     - Stats gathered along cluster_axis=1 (mesh columns)
     """
-    torch.manual_seed(1234)
+    torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
@@ -153,7 +153,7 @@ def test_rmsnorm_single_chip(device, isl_per_chip, emb_dim, epsilon):
     - Input shape: (1, 1, isl_per_chip, emb_dim) - 4D format
     - Full embedding dimension on single chip
     """
-    torch.manual_seed(1234)
+    torch.manual_seed(42)
 
     inp_shape = (1, 1, isl_per_chip, emb_dim)
 

@@ -7,6 +7,8 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include <unistd.h>
 #include <climits>
 #include <fstream>
@@ -43,9 +45,21 @@ TrayID get_tray_id_for_chip(
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
+        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
     };
 
-    if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
+    if (using_mock_cluster_desc) {
+        return TrayID{0};
+    }
+    if (!mobo_to_bus_ids.contains(mobo_name)) {
+        auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
+        log_warning(
+            tt::LogAlways,
+            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+            mobo_name,
+            chip_id,
+            bus_id);
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -237,10 +251,70 @@ void generate_cross_host_connections(PhysicalSystemDescriptor& psd) {
     }
 }
 
+struct OneSidedConnection {
+    std::string host;
+    std::string src_host;
+    std::string dst_host;
+    AsicID src_asic;
+    AsicID dst_asic;
+    uint8_t src_chan;
+    uint8_t dst_chan;
+};
+
+void erase_one_sided_connections(PhysicalSystemDescriptor& psd, const std::vector<OneSidedConnection>& connections) {
+    auto& system_graph = psd.get_system_graph();
+    auto& exit_node_table = psd.get_exit_node_connection_table();
+
+    for (const auto& conn : connections) {
+        // Remove from asic_connectivity_graph
+        auto& asic_group = system_graph.asic_connectivity_graph[conn.host];
+        if (auto src_it = asic_group.find(conn.src_asic); src_it != asic_group.end()) {
+            auto& dst_edges = src_it->second;
+            auto dst_it = std::find_if(dst_edges.begin(), dst_edges.end(), [&](const AsicConnectionEdge& edge) {
+                return edge.first == conn.dst_asic;
+            });
+            if (dst_it != dst_edges.end()) {
+                auto& eth_conns = dst_it->second;
+                std::erase_if(eth_conns, [&](const EthConnection& ec) {
+                    return ec.src_chan == conn.src_chan && ec.dst_chan == conn.dst_chan;
+                });
+                if (eth_conns.empty()) {
+                    dst_edges.erase(dst_it);
+                }
+            }
+            if (dst_edges.empty()) {
+                asic_group.erase(src_it);
+            }
+        }
+
+        // Remove from exit_node_connection_table
+        if (auto host_it = exit_node_table.find(conn.host); host_it != exit_node_table.end()) {
+            std::erase_if(host_it->second, [&](const ExitNodeConnection& enc) {
+                return enc.src_exit_node == conn.src_asic && enc.dst_exit_node == conn.dst_asic &&
+                       enc.eth_conn.src_chan == conn.src_chan && enc.eth_conn.dst_chan == conn.dst_chan;
+            });
+        }
+
+        // Remove from host_connectivity_graph
+        if (auto host_it = system_graph.host_connectivity_graph.find(conn.src_host);
+            host_it != system_graph.host_connectivity_graph.end()) {
+            for (auto& host_edge : host_it->second) {
+                if (host_edge.first == conn.dst_host) {
+                    std::erase_if(host_edge.second, [&](const ExitNodeConnection& enc) {
+                        return enc.src_exit_node == conn.src_asic && enc.dst_exit_node == conn.dst_asic &&
+                               enc.eth_conn.src_chan == conn.src_chan && enc.eth_conn.dst_chan == conn.dst_chan;
+                    });
+                }
+            }
+        }
+    }
+}
+
 void validate_graphs(PhysicalSystemDescriptor& psd) {
     // Validate that the representation of the system is internally consistent.
     const auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
+    std::vector<OneSidedConnection> connections_to_drop;
 
     for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
@@ -249,6 +323,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                 continue;
             }
             const auto& src_host = asic_descriptors.at(src_asic).host_name;
+            const auto& src_desc = asic_descriptors.at(src_asic);
 
             // Skip if host_connectivity_graph doesn't have src_host (shouldn't happen, but be defensive)
             if (!system_graph.host_connectivity_graph.contains(src_host)) {
@@ -262,6 +337,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                     continue;
                 }
                 const auto& dst_host = asic_descriptors.at(dst_asic).host_name;
+                const auto& dst_desc = asic_descriptors.at(dst_asic);
 
                 bool all_local = std::all_of(
                     eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return conn.is_local; });
@@ -300,12 +376,26 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                             return host_edge.first == dst_host;
                         });
 
-                    TT_FATAL(
-                        host_edge_it != src_host_edges.end(),
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
-                        "connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (host_edge_it == src_host_edges.end()) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Physical Discovery Warning: Global Connection between host {} and host {} is not found "
+                            "in the host connectivity graph. ASIC {} (Tray {} Location {} chan {}) -> ASIC {} "
+                            "(Tray {} Location {} chan {}). Dropping one-sided link.",
+                            src_host,
+                            dst_host,
+                            src_asic,
+                            src_desc.tray_id,
+                            src_desc.asic_location,
+                            eth_conn.src_chan,
+                            dst_asic,
+                            dst_desc.tray_id,
+                            dst_desc.asic_location,
+                            eth_conn.dst_chan);
+                        connections_to_drop.push_back(
+                            {host, src_host, dst_host, src_asic, dst_asic, eth_conn.src_chan, eth_conn.dst_chan});
+                        continue;
+                    }
 
                     const auto& exit_node_conns = host_edge_it->second;
                     bool exit_conn_found = std::any_of(
@@ -316,15 +406,36 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
 
-                    TT_FATAL(
-                        exit_conn_found,
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (!exit_conn_found) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Physical Discovery Warning: Exit node connection not found between host {} and host {}. "
+                            "ASIC {} (Tray {} Location {} chan {}) -> ASIC {} (Tray {} Location {} chan {}). "
+                            "Dropping one-sided link.",
+                            src_host,
+                            dst_host,
+                            src_asic,
+                            src_desc.tray_id,
+                            src_desc.asic_location,
+                            eth_conn.src_chan,
+                            dst_asic,
+                            dst_desc.tray_id,
+                            dst_desc.asic_location,
+                            eth_conn.dst_chan);
+                        connections_to_drop.push_back(
+                            {host, src_host, dst_host, src_asic, dst_asic, eth_conn.src_chan, eth_conn.dst_chan});
+                    }
                 }
             }
         }
+    }
+
+    if (!connections_to_drop.empty()) {
+        log_warning(
+            tt::LogMetal,
+            "Physical Discovery: Dropping {} one-sided connection(s). Link retraining will attempt recovery.",
+            connections_to_drop.size());
+        erase_one_sided_connections(psd, connections_to_drop);
     }
 }
 
@@ -404,6 +515,16 @@ void exchange_metadata(
     distributed_context->barrier();
 }
 
+bool is_bh_galaxy_rev_c(tt::umd::Cluster& cluster) {
+    auto* cluster_desc = cluster.get_cluster_description();
+    if (cluster_desc->get_board_type(0) != BoardType::UBB_BLACKHOLE) {
+        return false;
+    }
+    uint64_t board_id = cluster_desc->get_board_id_for_chip(0);
+    uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
+    return revision_bits >= 3;
+}
+
 }  // namespace
 
 namespace discovery_impl {
@@ -415,6 +536,9 @@ PhysicalSystemDescriptor run_local_discovery(
     bool run_live_discovery,
     bool all_hostnames_unique) {
     PhysicalSystemDescriptor psd(target_device_type);
+    if (is_bh_galaxy_rev_c(cluster)) {
+        psd.set_is_bh_galaxy_rev_c(true);
+    }
 
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc = nullptr;
     if (!run_live_discovery || target_device_type != TargetDevice::Silicon) {

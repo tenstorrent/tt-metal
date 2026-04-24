@@ -200,7 +200,9 @@ class Transformer(LightweightModule):
         logits = self._apply_norm_and_lm_head(logits)
         return logits
 
-    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+    def extract_last_tokens_batched_prefill(
+        self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
+    ):
         """Extract each user's last-token hidden state from batched prefill output.
 
         Reads hidden states to host, extracts the relevant row for each user,
@@ -215,7 +217,8 @@ class Transformer(LightweightModule):
             prefill_seq_len: padded sequence length per user
 
         Returns:
-            user_tokens: [1, 1, padded_batch, dim_per_device] per device, column-sharded, TILE_LAYOUT
+            user_tokens: [1, 1, target_batch or padded_batch, dim_per_device] per device,
+            column-sharded, TILE_LAYOUT
         """
         active_indices = [lt for lt in last_token_idx_list if lt > 0]
         all_same = len(set(active_indices)) <= 1
@@ -244,6 +247,20 @@ class Transformer(LightweightModule):
                 lt_idx = last_token_idx_list[slot]
                 rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
             combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        target_batch = padded_batch if target_batch is None else target_batch
+        if target_batch < padded_batch:
+            raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
+        if target_batch > padded_batch:
+            padded_combined = torch.zeros(
+                1,
+                1,
+                target_batch,
+                combined.shape[-1],
+                dtype=combined.dtype,
+            )
+            padded_combined[:, :, :padded_batch, :] = combined
+            combined = padded_combined
 
         user_tokens = ttnn.from_torch(
             combined,

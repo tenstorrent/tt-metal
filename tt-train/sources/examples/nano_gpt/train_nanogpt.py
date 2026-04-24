@@ -45,16 +45,42 @@ from ttml.models.llama import (
     LlamaConfig,
     LlamaRopeScalingConfig,
 )
+from ttml.models.deepseek import (
+    DeepSeek,
+    DeepSeekConfig,
+)
 from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer
+from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
+from ttml.common.profiler_utils import profiler_marker
 
 # Union type for models that share the same forward(input, mask) interface
-Model = Union[NanoGPT, Llama]
+Model = Union[NanoGPT, Llama, DeepSeek]
 
 # Memory tracking utilities
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
+
+def get_device_peak_tflops_bf16() -> float:
+    """Get theoretical peak BF16 TFLOPS for the current TT device.
+
+    Wormhole: 1.0 TFLOPS/core, Blackhole: 1.35 TFLOPS/core.
+    Returns total peak TFLOPS across all compute cores.
+    """
+    from ttnn.device import is_blackhole, is_wormhole_b0
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = grid_size.x * grid_size.y
+
+    if is_wormhole_b0(device):
+        tflops_per_core = 1.0
+    elif is_blackhole(device):
+        tflops_per_core = 1.35
+    else:
+        raise ValueError(f"Unknown device: {device.arch()}")
+    return num_cores * tflops_per_core
 
 
 class TrainingConfig(BaseTrainingConfig):
@@ -107,7 +133,7 @@ class ModelConfig:
     Conversion to model-specific config (e.g. LlamaConfig) happens at model creation time.
     """
 
-    model_type: str = "gpt2"  # "gpt2" or "llama"
+    model_type: str = "gpt2"  # "gpt2", "llama", or "deepseek"
     model_path: str = ""
     vocab_size: int = 256
     embedding_dim: int = 384
@@ -129,6 +155,22 @@ class ModelConfig:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0  # 0 means no scaling
+    # DeepSeek-specific fields
+    inter_dim: Optional[int] = None
+    moe_inter_dim: int = 256
+    n_dense_layers: int = 2
+    n_routed_experts: int = 8
+    n_shared_experts: int = 1
+    n_activated_experts: int = 2
+    n_expert_groups: int = 2
+    n_limited_groups: int = 1
+    score_func: str = "sigmoid"
+    route_scale: float = 2.5
+    q_lora_rank: int = 256
+    kv_lora_rank: int = 128
+    qk_nope_head_dim: int = 64
+    qk_rope_head_dim: int = 32
+    v_head_dim: int = 64
 
 
 class LossAverageMeter:
@@ -356,12 +398,16 @@ def train_step(
 
     loss_float = get_loss_value(loss)
 
+    profiler_marker(None, "forward_pass_done")
+
     # Memory snapshot after forward pass
     if memory_snapshot_fn:
         memory_snapshot_fn("FORWARD_PASS")
 
     # Backward pass
     loss.backward(False)
+
+    profiler_marker(None, "backward_pass_done")
 
     # Memory snapshot after backward pass
     if memory_snapshot_fn:
@@ -391,8 +437,12 @@ def train_step(
                 False,  # error_if_nonfinite - set False to avoid errors on NaN
             )
 
+        profiler_marker(None, "gradient_sync_done")
+
         # Optimizer step
         optimizer.step()
+
+        profiler_marker(None, "optimizer_step_done")
 
         # Apply learning rate scheduler if provided)
         if compute_lr is not None:
@@ -450,6 +500,23 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
             config.high_freq_factor = rope_scaling.get("high_freq_factor", config.high_freq_factor)
             config.low_freq_factor = rope_scaling.get("low_freq_factor", config.low_freq_factor)
             config.original_context_length = rope_scaling.get("original_context_length", config.original_context_length)
+    elif config.model_type == "deepseek":
+        config.theta = transformer_config.get("theta", 10000.0)
+        config.inter_dim = transformer_config.get("inter_dim", config.inter_dim)
+        config.moe_inter_dim = transformer_config.get("moe_inter_dim", config.moe_inter_dim)
+        config.n_dense_layers = transformer_config.get("n_dense_layers", config.n_dense_layers)
+        config.n_routed_experts = transformer_config.get("n_routed_experts", config.n_routed_experts)
+        config.n_shared_experts = transformer_config.get("n_shared_experts", config.n_shared_experts)
+        config.n_activated_experts = transformer_config.get("n_activated_experts", config.n_activated_experts)
+        config.n_expert_groups = transformer_config.get("n_expert_groups", config.n_expert_groups)
+        config.n_limited_groups = transformer_config.get("n_limited_groups", config.n_limited_groups)
+        config.score_func = transformer_config.get("score_func", config.score_func)
+        config.route_scale = transformer_config.get("route_scale", config.route_scale)
+        config.q_lora_rank = transformer_config.get("q_lora_rank", config.q_lora_rank)
+        config.kv_lora_rank = transformer_config.get("kv_lora_rank", config.kv_lora_rank)
+        config.qk_nope_head_dim = transformer_config.get("qk_nope_head_dim", config.qk_nope_head_dim)
+        config.qk_rope_head_dim = transformer_config.get("qk_rope_head_dim", config.qk_rope_head_dim)
+        config.v_head_dim = transformer_config.get("v_head_dim", config.v_head_dim)
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -720,7 +787,7 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
         model_config: Universal model configuration
 
     Returns:
-        A NanoGPT or Llama model instance
+        A NanoGPT, Llama, or DeepSeek model instance
     """
     if model_config.model_type == "gpt2":
         nanogpt_exp_config = NanoGPTExperimentalConfig(
@@ -767,6 +834,35 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             rope_scaling=rope_scaling_config,
         )
         return Llama(llama_config)
+    elif model_config.model_type == "deepseek":
+        inter_dim = model_config.inter_dim
+        if inter_dim is None:
+            inter_dim = ((4 * model_config.embedding_dim * 2) // 3 + 255) // 256 * 256
+        deepseek_config = DeepSeekConfig(
+            vocab_size=model_config.vocab_size,
+            dim=model_config.embedding_dim,
+            inter_dim=inter_dim,
+            moe_inter_dim=model_config.moe_inter_dim,
+            n_layers=model_config.num_blocks,
+            n_dense_layers=model_config.n_dense_layers,
+            n_heads=model_config.num_heads,
+            n_routed_experts=model_config.n_routed_experts,
+            n_shared_experts=model_config.n_shared_experts,
+            n_activated_experts=model_config.n_activated_experts,
+            n_expert_groups=model_config.n_expert_groups,
+            n_limited_groups=model_config.n_limited_groups,
+            score_func=model_config.score_func,
+            route_scale=model_config.route_scale,
+            q_lora_rank=model_config.q_lora_rank,
+            kv_lora_rank=model_config.kv_lora_rank,
+            qk_nope_head_dim=model_config.qk_nope_head_dim,
+            qk_rope_head_dim=model_config.qk_rope_head_dim,
+            v_head_dim=model_config.v_head_dim,
+            max_seq_len=model_config.max_sequence_length,
+            rope_theta=model_config.theta,
+            runner_type=model_config.runner_type,
+        )
+        return DeepSeek(deepseek_config)
     else:
         raise ValueError(f"Unsupported model type: {model_config.model_type}")
 
@@ -1035,6 +1131,11 @@ def main():
         action="store_true",
         help="Enable memory usage tracking (prints memory stats after first iteration)",
     )
+    parser.add_argument(
+        "--print_summary",
+        action="store_true",
+        help="Print model layer-by-layer summary after creation",
+    )
 
     args = parser.parse_args()
 
@@ -1236,6 +1337,8 @@ def main():
 
             # Create model
             model = create_model_from_config(model_config)
+            if args.print_summary:
+                summary(model)
 
             # Count parameters
             total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
@@ -1243,6 +1346,16 @@ def main():
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
             print(f"   - Total parameters: {total_params:,}")
+
+        # Compute FLOPs per token for throughput reporting
+        flops_per_token = 0
+        if model_config.model_type == "deepseek":
+            from ttml.models.deepseek import DeepSeekConfig, calculate_flops_per_token
+
+            ds_cfg = model.config if hasattr(model, "config") and isinstance(model.config, DeepSeekConfig) else None
+            if ds_cfg is not None:
+                flops_per_token = calculate_flops_per_token(ds_cfg, model_config.max_sequence_length)
+                print(f"   - FLOPs per token: {flops_per_token:,} ({flops_per_token/1e9:.2f}G)")
 
         # Memory snapshot after model creation
         if args.track_memory:
@@ -1309,6 +1422,12 @@ def main():
         gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
+        # Compute peak device TFLOPS for MFU calculation
+        peak_tflops = 0.0
+        if flops_per_token > 0:
+            peak_tflops = get_device_peak_tflops_bf16()
+            print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
+
         # Training loop
         start_time = time.time()
         # Cache values used in hot path
@@ -1337,7 +1456,12 @@ def main():
                 batch_samples = [dataset[i] for i in indices[batch_start:batch_end]]
                 input_tokens, target_tokens = collate_fn(batch_samples, seq_len)
                 actual_batch_size = batch_end - batch_start
+                profiler_marker(None, "dataloader_step_done")
 
+                # Composite SDPA (used by DeepSeek) has no built-in causal masking,
+                # so we must pass an explicit mask. Fused SDPA (GPT-2/Llama) uses
+                # its native causal mode when mask is None.
+                attn_mask = mask if model_config.model_type == "deepseek" else None
                 loss_float, step_time, should_step = train_step(
                     model,
                     optimizer,
@@ -1345,7 +1469,7 @@ def main():
                     global_step,
                     input_tokens,
                     target_tokens,
-                    None,
+                    attn_mask,
                     gradient_accumulator,
                     training_config.use_clip_grad_norm,
                     training_config.clip_grad_norm_max_norm,
@@ -1357,7 +1481,21 @@ def main():
                     global_step += 1
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
-                    print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
+
+                    # Throughput metrics
+                    tps = (actual_batch_size * seq_len) / (step_time / 1000.0)
+                    if flops_per_token > 0 and step_time > 0:
+                        achieved_tflops = tps * flops_per_token / 1e12
+                        mfu_str = ""
+                        if peak_tflops > 0:
+                            mfu = achieved_tflops / peak_tflops * 100.0
+                            mfu_str = f", MFU: {mfu:.1f}%"
+                        print(
+                            f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, "
+                            f"TPS: {tps:.0f}, TFLOPS: {achieved_tflops:.2f}{mfu_str}"
+                        )
+                    else:
+                        print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms, TPS: {tps:.0f}")
 
                     if args.model_save_path and global_step % training_config.model_save_interval == 0:
                         save_checkpoint(
@@ -1371,6 +1509,11 @@ def main():
 
                     gradient_accumulator.reset()
 
+                    # Update MoE expert bias for load balancing (DeepSeek only)
+                    if model_config.model_type == "deepseek" and hasattr(model, "get_moe_layers"):
+                        for moe_layer in model.get_moe_layers():
+                            moe_layer.update_expert_bias()
+
                     # Print memory usage after first iteration
                     if args.track_memory and not is_everything_compiled:
                         is_everything_compiled = True
@@ -1379,6 +1522,10 @@ def main():
                         MemoryUsageTracker.clear()
                         if memory_guard:
                             memory_guard.release()
+
+                    profiler_marker(None, f"iteration_{global_step}", dump_results=True)
+                    if global_step == start_step + 1:
+                        profiler_marker(None, "compilation_finished")
 
                     if global_step >= max_steps:
                         break

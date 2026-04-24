@@ -36,6 +36,15 @@ def _fabric_config_for_num_procs(num_procs: int):
 
 @contextlib.contextmanager
 def open_mesh_device():
+    my_rank = int(ttnn.distributed_context_get_rank())
+    num_procs = int(ttnn.distributed_context_get_size())
+    worker_l1_size = 1431568
+    if num_procs == 64:
+        if my_rank == 62:
+            worker_l1_size = 1499000
+    elif num_procs == 16:
+        if my_rank == 14:
+            worker_l1_size = 1499000
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
@@ -43,7 +52,7 @@ def open_mesh_device():
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(15232),
-        "worker_l1_size": 1431568,
+        "worker_l1_size": worker_l1_size,
     }
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
@@ -80,14 +89,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--model-path",
         type=Path,
         default=None,
-        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights real/state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
         choices=("synthetic", "real", "state_dict"),
         default="real",
-        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
+        help="synthetic: random prepare path; real: TensorCache + HF safetensors; state_dict: HF safetensors + prepare path (no cache)",
     )
     parser.add_argument(
         "--fp32",
@@ -116,6 +125,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     parser.add_argument(
+        "--num-slots",
+        type=int,
+        default=64,
+        help="Number of users/slots (KV cache batch size) for the decoder stages",
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -128,7 +143,7 @@ def create_parser() -> argparse.ArgumentParser:
         help=(
             "If set, export H2D/D2H socket descriptors on mesh 0 after pipeline setup "
             "(files named <prefix>_h2d / <prefix>_d2h). When --launch-only is used and "
-            "this is omitted, defaults to deepseek_v3_b1."
+            "this is omitted, defaults to deepseek."
         ),
     )
     return parser
@@ -152,6 +167,7 @@ def run_demo(
     moe_layer_id_override: int | None = None,
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
+    num_slots: int = 64,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -169,6 +185,7 @@ def run_demo(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
+            num_slots=num_slots,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -217,18 +234,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
-    if args.weights == "real" and args.cache_path is None:
-        parser.error("--cache-path is required when --weights real")
-    if args.weights == "state_dict":
+    if args.weights == "real":
+        if args.cache_path is None:
+            parser.error("--cache-path is required when --weights real")
         if args.model_path is None:
-            parser.error("--model-path is required when --weights state_dict")
+            parser.error("--model-path is required when --weights real")
+    if args.weights in ("real", "state_dict"):
+        if args.model_path is None:
+            parser.error(f"--model-path is required when --weights {args.weights}")
         index_path = args.model_path / "model.safetensors.index.json"
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
-        io_socket_descriptor_prefix = "deepseek_v3_b1"
+        io_socket_descriptor_prefix = "deepseek"
 
     run_demo(
         prompt=args.prompt,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -811,3 +811,39 @@ tests:
   817:
     name: "Noc Estimator - DRAM Interleaved All to All"
     bandwidth_mode: "combined"
+
+  900:
+    name: "Quasar Addrgen - Strided1D SrcOnly"
+
+  901:
+    name: "Quasar Addrgen - Strided1D DstOnly"
+
+  902:
+    name: "Quasar Addrgen - Strided1D Both"
+
+  903:
+    name: "Quasar Addrgen - Strided2D SrcOnly"
+
+  904:
+    name: "Quasar Addrgen - Strided2D DstOnly"
+
+  905:
+    name: "Quasar Addrgen - Strided2D Both"
+
+  906:
+    name: "Quasar Addrgen - Face SrcOnly"
+
+  907:
+    name: "Quasar Addrgen - Face DstOnly"
+
+  908:
+    name: "Quasar Addrgen - Face Both"
+
+  909:
+    name: "Quasar Addrgen - Interleaved Banking"
+
+  910:
+    name: "Quasar IDMA - Basic"
+
+  911:
+    name: "Quasar IDMA - 1D Strided"

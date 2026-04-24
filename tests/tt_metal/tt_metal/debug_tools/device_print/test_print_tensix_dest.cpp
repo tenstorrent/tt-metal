@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -275,7 +275,7 @@ static DramBuffer prepare_reader(
     create_circular_buffer(
         workload, config.core, DEFAULT_INPUT_CB_INDEX, config.data_format, config.get_input_buffer_size());
 
-    // Create reader kernel
+    // Create reader kernel (second compile arg: use_dfbs = 0, use circular buffers)
     auto reader_kernel = tt_metal::CreateKernel(
         program_,
         config.reader_kernel,
@@ -283,7 +283,7 @@ static DramBuffer prepare_reader(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {DEFAULT_INPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_INPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the reader kernel
     tt_metal::SetRuntimeArgs(
@@ -307,7 +307,7 @@ static DramBuffer prepare_writer(
     create_circular_buffer(
         workload, config.core, DEFAULT_OUTPUT_CB_INDEX, config.data_format, config.get_output_buffer_size());
 
-    // Create writer kernel
+    // Create writer kernel (second compile arg: use_dfbs = 0, use circular buffers)
     auto writer_kernel = tt_metal::CreateKernel(
         program_,
         config.writer_kernel,
@@ -315,7 +315,7 @@ static DramBuffer prepare_writer(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {DEFAULT_OUTPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_OUTPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the writer kernel
     tt_metal::SetRuntimeArgs(

@@ -17,7 +17,6 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "tensix_neo_reg.h"
-#include "api/debug/assert.h"
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -105,7 +104,7 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
 }
 
 // This definition of reg_read conflicts with the one in
-// tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
+// tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
 // kernels bring into the global namespace using "using namespace ckernel".
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 inline __attribute__((always_inline)) uint32_t reg_read(uintptr_t addr) {
@@ -316,6 +315,10 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
+// Included here (rather than at the top of the file) so that assert_and_hang()
+// sees flush_l2_cache_line() in scope on ARCH_QUASAR + COMPILE_FOR_DM builds.
+#include "api/debug/assert.h"
+
 template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
@@ -382,30 +385,18 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
     // Enable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val |= (1 << 13);
-    asm volatile("csrrs zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
 
     // Enable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val |= (1 << 3);
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Disable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val &= ~(1 << 13);
-    asm volatile("csrrc zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
 
     // Disable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val &= ~(1 << 3);
-    asm volatile("csrrc zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrc zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 #endif  // !defined(COMPILE_FOR_TRISC)
@@ -429,8 +420,9 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Flush i$ on ethernet riscs
-inline __attribute__((always_inline)) void flush_erisc_icache() {
+// Flush i$ by executing enough NOPs to evict all cache lines.
+// Required on ERISC and DRISC cores which lack MMIO-based cache flush registers.
+inline __attribute__((always_inline)) void manually_flush_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {

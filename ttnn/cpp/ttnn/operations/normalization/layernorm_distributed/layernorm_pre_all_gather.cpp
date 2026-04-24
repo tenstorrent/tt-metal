@@ -5,6 +5,7 @@
 #include "layernorm_pre_all_gather.hpp"
 
 #include "device/layernorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
@@ -21,7 +22,7 @@ ttnn::Tensor layer_norm_pre_all_gather(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
         return ttnn::prim::layer_norm(
             input_tensor,
@@ -37,7 +38,7 @@ ttnn::Tensor layer_norm_pre_all_gather(
             ttnn::prim::DistributedLayerNormStage::PRE_ALL_GATHER);
     }
     return ttnn::prim::layer_norm_pre_all_gather(
-        input_tensor,
+        residual_input_tensor.has_value() ? ttnn::add(input_tensor, residual_input_tensor.value()) : input_tensor,
         recip_tensor,
         ttnn::prim::LayerNormDistributedType::LAYERNORM,
         dtype,

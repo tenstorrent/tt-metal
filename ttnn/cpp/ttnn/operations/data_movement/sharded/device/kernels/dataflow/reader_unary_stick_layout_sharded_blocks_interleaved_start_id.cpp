@@ -19,17 +19,16 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_trids = get_compile_time_arg_val(3);
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr uint32_t num_trids = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes, stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, block_height);
     uint32_t dest_write_addr = get_write_ptr(cb_id_in0);
     if (aligned) {
         for (uint32_t h = 0; h < block_height; ++h) {
-            uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+            uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
             noc_async_read(src_noc_addr, dest_write_addr, block_width_bytes);
             stick_id++;
             dest_write_addr += padded_block_width_bytes;
@@ -68,7 +67,7 @@ void kernel_main() {
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
                     // Start new src->scratch transfer
                     noc_async_read_set_trid(active_trid);
-                    uint64_t src_noc_addr = get_noc_addr(stick_id, s0);
+                    uint64_t src_noc_addr = s0.get_noc_addr(stick_id);
                     noc_async_read(src_noc_addr, scratch_write_addrs[slot], aligned_block_width_bytes);
                     dest_write_addrs[slot] = dest_write_addr;
                     slot_states[slot] = SlotState::SRC_PENDING;

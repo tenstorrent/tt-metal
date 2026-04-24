@@ -937,7 +937,8 @@ def test_demo_text(
     if request.config.getoption("--stress_test") in [0, 1]:
         stress_test = request.config.getoption("--stress_test")
     arg_enable_trace = request.config.getoption("--enable_trace")
-    enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
+    if arg_enable_trace is not None:
+        enable_trace = arg_enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     if request.config.getoption("--use_prefetcher") in [0, 1]:
@@ -1174,6 +1175,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
                 warmup_prefill=not is_device_perf_test,
+                enable_trace=enable_trace,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1187,6 +1189,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
                 warmup_prefill=not is_device_perf_test,
+                enable_trace=enable_trace,
             )
             if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out

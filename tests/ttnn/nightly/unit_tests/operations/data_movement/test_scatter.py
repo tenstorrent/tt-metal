@@ -501,3 +501,139 @@ def test_scatter_forge(input_shape, index_and_source_shape, input_dtype, device)
         assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
     else:
         assert_allclose(torch_result_from_ttnn, torch_result)
+
+
+@pytest.mark.parametrize("shape", [(100,), (4, 128), (2, 3, 4), (1, 2, 3, 4)])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_scatter_negative_dim(device, shape, dim, dtype):
+    """
+    Regression test for negative dimension support in ttnn.scatter.
+    Verifies that negative dimension values work correctly and match PyTorch behavior.
+    Includes 1D tensors to cover the logical_shape vs padded_shape bug (PR #41762).
+    """
+    # Skip invalid dim combinations (e.g., dim=-2 for 1D tensor)
+    if abs(dim) > len(shape):
+        pytest.skip(f"dim={dim} invalid for rank={len(shape)} tensor")
+
+    torch_input = torch.rand(shape, dtype=dtype)
+
+    # Create index and source tensors for scattering
+    index_shape = list(shape)
+    index_shape[dim] = min(index_shape[dim], 2)  # Scatter subset
+    torch_index = torch.randint(0, shape[dim], index_shape, dtype=torch.int32)
+    torch_source = torch.rand(index_shape, dtype=dtype)
+
+    # PyTorch reference with negative dim
+    torch_output_neg = torch_input.clone()
+    torch_output_neg.scatter_(dim, torch_index.long(), torch_source)
+
+    # Convert to ttnn using the matching test dtype
+    torch_to_ttnn_dtype = {
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float32: ttnn.float32,
+    }
+    ttnn_dtype = torch_to_ttnn_dtype[dtype]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_index = ttnn.from_torch(torch_index, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_source = ttnn.from_torch(torch_source, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # Test with negative dim
+    ttnn_output = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_source)
+    output = ttnn.to_torch(ttnn_output)
+
+    assert (
+        output.shape == torch_output_neg.shape
+    ), f"Output shape {output.shape} does not match expected {torch_output_neg.shape}"
+    # Use tighter tolerance for float32 as per existing scatter tests
+    rtol = 1e-3 if dtype == torch.float32 else 1e-2
+    assert_allclose(torch_output_neg, output, rtol=rtol)
+
+
+@pytest.mark.parametrize(
+    "shape,dim",
+    [
+        ((100,), -1),  # 1D tensor (regression for PR #41762)
+        ((4, 128), -1),  # Last dimension
+        ((4, 128), -2),  # First dimension
+        ((2, 3, 4), -1),  # 3D tensor, last dim
+        ((2, 3, 4), -2),  # 3D tensor, middle dim
+        ((2, 3, 4), -3),  # 3D tensor, first dim
+    ],
+)
+def test_scatter_negative_dim_equals_positive(device, shape, dim):
+    """
+    Verify that negative and positive dim produce identical results.
+    Includes 1D tensors to cover the logical_shape vs padded_shape bug (PR #41762).
+    """
+    positive_dim = len(shape) + dim
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    index_shape = list(shape)
+    index_shape[dim] = min(index_shape[dim], 2)
+    torch_index = torch.randint(0, shape[dim], index_shape, dtype=torch.int32)
+    torch_source = torch.rand(index_shape, dtype=torch.bfloat16)
+
+    # Get results for both negative and positive dims
+    torch_output_neg = torch_input.clone()
+    torch_output_neg.scatter_(dim, torch_index.long(), torch_source)
+
+    torch_output_pos = torch_input.clone()
+    torch_output_pos.scatter_(positive_dim, torch_index.long(), torch_source)
+
+    # Verify PyTorch results match
+    assert torch.allclose(torch_output_neg, torch_output_pos)
+
+    # Test ttnn
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_index = ttnn.from_torch(torch_index, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_source = ttnn.from_torch(torch_source, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    ttnn_output_neg = ttnn.to_torch(ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_source))
+
+    ttnn_input_pos = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output_pos = ttnn.to_torch(ttnn.scatter(ttnn_input_pos, positive_dim, ttnn_index, ttnn_source))
+
+    assert_allclose(ttnn_output_neg, ttnn_output_pos, rtol=1e-3)
+    assert_allclose(torch_output_neg, ttnn_output_neg, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "shape,index_shape",
+    [
+        ((100,), (80,)),  # 1D tensor
+        ((50,), (50,)),  # 1D tensor, full scatter
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
+    """
+    Regression test for PR #41762: 1D tensors in TILE_LAYOUT with negative dim.
+
+    The bug was that dim normalization used padded_shape().rank() instead of
+    logical_shape().rank(). For a 1D tensor [100] in TILE_LAYOUT, the padded
+    shape becomes [1, 128] (rank 2), causing dim=-1 to normalize to 1 instead
+    of 0, which then fails validation.
+    """
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16
+
+    torch_input = torch.randn(shape, dtype=torch_dtype)
+    torch_index = torch.randint(0, shape[0], index_shape, dtype=torch.int64)
+    torch_src = torch.randn(index_shape, dtype=torch_dtype)
+
+    # PyTorch reference with dim=-1 (should be equivalent to dim=0 for 1D)
+    torch_result = torch.scatter(torch_input, dim=-1, index=torch_index, src=torch_src)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # This would fail before PR #41762 with:
+    # "dim must follow the condition -input_rank <= dim < input_rank (dim: 1, rank: 1)"
+    ttnn_result = ttnn.scatter(ttnn_input, -1, ttnn_index, ttnn_src)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert result.shape == torch_result.shape
+    assert_allclose(result, torch_result)

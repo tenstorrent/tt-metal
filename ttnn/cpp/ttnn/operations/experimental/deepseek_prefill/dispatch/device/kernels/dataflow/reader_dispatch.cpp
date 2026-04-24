@@ -49,10 +49,8 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_compile_time_arg_val(17);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(18);
     constexpr uint32_t weights_page_size = get_compile_time_arg_val(19);
-    constexpr uint32_t offsets_page_size = get_compile_time_arg_val(20);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(21);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(22);
-    constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(23);
 
     // Operation parameters (indices 24-31)
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
@@ -76,7 +74,6 @@ void kernel_main() {
     constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(38);
     constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(39);
     constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(40);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(42);
     constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(43);
 
@@ -86,8 +83,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(46);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 48)
-    constexpr auto input_args = TensorAccessorArgs<48>();
+    // Batch configuration (index 48)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(48);
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 49)
+    constexpr auto input_args = TensorAccessorArgs<49>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -131,7 +131,7 @@ void kernel_main() {
                     << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores << ENDL();
 
     // Read offsets into local scratch
-    const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
+    const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
     cb_reserve_back(cb_offsets_id, offsets_pages);
     uint32_t offsets_base_addr = get_write_ptr(cb_offsets_id);
     for (uint32_t i = 0; i < offsets_pages; i++) {
@@ -141,8 +141,7 @@ void kernel_main() {
     uint32_t* offsets = (uint32_t*)offsets_base_addr;
 
     // Read dispatch table into local scratch
-    const auto dispatch_table_addr_gen =
-        TensorAccessor(dispatch_table_args, dispatch_table_tensor_address, dispatch_table_page_size);
+    const auto dispatch_table_addr_gen = TensorAccessor(dispatch_table_args, dispatch_table_tensor_address);
     cb_reserve_back(cb_dispatch_table_id, dispatch_table_pages);
     uint32_t dispatch_table_base_addr = get_write_ptr(cb_dispatch_table_id);
     for (uint32_t i = 0; i < dispatch_table_pages; i++) {
@@ -152,8 +151,11 @@ void kernel_main() {
     noc_async_read_barrier();
     int32_t* expert_dispatch_table = (int32_t*)dispatch_table_base_addr;
 
-    // Set up batched scratch buffers
-    constexpr uint32_t read_batch_size = 8;
+    // Reserve scratch space once — these CBs are not used as FIFOs. Each batch
+    // overwrites the same region at offsets [0, batch_count) without push/pop.
+    // DRAM reads are batched to saturate DRAM bandwidth, while the L1-to-writer-CB
+    // copies below are done one page at a time — this avoids CB FIFO pointer wrapping
+    // and measured faster in practice.
     cb_reserve_back(cb_indices_id, read_batch_size);
     uint32_t indices_base = get_write_ptr(cb_indices_id);
     cb_reserve_back(cb_weights_id, read_batch_size);
@@ -161,11 +163,11 @@ void kernel_main() {
     cb_reserve_back(cb_input_id, read_batch_size);
     uint32_t input_base = get_write_ptr(cb_input_id);
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
-    const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, aligned_output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, aligned_metadata_page_size);
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
+    const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address);
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // Reserve metadata temp for constructing metadata locally
     cb_reserve_back(cb_metadata_temp_id, 1);
@@ -211,18 +213,23 @@ void kernel_main() {
                 auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
                 auto expert_index_within_chip = routed_expert % experts_per_chip;
                 auto& offset = offsets[routed_expert];
+                if (offset >= max_dispatched_tokens_per_expert) {
+                    // Token would overflow the dispatch buffer - skip to prevent
+                    // out-of-bounds DRAM writes that corrupt memory and cause hangs.
+                    offset++;
+                    continue;
+                }
                 auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
 
-                // Construct metadata
-                volatile tt_l1_ptr int32_t* metadata =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
-                metadata[0] = linearized_mesh_coord;
-                metadata[1] = token_idx;
-                metadata[2] = k;
-                metadata[3] = routed_expert;
-                metadata[4] = static_cast<int16_t>(weights[k]);
-
                 if (expert_chip == linearized_mesh_coord) {
+                    volatile tt_l1_ptr int32_t* metadata =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
+                    metadata[0] = linearized_mesh_coord;
+                    metadata[1] = token_idx;
+                    metadata[2] = k;
+                    metadata[3] = routed_expert;
+                    metadata[4] = static_cast<int16_t>(weights[k]);
+
                     noc_async_write_page(page_idx, output_addr_gen, input_scratch_addr);
                     noc_async_write_page(page_idx, metadata_addr_gen, metadata_temp_addr);
                     noc_async_writes_flushed();
@@ -252,9 +259,13 @@ void kernel_main() {
 
                         // Push metadata to writer
                         cb_reserve_back(cb_metadata_for_writer_id, 1);
-                        uint32_t metadata_dst = get_write_ptr(cb_metadata_for_writer_id);
-                        noc_async_read(get_noc_addr(metadata_temp_addr), metadata_dst, aligned_metadata_page_size);
-                        noc_async_read_barrier();
+                        volatile tt_l1_ptr int32_t* meta_dst =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(get_write_ptr(cb_metadata_for_writer_id));
+                        meta_dst[0] = linearized_mesh_coord;
+                        meta_dst[1] = token_idx;
+                        meta_dst[2] = k;
+                        meta_dst[3] = routed_expert;
+                        meta_dst[4] = static_cast<int16_t>(weights[k]);
                         cb_push_back(cb_metadata_for_writer_id, 1);
                     }
                 }
