@@ -49,6 +49,7 @@ void kernel_main() {
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
     constexpr RingProxyMode proxy_mode = static_cast<RingProxyMode>(get_compile_time_arg_val(33));
+    constexpr bool chain_enabled = get_compile_time_arg_val(34) == 1;
     constexpr bool flatten_work = proxy_uses_flat_work(proxy_mode);
     constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
@@ -78,9 +79,9 @@ void kernel_main() {
     }
 
     uint32_t is_chain_participant = 0;
-#if defined(SDPA_KV_CHAIN_ENABLED)
-    is_chain_participant = get_arg_val<uint32_t>(argidx++);
-#endif
+    if constexpr (chain_enabled) {
+        is_chain_participant = get_arg_val<uint32_t>(argidx++);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 

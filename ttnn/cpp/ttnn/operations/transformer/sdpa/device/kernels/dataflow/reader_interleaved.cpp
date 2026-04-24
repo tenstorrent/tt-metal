@@ -83,9 +83,11 @@ void kernel_main() {
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
-    // Ring proxy case (tail CT arg) drives both flat work distribution and the K/Q halving.
-    constexpr RingProxyMode proxy_mode =
-        static_cast<RingProxyMode>(get_compile_time_arg_val(chunk_start_idx_args.next_compile_time_args_offset()));
+    // Tail CT args: proxy_case drives flat work distribution + K/Q halving, chain_enabled gates
+    // the runtime-arg chain block below and the forward/receive branches in the K/V loop.
+    constexpr uint32_t proxy_case_ct_idx = chunk_start_idx_args.next_compile_time_args_offset();
+    constexpr RingProxyMode proxy_mode = static_cast<RingProxyMode>(get_compile_time_arg_val(proxy_case_ct_idx));
+    constexpr bool chain_enabled = get_compile_time_arg_val(proxy_case_ct_idx + 1) == 1;
     constexpr bool flatten_work = proxy_uses_flat_work(proxy_mode);
     constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
@@ -126,80 +128,68 @@ void kernel_main() {
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
-    // KV chain forwarding (runtime args + semaphores populated when SDPA_KV_CHAIN_ENABLED).
-    uint32_t is_chain_participant = 0;
-    uint32_t is_injector = 0;
-    uint32_t is_sink = 0;
-    uint32_t chain_batch = 0;
-    uint32_t chain_head = 0;
-    uint32_t prev_physical_x = 0;
-    uint32_t prev_physical_y = 0;
-    uint32_t next_physical_x = 0;
-    uint32_t next_physical_y = 0;
-    uint32_t next_core_q_chunks = 0;
-    uint32_t mcast_num_dests = 0;
-    uint32_t mcast_sender_wait = 0;
-    uint64_t mcast_base_noc_addr = 0;
+    // KV chain forwarding: every field defaults such that should_forward/should_receive stay
+    // false and forward branches are dead when chain_enabled=false.
+    struct ChainState {
+        uint32_t participates = 0;
+        uint32_t is_injector = 0;
+        uint32_t is_sink = 0;
+        uint32_t batch = 0;
+        uint32_t head = 0;
+        uint32_t next_core_q_chunks = 0;
+        uint32_t mcast_num_dests = 0;
+        uint32_t sender_wait_count = 1;
+        uint32_t next_physical_x = 0;
+        uint32_t next_physical_y = 0;
 
-    volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr = nullptr;
-    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr_ptr = nullptr;
-    volatile tt_l1_ptr uint32_t* valid_semaphore_addr_ptr = nullptr;
-    uint64_t sender_semaphore_noc_addr = 0;
-    uint64_t receiver_semaphore_noc_addr = 0;
-    uint32_t valid_semaphore_addr = 0;
-    uint32_t receiver_semaphore_l1_addr = 0;
-    uint64_t mcast_sem_noc_addr = 0;
-    uint32_t sender_wait_count = 1;
+        volatile tt_l1_ptr uint32_t* sender_sem_ptr = nullptr;
+        volatile tt_l1_ptr uint32_t* receiver_sem_ptr = nullptr;
+        uint64_t sender_sem_noc_addr = 0;
+        uint64_t receiver_sem_noc_addr = 0;
+        uint32_t valid_sem_addr = 0;
+        uint64_t mcast_data_base_noc_addr = 0;  // OR with the L1 data addr at use
+        uint64_t mcast_sem_noc_addr = 0;
+    } chain;
 
-#if defined(SDPA_KV_CHAIN_ENABLED)
-    {
-        is_chain_participant = get_arg_val<uint32_t>(argidx++);
-        is_injector = get_arg_val<uint32_t>(argidx++);
-        is_sink = get_arg_val<uint32_t>(argidx++);
-        chain_batch = get_arg_val<uint32_t>(argidx++);
-        chain_head = get_arg_val<uint32_t>(argidx++);
+    if constexpr (chain_enabled) {
+        chain.participates = get_arg_val<uint32_t>(argidx++);
+        chain.is_injector = get_arg_val<uint32_t>(argidx++);
+        chain.is_sink = get_arg_val<uint32_t>(argidx++);
+        chain.batch = get_arg_val<uint32_t>(argidx++);
+        chain.head = get_arg_val<uint32_t>(argidx++);
         argidx += 2;  // skip chain_q_chunk_start, chain_q_chunk_count (host-only metadata)
-        prev_physical_x = get_arg_val<uint32_t>(argidx++);
-        prev_physical_y = get_arg_val<uint32_t>(argidx++);
-        next_physical_x = get_arg_val<uint32_t>(argidx++);
-        next_physical_y = get_arg_val<uint32_t>(argidx++);
-        next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
-        mcast_num_dests = get_arg_val<uint32_t>(argidx++);
-        mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+        const uint32_t prev_physical_x = get_arg_val<uint32_t>(argidx++);
+        const uint32_t prev_physical_y = get_arg_val<uint32_t>(argidx++);
+        chain.next_physical_x = get_arg_val<uint32_t>(argidx++);
+        chain.next_physical_y = get_arg_val<uint32_t>(argidx++);
+        chain.next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+        chain.mcast_num_dests = get_arg_val<uint32_t>(argidx++);
+        const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
-        if (is_chain_participant) {
-            const uint32_t sender_semaphore_addr = get_semaphore(sender_semaphore_id);
-            const uint32_t receiver_semaphore_addr = get_semaphore(receiver_semaphore_id);
-            valid_semaphore_addr = get_semaphore(valid_semaphore_id);
-            receiver_semaphore_l1_addr = receiver_semaphore_addr;
+        if (chain.participates) {
+            const uint32_t sender_sem = get_semaphore(sender_semaphore_id);
+            const uint32_t receiver_sem = get_semaphore(receiver_semaphore_id);
+            chain.valid_sem_addr = get_semaphore(valid_semaphore_id);
+            chain.sender_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sem);
+            chain.receiver_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_sem);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chain.valid_sem_addr) = VALID;
 
-            sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
-            receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore_addr);
-            valid_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_semaphore_addr);
-
-            *valid_semaphore_addr_ptr = VALID;
-
+            chain.sender_sem_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_sem);
             if constexpr (mcast_enabled) {
-                // All chains use mcast (all-or-nothing compile-time decision)
-                sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
-                if (is_injector) {
-                    // prev_physical = mcast_start (first receiver), next_physical = mcast_end (last receiver)
-                    mcast_base_noc_addr = get_noc_multicast_addr(
-                        prev_physical_x,
-                        prev_physical_y,
-                        next_physical_x,
-                        next_physical_y,
-                        0);  // addr=0; will OR in actual L1 addr at use site
-                    mcast_sem_noc_addr = mcast_base_noc_addr | receiver_semaphore_l1_addr;
-                    sender_wait_count = mcast_sender_wait;
+                // All chains mcast (all-or-nothing host decision). Injector mcasts across the
+                // [prev_physical, next_physical] rectangle on its row; receivers only need
+                // sender_sem_noc_addr to signal the injector.
+                if (chain.is_injector) {
+                    chain.mcast_data_base_noc_addr = get_noc_multicast_addr(
+                        prev_physical_x, prev_physical_y, chain.next_physical_x, chain.next_physical_y, 0);
+                    chain.mcast_sem_noc_addr = chain.mcast_data_base_noc_addr | receiver_sem;
+                    chain.sender_wait_count = mcast_sender_wait;
                 }
             } else {
-                sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
-                receiver_semaphore_noc_addr = get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
+                chain.receiver_sem_noc_addr = get_noc_addr(chain.next_physical_x, chain.next_physical_y, receiver_sem);
             }
         }
     }
-#endif
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
@@ -297,30 +287,26 @@ void kernel_main() {
 
         uint32_t prev_nb = kFirstIteration;
         uint32_t prev_nq = kFirstIteration;
-#if defined(SDPA_KV_CHAIN_ENABLED)
-        // Flat path tracks q_iter_local across same-head iterations — hierarchical gets it for
-        // free from its inner q_iter counter.
+        // Flat path tracks q_iter_local across same-head iterations (chain-only); hierarchical
+        // gets it for free from its inner q_iter counter.
         uint32_t flat_prev_head_id = kFirstIteration;
         uint32_t flat_q_iter_local = 0;
-#endif
 
         for (uint32_t gq = 0; gq < total_q_iters; ++gq) {
             // 1. Resolve the work item (nb, nq, q_chunk, q_iter_local) for this gq.
-            uint32_t nb, nq, q_chunk, q_iter_local;
+            uint32_t nb, nq, q_chunk, q_iter_local = 0;
             if constexpr (flatten_work) {
                 const auto w =
                     decompose_flat_q_index(global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, proxy_mode);
                 nb = w.nb;
                 nq = w.nq;
                 q_chunk = w.q_chunk;
-#if defined(SDPA_KV_CHAIN_ENABLED)
-                const uint32_t cur_head_id = nb * NQH + nq;
-                flat_q_iter_local = (cur_head_id == flat_prev_head_id) ? (flat_q_iter_local + 1) : 0;
-                flat_prev_head_id = cur_head_id;
-                q_iter_local = flat_q_iter_local;
-#else
-                q_iter_local = 0;
-#endif
+                if constexpr (chain_enabled) {
+                    const uint32_t cur_head_id = nb * NQH + nq;
+                    flat_q_iter_local = (cur_head_id == flat_prev_head_id) ? (flat_q_iter_local + 1) : 0;
+                    flat_prev_head_id = cur_head_id;
+                    q_iter_local = flat_q_iter_local;
+                }
             } else {
                 const auto w = decompose_hierarchical_index(gq, heads_local, q_chunks_per_core);
                 nb = local_batch_start + w.nb_idx;
@@ -399,17 +385,22 @@ void kernel_main() {
 
             // q_iter_local is the per-(nb, nq) slot index on this core, so a straddling flat-mode
             // core gates forwards against the next core's head slot count, not its whole-range gq.
-            const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch) && (nq == chain_head) &&
-                                        (q_iter_local < next_core_q_chunks);
-            const bool should_receive =
-                is_chain_participant && !is_injector && (nb == chain_batch) && (nq == chain_head);
+            // Both stay false when chain_enabled=false so the forward/receive branches below dead.
+            bool should_forward = false;
+            bool should_receive = false;
+            if constexpr (chain_enabled) {
+                const bool on_chain_head = (nb == chain.batch) && (nq == chain.head);
+                should_forward =
+                    chain.participates && !chain.is_sink && on_chain_head && (q_iter_local < chain.next_core_q_chunks);
+                should_receive = chain.participates && !chain.is_injector && on_chain_head;
+            }
 
             // UP proxy halves the K loop. Chain cores walk the full K range so injector + receivers
             // stay in lockstep; the lightweight causal mask zeroes softmax columns past q_high.
             uint32_t k_chunk_end;
             if constexpr (proxy_mode == RingProxyMode::Up) {
                 k_chunk_end = k_num_chunks / 2;
-            } else if (is_chain_participant) {
+            } else if (chain_enabled && chain.participates) {
                 k_chunk_end = k_num_chunks;
             } else {
                 k_chunk_end = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
@@ -429,9 +420,9 @@ void kernel_main() {
                     // Receive forwarded K chunk from previous core
                     cb_reserve_back(cb_k_in, k_chunk_tiles);
                     cb_k_start_address = get_write_ptr(cb_k_in);
-                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(chain.receiver_sem_ptr, INVALID);
+                    noc_semaphore_inc(chain.sender_sem_noc_addr, 1);
+                    noc_semaphore_wait(chain.receiver_sem_ptr, VALID);
                     cb_push_back(cb_k_in, k_chunk_tiles);
                 } else {
                     // Read K chunk from DRAM
@@ -480,25 +471,26 @@ void kernel_main() {
                 // any noc_async_read_barrier() between them deadlocks (the read barrier
                 // blocks while a linked write awaits its companion).
                 if (should_forward) {
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                    noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+                    noc_semaphore_wait(chain.sender_sem_ptr, chain.sender_wait_count);
+                    noc_semaphore_set(chain.sender_sem_ptr, 0);
                     if constexpr (mcast_enabled) {
-                        uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
+                        const uint64_t k_mcast_addr = chain.mcast_data_base_noc_addr | cb_k_start_address;
                         noc_async_write_multicast(
                             cb_k_start_address,
                             k_mcast_addr,
                             k_chunk_tiles * k_tile_bytes,
-                            mcast_num_dests,
+                            chain.mcast_num_dests,
                             true /* linked: semaphore mcast follows */);
-                        noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                        noc_semaphore_set_multicast(
+                            chain.valid_sem_addr, chain.mcast_sem_noc_addr, chain.mcast_num_dests);
                         noc_async_writes_flushed();
                         if (!should_receive) {
                             cb_push_back(cb_k_in, k_chunk_tiles);
                         }
                     } else {
-                        uint64_t k_unicast_data_addr =
-                            get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
-                        noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                        const uint64_t k_unicast_addr =
+                            get_noc_addr(chain.next_physical_x, chain.next_physical_y, cb_k_start_address);
+                        noc_async_write(cb_k_start_address, k_unicast_addr, k_chunk_tiles * k_tile_bytes);
                     }
                 }
 
@@ -548,7 +540,7 @@ void kernel_main() {
                         if (!should_receive) {
                             cb_push_back(cb_k_in, k_chunk_tiles);
                         }
-                        noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                        noc_semaphore_set_remote(chain.valid_sem_addr, chain.receiver_sem_noc_addr);
                     }
                 }
 
@@ -583,9 +575,9 @@ void kernel_main() {
                     // Receive forwarded V chunk from previous core
                     cb_reserve_back(cb_v_in, v_chunk_tiles);
                     cb_v_start_address = get_write_ptr(cb_v_in);
-                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(chain.receiver_sem_ptr, INVALID);
+                    noc_semaphore_inc(chain.sender_sem_noc_addr, 1);
+                    noc_semaphore_wait(chain.receiver_sem_ptr, VALID);
                     cb_push_back(cb_v_in, v_chunk_tiles);
                 } else {
                     // Read V chunk from DRAM
@@ -639,25 +631,26 @@ void kernel_main() {
                 // Forward V chunk to next core(s) before push_back — prevents compute from
                 // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
-                    noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+                    noc_semaphore_wait(chain.sender_sem_ptr, chain.sender_wait_count);
+                    noc_semaphore_set(chain.sender_sem_ptr, 0);
                     if constexpr (mcast_enabled) {
-                        uint64_t v_mcast_addr = mcast_base_noc_addr | cb_v_start_address;
+                        const uint64_t v_mcast_addr = chain.mcast_data_base_noc_addr | cb_v_start_address;
                         noc_async_write_multicast(
                             cb_v_start_address,
                             v_mcast_addr,
                             v_chunk_tiles * v_tile_bytes,
-                            mcast_num_dests,
+                            chain.mcast_num_dests,
                             true /* linked: semaphore mcast follows */);
-                        noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                        noc_semaphore_set_multicast(
+                            chain.valid_sem_addr, chain.mcast_sem_noc_addr, chain.mcast_num_dests);
                     } else {
-                        uint64_t v_unicast_data_addr =
-                            get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
-                        noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                        const uint64_t v_unicast_addr =
+                            get_noc_addr(chain.next_physical_x, chain.next_physical_y, cb_v_start_address);
+                        noc_async_write(cb_v_start_address, v_unicast_addr, v_chunk_tiles * v_tile_bytes);
                     }
                     noc_async_writes_flushed();
                     if constexpr (!mcast_enabled) {
-                        noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                        noc_semaphore_set_remote(chain.valid_sem_addr, chain.receiver_sem_noc_addr);
                     }
                     if (!should_receive) {
                         cb_push_back(cb_v_in, v_chunk_tiles);

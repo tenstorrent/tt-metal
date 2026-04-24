@@ -647,6 +647,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(static_cast<uint32_t>(proxy_case));
+    reader_compile_time_args.push_back(static_cast<uint32_t>(chain_enabled));
 
     // Create semaphores for KV chain forwarding BEFORE kernel compilation (when chain_enabled)
     // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
@@ -739,6 +740,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
         (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
         (std::uint32_t)proxy_case,             // arg 33: ring proxy case (None => hierarchical)
+        (std::uint32_t)chain_enabled,          // arg 34: KV chain forwarding active
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -754,9 +756,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (!flatten_work && is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
-    }
-    if (chain_enabled) {
-        defines["SDPA_KV_CHAIN_ENABLED"] = "1";
     }
 
     log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
@@ -925,7 +924,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t read_offset = 0;
     uint32_t write_offset = 0;
 
-    // Build chain topology for KV forwarding (non-causal only)
+    // Build chain topology for KV forwarding (non-causal, or flat-work causal w/ lightweight mask).
     std::vector<CoreWork> core_work(num_cores);
     std::vector<CoreChainInfo> core_chain_info(num_cores);
     const uint32_t total_heads = B * NQH;
