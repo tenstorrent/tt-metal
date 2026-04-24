@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
 from models.demos.deepseek_v4_flash.cpu_reference import (
     combine_routed_experts,
@@ -34,6 +35,7 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     grouped_output_projection_a,
     load_attention_projection_weights,
 )
+from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import TtPrefillAttentionBlock, load_attention_sink
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
@@ -306,6 +308,91 @@ def test_tiny_attention_output_projection_host_grouped_wo_a_matches_torch(
 
     assert torch_output.shape == expected.shape
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preprocessed_checkpoint: Path, device):
+    """Integrated prefill block; compressor pooling, sparse attention, and grouped wo_a are host fallbacks."""
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    layer = 2
+    projection_weights = load_attention_projection_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=layer,
+        include_output_projection=True,
+    )
+    compressor_weights = load_prefill_compressor_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=layer,
+    )
+    attn_sink = load_attention_sink(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
+
+    hidden_size = manifest["config"]["hidden_size"]
+    num_heads = manifest["config"]["num_attention_heads"]
+    head_dim = manifest["config"]["head_dim"]
+    compress_ratio = manifest["config"]["compress_ratios"][layer]
+    seq_len = 32
+    torch_input = torch.linspace(-0.18, 0.22, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+
+    q_rank = F.linear(torch_input[:, 0].float(), projection_weights.wq_a.to(torch.bfloat16).float()).to(torch.bfloat16)
+    q = F.linear(
+        rms_norm(
+            q_rank,
+            projection_weights.q_norm.to(torch.bfloat16),
+            float(manifest["config"]["rms_norm_eps"]),
+        ).float(),
+        projection_weights.wq_b.to(torch.bfloat16).float(),
+    ).to(torch.bfloat16)
+    compressed_kv = compressor_prefill(
+        torch_input[:, 0],
+        compressor_weights.wkv.to(torch.bfloat16),
+        compressor_weights.wgate.to(torch.bfloat16),
+        compressor_weights.ape,
+        compressor_weights.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=head_dim,
+        norm_eps=float(manifest["config"]["rms_norm_eps"]),
+        overlap=True,
+    ).to(torch.bfloat16)
+    q_heads = q.reshape(1, seq_len, num_heads, head_dim)
+    index_weights = torch.linspace(0.5, 1.25, steps=num_heads, dtype=torch.float32).reshape(1, 1, num_heads)
+    index_weights = index_weights.expand(1, seq_len, num_heads)
+    topk_idxs = indexer_topk(
+        q_heads,
+        compressed_kv,
+        index_weights,
+        index_topk=int(manifest["config"]["index_topk"]),
+        compress_ratio=compress_ratio,
+        start_pos=0,
+        offset=0,
+    )
+    attention_output = sparse_attention(
+        q_heads,
+        compressed_kv,
+        attn_sink,
+        topk_idxs,
+        softmax_scale=head_dim**-0.5,
+    )
+    attention_output = attention_output.reshape(1, seq_len, num_heads * head_dim).to(torch.bfloat16)
+    output_rank = grouped_output_projection_a(
+        attention_output,
+        projection_weights.wo_a,
+        o_groups=int(manifest["config"]["o_groups"]),
+    )
+    expected = F.linear(output_rank.float(), projection_weights.wo_b.to(torch.bfloat16).float()).unsqueeze(1)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtPrefillAttentionBlock.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=layer)
+    torch_output = ttnn.to_torch(module(tt_input, topk_idxs=topk_idxs))
+
+    assert torch.any(topk_idxs < 0)
+    assert torch_output.shape == expected.shape
+    passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.999)
+    assert passing, f"Prefill attention block output PCC below 0.999: {pcc_message}"
 
 
 def test_tiny_sparse_prefill_attention_abi_smoke_matches_torch(device):

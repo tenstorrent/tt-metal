@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -26,6 +28,11 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     grouped_output_projection_a,
     load_attention_projection_weights,
     validate_attention_projection_weights,
+)
+from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import (
+    load_attention_sink,
+    validate_prefill_attention_block_config,
+    validate_prefill_attention_block_input,
 )
 from models.demos.deepseek_v4_flash.ttnn_router import select_router_scores, validate_router_config
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import validate_sparse_attention_contract
@@ -217,6 +224,64 @@ def test_attention_projection_weight_loading_and_grouped_wo_a_host_scaffold(tmp_
             head_dim=8,
             o_groups=4,
             o_lora_rank=16,
+        )
+
+
+def test_prefill_attention_block_contract_validation(tmp_path):
+    source = generate_tiny_hf_checkpoint(tmp_path / "source", num_hidden_layers=3)
+    output = convert_hf_checkpoint(source, tmp_path / "tt_preprocessed")
+    attn_sink = load_attention_sink(output, layer=2)
+    torch.testing.assert_close(attn_sink, torch.zeros(4))
+
+    hidden_states = torch.zeros(1, 1, 8, 32)
+    topk_idxs = torch.zeros(1, 8, 2, dtype=torch.int64)
+    validate_prefill_attention_block_input(
+        hidden_states,
+        topk_idxs,
+        hidden_size=32,
+        compress_ratio=4,
+    )
+    with pytest.raises(ValueError, match="topk_idxs is required"):
+        validate_prefill_attention_block_input(hidden_states, None, hidden_size=32, compress_ratio=4)
+    with pytest.raises(ValueError, match="Expected topk_idxs batch/seq"):
+        validate_prefill_attention_block_input(
+            hidden_states,
+            torch.zeros(1, 7, 2, dtype=torch.int64),
+            hidden_size=32,
+            compress_ratio=4,
+        )
+
+    device = object()
+    dtype = object()
+    memory_config = object()
+    projection = SimpleNamespace(
+        device=device,
+        dtype=dtype,
+        memory_config=memory_config,
+        num_heads=4,
+        head_dim=8,
+    )
+    compressor = SimpleNamespace(device=device, dtype=dtype, memory_config=memory_config, head_dim=8)
+    sparse_attention = SimpleNamespace(
+        device=device,
+        dtype=dtype,
+        memory_config=memory_config,
+        num_heads=4,
+        head_dim=8,
+    )
+    validate_prefill_attention_block_config(
+        attention_projection=projection,
+        compressor=compressor,
+        sparse_attention=sparse_attention,
+        attn_sink=attn_sink,
+    )
+    bad_compressor = SimpleNamespace(device=device, dtype=dtype, memory_config=memory_config, head_dim=4)
+    with pytest.raises(ValueError, match="compressor head_dim"):
+        validate_prefill_attention_block_config(
+            attention_projection=projection,
+            compressor=bad_compressor,
+            sparse_attention=sparse_attention,
+            attn_sink=attn_sink,
         )
 
 
