@@ -1576,19 +1576,10 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     for (auto core : all_cores_in_rect_grid_vec) {
         if (std::find(all_worker_cores.ranges().begin(), all_worker_cores.ranges().end(), core) ==
             all_worker_cores.ranges().end()) {  // not worker
-            bool is_worker_core = false;
-            std::vector<uint32_t> mm_in1_sender_writer_args;
-            mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-            in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
-
-            std::vector<uint32_t> mm_compute_args;
-            mm_compute_args.push_back((std::uint32_t)is_worker_core);
-            compute_kernel_desc.runtime_args.emplace_back(core, mm_compute_args);
+            in1_sender_writer_kernel_desc.emplace_runtime_args(core, {0u});
+            compute_kernel_desc.emplace_runtime_args(core, {0u});
         } else {
-            bool is_worker_core = true;
-            std::vector<uint32_t> mm_compute_args;
-            mm_compute_args.push_back((std::uint32_t)is_worker_core);
-            compute_kernel_desc.runtime_args.emplace_back(core, mm_compute_args);
+            compute_kernel_desc.emplace_runtime_args(core, {1u});
         }
     }
 
@@ -1596,14 +1587,13 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
 
-        bool is_worker_core = true;
-        std::vector<uint32_t> mm_in1_sender_writer_args;
-        mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-        mm_in1_sender_writer_args.push_back(in1_buffer->address());
+        KernelDescriptor::RTArgList in1_args;
+        in1_args.push_back(1u);  // is_worker_core
+        in1_args.push_back(in1_buffer);
         if (bias_buffer != nullptr) {
-            mm_in1_sender_writer_args.push_back(bias_buffer->address());
+            in1_args.push_back(bias_buffer);
         } else {
-            mm_in1_sender_writer_args.push_back(0);
+            in1_args.push_back(0u);
         }
 
         uint32_t vc = bank_id & 0x3;
@@ -1616,8 +1606,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                 break;
             }
         }
-        mm_in1_sender_writer_args.push_back((std::uint32_t)bank_id);
-        mm_in1_sender_writer_args.push_back((std::uint32_t)vc);
+        in1_args.push_back((uint32_t)bank_id);
+        in1_args.push_back((uint32_t)vc);
 
         bank_id = (bank_id + 1) % num_dram_banks;
 
@@ -1631,25 +1621,23 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             uint32_t per_core_N_reshard_2 = per_core_N_in1_sender - per_core_N_reshard_1;
 
             if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
-                mm_in1_sender_writer_args.push_back(2);
+                in1_args.push_back(2u);
             } else {
-                mm_in1_sender_writer_args.push_back(1);
+                in1_args.push_back(1u);
             }
 
-            mm_in1_sender_writer_args.push_back(
-                per_core_N_storage_curr_stride * output_single_tile_size);  // reshard_tensor_start_offset
-            mm_in1_sender_writer_args.push_back(
-                per_core_N_reshard_1 * output_single_tile_size);                       // per_core_N_reshard_bytes_1
-            mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx]);  // output_noc_x
-            mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx]);  // output_noc_y
+            in1_args.push_back(
+                per_core_N_storage_curr_stride * output_single_tile_size);       // reshard_tensor_start_offset
+            in1_args.push_back(per_core_N_reshard_1 * output_single_tile_size);  // per_core_N_reshard_bytes_1
+            in1_args.push_back(output_noc_x[curr_storage_core_idx]);             // output_noc_x
+            in1_args.push_back(output_noc_y[curr_storage_core_idx]);             // output_noc_y
 
             total_tensor_width_written_back += per_core_N_reshard_1;
 
             if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
-                mm_in1_sender_writer_args.push_back(
-                    per_core_N_reshard_2 * output_single_tile_size);  // per_core_N_reshard_bytes_2
-                mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core_idx + 1]);  // output_noc_x
-                mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core_idx + 1]);  // output_noc_y
+                in1_args.push_back(per_core_N_reshard_2 * output_single_tile_size);  // per_core_N_reshard_bytes_2
+                in1_args.push_back(output_noc_x[curr_storage_core_idx + 1]);         // output_noc_x
+                in1_args.push_back(output_noc_y[curr_storage_core_idx + 1]);         // output_noc_y
 
                 total_tensor_width_written_back += per_core_N_reshard_2;
             }
@@ -1658,6 +1646,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             per_core_N_storage_curr_stride =
                 (per_core_N_storage_curr_stride + per_core_N_in1_sender) % per_core_N_storage;
         } else {
+            // Collect trailing args separately so num_cores_write_back can be inserted at pos 5.
+            std::vector<uint32_t> trailing;
             uint32_t num_cores_write_back = 0;
 
             if (curr_storage_core < num_cores_written_back) {
@@ -1665,12 +1655,10 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 
                 worker_core_stride = per_core_N_storage - storage_core_stride;
 
-                mm_in1_sender_writer_args.push_back(
-                    storage_core_stride * output_single_tile_size);  // reshard_tensor_start_offset
-                mm_in1_sender_writer_args.push_back(
-                    worker_core_stride * output_single_tile_size);                     // per_core_N_reshard
-                mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core]);  // output_noc_x
-                mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core]);  // output_noc_y
+                trailing.push_back(storage_core_stride * output_single_tile_size);  // reshard_tensor_start_offset
+                trailing.push_back(worker_core_stride * output_single_tile_size);   // per_core_N_reshard
+                trailing.push_back(output_noc_x[curr_storage_core]);                // output_noc_x
+                trailing.push_back(output_noc_y[curr_storage_core]);                // output_noc_y
 
                 curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
                 storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
@@ -1693,10 +1681,10 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                         curr_worker_core += 1;
                     }
 
-                    mm_in1_sender_writer_args.push_back(
-                        current_worker_write_back_tiles * output_single_tile_size);        // per_core_N_reshard
-                    mm_in1_sender_writer_args.push_back(output_noc_x[curr_storage_core]);  // output_noc_x
-                    mm_in1_sender_writer_args.push_back(output_noc_y[curr_storage_core]);  // output_noc_y
+                    trailing.push_back(
+                        current_worker_write_back_tiles * output_single_tile_size);  // per_core_N_reshard
+                    trailing.push_back(output_noc_x[curr_storage_core]);             // output_noc_x
+                    trailing.push_back(output_noc_y[curr_storage_core]);             // output_noc_y
 
                     total_tensor_width_written_back += current_worker_write_back_tiles;
 
@@ -1706,14 +1694,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                 }
             }
 
-            mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 5, num_cores_write_back);
+            in1_args.push_back(num_cores_write_back);
+            in1_args.append(trailing);
         }
 
-        in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
-        TT_FATAL(
-            mm_in1_sender_writer_args.size() >= 10,
-            "Kernel requires at least 10 runtime args, got {}",
-            mm_in1_sender_writer_args.size());
+        in1_sender_writer_kernel_desc.emplace_runtime_args(core, std::move(in1_args));
     }
 
     TT_FATAL(

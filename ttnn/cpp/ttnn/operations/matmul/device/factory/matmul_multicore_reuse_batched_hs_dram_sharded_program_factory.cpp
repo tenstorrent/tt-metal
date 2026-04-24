@@ -1100,17 +1100,10 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
 
     // Idle cores in the bounding box
     for (const auto& core : all_cores_in_rect_grid_vec) {
-        bool is_worker = worker_cores_set.contains(core);
-
-        if (!is_worker) {
-            std::vector<uint32_t> in0_idle_args = {0u};
-            in0_reader_kernel_desc.runtime_args.emplace_back(core, in0_idle_args);
-
-            std::vector<uint32_t> in1_idle_args = {0u};
-            in1_writer_kernel_desc.runtime_args.emplace_back(core, in1_idle_args);
-
-            std::vector<uint32_t> compute_idle_args = {0u};
-            compute_kernel_desc.runtime_args.emplace_back(core, compute_idle_args);
+        if (!worker_cores_set.contains(core)) {
+            in0_reader_kernel_desc.emplace_runtime_args(core, {0u});
+            in1_writer_kernel_desc.emplace_runtime_args(core, {0u});
+            compute_kernel_desc.emplace_runtime_args(core, {0u});
         }
     }
 
@@ -1129,33 +1122,25 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
             }
         }
 
-        // in0 reader runtime args
-        std::vector<uint32_t> in0_reader_runtime_args = {
-            1u,
-            input_storage_noc_x[worker_idx],
-            input_storage_noc_y[worker_idx],
-            in0_buffer->address(),
-        };
-        in0_reader_kernel_desc.runtime_args.emplace_back(core, in0_reader_runtime_args);
+        in0_reader_kernel_desc.emplace_runtime_args(
+            core, {1u, input_storage_noc_x[worker_idx], input_storage_noc_y[worker_idx], in0_buffer});
 
-        // in1 writer runtime args
-        std::vector<uint32_t> in1_writer_runtime_args = {
-            1u,
-            in1_buffer->address(),
-            bias_buffer != nullptr ? bias_buffer->address() : 0u,
-            bank_id,
-            vc,
-            output_storage_noc_x[worker_idx],
-            output_storage_noc_y[worker_idx],
-            out_buffer->address(),
-        };
-        in1_writer_kernel_desc.runtime_args.emplace_back(core, in1_writer_runtime_args);
+        KernelDescriptor::RTArgList in1_args;
+        in1_args.push_back(1u);
+        in1_args.push_back(in1_buffer);
+        if (bias_buffer != nullptr) {
+            in1_args.push_back(bias_buffer);
+        } else {
+            in1_args.push_back(0u);
+        }
+        in1_args.push_back(bank_id);
+        in1_args.push_back(vc);
+        in1_args.push_back(output_storage_noc_x[worker_idx]);
+        in1_args.push_back(output_storage_noc_y[worker_idx]);
+        in1_args.push_back(out_buffer);
+        in1_writer_kernel_desc.emplace_runtime_args(core, std::move(in1_args));
 
-        // Compute runtime args
-        std::vector<uint32_t> compute_runtime_args = {
-            1u,
-        };
-        compute_kernel_desc.runtime_args.emplace_back(core, compute_runtime_args);
+        compute_kernel_desc.emplace_runtime_args(core, {1u});
     }
 
     // Push all kernel descriptors

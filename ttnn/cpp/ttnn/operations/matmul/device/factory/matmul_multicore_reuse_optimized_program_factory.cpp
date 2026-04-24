@@ -340,13 +340,29 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs reader_writer_runtime_args;
     KernelDescriptor::RuntimeArgs compute_runtime_args_g1;
     KernelDescriptor::RuntimeArgs compute_runtime_args_g2;
-    reader_runtime_args.reserve(num_cores);
-    reader_writer_runtime_args.reserve(num_cores);
     compute_runtime_args_g1.reserve(g1_numcores);
+
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = reader_compile_time_args;
+    reader_kernel_desc.named_compile_time_args = cb_named_args;
+    reader_kernel_desc.defines = reader_defines;
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor reader_writer_kernel_desc;
+    reader_writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp";
+    reader_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_writer_kernel_desc.core_ranges = all_cores;
+    reader_writer_kernel_desc.compile_time_args = reader_writer_compile_time_args;
+    reader_writer_kernel_desc.named_compile_time_args = cb_named_args;
+    reader_writer_kernel_desc.defines = reader_writer_defines;
+    reader_writer_kernel_desc.config = WriterConfigDescriptor{};
 
     for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -362,23 +378,15 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         uint32_t in1_start_tile_id =
             (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
 
-        reader_runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                (uint32_t)in0_buffer->address(),
-                in0_start_tile_id,
-                num_output_blocks_per_core,
-            });
+        reader_kernel_desc.emplace_runtime_args(core, {in0_buffer, in0_start_tile_id, num_output_blocks_per_core});
 
-        reader_writer_runtime_args.emplace_back(
+        reader_writer_kernel_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                (uint32_t)in1_buffer->address(),
-                in1_start_tile_id,
-                num_output_blocks_per_core,
-                (uint32_t)out_buffer->address(),
-                num_blocks_written * num_tiles_per_block_out,
-            });
+            {in1_buffer,
+             in1_start_tile_id,
+             num_output_blocks_per_core,
+             out_buffer,
+             num_blocks_written * num_tiles_per_block_out});
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {
@@ -395,30 +403,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     ////////////////////////////////////////////////////////////////////////////
     ProgramDescriptor program_descriptor;
 
-    // Reader kernel descriptor
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp";
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = cb_named_args;
-    reader_kernel_desc.defines = reader_defines;
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Reader/Writer kernel descriptor (reads in1, writes output)
-    KernelDescriptor reader_writer_kernel_desc;
-    reader_writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp";
-    reader_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_writer_kernel_desc.core_ranges = all_cores;
-    reader_writer_kernel_desc.compile_time_args = reader_writer_compile_time_args;
-    reader_writer_kernel_desc.named_compile_time_args = cb_named_args;
-    reader_writer_kernel_desc.defines = reader_writer_defines;
-    reader_writer_kernel_desc.runtime_args = std::move(reader_writer_runtime_args);
-    reader_writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_writer_kernel_desc));
 
     // Compute kernel descriptor (core group 1)
