@@ -209,7 +209,7 @@ const core_descriptor_t& get_core_descriptor_config(
 
     CoreCoord compute_grid_size;
     // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
-    if (!fast_dispatch && !env.get_rtoptions().get_simulator_enabled()) {
+    if (!fast_dispatch && !env.get_rtoptions().is_simulator_or_emulated()) {
         compute_grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         log_info(
             tt::LogDevice,
@@ -258,7 +258,8 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || env.get_rtoptions().get_simulator_enabled(), "Dispatch cores size must be positive");
+        !dispatch_cores.empty() || env.get_rtoptions().is_simulator_or_emulated(),
+        "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
     std::vector<RelativeCoreCoord> fabric_mux_cores;
