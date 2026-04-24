@@ -73,11 +73,11 @@ resolve target → compose + dispatch → find CSV → analyze → interpret →
 
 | RISC | Duration [ns] | % of op |
 |---|---|---|
-| BRISC (reader) | ... | ... |
-| NCRISC (writer) | ... | ... |
-| TRISC0/1/2 (compute) | ... | ... |
+| BRISC | ... | ... |
+| NCRISC | ... | ... |
+| TRISC0/1/2 | ... | ... |
 
-**Overhead ratio** (top op): (FW - KERNEL) / FW = <pct>%
+**overhead_ratio** (top op): <pct>%
 
 ## Bottleneck Read
 

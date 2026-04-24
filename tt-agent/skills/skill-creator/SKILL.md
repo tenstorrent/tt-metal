@@ -96,12 +96,16 @@ Applies equally to new skills and to edits of existing skills.
 
 ### Dedup sweep
 
-4. List every rule, invariant, command, path, or env var that appears in
-   the touched files. For each, verify it lives in exactly one file per
-   `tt-guidelines.md § Single Canonical Location`.
+4. List every rule, invariant, command, path, env var, formula, or inline
+   definition that appears in the touched files. Template-internal glosses
+   count — a column labeled `BRISC (reader)` inlines a definition owned
+   elsewhere; cross-reference the canonical file instead of restating. For
+   each, verify it lives in exactly one file per `tt-guidelines.md §
+   Single Canonical Location`.
 5. **Recipe/knowledge cross-check:** for each edited SKILL.md, grep the
    corresponding `knowledge/recipes/<repo>/` and `knowledge/<domain>/` for
-   overlapping command strings, file paths, env var names, CLI flags.
+   overlapping command strings, file paths, env var names, CLI flags, and
+   formulas.
 6. Duplication found → return to Phase 2. Rewrite the non-canonical file
    as a one-line cross-reference; do not restate.
 
