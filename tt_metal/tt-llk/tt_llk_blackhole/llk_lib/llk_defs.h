@@ -42,7 +42,7 @@ enum PoolType
     MIN,
 };
 
-enum DataCopyType
+enum class DataCopyType : std::uint8_t
 {
     A2D,
     B2D,
