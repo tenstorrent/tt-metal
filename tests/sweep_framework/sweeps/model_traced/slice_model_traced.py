@@ -122,8 +122,15 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Detect whether the master trace used positional or named args.
+    # If the vector has arg1/arg2/arg3, call positionally to match the trace.
+    use_positional = arg1 is not None and kwargs.get("starts") is None
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs)
+    if use_positional:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    else:
+        output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
