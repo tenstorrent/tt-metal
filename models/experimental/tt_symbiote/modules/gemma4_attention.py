@@ -534,23 +534,24 @@ class TTNNGemma4Attention(TTNNModule):
     def _apply_rotary_embedding_llama(
         self, query_states, key_states, cos, sin, trans_mat, is_decode_mode, batch_size=None
     ):
-        """Apply rotary_embedding_llama with partial-RoPE optimization.
+        """Apply rotary_embedding_llama, splitting for head_dim > 256.
 
         The TTNN rotary_embedding_llama kernel requires head_dim <= 256.
-        Three paths:
-        1. head_dim <= 256: Direct single kernel call (sliding layers).
-        2. head_dim > 256 AND rotary_dim <= 256: Partial RoPE — slice only the
-           rotary dims (128 for Gemma 4 global), apply one kernel call, concat
-           with untouched pass-through dims. 1.57x decode speedup.
-        3. head_dim > 256 AND rotary_dim > 256: Chunked fallback — split into
-           256-dim chunks and apply RoPE to each (future-proofing).
+        For global layers with head_dim=512, we split Q/K and cos/sin along the
+        last dimension into 256-dim chunks, apply RoPE to each, and concat back.
+        RoPE operates on independent pairs so the split is mathematically correct.
 
-        In decode mode, the kernel requires HEIGHT_SHARDED inputs, so tensors
-        are sharded before RoPE and un-sharded after.
+        In decode mode, the kernel also requires HEIGHT_SHARDED inputs, so each
+        chunk is sharded before RoPE and un-sharded after.
+
+        NOTE: A partial-RoPE optimization (slice rotary dims only, single kernel
+        call, concat with pass-through) was tried but caused an intermittent
+        device hang on ~the 65-96th decode step of the 2nd benchmark request
+        on T3K. Reverted to the chunked path, which is the proven baseline.
+        See git history for the partial-RoPE implementation if revisiting.
         """
         max_rope_dim = 256
 
-        # --- Path 1: head_dim fits kernel limit (sliding layers, head_dim=256) ---
         if self.head_dim <= max_rope_dim:
             query_states = ttnn.experimental.rotary_embedding_llama(
                 query_states, cos, sin, trans_mat, is_decode_mode=is_decode_mode
@@ -560,55 +561,7 @@ class TTNNGemma4Attention(TTNNModule):
             )
             return query_states, key_states
 
-        # --- Path 2: Partial RoPE (global layers, rotary_dim=128 <= 256) ---
-        rotary_dim = self._rotary_dim
-        if rotary_dim <= max_rope_dim:
-            # Slice rotary portion and pass-through portion
-            q_rot = query_states[:, :, :, :rotary_dim]
-            q_pass = query_states[:, :, :, rotary_dim:]
-            k_rot = key_states[:, :, :, :rotary_dim]
-            k_pass = key_states[:, :, :, rotary_dim:]
-
-            # Slice cos/sin to actual rotary dims only
-            cos_rot = cos[:, :, :, :rotary_dim]
-            sin_rot = sin[:, :, :, :rotary_dim]
-
-            # For decode mode, shard rotary-dim tensors to L1 (kernel requirement)
-            if is_decode_mode and batch_size is not None:
-                batch_grid = ttnn.num_cores_to_corerangeset(
-                    batch_size, self.device.compute_with_storage_grid_size(), True
-                )
-                shard_mem = ttnn.create_sharded_memory_config(
-                    shape=(ttnn.TILE_SIZE, rotary_dim),
-                    core_grid=batch_grid,
-                    strategy=ttnn.ShardStrategy.HEIGHT,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                q_rot = ttnn.to_memory_config(q_rot, shard_mem)
-                k_rot = ttnn.to_memory_config(k_rot, shard_mem)
-                cos_rot = ttnn.to_memory_config(cos_rot, shard_mem)
-                sin_rot = ttnn.to_memory_config(sin_rot, shard_mem)
-
-            # Single RoPE kernel call per Q/K (128 dims fits kernel limit)
-            q_rot = ttnn.experimental.rotary_embedding_llama(
-                q_rot, cos_rot, sin_rot, trans_mat, is_decode_mode=is_decode_mode
-            )
-            k_rot = ttnn.experimental.rotary_embedding_llama(
-                k_rot, cos_rot, sin_rot, trans_mat, is_decode_mode=is_decode_mode
-            )
-
-            # Unshard back to DRAM after RoPE
-            if is_decode_mode and batch_size is not None:
-                q_rot = ttnn.to_memory_config(q_rot, ttnn.DRAM_MEMORY_CONFIG)
-                k_rot = ttnn.to_memory_config(k_rot, ttnn.DRAM_MEMORY_CONFIG)
-
-            # Concat rotated portion with untouched pass-through
-            query_states = ttnn.concat([q_rot, q_pass], dim=-1)
-            key_states = ttnn.concat([k_rot, k_pass], dim=-1)
-            return query_states, key_states
-
-        # --- Path 3: Chunked fallback for rotary_dim > 256 (future-proofing) ---
+        # Split into chunks of max_rope_dim along the last dimension
         num_chunks = (self.head_dim + max_rope_dim - 1) // max_rope_dim
         q_chunks = []
         k_chunks = []
