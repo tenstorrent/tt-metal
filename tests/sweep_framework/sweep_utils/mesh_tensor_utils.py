@@ -168,6 +168,45 @@ def get_mesh_composer(mesh_device, tensor_placement: Optional[Dict] = None):
         return None
 
 
+def _restore_2d_topology(
+    tensor: ttnn.Tensor,
+    placement_entries: list,
+    dist_parsed: list,
+    mesh_shape_tuple: tuple,
+) -> None:
+    """Restore correct 2D TensorTopology on a device tensor.
+
+    The C++ factory methods (create_fully_replicated_tensor_topology,
+    create_sharded_tensor_topology) always flatten to 1D MeshShape(N).
+    This helper reconstructs the correct 2D topology from the vector
+    config's placement info and applies it via update_tensor_topology().
+    """
+    import re
+
+    # Build the 2D distribution shape
+    dist_shape = ttnn.MeshShape(*dist_parsed[:2])
+
+    # Build 2D placements list from the parsed placement entries
+    placements = []
+    for entry in (placement_entries or []):
+        shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+        if shard_match:
+            placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
+        else:
+            placements.append(ttnn.PlacementReplicate())
+
+    # Pad to 2 entries if only 1 (1D placement on a 2D mesh)
+    while len(placements) < 2:
+        placements.append(ttnn.PlacementReplicate())
+
+    # Build mesh_coords for the full mesh (row-major order)
+    rows, cols = dist_parsed[0], dist_parsed[1] if len(dist_parsed) > 1 else 1
+    mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+
+    topology = ttnn.TensorTopology(dist_shape, placements, mesh_coords)
+    tensor.update_tensor_topology(topology)
+
+
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -281,7 +320,7 @@ def create_tensor_on_mesh(
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     # Create tensor on mesh
-    return ttnn.from_torch(
+    result = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=layout,
@@ -289,6 +328,19 @@ def create_tensor_on_mesh(
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
     )
+
+    # Restore correct 2D tensor topology from vector placement info.
+    # The C++ factory methods always create 1D topology (MeshShape(N))
+    # during to_device(), losing the 2D distribution info from the host tensor.
+    # We reconstruct and re-apply the correct 2D topology so that the
+    # operation tracer captures it accurately (matching the master trace).
+    if tensor_placement and is_2d_distribution:
+        try:
+            _restore_2d_topology(result, entries, dist_parsed, mesh_shape_tuple)
+        except Exception:
+            pass  # Best-effort; don't block sweep execution
+
+    return result
 
 
 def get_mesh_shape() -> Optional[Tuple[int, int]]:

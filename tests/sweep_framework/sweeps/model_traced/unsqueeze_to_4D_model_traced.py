@@ -61,6 +61,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+    # Check kwargs for storage_type in case it's passed there instead of as named param
+    if storage_type == "StorageType::DEVICE" and "storage_type" in kwargs:
+        storage_type = kwargs["storage_type"]
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs

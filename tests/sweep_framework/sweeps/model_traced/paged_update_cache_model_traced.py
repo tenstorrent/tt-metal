@@ -95,6 +95,9 @@ def run(
         input_d_layout = page_table_kwargs.get("layout") or ttnn.ROW_MAJOR_LAYOUT
         input_d_memory_config = page_table_kwargs.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
 
+    # Extract input_b named tensor info for shape/dtype
+    input_b_tensor_kwargs = extract_named_tensor_kwargs(kwargs, "input_b")
+
     if isinstance(input_a_shape, dict):
         shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
         shape_b = input_a_shape.get("input_b", input_a_shape.get("other"))
@@ -110,7 +113,10 @@ def run(
         else:
             shape = input_a_shape
         shape_a = shape
+        # Try multiple sources for input_b shape
         input_b_shape_raw = kwargs.get("input_b_shape", None)
+        if input_b_shape_raw is None and input_b_tensor_kwargs is not None:
+            input_b_shape_raw = input_b_tensor_kwargs["shape"]
         if input_b_shape_raw is not None:
             shape_b = tuple(input_b_shape_raw) if isinstance(input_b_shape_raw, (tuple, list)) else input_b_shape_raw
         else:
