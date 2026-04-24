@@ -15,8 +15,10 @@ In single-device mode (skip_ccl=True): CCL is skipped and the input is used dire
 """
 
 import os
+import random
 import re
 import statistics
+import time
 from pathlib import Path
 
 import pytest
@@ -1011,8 +1013,8 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     # MTP embedding reuses the main one-hot embedding table
     torch_embedding = base_embed_w
 
-    torch_eh_proj_bf8 = ttnn.from_torch(torch_eh_proj, dtype=ttnn.bfloat8_b)
-    torch_eh_proj = ttnn.to_torch(torch_eh_proj_bf8).to(torch.bfloat16)
+    torch_eh_proj_bf4 = ttnn.from_torch(torch_eh_proj, dtype=ttnn.bfloat4_b)
+    torch_eh_proj = ttnn.to_torch(torch_eh_proj_bf4).to(torch.bfloat16)
 
     results = []
     for iteration in range(iterations):
@@ -1933,7 +1935,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -1964,7 +1966,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
-            output_mtp_tensor=ttnn_mtp_output,
+            eh_mm_fused_buffer=ttnn_mtp_output,
             embedding_tensor=ttnn_embedding,
             h_gamma_tensor=ttnn_h_gamma,
             e_gamma_tensor=ttnn_e_gamma,
@@ -1995,7 +1997,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             ttnn_gamma,
             ttnn_b,
             ttnn_scores,
-            output_mtp_tensor=ttnn_mtp_output,
+            eh_mm_fused_buffer=ttnn_mtp_output,
             embedding_tensor=ttnn_embedding,
             h_gamma_tensor=ttnn_h_gamma,
             e_gamma_tensor=ttnn_e_gamma,
@@ -2443,7 +2445,7 @@ def test_single_device_mtp(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -2655,7 +2657,7 @@ def test_single_device_mtp_verification(
     )
     torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
     ttnn_eh_proj = to_device(
-        torch_eh_proj_shuffled, eh_proj_mem_config, layout=ttnn.TILE_LAYOUT, tile=b_tile, dtype=ttnn.bfloat8_b
+        torch_eh_proj_shuffled, eh_proj_mem_config, layout=ttnn.TILE_LAYOUT, tile=b_tile, dtype=ttnn.bfloat4_b
     )
     ttnn_mtp_output = to_device(
         torch.zeros((M, mtp_padded_dim), dtype=torch.bfloat16),
@@ -2681,7 +2683,7 @@ def test_single_device_mtp_verification(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -3469,7 +3471,7 @@ def test_multidevice_mtp(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        output_mtp_tensor=ttnn_mtp_output,
+        eh_mm_fused_buffer=ttnn_mtp_output,
         embedding_tensor=ttnn_embedding,
         h_gamma_tensor=ttnn_h_gamma,
         e_gamma_tensor=ttnn_e_gamma,
@@ -4873,9 +4875,9 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
     num_procs = int(ttnn.distributed_context_get_size())
 
-    iterations = 50
+    iterations = 1000000
     run_golden = False
-    run_on = "pod"  # "pod" or "glx"
+    run_on = "glx"  # "pod" or "glx"
 
     if run_on == "pod":
         config = create_single_pod_combined_spec_decode_pipeline_configuration(
@@ -4902,7 +4904,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
 
     pos_id = 0
-    slot_id = 23
+    slot_id = 0
 
     try:
         pipeline.setup_and_run()
@@ -4928,19 +4930,33 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                slot_id = random.randint(0, 255)
                 torch_token[0, 6] = slot_id
+                logger.debug(f"[TEST P{pid}] iter {iteration} slot_id: {torch_token[0, 6].item()}")
+
                 torch_token[0, 7] = iteration
                 torch_token[0, 8] = iteration
-                torch_token[0, 9] = iteration
+                torch_token[0, 9] = -1
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
+                t_write_start = time.perf_counter()
                 pipeline.write_token(token_tensor)
+                t_write_end = time.perf_counter()
                 logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
+                t_read_start = time.perf_counter()
                 pipeline.read_output(output_tensor)
+                t_read_end = time.perf_counter()
+                write_us = (t_write_end - t_write_start) * 1e6
+                read_us = (t_read_end - t_read_start) * 1e6
+                roundtrip_us = (t_read_end - t_write_start) * 1e6
+                logger.info(
+                    f"[LATENCY P{pid}] iter {iteration}: "
+                    f"write={write_us:.1f}us read={read_us:.1f}us roundtrip={roundtrip_us:.1f}us"
+                )
                 logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
@@ -4950,6 +4966,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 tok1_id = raw[3].item()
                 tok1_type = raw[4].item()
                 tok1_pos = raw[5].item()
+                output_slot_id = raw[6].item()
 
                 if run_golden:
                     expected_base, expected_spec = golden[iteration]
@@ -4958,12 +4975,14 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                     expected_spec = None
 
                 type_name = {0: "BASE", 1: "SPEC"}
-                logger.debug(
+                assert output_slot_id == slot_id, f"Slot ID mismatch: {output_slot_id} != {slot_id}"
+                logger.info(
                     f"[TEST P{pid}] iter {iteration} "
                     f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
-                    f"golden base token={expected_base} golden spec token={expected_spec}",
+                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} "
+                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} "
+                    f"slot_id={output_slot_id} "
+                    f"golden base token={expected_base} golden spec token={expected_spec}"
                 )
 
         logger.debug(f"[TEST P{pid}] all iterations done, barrier")

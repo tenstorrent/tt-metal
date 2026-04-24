@@ -409,7 +409,7 @@ def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
     )
     return TensorTarget(
         name="mtp_eh_projection",
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,

@@ -703,45 +703,67 @@ class BaseLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # MTP output tensor allocation
-        ttnn_mtp_output = None
+        # Overlapped L1 buffer for mcast_src_cb, mcast_dst_cb, mcast_eh_src_cb, mcast_eh_dst_cb, embedding_cb
+        fused_buf_grid = matmul_core_grid.merge(mcast_core_grid)
+        num_fused_buf_cores = fused_buf_grid.num_cores()
+        fused_buf_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(fused_buf_grid, (BaseLMHeadStage.M, BaseLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        input_core_fused_buffer = ttnn.from_torch(
+            torch.zeros((num_fused_buf_cores, BaseLMHeadStage.K), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=fused_buf_mem_config,
+            tile=BaseLMHeadStage.A_TILE,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        # MTP fused buffer: single allocation backing CB17 (matmul output), CB20 (reduce
+        # intermediate), and CB19 (eh_gather / reduce output).  CB17+CB20 live on compute
+        # cores at different offsets (both active during reduce); CB19 lives on the argmax
+        # core.  Per-core shard is the max of (cb17+cb20) and cb19.
+        eh_mm_fused_buffer = None
         if self._enable_mtp:
             compute_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
             compute_core_grid = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
             )
-            mtp_output_mem_config = ttnn.MemoryConfig(
+
+            out_tile_w = BaseLMHeadStage.OUT_TILE.tile_shape[1]
+            eh_out_w_per_core = mtp_n_per_core // out_tile_w
+            eh_gather_total_tiles = num_dram_banks * eh_out_w_per_core + 1
+
+            compute_core_width = mtp_n_per_core + 3 * mtp_n_per_core  # cb17 + cb20
+            argmax_core_width = eh_gather_total_tiles * out_tile_w
+            eh_mm_shard_width = max(compute_core_width, argmax_core_width)
+
+            eh_mm_fused_grid = compute_core_grid.merge(argmax_final_core_grid)
+            num_eh_mm_fused_cores = eh_mm_fused_grid.num_cores()
+            eh_mm_fused_mem = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(compute_core_grid, (BaseLMHeadStage.M, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(
+                    eh_mm_fused_grid,
+                    (BaseLMHeadStage.M, eh_mm_shard_width),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
             )
-            ttnn_mtp_output = ttnn.from_torch(
-                torch.zeros((num_devices, BaseLMHeadStage.M, mtp_padded_dim), dtype=torch.bfloat16),
+            eh_mm_fused_buffer = ttnn.from_torch(
+                torch.zeros(
+                    (num_devices, BaseLMHeadStage.M, num_eh_mm_fused_cores * eh_mm_shard_width),
+                    dtype=torch.bfloat16,
+                ),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                memory_config=mtp_output_mem_config,
+                memory_config=eh_mm_fused_mem,
                 tile=BaseLMHeadStage.OUT_TILE,
                 mesh_mapper=mesh_mapper,
             )
 
-            # Reduce-to-one intermediate tensor for TP EH matmul (3x shard width for 3 rounds)
-            reduce_intermediate_mem = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    compute_core_grid, (BaseLMHeadStage.M, 3 * mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR
-                ),
-            )
-            reduce_intermediate_tensor = ttnn.from_torch(
-                torch.zeros((num_devices, BaseLMHeadStage.M, 3 * mtp_padded_dim), dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=reduce_intermediate_mem,
-                tile=BaseLMHeadStage.OUT_TILE,
-                mesh_mapper=mesh_mapper,
-            )
             dg = mesh_device.compute_with_storage_grid_size()
             reduce_sem_crs = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dg.x - 1, dg.y - 1))]
@@ -768,33 +790,6 @@ class BaseLMHeadStage(StageKind):
         if sender.y < mcast_end_y:
             mcast_receiver_ranges.append(
                 ttnn.CoreRange(ttnn.CoreCoord(0, sender.y + 1), ttnn.CoreCoord(mcast_end_x, mcast_end_y))
-            )
-
-        eh_gather_output_buf = None
-
-        if self._enable_mtp:
-            eh_out_w_per_core = mtp_n_per_core // BaseLMHeadStage.OUT_TILE.tile_shape[1]
-            eh_gather_total_tiles = num_dram_banks * eh_out_w_per_core + 1
-            out_tile_h = BaseLMHeadStage.OUT_TILE.tile_shape[0]
-            out_tile_w = BaseLMHeadStage.OUT_TILE.tile_shape[1]
-            eh_gather_shard_shape = (eh_gather_total_tiles * out_tile_h, out_tile_w)
-            eh_gather_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    argmax_final_core_grid,
-                    eh_gather_shard_shape,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-            eh_gather_output_buf = ttnn.from_torch(
-                torch.zeros((num_devices * eh_gather_total_tiles * out_tile_h, out_tile_w), dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                tile=BaseLMHeadStage.OUT_TILE,
-                device=mesh_device,
-                memory_config=eh_gather_mem_config,
-                mesh_mapper=mesh_mapper,
             )
 
         lmhead_input_socket = pipeline_block.get_downstream_socket()
@@ -827,16 +822,15 @@ class BaseLMHeadStage(StageKind):
             "bcast_semaphores": bcast_inputs.semaphores,
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
-            "eh_gather_output_buf": eh_gather_output_buf,
             "base_token_buffer": base_token_buffer,
+            "input_core_fused_buffer": input_core_fused_buffer,
         }
         if self._enable_mtp:
-            self._lmhead_state["ttnn_mtp_output"] = ttnn_mtp_output
-            self._lmhead_state["ttnn_embedding"] = self._embedding_weights.embedding  # replicated on ecah device
+            self._lmhead_state["eh_mm_fused_buffer"] = eh_mm_fused_buffer
+            self._lmhead_state["ttnn_embedding"] = self._embedding_weights.embedding  # replicated on each device
             self._lmhead_state["ttnn_h_gamma"] = self._mtp_weights.h_gamma  # replicated on each device
             self._lmhead_state["ttnn_e_gamma"] = self._mtp_weights.e_gamma  # replicated on each device
             self._lmhead_state["ttnn_eh_proj"] = self._mtp_weights.eh_projection  # width sharded on each device
-            self._lmhead_state["reduce_intermediate_tensor"] = reduce_intermediate_tensor
             self._lmhead_state["reduce_semaphores"] = reduce_semaphores
             compute_grid_size = mesh_device.compute_with_storage_grid_size()
             num_cores = compute_grid_size.x * compute_grid_size.y
@@ -863,7 +857,7 @@ class BaseLMHeadStage(StageKind):
             d["ttnn_b"],
             d["ttnn_scores"],
             sender_coord=pipeline_config[my_stage_idx].entry_node_coord,
-            output_mtp_tensor=d.get("ttnn_mtp_output"),
+            eh_mm_fused_buffer=d.get("eh_mm_fused_buffer"),
             embedding_tensor=d.get("ttnn_embedding"),
             h_gamma_tensor=d.get("ttnn_h_gamma"),
             e_gamma_tensor=d.get("ttnn_e_gamma"),
@@ -883,13 +877,11 @@ class BaseLMHeadStage(StageKind):
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             is_mtp_base_stage=True,
-            eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
             metadata_tensor=d.get("metadata_tensor"),
             reduce_semaphores=d.get("reduce_semaphores"),
-            reduce_intermediate_tensor=d.get("reduce_intermediate_tensor"),
-            reduce_output_tensor=d.get("eh_gather_output_buf"),
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
+            input_core_fused_buffer=d.get("input_core_fused_buffer"),
         )
 
 

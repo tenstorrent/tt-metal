@@ -918,7 +918,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
-            deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 2> eh_matmul;
+            deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 3> eh_matmul;
             {
                 DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
                 eh_matmul();
