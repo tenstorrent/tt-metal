@@ -267,6 +267,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
         1,      // arg 20: lightweight causal mask
+        0,      // arg 21: use_streaming_compute — always false for ring distributed (causal)
+        0,      // arg 22: out_subblock_h — unused when streaming is off
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
