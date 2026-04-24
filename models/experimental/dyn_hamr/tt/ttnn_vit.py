@@ -163,7 +163,7 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
         params["blocks"].append({
             "norm1": {"weight": _t(blk.norm1.weight, device), "bias": _t(blk.norm1.bias, device)},
             "attn": {
-                "qkv_w": _t_bfp8(qkv_w_padded, device),
+                "qkv_w": _t_bfp4(qkv_w_padded, device),
                 "qkv_b": _t_bias(qkv_b_padded, device),
                 "proj_w": _t_bfp8(proj_w_padded, device),
                 "proj_b": _t_bias(blk.attn.proj.bias, device),
