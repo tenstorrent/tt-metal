@@ -74,6 +74,12 @@ def _get_mtp_test_max_seq_len() -> int:
     return max_seq_len
 
 
+def _should_use_generator_weight_cache(force_recalculate: bool) -> bool:
+    if force_recalculate:
+        return False
+    return os.getenv("DEEPSEEK_V3_MTP_USE_WEIGHT_CACHE", "1") != "0"
+
+
 def test_mtp_test_max_seq_len_default_covers_reference_window(monkeypatch):
     monkeypatch.setitem(globals(), "DEFAULT_MTP_TEST_MAX_SEQ_LEN", 256)
     monkeypatch.delenv("DEEPSEEK_V3_MTP_REF_STEPS", raising=False)
@@ -94,6 +100,19 @@ def test_mtp_test_max_seq_len_rejects_non_tile_aligned(monkeypatch):
 
     with pytest.raises(ValueError, match="must be divisible"):
         _get_mtp_test_max_seq_len()
+
+
+def test_mtp_generator_uses_weight_cache_by_default(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_V3_MTP_USE_WEIGHT_CACHE", raising=False)
+
+    assert _should_use_generator_weight_cache(force_recalculate=False) is True
+
+
+def test_mtp_generator_weight_cache_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_V3_MTP_USE_WEIGHT_CACHE", "0")
+
+    assert _should_use_generator_weight_cache(force_recalculate=False) is False
+    assert _should_use_generator_weight_cache(force_recalculate=True) is False
 
 
 # Test: host-side selective aliasing only rewires the intended interleaved verify rows.
@@ -462,6 +481,7 @@ def _prepare_generator(
         max_seq_len=_get_mtp_test_max_seq_len(),
         enable_mtp=enable_mtp,
         force_recalculate=force_recalculate,
+        use_weight_cache=_should_use_generator_weight_cache(force_recalculate),
     )
     gen._prepare_run_configs("prefill")
     gen._prepare_run_configs("decode")
