@@ -36,7 +36,8 @@ For each explicit `MatmulMultiCoreReuseMultiCast{,1D}ProgramConfig` in a model:
 | Model | Arch | Scope | Baseline | After | Δ | Configs touched | Commit |
 |---|---|---|---:|---:|---:|---|---|
 | sentence-BERT | WH | total matmul device time (Tracy) | 13,385,817 ns | 10,515,489 ns | **-21.4%** | ff2+qkv reshape (4,2)+rmo; ff1+self_out flag-only | `0a421bb6a56` + threshold `7a89d6a8f55` |
-| Falcon7b | WH | prefill seq=1024 device-kernel sps | 3120 | 3742 | **+19.9%** | mm_h_to_4h `(1,8)`, mm_4h_to_h `(1,6)` — both legacy-compatible h=1 | `0fbd77527c2` |
+| Falcon7b | WH | prefill seq=1024 device-kernel sps (CI-threshold baseline) | 3120 | 3742 | **+19.9%** | mm_h_to_4h `(1,8)`, mm_4h_to_h `(1,6)` — both legacy-compatible h=1 | `0fbd77527c2` |
+| Falcon7b | WH | prefill seq=1024 device-kernel sps (same-hardware A/B, measured `2026-04-24`) | 2938.7 (median of 3) | 3745.0 (median-aligned) | **+27.3%** | same edit as above — published +19.9% was conservative; CI hardware where 3120 was measured runs ~6% faster than this n150 | — |
 | sentence-BERT | BH | device-kernel sps | 976.5 | 991.7 | +1.56% — below 5% bar, **reverted** | attempted ff2+qkv (4,2)+rmo pattern | (no commit; structural win was the auto-tuner fix, not the config change) |
 | SDXL UNet 1024x1024 | BH | device-kernel duration | 79.04 ms | 79.25 ms | +0.26% slower — **reverted** | 11 legacy-compatible subblock upgrades across FF2/TM/ATTN_QKV/ATTN_OUT/RESNET_CONV | (no commit) |
 | ResNet50 | BH | device-kernel sps (batch 32) | 12975.5 | — | n/a | single explicit mcast config at `per_core_M=1, per_core_N=1` — already at max; no manual migration target | (no commit) |
@@ -63,10 +64,23 @@ regressions, and to bump device/e2e perf thresholds that were set against pre-au
 | Qwen3-embedding-8b (WH) | — | no device-perf test in tree | — | — |
 
 **Observations on the WH auto-config A/B data:**
+
+**Important caveat on the "flat" claims below:** the Falcon7b and sentence-BERT `expected_perf`
+values were all set on CI hardware before the auto-tuner landed (`7abfb7ad448`, `63cd6ea58c5`,
+`a24bc52b6f5` predate `8e9f28d664b`). But direct measurement on this n150 shows CI hardware
+runs ~6% faster than this machine on the same pre-edit code (verified via Falcon7b prefill
+seq=1024: pre-edit code at 2938.7 sps here vs CI's 3120 target, -5.8%). So comparing my
+post-auto-tuner measurements against CI-set `expected_perf` under-reports the auto-tuner's
+actual delta on this hardware by roughly that gap. A rigorous same-hardware A/B would require
+checking out pre-`8e9f28d664b` code, rebuilding, and re-measuring each auto-config path — not
+done this session. The "flat ±2%" statements below are really "within ±2% of CI target",
+which equals approximately "+4-7% vs true pre-auto-tuner on this hardware" once the
+cross-hardware gap is applied.
+
 - **Falcon7b** auto-config paths (prefill seq=128, decode seq=128, decode seq=1024): all three
-  measure within ±2% of the pre-auto-tuner `expected_perf`. Auto-tuner is flat on Falcon7b's
-  auto-config paths. Consistent with the cross-arch hypothesis below — pack-phase lever doesn't
-  dominate for small shapes / decode-mode matmuls. No threshold bumps needed.
+  measure within ±2% of the CI-set `expected_perf`. Applying the ~6% cross-hardware correction
+  suggests small auto-tuner wins (~+4-7%) on this hardware but not rigorously verified. Safe
+  conclusion: no regression; plausible small wins; thresholds on this branch are stable.
 - **DistilBERT** wall-clock (`test_performance_distilbert_for_qa`, seq=384): 7 runs measured
   0.0325, 0.0330, 0.0325, 0.0380, 0.0326, 0.0325, 0.0326 s. Median 0.0326 s. **Important
   correction**: the `expected_inference_time=0.0338 s` threshold was set in
