@@ -112,5 +112,9 @@ def mesh_for_shape(mesh_shape: tuple[int, int]) -> MeshConfig:
     return MeshConfig(mesh_shape, decode=ModeConfig(tp=cols, ep=rows), prefill=ModeConfig(tp=cols, ep=1, sp=rows))
 
 
+def mesh_for_ttnn_mesh(mesh_device) -> MeshConfig:
+    return mesh_for_shape(tuple(int(dim) for dim in mesh_device.shape))
+
+
 def _mode_to_dict(config: ModeConfig, dp: int) -> dict:
     return {"tp": config.tp, "ep": config.ep, "sp": config.sp, "dp": dp}
