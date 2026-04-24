@@ -444,7 +444,7 @@ jobs:
 
   ai-run-summary:
     name: "AI Run Summary"
-    needs: vllm-tests
+    needs: [generate-matrix, vllm-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -455,7 +455,8 @@ jobs:
           config-path: .github/ai-summary/vllm-nightly.yaml
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
-          jobs-filter: "vllm-tests / "
+          expected-jobs: ${{ needs.generate-matrix.outputs.matrix }}
+          run-result: ${{ needs.vllm-tests.result }}
 
       - name: Show report
         if: always() && steps.ai-run-summary.outputs.report-file != ''
