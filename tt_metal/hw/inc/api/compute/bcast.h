@@ -99,8 +99,8 @@ template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
 void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     // Pass through uses A2D and potentially direct unpack to dest.
-    const auto data_copy_type = (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-    const bool enable_unpack_to_dest = data_copy_type == DataCopyType::A2D;
+    constexpr auto data_copy_type = (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+    constexpr bool enable_unpack_to_dest = data_copy_type == DataCopyType::A2D;
     const std::uint32_t new_operand_id = get_operand_id(new_icb);
     const std::uint32_t old_operand_id = get_operand_id(old_icb);
     bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
