@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/unary_ng/common/unary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <mutex>
 
-namespace ttnn::operations::unary_ng {
+namespace ttnn::operations::unary {
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();
@@ -81,7 +81,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(const TensorSpec& input_spec, con
             std::call_once(warn_flag, [] {
                 log_warning(
                     tt::LogOp,
-                    "UnaryNg: ROW_MAJOR shard element count is not tile-aligned; "
+                    "Unary: ROW_MAJOR shard element count is not tile-aligned; "
                     "falling back to interleaved path");
             });
             return std::nullopt;
@@ -133,7 +133,7 @@ CoreRangeSet get_worker_grid(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& memory_config_actual) {
     if (sub_core_grids.has_value()) {
-        log_debug(tt::LogOp, "UnaryNg: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
+        log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
 
@@ -152,13 +152,13 @@ CoreRangeSet get_worker_grid(
 
     if (output_tensor.has_value() && output_tensor->is_sharded()) {
         log_debug(
-            tt::LogOp, "UnaryNg: Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
+            tt::LogOp, "Unary: Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
         return get_tensor_grid(*output_tensor);
     }
 
     if (memory_config.has_value() && memory_config->is_sharded() && memory_config->shard_spec().has_value()) {
         const auto& grid = memory_config->shard_spec()->grid;
-        log_debug(tt::LogOp, "UnaryNg: Using memory config shard spec grid for worker grid {}", grid.str());
+        log_debug(tt::LogOp, "Unary: Using memory config shard spec grid for worker grid {}", grid.str());
         auto* device = input_tensor.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
@@ -170,7 +170,7 @@ CoreRangeSet get_worker_grid(
     }
 
     if (output_tensor.has_value() || memory_config.has_value()) {
-        log_debug(tt::LogOp, "UnaryNg: Using all worker cores (output or memory config not sharded)");
+        log_debug(tt::LogOp, "Unary: Using all worker cores (output or memory config not sharded)");
         auto* device = input_tensor.device();
         return device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
@@ -178,11 +178,11 @@ CoreRangeSet get_worker_grid(
 
     if (input_tensor.is_sharded() && is_native_L1_sharding(input_tensor.tensor_spec(), memory_config_actual)) {
         log_debug(
-            tt::LogOp, "UnaryNg: Native L1 sharding using input tensor grid {}", input_tensor.shard_spec()->grid.str());
+            tt::LogOp, "Unary: Native L1 sharding using input tensor grid {}", input_tensor.shard_spec()->grid.str());
         return get_tensor_grid(input_tensor);
     }
 
-    log_debug(tt::LogOp, "UnaryNg: Using all worker cores of the device");
+    log_debug(tt::LogOp, "Unary: Using all worker cores of the device");
     auto* device = input_tensor.device();
     return device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
@@ -216,8 +216,8 @@ tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
         auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
         shard_shape = {shard_height, shard_width};
     }
-    log_debug(tt::LogOp, "UnaryNg: Generated shard spec using all {} worker cores", num_cores);
+    log_debug(tt::LogOp, "Unary: Generated shard spec using all {} worker cores", num_cores);
     return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
 }
 
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn::operations::unary
