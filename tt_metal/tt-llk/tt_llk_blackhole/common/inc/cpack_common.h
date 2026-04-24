@@ -510,7 +510,7 @@ inline void reconfig_packer_data_format(
     // Number of reads per face used for resetting tile position generator for edge masks
     pack_counters_u pack_counters;
     pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;
+    pack_counters.f.pack_reads_per_xy_plane = 1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
 
@@ -614,8 +614,7 @@ inline void configure_pack(
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
     pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim; // Number of reads per face
-                                                          // Used for resetting tile position generator for edge masks
+    pack_counters.f.pack_reads_per_xy_plane = 1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
