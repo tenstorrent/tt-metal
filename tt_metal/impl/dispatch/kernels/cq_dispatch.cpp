@@ -1418,27 +1418,24 @@ dispatch_d_noc_counter_snapshot snapshot_dispatch_d_noc_counters() {
         .nonposted_atomics_acked = noc_nonposted_atomics_acked[upstream_noc_index],
         .posted_writes_num_issued = noc_posted_writes_num_issued[upstream_noc_index]
     };
-    DPRINT << "DBG18881 dispatch_d: snapshot at start"
-           << " upstream_noc_index=" << (uint32_t)upstream_noc_index
-           << " reads=" << snapshot.reads_num_issued
-           << " nonposted_writes=" << snapshot.nonposted_writes_num_issued
-           << " nonposted_writes_acked=" << snapshot.nonposted_writes_acked
-           << " nonposted_atomics_acked=" << snapshot.nonposted_atomics_acked
-           << " posted_writes=" << snapshot.posted_writes_num_issued
-           << ENDL();
-    DPRINT << "DBG18881 dispatch_d: counter slot snapshot"
-           << " upstream_noc_index=" << (uint32_t)upstream_noc_index
-           << " reads="
-           << get_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(upstream_noc_index)
-           << " nonposted_writes="
-           << get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(upstream_noc_index)
-           << " nonposted_writes_acked="
-           << get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(upstream_noc_index)
-           << " nonposted_atomics_acked="
-           << get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index)
-           << " posted_writes="
-           << get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index)
-           << ENDL();
+    DEVICE_PRINT(
+        "DBG18881 dispatch_d: snapshot at start upstream_noc_index={} reads={} nonposted_writes={} "
+        "nonposted_writes_acked={} nonposted_atomics_acked={} posted_writes={}\n",
+        (uint32_t)upstream_noc_index,
+        snapshot.reads_num_issued,
+        snapshot.nonposted_writes_num_issued,
+        snapshot.nonposted_writes_acked,
+        snapshot.nonposted_atomics_acked,
+        snapshot.posted_writes_num_issued);
+    DEVICE_PRINT(
+        "DBG18881 dispatch_d: counter slot snapshot upstream_noc_index={} reads={} nonposted_writes={} "
+        "nonposted_writes_acked={} nonposted_atomics_acked={} posted_writes={}\n",
+        (uint32_t)upstream_noc_index,
+        get_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(upstream_noc_index),
+        get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(upstream_noc_index),
+        get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(upstream_noc_index),
+        get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(upstream_noc_index),
+        get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index));
     return snapshot;
 }
 
@@ -1467,21 +1464,21 @@ void publish_dispatch_d_noc_counter_deltas(const dispatch_d_noc_counter_snapshot
     set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
         upstream_noc_index, posted_writes_delta);
 
-    DPRINT << "DBG18881 dispatch_d: published deltas"
-           << " upstream_noc_index=" << (uint32_t)upstream_noc_index
-           << " my_noc_index=" << (uint32_t)my_noc_index
-           << " reads=" << reads_delta
-           << " nonposted_writes=" << nonposted_writes_delta
-           << " nonposted_writes_acked=" << nonposted_writes_acked_delta
-           << " nonposted_atomics_acked=" << nonposted_atomics_acked_delta
-           << " posted_writes=" << posted_writes_delta
-           << ENDL();
+    DEVICE_PRINT(
+        "DBG18881 dispatch_d: published deltas upstream_noc_index={} my_noc_index={} reads={} "
+        "nonposted_writes={} nonposted_writes_acked={} nonposted_atomics_acked={} posted_writes={}\n",
+        (uint32_t)upstream_noc_index,
+        (uint32_t)my_noc_index,
+        reads_delta,
+        nonposted_writes_delta,
+        nonposted_writes_acked_delta,
+        nonposted_atomics_acked_delta,
+        posted_writes_delta);
 
     volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
     *shutdown_sem_addr = *shutdown_sem_addr + 1;
-    DPRINT << "DBG18881 dispatch_d: signaled dispatch_s shutdown semaphore, sem_val="
-           << *shutdown_sem_addr << ENDL();
+    DEVICE_PRINT("DBG18881 dispatch_d: signaled dispatch_s shutdown semaphore, sem_val={}\n", *shutdown_sem_addr);
 }
 
 void kernel_main() {

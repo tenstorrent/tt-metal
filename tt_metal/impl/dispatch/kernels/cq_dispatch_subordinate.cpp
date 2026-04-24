@@ -132,15 +132,16 @@ uint32_t snapshot_dispatch_d_shutdown_semaphore() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
     uint32_t shutdown_sem_start = *shutdown_sem_addr;
 
-    DPRINT << "DBG18881 dispatch_s: snapshot at start"
-           << " my_noc_index=" << (uint32_t)my_noc_index
-           << " shutdown_sem_start=" << shutdown_sem_start
-           << " reads=" << noc_reads_num_issued[my_noc_index]
-           << " nonposted_writes=" << noc_nonposted_writes_num_issued[my_noc_index]
-           << " nonposted_writes_acked=" << noc_nonposted_writes_acked[my_noc_index]
-           << " nonposted_atomics_acked=" << noc_nonposted_atomics_acked[my_noc_index]
-           << " posted_writes=" << noc_posted_writes_num_issued[my_noc_index]
-           << ENDL();
+    DEVICE_PRINT(
+        "DBG18881 dispatch_s: snapshot at start my_noc_index={} shutdown_sem_start={} reads={} "
+        "nonposted_writes={} nonposted_writes_acked={} nonposted_atomics_acked={} posted_writes={}\n",
+        (uint32_t)my_noc_index,
+        shutdown_sem_start,
+        noc_reads_num_issued[my_noc_index],
+        noc_nonposted_writes_num_issued[my_noc_index],
+        noc_nonposted_writes_acked[my_noc_index],
+        noc_nonposted_atomics_acked[my_noc_index],
+        noc_posted_writes_num_issued[my_noc_index]);
     return shutdown_sem_start;
 }
 
@@ -153,15 +154,16 @@ void merge_dispatch_d_noc_counter_deltas(uint32_t shutdown_sem_start) {
     {
         const uint32_t pre_local = noc_nonposted_atomics_acked[my_noc_index];
         const uint32_t pre_niu = NOC_STATUS_READ_REG(my_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
-        DPRINT << "DBG18881 dispatch_s: pre-handoff local_atomics_acked=" << pre_local
-               << " my_noc_index=" << (uint32_t)my_noc_index
-               << " niu_atomic_resp=" << pre_niu << ENDL();
+        DEVICE_PRINT(
+            "DBG18881 dispatch_s: pre-handoff local_atomics_acked={} my_noc_index={} niu_atomic_resp={}\n",
+            pre_local,
+            (uint32_t)my_noc_index,
+            pre_niu);
     }
     volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
     noc_semaphore_wait_min(shutdown_sem_addr, shutdown_sem_start + 1);
-    DPRINT << "DBG18881 dispatch_s: received shutdown semaphore signal, sem_val="
-           << *shutdown_sem_addr << ENDL();
+    DEVICE_PRINT("DBG18881 dispatch_s: received shutdown semaphore signal, sem_val={}\n", *shutdown_sem_addr);
     invalidate_l1_cache();
     const uint32_t reads_delta =
         get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::READS_NUM_ISSUED>(my_noc_index);
@@ -190,20 +192,20 @@ void merge_dispatch_d_noc_counter_deltas(uint32_t shutdown_sem_start) {
         noc_posted_writes_num_issued[my_noc_index] += posted_writes_delta;
     }
     {
-        // const uint32_t post_niu = NOC_STATUS_READ_REG(my_noc_index, NIU_MST_ATOMIC_RESP_RECEIVED);
-        DPRINT << "DBG18881 dispatch_s: merged deltas"
-               << " reads=" << reads_delta
-               << " nonposted_writes=" << nonposted_writes_delta
-               << " nonposted_writes_acked=" << nonposted_writes_acked_delta
-               << " nonposted_atomics_acked=" << nonposted_atomics_acked_delta
-               << " posted_writes=" << posted_writes_delta
-               << " merged_reads=" << noc_reads_num_issued[my_noc_index]
-               << " merged_nonposted_writes=" << noc_nonposted_writes_num_issued[my_noc_index]
-               << " merged_nonposted_writes_acked=" << noc_nonposted_writes_acked[my_noc_index]
-               << " merged_nonposted_atomics_acked=" << noc_nonposted_atomics_acked[my_noc_index]
-               << " merged_posted_writes=" << noc_posted_writes_num_issued[my_noc_index]
-            //    << " niu_atomic_resp=" << post_niu
-               << ENDL();
+        DEVICE_PRINT(
+            "DBG18881 dispatch_s: merged deltas reads={} nonposted_writes={} nonposted_writes_acked={} "
+            "nonposted_atomics_acked={} posted_writes={} merged_reads={} merged_nonposted_writes={} "
+            "merged_nonposted_writes_acked={} merged_nonposted_atomics_acked={} merged_posted_writes={}\n",
+            reads_delta,
+            nonposted_writes_delta,
+            nonposted_writes_acked_delta,
+            nonposted_atomics_acked_delta,
+            posted_writes_delta,
+            noc_reads_num_issued[my_noc_index],
+            noc_nonposted_writes_num_issued[my_noc_index],
+            noc_nonposted_writes_acked[my_noc_index],
+            noc_nonposted_atomics_acked[my_noc_index],
+            noc_posted_writes_num_issued[my_noc_index]);
     }
 }
 
@@ -469,9 +471,9 @@ void kernel_main() {
         merge_dispatch_d_noc_counter_deltas(dispatch_d_shutdown_sem_start);
     }
 
-    DPRINT << "DBG18881 dispatch_s: entering noc_async_full_barrier" << ENDL();
+    DEVICE_PRINT("DBG18881 dispatch_s: entering noc_async_full_barrier\n");
     noc_async_full_barrier();
-    DPRINT << "DBG18881 dispatch_s: exited noc_async_full_barrier" << ENDL();
+    DEVICE_PRINT("DBG18881 dispatch_s: exited noc_async_full_barrier\n");
  
     DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
