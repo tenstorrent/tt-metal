@@ -30,22 +30,12 @@ def _write_complete_run(path: Path, model: str, batch_size: int, seq_len: int, d
 def _run_validator(
     tmp_path: Path,
     strict_missing: bool = False,
-    *,
-    targets_yaml: Path | None = None,
-    tests_yaml: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    benchmark_dir = tmp_path / "generated/benchmark_data"
-    targets_yaml = targets_yaml or tmp_path / "models/model_targets.yaml"
-    tests_yaml = tests_yaml or tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml"
     command = [
         sys.executable,
         str(SCRIPT_PATH),
-        "--targets-yaml",
-        str(targets_yaml),
-        "--benchmark-dir",
-        str(benchmark_dir),
-        "--tests-yaml",
-        str(tests_yaml),
+        "--path-profile",
+        "cwd",
         "--sku",
         "wh_n150",
     ]
@@ -53,7 +43,7 @@ def _run_validator(
         command.append("--strict-missing")
     return subprocess.run(
         command,
-        cwd=str(REPO_ROOT),
+        cwd=str(tmp_path),
         capture_output=True,
         text=True,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
@@ -200,16 +190,24 @@ def test_validate_perf_targets_todo_entry_respects_strict_flag(tmp_path):
     assert strict.returncode == 1
 
 
-def test_validate_perf_targets_rejects_non_yaml_targets_path(tmp_path):
+def test_validate_perf_targets_rejects_unknown_path_profile(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
     (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
 
-    invalid_targets = tmp_path / "models/model_targets.txt"
-    invalid_targets.write_text("targets: {}", encoding="utf-8")
-    tests_yaml = tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml"
-    tests_yaml.write_text("[]", encoding="utf-8")
-
-    result = _run_validator(tmp_path, targets_yaml=invalid_targets, tests_yaml=tests_yaml)
-    assert result.returncode == 1
-    assert "Invalid --targets-yaml" in result.stdout
+    command = [
+        sys.executable,
+        str(SCRIPT_PATH),
+        "--path-profile",
+        "unknown-profile",
+    ]
+    result = subprocess.run(
+        command,
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr

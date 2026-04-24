@@ -142,9 +142,7 @@ jobs:
         shell: bash
         run: |
           python3 .github/scripts/utils/validate_perf_targets.py \
-            --targets-yaml models/model_targets.yaml \
-            --benchmark-dir generated/benchmark_data \
-            --tests-yaml tests/pipeline_reorg/models_e2e_tests.yaml \
+            --path-profile repo-root \
             --sku "${{ matrix.test-group.sku }}"
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}

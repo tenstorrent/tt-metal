@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,16 @@ LOWER_IS_BETTER_METRICS = {
     "compile_prefill",
     "compile_decode",
 }
+
+TARGETS_YAML_RELATIVE_PATH = Path("models/model_targets.yaml")
+BENCHMARK_DIR_RELATIVE_PATH = Path("generated/benchmark_data")
+TESTS_YAML_RELATIVE_PATH = Path("tests/pipeline_reorg/models_e2e_tests.yaml")
+
+
+class PathProfile(str, Enum):
+    REPO_ROOT = "repo-root"
+    CURRENT_WORKING_DIRECTORY = "cwd"
+
 
 METRIC_NAME_MAP = {
     "prefill_t/s": ("inference_prefill", "tokens/s"),
@@ -200,70 +211,30 @@ def _validate_gap_coverage(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate benchmark artifacts against centralized perf/accuracy targets.")
-    parser.add_argument("--targets-yaml", default="models/model_targets.yaml")
-    parser.add_argument("--benchmark-dir", default="generated/benchmark_data")
-    parser.add_argument("--tests-yaml", default="tests/pipeline_reorg/models_e2e_tests.yaml")
+    parser.add_argument(
+        "--path-profile",
+        choices=[profile.value for profile in PathProfile],
+        default=PathProfile.REPO_ROOT.value,
+        help="Path root profile used to resolve benchmark and target files",
+    )
     parser.add_argument("--sku", default=None, help="Override SKU for this job (recommended in CI matrix jobs)")
     parser.add_argument("--strict-missing", action="store_true", help="Fail when matching target is TODO or missing")
     parser.add_argument("--high-tol-percentage", type=float, default=1.15)
     return parser.parse_args()
 
 
-def _sanitize_cli_path(
-    raw_path: str,
-    *,
-    arg_name: str,
-    expect_dir: bool = False,
-    allowed_suffixes: tuple[str, ...] = (),
-) -> Path:
-    if "\x00" in raw_path:
-        raise ValueError(f"Invalid {arg_name}: path contains null byte")
-
-    try:
-        sanitized = Path(raw_path).resolve(strict=False)
-    except OSError as exc:
-        raise ValueError(f"Invalid {arg_name}: failed to resolve path '{raw_path}' ({exc})") from exc
-
-    project_root = Path.cwd().resolve()
-    try:
-        sanitized.relative_to(project_root)
-    except ValueError:
-        raise ValueError(f"Invalid {arg_name}: path '{sanitized}' must be within the project root '{project_root}'")
-
-    if expect_dir:
-        if sanitized.exists() and not sanitized.is_dir():
-            raise ValueError(f"Invalid {arg_name}: expected directory path, got file '{sanitized}'")
-    elif sanitized.exists() and not sanitized.is_file():
-        raise ValueError(f"Invalid {arg_name}: expected file path, got directory '{sanitized}'")
-
-    if allowed_suffixes and sanitized.suffix.lower() not in allowed_suffixes:
-        suffixes = ", ".join(allowed_suffixes)
-        raise ValueError(f"Invalid {arg_name}: expected one of [{suffixes}], got '{sanitized.suffix}'")
-
-    return sanitized
+def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
+    base_path = REPO_ROOT if path_profile is PathProfile.REPO_ROOT else Path.cwd().resolve()
+    targets_yaml_path = base_path / TARGETS_YAML_RELATIVE_PATH
+    benchmark_dir = base_path / BENCHMARK_DIR_RELATIVE_PATH
+    tests_yaml_path = base_path / TESTS_YAML_RELATIVE_PATH
+    return targets_yaml_path, benchmark_dir, tests_yaml_path
 
 
 def main() -> int:
     args = parse_args()
-    try:
-        targets_yaml_path = _sanitize_cli_path(
-            args.targets_yaml,
-            arg_name="--targets-yaml",
-            allowed_suffixes=(".yaml", ".yml"),
-        )
-        benchmark_dir = _sanitize_cli_path(
-            args.benchmark_dir,
-            arg_name="--benchmark-dir",
-            expect_dir=True,
-        )
-        tests_yaml_path = _sanitize_cli_path(
-            args.tests_yaml,
-            arg_name="--tests-yaml",
-            allowed_suffixes=(".yaml", ".yml"),
-        )
-    except ValueError as exc:
-        print(f"::error::{exc}")
-        return 1
+    path_profile = PathProfile(args.path_profile)
+    targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
 
     targets_yaml = _load_yaml(targets_yaml_path)
     if not isinstance(targets_yaml, dict):
