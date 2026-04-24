@@ -47,12 +47,13 @@ def _log_memory(label: str):
 
 # --- Constants ---
 
-PROMPTS_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
+PROMPT_1K_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
 ABC_1K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json")
 ABC_SHORT_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.json")
 P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
 P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
+PROMPT_25K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json")
 
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {

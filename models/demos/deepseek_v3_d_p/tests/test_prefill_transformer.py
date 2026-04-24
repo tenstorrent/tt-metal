@@ -48,8 +48,8 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     P64TOK_PATH,
     P960TOK_PATH,
     PIE960_PATH,
-    PROMPTS_PATH,
     ReferenceCacheKey,
+    PROMPT_1K_PATH,
     check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
@@ -267,7 +267,7 @@ def test_prefill_transformer(
         if input_source == "json_prompts":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
-            prompt_text = load_prompts_from_json(str(PROMPTS_PATH))
+            prompt_text = load_prompts_from_json(str(PROMPT_1K_PATH))
             prompt_text = prompt_text[0] if isinstance(prompt_text, list) else prompt_text
         elif input_source == "abc_1k":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
