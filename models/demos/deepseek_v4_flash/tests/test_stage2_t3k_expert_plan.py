@@ -20,6 +20,7 @@ from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 ttnn = pytest.importorskip("ttnn")
 
+from models.demos.deepseek_v4_flash.ttnn_expert_group import TtPlannedRoutedExpertGroup
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 
 pytestmark = pytest.mark.t3k_compat
@@ -81,12 +82,7 @@ def test_t3k_planned_primary_replica_runs_tiny_routed_expert(
     )
 
     manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
-    weights = {
-        projection: load_packed_expert_weight(
-            tiny_tt_preprocessed_checkpoint, layer=0, expert=expert_id, projection=projection
-        ).dequantize(dtype=torch.bfloat16)
-        for projection in ("w1", "w2", "w3")
-    }
+    weights = _load_expert_weights(tiny_tt_preprocessed_checkpoint, expert_id)
 
     hidden_size = weights["w1"].shape[-1]
     intermediate_size = weights["w1"].shape[0]
@@ -117,3 +113,58 @@ def test_t3k_planned_primary_replica_runs_tiny_routed_expert(
     torch_output = ttnn.to_torch(module(tt_input, route_weight=tt_route_weights))
 
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def test_t3k_planned_routed_expert_group_host_combines_two_tiny_experts(
+    tiny_tt_preprocessed_checkpoint: Path,
+    t3k_mesh,
+) -> None:
+    plan = plan_batch1_decode_expert_placements((2, 4), (0, 2), replicas_per_expert=1)
+
+    assert plan.devices_for_expert(0) == ((0, 0),)
+    assert plan.devices_for_expert(2) == ((1, 0),)
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    weights_by_expert = {
+        expert_id: _load_expert_weights(tiny_tt_preprocessed_checkpoint, expert_id)
+        for expert_id in plan.activated_expert_ids
+    }
+
+    hidden_size = weights_by_expert[0]["w1"].shape[-1]
+    torch_input = torch.linspace(-0.3, 0.3, steps=32 * hidden_size, dtype=torch.float32).reshape(1, 1, 32, hidden_size)
+    torch_input = torch_input.to(torch.bfloat16)
+    route_weights = torch.stack(
+        [
+            torch.linspace(0.2, 0.8, steps=32, dtype=torch.float32),
+            torch.linspace(0.7, 0.1, steps=32, dtype=torch.float32),
+        ],
+        dim=-1,
+    ).reshape(1, 32, 2)
+    route_indices = torch.tensor(plan.activated_expert_ids, dtype=torch.int64).reshape(1, 1, 2).expand(1, 32, 2)
+    expected = combine_routed_experts(
+        torch_input.reshape(1, 32, hidden_size),
+        route_weights,
+        route_indices,
+        {expert_id: (weights["w1"], weights["w2"], weights["w3"]) for expert_id, weights in weights_by_expert.items()},
+        swiglu_limit=float(manifest["config"]["swiglu_limit"]),
+    ).reshape_as(torch_input)
+
+    group = TtPlannedRoutedExpertGroup.from_preprocessed(tiny_tt_preprocessed_checkpoint, t3k_mesh, plan)
+    torch_output = group.run_torch_host_combine(
+        torch_input,
+        {
+            expert_id: route_weights[:, :, topk_index : topk_index + 1]
+            for topk_index, expert_id in enumerate(plan.activated_expert_ids)
+        },
+    )
+
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def _load_expert_weights(preprocessed_path: Path, expert_id: int) -> dict[str, torch.Tensor]:
+    return {
+        projection: load_packed_expert_weight(
+            preprocessed_path, layer=0, expert=expert_id, projection=projection
+        ).dequantize(dtype=torch.bfloat16)
+        for projection in ("w1", "w2", "w3")
+    }
