@@ -76,15 +76,16 @@ _test_run_summary_init() {
     mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
     mkdir -p "${TT_METAL_HOME}/generated/artifacts"
     : >"$(_test_run_summary_tsv)"
+    # Assumption: no prior EXIT trap exists. This overwrites any existing EXIT trap.
+    # If a prior trap is needed, chain it here (e.g. capture with $(trap -p EXIT)).
     trap '_test_run_summary_on_exit' EXIT
 }
 
 # Run without errexit killing the script before we record summary (host down, tt-run/MPI failure, etc.).
+# NOTE: _TEST_RUN_LAST_EC is an unscoped global variable. This is safe for sequential calls
+# (which is how all callers use it today) but would not be safe for parallel invocations.
 _test_run_summary_exec() {
-    set +e
-    "$@"
-    _TEST_RUN_LAST_EC=$?
-    set -e
+    "$@" && _TEST_RUN_LAST_EC=0 || _TEST_RUN_LAST_EC=$?
     return 0
 }
 
@@ -238,13 +239,13 @@ run_quad_galaxy_unit_tests() {
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto 2>&1 | tee "$cv_log"
   ec="${PIPESTATUS[0]}"
   set -e
-  fail+=$((fail+ec))
+  fail=$((fail + ec))
   _test_run_summary_record_native_step "run_cluster_validation" "$ec" "$cv_log"
 
   local j_mesh j_ccl
   j_mesh="$(_test_run_summary_junit_path infra_quad_mesh_device_trace)"
   _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv --junitxml="${j_mesh}" "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace"
-  ec="${_TEST_RUN_LAST_EC}" ; fail+=$((fail+ec))
+  ec="${_TEST_RUN_LAST_EC}" ; fail=$((fail + ec))
   _test_run_summary_append_junit_rows "infra_quad_mesh_device_trace" "${j_mesh}" "$ec"
 
   # TODO: Currently failing on 1D/2D tests
@@ -252,7 +253,7 @@ run_quad_galaxy_unit_tests() {
 
   j_ccl="$(_test_run_summary_junit_path infra_quad_ccl_quad_host_mesh)"
   _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv --junitxml="${j_ccl}" tests/nightly/tg/ccl/ -k "quad_host_mesh"
-  ec="${_TEST_RUN_LAST_EC}" ; fail+=$((fail+ec))
+  ec="${_TEST_RUN_LAST_EC}" ; fail=$((fail + ec))
   _test_run_summary_append_junit_rows "infra_quad_ccl_quad_host_mesh" "${j_ccl}" "$ec"
 
   if [[ $fail -ne 0 ]]; then
@@ -493,7 +494,7 @@ run_dual_deepseekv3_unit_tests() {
     local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_dual)"
     _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
     local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "deepseekv3_unit_dual" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
@@ -508,7 +509,7 @@ run_quad_deepseekv3_unit_tests() {
     local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_quad)"
     _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
     local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "deepseekv3_unit_quad" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
@@ -527,7 +528,7 @@ run_dual_deepseekv3_module_tests() {
     local junit_path="$(_test_run_summary_junit_path deepseekv3_module_dual)"
     _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
     local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "deepseekv3_module_dual" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
@@ -542,7 +543,7 @@ run_quad_deepseekv3_module_tests() {
     local junit_path="$(_test_run_summary_junit_path deepseekv3_module_quad)"
     _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
     local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "deepseekv3_module_quad" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
@@ -565,7 +566,7 @@ run_dual_teacher_forced_test() {
 
     _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log"
     local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "teacher_forced_dual" "${junit_path}" "${ec}"
 
     # Extract accuracy metrics from logs and save to artifact file
@@ -591,7 +592,7 @@ run_quad_teacher_forced_test() {
 
     _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log"
     local ec="${_TEST_RUN_LAST_EC}"
-    fail+=$((fail + ec))
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "teacher_forced_quad" "${junit_path}" "${ec}"
 
     # Extract accuracy metrics from logs and save to artifact file
