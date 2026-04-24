@@ -33,6 +33,7 @@
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/checkpoint.h"
+#include "util_sampler.h"
 
 // clang-format on
 
@@ -384,6 +385,7 @@ int main() {
     trigger_sync_register_init();
 
     DeviceProfilerInit();
+    ttnvtop_sampler::init();
     while (1) {
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
@@ -396,6 +398,7 @@ int main() {
             ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
+            ttnvtop_sampler::maybe_tick();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
