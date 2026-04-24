@@ -388,6 +388,63 @@ jobs:
             echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
           fi
 
+      - name: Write pytest results to job summary
+        if: always()
+        env:
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+        run: |
+          RESULTS_FILE="model_tracer/traced_operations/_test_results.json"
+          if [[ ! -f "$RESULTS_FILE" ]]; then
+            echo "### Pytest Results — \`$SLUG\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> No test results file found (test may not have started)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("model_tracer/traced_operations/_test_results.json") as f:
+              r = json.load(f)
+
+          passed = r.get("passed", 0)
+          failed = r.get("failed", 0)
+          total = r.get("total", 0)
+          exit_code = r.get("exit_code", "?")
+          slug = os.environ["SLUG"]
+          test_path = r.get("test_path", os.environ.get("TEST_PATH", ""))
+
+          if failed > 0:
+              status_icon = ":x:"
+              verdict = "FAILED"
+          elif passed > 0:
+              status_icon = ":white_check_mark:"
+              verdict = "PASSED"
+          else:
+              status_icon = ":warning:"
+              verdict = "UNKNOWN"
+
+          summary = f"""### {status_icon} Pytest Results — `{slug}`
+
+          | Metric | Value |
+          |---|---|
+          | Test Path | `{test_path}` |
+          | Passed | {passed} |
+          | Failed | {failed} |
+          | Total | {total} |
+          | Exit Code | {exit_code} |
+          | Verdict | **{verdict}** |
+          """
+
+          import textwrap
+          summary = textwrap.dedent(summary)
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          PY
+
       - name: Write leg status sidecar
         if: always()
         env:
@@ -418,6 +475,18 @@ jobs:
               except Exception as exc:
                   stats["parse_error"] = str(exc)
 
+          test_stats = {"passed": None, "failed": None, "total": None}
+          results_file = "model_tracer/traced_operations/_test_results.json"
+          if os.path.isfile(results_file):
+              try:
+                  with open(results_file) as f:
+                      tr = json.load(f)
+                  test_stats["passed"] = tr.get("passed", 0)
+                  test_stats["failed"] = tr.get("failed", 0)
+                  test_stats["total"] = tr.get("total", 0)
+              except Exception:
+                  pass
+
           record = {
               "slug": os.environ["SLUG"],
               "test_path": os.environ["TEST_PATH"],
@@ -426,6 +495,7 @@ jobs:
               "outcome": os.environ.get("TRACE_OUTCOME") or "skipped",
               "trace_uid": os.environ.get("TRACE_UID") or None,
               "stats": stats,
+              "test_stats": test_stats,
           }
           out_path = f"/work/leg-status/{record['slug']}.json"
           with open(out_path, "w") as f:
@@ -847,6 +917,8 @@ jobs:
           rows = []
           success = 0
           failed = 0
+          total_tests_passed = 0
+          total_tests_failed = 0
           status_dir = Path("leg_status")
           if status_dir.is_dir():
               for p in sorted(status_dir.glob("*.json")):
@@ -859,9 +931,16 @@ jobs:
                   success += int(ok)
                   failed += int(not ok)
                   hf = rec.get("hf_model") or ""
+                  ts = rec.get("test_stats", {}) or {}
+                  tp = ts.get("passed")
+                  tf = ts.get("failed")
+                  total_tests_passed += tp or 0
+                  total_tests_failed += tf or 0
+                  test_col = f"{tp or 0} passed, {tf or 0} failed" if tp is not None else "-"
                   rows.append(
                       f"| {icon} | `{rec.get('slug')}` | `{rec.get('test_path')}` | "
-                      f"`{hf}` | {rec.get('stats', {}).get('unique_operations') or '-'} | "
+                      f"`{hf}` | {test_col} | "
+                      f"{rec.get('stats', {}).get('unique_operations') or '-'} | "
                       f"{rec.get('stats', {}).get('total_configurations') or '-'} | "
                       f"`{rec.get('trace_uid') or '-'}` |"
                   )
@@ -871,6 +950,7 @@ jobs:
               "",
               f"- Models requested: **{os.environ.get('MODEL_COUNT', '?')}**",
               f"- Succeeded: **{success}** / Failed: **{failed}**",
+              f"- Pytest totals: **{total_tests_passed} passed**, **{total_tests_failed} failed**",
               f"- Load to DB: **{os.environ.get('LOAD_TO_DB', 'false')}**",
               f"- Run Validation: **{os.environ.get('RUN_VALIDATION', 'false')}**",
           ]
@@ -882,10 +962,10 @@ jobs:
               lines.append(f"- Homogenized `trace_uid`: **`{trace_uid}`**")
           lines.extend([
               "",
-              "| Status | Slug | test_path | HF_MODEL | Unique ops | Total configs | Leg trace_uid |",
-              "|---|---|---|---|---|---|---|",
+              "| Status | Slug | test_path | HF_MODEL | Pytest Results | Unique ops | Total configs | Leg trace_uid |",
+              "|---|---|---|---|---|---|---|---|",
           ])
-          lines.extend(rows or ["| — | (no leg sidecars found) | | | | | |"])
+          lines.extend(rows or ["| — | (no leg sidecars found) | | | | | | |"])
 
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary_path:
