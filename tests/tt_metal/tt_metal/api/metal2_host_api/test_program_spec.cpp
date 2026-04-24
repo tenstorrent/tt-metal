@@ -498,7 +498,10 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown semaphore 'missing_sem'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
@@ -515,7 +518,10 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
     binding.accessor_name = "has-dash";
     spec.kernels[0].semaphore_bindings = {binding};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("semaphore accessor_name 'has-dash' must be a valid C++ identifier")));
 }
 
 TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
@@ -536,7 +542,9 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
         KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "same"},
         KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_1", .accessor_name = "same"}};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
@@ -549,7 +557,10 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
     spec.semaphores = {sem};
     spec.workers.value()[0].semaphores = {"sem_0"};
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has initial_value=1 but only zero is supported on Quasar")));
 }
 
 // ---- Named RTA / CRTA / CTA schema validation ----

@@ -113,7 +113,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // NOTE: Both accessor types are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
     //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
-    //       Implicit CTA is simplier and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
+    //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
     //       We are starting simple and can adjust later if problems arise.
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     ostringstream content;
