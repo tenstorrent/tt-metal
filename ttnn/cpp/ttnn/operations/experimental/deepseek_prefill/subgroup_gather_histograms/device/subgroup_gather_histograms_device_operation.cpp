@@ -17,12 +17,10 @@ void SubgroupGatherHistogramsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input layout must be ROW_MAJOR");
 
     const auto& input_shape = tensor_args.input_tensor.logical_shape();
-    // Input is the per-chip histogram, shape [n_routed_experts] or [1, n_routed_experts].
-    TT_FATAL(
-        input_shape.size() == 1 || input_shape.size() == 2, "Input must be 1D or 2D, got {} dims", input_shape.size());
-    if (input_shape.size() == 2) {
-        TT_FATAL(input_shape[-2] == 1, "For 2D input first dim must be 1, got {}", input_shape[-2]);
-    }
+    // Input is the per-chip histogram: last dim is W. Leading dims contribute rows: N_ROWS is their
+    // product. 1D subgroups use N_ROWS=1; 2D subgroups typically pre-gather along axis 1 so each chip
+    // carries mesh_cols rows. No constraint on the individual leading-dim values.
+    TT_FATAL(input_shape.size() >= 1, "Input must have at least 1 dim, got {}", input_shape.size());
     TT_FATAL(args.cluster_axis == 0, "Only cluster_axis=0 is supported (got {})", args.cluster_axis);
     TT_FATAL(
         args.num_dispatch_subgroups >= 1, "num_dispatch_subgroups must be >= 1 (got {})", args.num_dispatch_subgroups);
@@ -37,6 +35,10 @@ SubgroupGatherHistogramsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.input_tensor.logical_shape();
     const uint32_t n_routed_experts = input_shape[-1];
+    uint32_t n_rows = 1;
+    for (size_t i = 0; i + 1 < input_shape.size(); ++i) {
+        n_rows *= input_shape[i];
+    }
 
     auto* mesh_device = tensor_args.input_tensor.device();
     const uint32_t axis_size = mesh_device->shape()[args.cluster_axis];
@@ -46,9 +48,9 @@ SubgroupGatherHistogramsDeviceOperation::compute_output_specs(
         args.cluster_axis,
         axis_size,
         args.num_dispatch_subgroups);
-    const uint32_t dispatch_group_size = axis_size / args.num_dispatch_subgroups;
+    const uint32_t subgroup_rows = axis_size / args.num_dispatch_subgroups;
 
-    auto output_shape = ttnn::Shape({dispatch_group_size, n_routed_experts});
+    auto output_shape = ttnn::Shape({subgroup_rows * n_rows, n_routed_experts});
     auto layout = tt::tt_metal::TensorLayout(
         DataType::UINT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config);
     return TensorSpec(output_shape, layout);

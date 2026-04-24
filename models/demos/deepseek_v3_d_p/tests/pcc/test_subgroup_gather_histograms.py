@@ -5,10 +5,14 @@
 """
 Unit test for ttnn.experimental.deepseek_prefill.subgroup_gather_histograms.
 
-Runs on an 8x1 Blackhole LoudBox with num_dispatch_subgroups=2. Each chip is fed a
-distinct per-subgroup histogram (so we can detect any cross-subgroup contamination),
-and we assert the gathered output on chips 0..3 matches only the 4 histograms from
-chips 0..3, and chips 4..7 match only theirs.
+Runs on a Blackhole LoudBox with num_dispatch_subgroups=2. Each chip is fed a
+distinct per-chip histogram (so any cross-subgroup or cross-chip contamination
+is detectable), and we assert the gathered output on every chip matches only
+its own subgroup's histograms.
+
+Covers both 1D (8x1 linear) and 2D (4x2 mesh) mesh topologies. The 2D variant
+exercises chip/mesh-id-based fabric routing needed for diagonal peers in a
+(2, 2) subgroup.
 """
 
 import pytest
@@ -19,9 +23,40 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
 
+def _make_tt_histograms(mesh_device, histograms, dtype):
+    """
+    Shard a per-chip histogram tensor of shape (mesh_rows, mesh_cols, W) across
+    the mesh so each chip (r, c) gets its own (1, W) row; returns the TTNN tensor.
+    """
+    mesh_rows, mesh_cols = mesh_device.shape
+
+    if mesh_cols == 1:
+        # 1D mesh: shard along axis 0, input shape (mesh_rows, W).
+        flat = histograms.reshape(mesh_rows, -1)
+        return ttnn.from_torch(
+            flat,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # 2D mesh: shard both axes with input shape (mesh_rows, mesh_cols, W). The op
+    # accepts >=1-D inputs with leading 1s, so per-chip (1, 1, W) works directly.
+    return ttnn.from_torch(
+        histograms,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, 1)),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 @pytest.mark.parametrize("n_routed_experts", [64])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology, num_dispatch_subgroups, dispatch_group_size",
+    "mesh_device, device_params, num_links, num_dispatch_subgroups, dispatch_group_size",
     [
         pytest.param(
             (8, 1),
@@ -30,11 +65,22 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_route
                 "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             },
             1,
-            ttnn.Topology.Linear,
             2,
             4,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
             id="subgroups-2x4-linear-1link",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            1,
+            2,
+            4,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="subgroups-2x2x2-mesh-4x2-1link",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -43,30 +89,28 @@ def test_subgroup_gather_histograms(
     mesh_device,
     n_routed_experts,
     num_links,
-    topology,
     num_dispatch_subgroups,
     dispatch_group_size,
 ):
     torch.manual_seed(42)
 
+    mesh_rows, mesh_cols = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
-    assert num_devices == dispatch_group_size * num_dispatch_subgroups
+    assert num_devices == mesh_rows * mesh_cols
+    assert mesh_rows % num_dispatch_subgroups == 0, "mesh_rows must split evenly into subgroups"
+    subgroup_rows = mesh_rows // num_dispatch_subgroups
+    assert dispatch_group_size == subgroup_rows * mesh_cols
 
     # Build distinct per-chip histograms so contamination is detectable.
-    # chip i gets row [i * 1000 + 0, i * 1000 + 1, ..., i * 1000 + W-1] (mod 2^16 to stay in uint32).
-    histograms = torch.zeros(num_devices, n_routed_experts, dtype=torch.int64)
-    for i in range(num_devices):
-        histograms[i, :] = torch.arange(n_routed_experts, dtype=torch.int64) + i * 1000
+    # chip (r, c) gets row [(r*mesh_cols + c)*1000 + 0, ..., (r*mesh_cols + c)*1000 + W-1].
+    histograms = torch.zeros(mesh_rows, mesh_cols, n_routed_experts, dtype=torch.int64)
+    for r in range(mesh_rows):
+        for c in range(mesh_cols):
+            linear = r * mesh_cols + c
+            histograms[r, c, :] = torch.arange(n_routed_experts, dtype=torch.int64) + linear * 1000
     histograms = histograms.to(torch.int32)
 
-    tt_histograms = ttnn.from_torch(
-        histograms,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    tt_histograms = _make_tt_histograms(mesh_device, histograms, dtype=ttnn.uint32)
 
     tt_gathered = ttnn.experimental.deepseek_prefill.subgroup_gather_histograms(
         tt_histograms,
@@ -76,25 +120,37 @@ def test_subgroup_gather_histograms(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Per-chip expected output: within its subgroup, rows indexed by local linearized coord
+    # (local_row * mesh_cols + local_col). Each subgroup spans rows [sg*subgroup_rows, (sg+1)*subgroup_rows).
     all_passed = True
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(tt_gathered)):
         tt_out = ttnn.to_torch(dt).to(torch.int64)
-        sg_idx = dev_idx // dispatch_group_size
-        expected = histograms[sg_idx * dispatch_group_size : (sg_idx + 1) * dispatch_group_size, :].to(torch.int64)
+        r = dev_idx // mesh_cols
+        c = dev_idx % mesh_cols
+        sg_idx = r // subgroup_rows
+        base_row = sg_idx * subgroup_rows
+        expected = (
+            histograms[base_row : base_row + subgroup_rows, :, :]
+            .reshape(subgroup_rows * mesh_cols, n_routed_experts)
+            .to(torch.int64)
+        )
 
         if tt_out.shape != expected.shape:
-            logger.error(f"device {dev_idx}: shape mismatch tt={tt_out.shape} expected={expected.shape}")
+            logger.error(
+                f"device {dev_idx} (r={r}, c={c}, sg={sg_idx}): shape mismatch "
+                f"tt={tt_out.shape} expected={expected.shape}"
+            )
             all_passed = False
             continue
         if not torch.equal(tt_out, expected):
             diff_mask = tt_out != expected
             first_bad = torch.nonzero(diff_mask)[0].tolist()
             logger.error(
-                f"device {dev_idx} (subgroup {sg_idx}): mismatch at {first_bad}; "
+                f"device {dev_idx} (r={r}, c={c}, sg={sg_idx}): mismatch at {first_bad}; "
                 f"tt={tt_out[tuple(first_bad)]} vs expected={expected[tuple(first_bad)]}"
             )
             all_passed = False
         else:
-            logger.info(f"✅ device {dev_idx} (subgroup {sg_idx}) matches")
+            logger.info(f"OK device {dev_idx} (r={r}, c={c}, sg={sg_idx}) matches")
 
     assert all_passed, "subgroup_gather_histograms did not match reference on one or more devices"

@@ -107,10 +107,19 @@ SubgroupGatherHistogramsProgramFactory::create_at(
     const uint32_t output_aligned_page_size = detail::get_aligned_page_size(output_tensor);
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    // Input scratch CB (1 page holds the whole local histogram).
+    // N_ROWS = number of input pages this chip contributes (product of all leading dims).
+    // 1D case: (1, W) → N_ROWS=1. 2D case after composite's axis-1 pre-pass: (mesh_cols, 1, W)
+    // or (mesh_cols, W) → N_ROWS=mesh_cols.
+    const auto& input_shape = input_tensor.logical_shape();
+    uint32_t n_rows = 1;
+    for (size_t i = 0; i + 1 < input_shape.size(); ++i) {
+        n_rows *= input_shape[i];
+    }
+
+    // Input scratch CB — holds all N_ROWS pages of this chip's contribution.
     tt::tt_metal::CircularBufferConfig input_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            aligned_input_page_size,
+            n_rows * aligned_input_page_size,
             {{tt::CBIndex::c_0, tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())}})
             .set_page_size(tt::CBIndex::c_0, aligned_input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, input_cb_config);
@@ -122,6 +131,8 @@ SubgroupGatherHistogramsProgramFactory::create_at(
             .set_page_size(tt::CBIndex::c_1, packet_header_size_bytes);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
 
+    // Fan-out restricted to axis-0 (same-column) peers; axis-1 replication is handled upstream
+    // by the composite via ttnn::all_gather when the subgroup is 2D.
     const auto [neighbors, directions] = ccl::common::get_neighbors_in_range(
         subgroup_range, mesh_coordinate, operation_attributes.topology, operation_attributes.cluster_axis);
 
@@ -138,6 +149,7 @@ SubgroupGatherHistogramsProgramFactory::create_at(
         /*cb_input_id*/ static_cast<uint32_t>(tt::CBIndex::c_0),
         /*cb_packet_header_id*/ static_cast<uint32_t>(tt::CBIndex::c_1),
         /*W*/ input_tensor.logical_shape()[-1],
+        /*N_ROWS*/ n_rows,
         /*input_page_size*/ input_page_size,
         /*aligned_input_page_size*/ aligned_input_page_size,
         /*aligned_output_page_size*/ output_aligned_page_size,
@@ -159,7 +171,6 @@ SubgroupGatherHistogramsProgramFactory::create_at(
     defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
     defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
     defines["DIRECTIONS"] = ccl::common::stringify(directions);
-    defines["AXIS"] = std::to_string(operation_attributes.cluster_axis);
 
     tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
         program,
