@@ -6,8 +6,9 @@ import time
 
 import pytest
 import torch
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 from loguru import logger
+from PIL import Image
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -107,8 +108,13 @@ def test_performance_vit_e2e(
     model = load_torch_model(model_location_generator)
     config = model.config
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"]
+    image_path = hf_hub_download(
+        repo_id="huggingface/cats-image",
+        filename="cats_image.jpeg",
+        repo_type="dataset",
+        revision="ccdec0af347ae11c5315146402c3e16c8bbf4149",
+    )
+    image = Image.open(image_path).convert("RGB")
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values.to(torch.bfloat16)
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)

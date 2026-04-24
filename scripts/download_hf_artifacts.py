@@ -6,7 +6,7 @@ import argparse
 
 import evaluate
 from datasets import load_dataset
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from loguru import logger
 
 
@@ -86,7 +86,6 @@ OTHER_MODELS = [
 # TODO: add configs, splits, etc
 DATASETS = [
     "hf-internal-testing/librispeech_asr_dummy",
-    "huggingface/cats-image",
     "poloclub/diffusiondb",
     "squad_v2",
     "wikitext",
@@ -147,6 +146,16 @@ def download_datasets(args):
     # datasets are using different structure then models/huggingface_hub and it's better use different API for downloading
     for dataset in DATASETS:
         _ = load_dataset(dataset, cache_dir=args.cache_dir, verification_mode="no_checks")
+    # huggingface/cats-image is a script-based dataset that is no longer loadable via
+    # load_dataset() in datasets>=4.0; tests fetch the bundled image directly with hf_hub_download.
+    _ = hf_hub_download(
+        repo_id="huggingface/cats-image",
+        filename="cats_image.jpeg",
+        repo_type="dataset",
+        revision="ccdec0af347ae11c5315146402c3e16c8bbf4149",
+        token=args.hf_token,
+        cache_dir=args.cache_dir,
+    )
     logger.info("Finished downloading datasets")
 
 
