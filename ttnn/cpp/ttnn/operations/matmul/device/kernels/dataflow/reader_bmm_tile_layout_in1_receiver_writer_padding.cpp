@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "experimental/noc.h"
@@ -107,7 +106,7 @@ void kernel_main() {
 #endif
 
     // WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;

@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
@@ -124,7 +123,7 @@ void kernel_main() {
     }
 
 #else
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
 #ifndef IN0_SHARDED
 #ifdef INTERMEDIATE_CB_READ
     constexpr uint32_t in0_intermediate_cb_index = get_named_compile_time_arg_val("cb_in0_intermediate");
@@ -136,7 +135,7 @@ void kernel_main() {
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     experimental::CircularBuffer cb_sparsity(cb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -157,7 +156,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < in0_B; ++b) {
         if constexpr (batchB > 0) {
-            noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
+            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
             noc.async_read_barrier();
         }
 
@@ -336,22 +335,6 @@ void kernel_main() {
                             }
                         }
 #endif  // IN0_SHARDED
-
-                        // DEBUG: Scan in0 buffer for 0xfefefefe corruption
-                        {
-                            volatile tt_l1_ptr uint32_t* buf =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in0));
-                            uint32_t num_words = in0_block_size_bytes / sizeof(uint32_t);
-                            for (uint32_t i = 0; i < num_words; i++) {
-                                if (buf[i] == 0xfefefefe) {
-                                    DPRINT << "CORRUPT in0_sender blk=" << block << " word=" << i << " addr=0x" << HEX()
-                                           << (uint32_t)&buf[i] << ENDL();
-                                    WATCHER_RING_BUFFER_PUSH(0xBADBAD09);
-                                    while (true) {
-                                    }
-                                }
-                            }
-                        }
 
 #ifndef SKIP_MCAST
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr

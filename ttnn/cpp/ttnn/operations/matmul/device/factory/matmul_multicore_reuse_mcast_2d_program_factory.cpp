@@ -29,7 +29,7 @@ namespace reuse_mcast_optimized_helpers {
 MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::MathFidelity math_fidelity,
+    MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -870,7 +870,6 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
                 {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
-                {"bias_ntiles", in1_per_core_w},
             }});
 
     // Create circular buffers
@@ -883,7 +882,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
     tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-    log_info(
+    log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src0_cb_index,
@@ -900,7 +899,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
     tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
-    log_info(
+    log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         src1_cb_index,
@@ -917,7 +916,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .set_globally_allocated_address(*in0_buffer)
                 .set_tile_dims(src2_cb_index, in0_tile);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
-        log_info(
+        log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src2_cb_index,
@@ -958,7 +957,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
-        log_info(
+        log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             interm0_cb_index,
@@ -980,7 +979,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         output_cb_config = output_cb_config.set_globally_allocated_address(*out_buffer);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
-    log_info(
+    log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         output_cb_index,
@@ -996,7 +995,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .set_page_size(src3_cb_index, bias_single_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
-        log_info(
+        log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
