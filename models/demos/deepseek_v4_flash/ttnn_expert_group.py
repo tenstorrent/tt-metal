@@ -116,6 +116,47 @@ class TtPlannedRoutedExpertGroup(LightweightModule):
         return combined.to(hidden_states.dtype)
 
 
+def unique_route_expert_ids(route_indices: torch.Tensor) -> tuple[int, ...]:
+    _validate_route_indices(route_indices)
+    seen: set[int] = set()
+    expert_ids: list[int] = []
+    for expert_id in route_indices.reshape(-1).tolist():
+        expert_id = int(expert_id)
+        if expert_id not in seen:
+            seen.add(expert_id)
+            expert_ids.append(expert_id)
+    return tuple(expert_ids)
+
+
+def route_weights_by_expert(
+    route_weights: torch.Tensor,
+    route_indices: torch.Tensor,
+    expert_ids: tuple[int, ...] | None = None,
+) -> dict[int, torch.Tensor]:
+    if route_weights.shape != route_indices.shape:
+        raise ValueError(
+            f"route_weights and route_indices must have the same shape, "
+            f"got {tuple(route_weights.shape)} and {tuple(route_indices.shape)}"
+        )
+    if route_weights.ndim != 3:
+        raise ValueError(f"route tensors must have shape [batch, tokens, topk], got {tuple(route_weights.shape)}")
+    _validate_route_indices(route_indices)
+
+    if expert_ids is None:
+        expert_ids = unique_route_expert_ids(route_indices)
+    else:
+        _validate_expert_ids(expert_ids)
+
+    weights_by_expert: dict[int, torch.Tensor] = {}
+    for expert_id in expert_ids:
+        weights_by_expert[expert_id] = torch.where(
+            route_indices == expert_id,
+            route_weights,
+            torch.zeros((), dtype=route_weights.dtype, device=route_weights.device),
+        ).sum(dim=-1, keepdim=True)
+    return weights_by_expert
+
+
 def _validate_plan_for_group(plan: ExpertPlacementPlan, mesh_shape: tuple[int, int]) -> None:
     if plan.mesh_shape != mesh_shape:
         raise ValueError(f"Plan mesh_shape {plan.mesh_shape} does not match mesh device shape {mesh_shape}")
@@ -173,6 +214,27 @@ def _expand_route_weights(route_weights: torch.Tensor, intermediate_size: int) -
     return route_weights.reshape(1, 1, route_weights.shape[1], 1).expand(
         1, 1, route_weights.shape[1], intermediate_size
     )
+
+
+def _validate_route_indices(route_indices: torch.Tensor) -> None:
+    if route_indices.dtype not in (torch.int32, torch.int64):
+        raise ValueError(f"route_indices dtype must be int32 or int64, got {route_indices.dtype}")
+    if torch.any(route_indices < 0):
+        raise ValueError("route_indices values must be non-negative expert IDs")
+
+
+def _validate_expert_ids(expert_ids: tuple[int, ...]) -> None:
+    if not expert_ids:
+        raise ValueError("expert_ids must be non-empty")
+    seen: set[int] = set()
+    for expert_id in expert_ids:
+        if not isinstance(expert_id, int):
+            raise TypeError(f"expert IDs must be integers, got {expert_id!r}")
+        if expert_id < 0:
+            raise ValueError(f"expert IDs must be >= 0, got {expert_id}")
+        if expert_id in seen:
+            raise ValueError(f"expert_ids must not contain duplicates, got {expert_id}")
+        seen.add(expert_id)
 
 
 def _single_expert_dim(experts: Mapping[int, TtRoutedExpertMLP], field: str) -> int:

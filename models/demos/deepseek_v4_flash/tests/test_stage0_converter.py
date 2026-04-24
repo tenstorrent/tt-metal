@@ -41,6 +41,8 @@ def test_key_map_accepts_v4_and_hf_aliases():
         normalize_hf_key("model.layers.2.self_attn.indexer.compressor.wkv.weight").canonical
         == "layers.2.attn.indexer.compressor.wkv.weight"
     )
+    assert normalize_hf_key("model.layers.3.mlp.gate.weight").canonical == "layers.3.ffn.gate.weight"
+    assert normalize_hf_key("model.layers.3.mlp.gate.e_score_correction_bias").canonical == "layers.3.ffn.gate.bias"
 
     mapped = normalize_hf_key("model.layers.3.mlp.experts.2.gate_proj.weight")
     assert mapped.canonical == "layers.3.ffn.experts.2.w1.weight"
@@ -117,6 +119,7 @@ def test_generate_and_convert_tiny_one_layer_checkpoint(tmp_path):
     with safe_open(non_expert_artifact, framework="pt", device="cpu") as handle:
         keys = set(handle.keys())
         assert "embed.weight" in keys
+        assert "layers.0.ffn.gate.weight" in keys
         assert "layers.0.ffn.shared_experts.w1.weight" in keys
         assert "layers.0.ffn.experts.0.w1.weight" not in keys
     with safe_open(expert_artifact, framework="pt", device="cpu") as handle:
@@ -140,7 +143,9 @@ def test_generate_and_convert_tiny_three_layer_fixture(tmp_path):
     non_expert_artifact = output / manifest["artifacts"]["non_expert_safetensors"][0]
     with safe_open(non_expert_artifact, framework="pt", device="cpu") as handle:
         keys = set(handle.keys())
+        assert "layers.0.ffn.gate.weight" in keys
         assert "layers.0.ffn.gate.tid2eid" in keys
+        assert "layers.2.ffn.gate.weight" in keys
         assert "layers.2.ffn.gate.tid2eid" in keys
         assert "layers.2.attn.compressor.ape" in keys
         assert "layers.2.attn.compressor.norm.weight" in keys

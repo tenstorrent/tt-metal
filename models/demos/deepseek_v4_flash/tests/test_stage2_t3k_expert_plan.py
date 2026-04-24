@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
-from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts
+from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, v4_router
 from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
 from models.demos.deepseek_v4_flash.expert_plan import plan_batch1_decode_expert_placements
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
@@ -20,8 +20,13 @@ from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 ttnn = pytest.importorskip("ttnn")
 
-from models.demos.deepseek_v4_flash.ttnn_expert_group import TtPlannedRoutedExpertGroup
+from models.demos.deepseek_v4_flash.ttnn_expert_group import (
+    TtPlannedRoutedExpertGroup,
+    route_weights_by_expert,
+    unique_route_expert_ids,
+)
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
+from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
 
 pytestmark = pytest.mark.t3k_compat
 
@@ -156,6 +161,64 @@ def test_t3k_planned_routed_expert_group_host_combines_two_tiny_experts(
             expert_id: route_weights[:, :, topk_index : topk_index + 1]
             for topk_index, expert_id in enumerate(plan.activated_expert_ids)
         },
+    )
+
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def test_t3k_router_feeds_planned_routed_expert_group(
+    tiny_tt_preprocessed_checkpoint: Path,
+    t3k_mesh,
+) -> None:
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    router_weights = load_router_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=0)
+
+    hidden_size = router_weights.gate_weight.shape[-1]
+    seq_len = 32
+    torch_input = torch.linspace(-0.25, 0.25, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    input_ids = torch.zeros(1, seq_len, dtype=torch.int64)
+
+    router_submesh = t3k_mesh.create_submesh(
+        ttnn.MeshShape(1, 1),
+        offset=ttnn.MeshCoordinate(0, 3),
+    )
+    tt_input = ttnn.from_torch(torch_input, device=router_submesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    router = TtRouter.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=router_submesh, layer=0)
+    route_weights, route_indices = router(tt_input, input_ids=input_ids)
+
+    expected_route_weights, expected_route_indices = v4_router(
+        torch_input[:, 0],
+        router_weights.gate_weight,
+        topk=int(manifest["config"]["num_experts_per_tok"]),
+        route_scale=float(manifest["config"]["routed_scaling_factor"]),
+        scoring_func=str(manifest["config"]["scoring_func"]),
+        input_ids=input_ids,
+        tid2eid=router_weights.tid2eid,
+    )
+    torch.testing.assert_close(route_indices, expected_route_indices)
+    torch.testing.assert_close(route_weights.float(), expected_route_weights.float(), rtol=5e-2, atol=5e-2)
+
+    active_expert_ids = unique_route_expert_ids(route_indices)
+    assert len(active_expert_ids) == 2
+    plan = plan_batch1_decode_expert_placements((2, 4), active_expert_ids, replicas_per_expert=1)
+    weights_by_expert = {
+        expert_id: _load_expert_weights(tiny_tt_preprocessed_checkpoint, expert_id) for expert_id in active_expert_ids
+    }
+    expected = combine_routed_experts(
+        torch_input[:, 0],
+        route_weights,
+        route_indices,
+        {expert_id: (weights["w1"], weights["w2"], weights["w3"]) for expert_id, weights in weights_by_expert.items()},
+        swiglu_limit=float(manifest["config"]["swiglu_limit"]),
+    ).reshape_as(torch_input)
+
+    group = TtPlannedRoutedExpertGroup.from_preprocessed(tiny_tt_preprocessed_checkpoint, t3k_mesh, plan)
+    torch_output = group.run_torch_host_combine(
+        torch_input,
+        route_weights_by_expert(route_weights, route_indices, active_expert_ids),
     )
 
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)

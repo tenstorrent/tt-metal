@@ -19,6 +19,7 @@ from models.demos.deepseek_v4_flash.cpu_reference import (
     v4_router,
     window_topk_indices,
 )
+from models.demos.deepseek_v4_flash.ttnn_router import select_router_scores, validate_router_config
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import validate_sparse_attention_contract
 
 
@@ -49,6 +50,69 @@ def test_v4_router_hash_and_sqrtsoftplus_top6():
     expected_hash_weights = scores.gather(-1, hash_indices)
     expected_hash_weights = expected_hash_weights / expected_hash_weights.sum(dim=-1, keepdim=True) * 1.5
     torch.testing.assert_close(hash_weights, expected_hash_weights)
+
+
+def test_ttnn_router_host_scoring_matches_cpu_reference_shapes():
+    x = torch.arange(1 * 3 * 4, dtype=torch.float32).reshape(1, 3, 4) / 11.0
+    gate_weight = torch.arange(5 * 4, dtype=torch.float32).reshape(5, 4) / 13.0
+    scores = x @ gate_weight.T
+    bias = torch.tensor([0.0, 2.0, 0.0, 1.0, -1.0])
+
+    weights, indices = select_router_scores(scores, topk=2, route_scale=1.25, bias=bias)
+    expected_weights, expected_indices = v4_router(x, gate_weight, topk=2, route_scale=1.25, bias=bias)
+
+    assert weights.shape == (1, 3, 2)
+    assert indices.shape == (1, 3, 2)
+    torch.testing.assert_close(indices, expected_indices)
+    torch.testing.assert_close(weights, expected_weights)
+
+    tid2eid = torch.tensor([[0, 2], [1, 3], [4, 0]], dtype=torch.int32)
+    input_ids = torch.tensor([[2, 0, 1]], dtype=torch.int64)
+    hash_weights, hash_indices = select_router_scores(
+        scores,
+        topk=2,
+        route_scale=1.25,
+        input_ids=input_ids,
+        tid2eid=tid2eid,
+    )
+    expected_hash_weights, expected_hash_indices = v4_router(
+        x,
+        gate_weight,
+        topk=2,
+        route_scale=1.25,
+        input_ids=input_ids,
+        tid2eid=tid2eid,
+    )
+
+    assert hash_weights.shape == (1, 3, 2)
+    assert hash_indices.shape == (1, 3, 2)
+    torch.testing.assert_close(hash_indices, expected_hash_indices)
+    torch.testing.assert_close(hash_weights, expected_hash_weights)
+
+
+def test_ttnn_router_rejects_bad_api_inputs():
+    scores = torch.zeros(1, 3, 4)
+    gate_weight = torch.zeros(4, 8)
+    tid2eid = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
+
+    with pytest.raises(ValueError, match="Unsupported DeepSeek V4 Flash scoring_func"):
+        validate_router_config(gate_weight, topk=2, route_scale=1.0, scoring_func="aux_loss")
+    with pytest.raises(ValueError, match="bias must have shape"):
+        select_router_scores(scores, topk=2, route_scale=1.0, bias=torch.zeros(3))
+    with pytest.raises(ValueError, match="input_ids is required"):
+        select_router_scores(scores, topk=2, route_scale=1.0, tid2eid=tid2eid)
+    with pytest.raises(ValueError, match="input_ids must have shape"):
+        select_router_scores(
+            scores, topk=2, route_scale=1.0, input_ids=torch.zeros(3, dtype=torch.int64), tid2eid=tid2eid
+        )
+    with pytest.raises(ValueError, match="input_ids values must be"):
+        select_router_scores(
+            scores,
+            topk=2,
+            route_scale=1.0,
+            input_ids=torch.full((1, 3), 2, dtype=torch.int64),
+            tid2eid=tid2eid,
+        )
 
 
 def test_hyperconnection_split_sinkhorn_pre_post():

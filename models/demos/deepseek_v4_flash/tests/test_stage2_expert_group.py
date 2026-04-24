@@ -12,6 +12,8 @@ from models.demos.deepseek_v4_flash.ttnn_expert_group import (
     TtPlannedRoutedExpertGroup,
     _expand_route_weights,
     _validate_plan_for_group,
+    route_weights_by_expert,
+    unique_route_expert_ids,
 )
 
 
@@ -73,3 +75,21 @@ def test_expand_route_weights_matches_ttnn_routed_expert_shape() -> None:
     assert expanded.shape == (1, 1, 32, 4)
     torch.testing.assert_close(expanded[0, 0, :, 0], route_weights[0, :, 0])
     torch.testing.assert_close(expanded[0, 0, :, 3], route_weights[0, :, 0])
+
+
+def test_route_weights_by_expert_builds_planned_group_inputs() -> None:
+    route_weights = torch.tensor([[[0.2, 0.8], [0.4, 0.6], [0.5, 0.25]]], dtype=torch.float32)
+    route_indices = torch.tensor([[[2, 0], [0, 2], [2, 2]]], dtype=torch.int64)
+
+    assert unique_route_expert_ids(route_indices) == (2, 0)
+
+    weights_by_expert = route_weights_by_expert(route_weights, route_indices, expert_ids=(2, 0))
+
+    assert set(weights_by_expert) == {0, 2}
+    torch.testing.assert_close(weights_by_expert[0], torch.tensor([[[0.8], [0.4], [0.0]]]))
+    torch.testing.assert_close(weights_by_expert[2], torch.tensor([[[0.2], [0.6], [0.75]]]))
+
+    with pytest.raises(ValueError, match="same shape"):
+        route_weights_by_expert(route_weights[..., :1], route_indices)
+    with pytest.raises(ValueError, match="non-negative"):
+        route_weights_by_expert(route_weights, torch.full_like(route_indices, -1))

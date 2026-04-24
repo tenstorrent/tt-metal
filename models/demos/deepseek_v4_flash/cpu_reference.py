@@ -44,6 +44,7 @@ def v4_router(
         if input_ids is None:
             raise ValueError("input_ids is required for hash-routed layers")
         indices = tid2eid[input_ids.reshape(-1)].to(torch.long)
+        indices = indices.reshape(*scores.shape[:-1], indices.shape[-1])
     else:
         indices = selection_scores.topk(topk, dim=-1).indices
 

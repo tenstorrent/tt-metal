@@ -19,6 +19,7 @@ from models.demos.deepseek_v4_flash.cpu_reference import (
     indexer_topk,
     sparse_attention,
     swiglu_expert,
+    v4_router,
 )
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
@@ -28,6 +29,7 @@ ttnn = pytest.importorskip("ttnn")
 from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
+from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import TtSparsePrefillAttention
 
@@ -163,6 +165,36 @@ def test_tiny_routed_expert_mlp_module_matches_torch(tiny_tt_preprocessed_checkp
     torch_output = ttnn.to_torch(module(tt_input, route_weight=tt_route_weights))
 
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def test_tiny_router_module_matches_torch_hash_layer(tiny_tt_preprocessed_checkpoint: Path, device):
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    weights = load_router_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=0)
+
+    hidden_size = weights.gate_weight.shape[-1]
+    seq_len = 32
+    torch_input = torch.linspace(-0.15, 0.2, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    input_ids = torch.zeros(1, seq_len, dtype=torch.int64)
+    input_ids[:, seq_len // 2 :] = 1
+    expected_weights, expected_indices = v4_router(
+        torch_input[:, 0],
+        weights.gate_weight,
+        topk=int(manifest["config"]["num_experts_per_tok"]),
+        route_scale=float(manifest["config"]["routed_scaling_factor"]),
+        scoring_func=str(manifest["config"]["scoring_func"]),
+        input_ids=input_ids,
+        tid2eid=weights.tid2eid,
+    )
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtRouter.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=0)
+    route_weights, route_indices = module(tt_input, input_ids=input_ids)
+
+    torch.testing.assert_close(route_indices, expected_indices)
+    torch.testing.assert_close(route_weights.float(), expected_weights.float(), rtol=5e-2, atol=5e-2)
 
 
 def test_tiny_prefill_compressor_overlap_uses_host_ratio_pooling_and_matches_torch(
