@@ -106,13 +106,14 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
 
     // ---- L1 Memory Layout ----
     // l1_base_address:                              in0 source data (per-core K subblocks)
-    // l1_base_address + max_source_data + 0x10:     in0 multicast output (all K subblocks)
-    // aligned(output_end + gap):                    in1 DRAM read output
+    // l1_base_address + max_source_data + pad:      in0 multicast output (all K subblocks)
+    // aligned(output_end + pad):                    in1 DRAM read output
     // after in1: barrier scratch
-    uint32_t in0_mcast_output_addr = l1_base_address + max_source_data_bytes + 0x10;
+    uint32_t in0_mcast_output_addr = l1_base_address + max_source_data_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in0_output_total_bytes = K * k_subblock_size_bytes;
 
-    uint32_t in1_output_addr_unaligned = in0_mcast_output_addr + in0_output_total_bytes + 0x10;
+    uint32_t in1_output_addr_unaligned =
+        in0_mcast_output_addr + in0_output_total_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in1_output_addr = (in1_output_addr_unaligned + 63) & ~63U;
 
     // ---- Generate in0 data ----
@@ -124,13 +125,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     // Per-row data size in uint32_t elements
     uint32_t row_data_size_uint32 = in0_input.size() / R;
     uint32_t k_subblock_size_uint32 = k_subblock_size_bytes / sizeof(uint32_t);
-
-    // Clear all matmul cores L1
-    uint32_t total_clear_size = in1_output_addr + in1_per_core_read_size_bytes + 32 - l1_base_address;
-    vector<uint32_t> zeros(total_clear_size / sizeof(uint32_t), 0);
-    for (const auto& core : matmul_cores_list) {
-        detail::WriteToDeviceL1(device, core, l1_base_address, zeros);
-    }
 
     // ---- Distribute in0 data round-robin across all cores ----
     // Build golden data map: row_y -> full row data (for verification)
@@ -174,7 +168,7 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
 
     vector<uint32_t> in1_per_core_read_addr;
     in1_per_core_read_addr.reserve(C);
-for (uint32_t i = 0; i < C; i++) {
+    for (uint32_t i = 0; i < C; i++) {
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
 
@@ -276,6 +270,8 @@ for (uint32_t i = 0; i < C; i++) {
             num_cores,                             // 6  Total number of cores in barrier
             risc1_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
             risc1_barrier_done_sem_id,             // 8  Barrier done semaphore ID
+            1,                                     // 9  Profiling: number of transactions
+            in1_per_core_read_size_bytes,          // 10 Profiling: per-K-subblock transaction size
         };
 
         tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, i, risc0_core_runtime_args);
@@ -344,19 +340,54 @@ for (uint32_t i = 0; i < C; i++) {
 }
 
 bool run_single_test(const shared_ptr<distributed::MeshDevice>& mesh_device, MatmulTestConfig test_config) {
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
-    test_config.page_size_bytes = bytes_per_page;
+    test_config.test_id += unit_tests::dm::matmul::MATMUL_1D_V2_TEST_ID_OFFSET;
+    test_config.page_size_bytes = 2048;
     test_config.end_logical_core = CoreCoord(
         test_config.start_logical_core.x + test_config.num_subblocks_c_dim - 1,
         test_config.start_logical_core.y + test_config.num_subblocks_r_dim - 1);
     return run_dm_1d_matmul_v2(mesh_device, test_config);
 }
 
+bool run_multiple_test(const shared_ptr<distributed::MeshDevice>& mesh_device, const MatmulTestConfig& test_config) {
+    auto or_scalar = [](const std::vector<uint32_t>& v, uint32_t scalar) {
+        return v.empty() ? std::vector<uint32_t>{scalar} : v;
+    };
+
+    auto nr_vals = or_scalar(test_config.num_subblocks_r_dim_sweep, test_config.num_subblocks_r_dim);
+    auto nc_vals = or_scalar(test_config.num_subblocks_c_dim_sweep, test_config.num_subblocks_c_dim);
+    auto nk_vals = or_scalar(test_config.num_subblocks_k_dim_sweep, test_config.num_subblocks_k_dim);
+    auto sr_vals = or_scalar(test_config.subblock_r_dim_sweep, test_config.subblock_r_dim);
+    auto sc_vals = or_scalar(test_config.subblock_c_dim_sweep, test_config.subblock_c_dim);
+    auto sk_vals = or_scalar(test_config.subblock_k_dim_sweep, test_config.subblock_k_dim);
+
+    bool all_pass = true;
+    for (uint32_t nr : nr_vals) {
+        for (uint32_t nc : nc_vals) {
+            for (uint32_t nk : nk_vals) {
+                for (uint32_t sr : sr_vals) {
+                    for (uint32_t sc : sc_vals) {
+                        for (uint32_t sk : sk_vals) {
+                            MatmulTestConfig single = test_config;
+                            single.num_subblocks_r_dim = nr;
+                            single.num_subblocks_c_dim = nc;
+                            single.num_subblocks_k_dim = nk;
+                            single.subblock_r_dim = sr;
+                            single.subblock_c_dim = sc;
+                            single.subblock_k_dim = sk;
+                            all_pass &= run_single_test(mesh_device, single);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return all_pass;
+}
+
 }  // namespace unit_tests::dm::one_d_matmul_v2
 
 TEST_P(Matmul1DV2ParamFixture, Test1DMatmulV2) {
-    EXPECT_TRUE(unit_tests::dm::one_d_matmul_v2::run_single_test(get_mesh_device(), GetParam()));
+    EXPECT_TRUE(unit_tests::dm::one_d_matmul_v2::run_multiple_test(get_mesh_device(), GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(

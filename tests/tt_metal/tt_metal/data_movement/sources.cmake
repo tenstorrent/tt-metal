@@ -32,6 +32,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     dram_neighbour/test_dram_neighbour.cpp
     matmul/test_matmul_1d.cpp
     matmul/test_matmul_1d_v2.cpp
+    matmul/test_matmul_2d.cpp
     quasar_cache/test_quasar_cache.cpp
     quasar_examples/quasar_addrgen/test_addrgen_example.cpp
     quasar_examples/quasar_im2col/test_im2col_example.cpp

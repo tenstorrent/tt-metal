@@ -38,7 +38,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sender_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sem_addr);
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_sem_addr);
 
-    // Multicast addresses for my row (same for all K iterations, only the L1 offset changes)
+    // Multicast addresses for my row (same Y for all cores in the row, varying X)
     uint64_t row_mcast_base = get_noc_multicast_addr(physical_start_x, my_y[0], physical_end_x, my_y[0], 0);
 
     barrier_sync(
