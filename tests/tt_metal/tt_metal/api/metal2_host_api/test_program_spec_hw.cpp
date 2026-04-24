@@ -309,5 +309,62 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     EXPECT_EQ(output_data, input_data);
 }
 
+// ============================================================================
+// Semaphore Accessor Name Loopback Test
+// ============================================================================
+//
+// Targeted test for the semaphore accessor name plumbing.
+// Very minimal: just one semaphore and two kernels that sync on it via
+// different local accessor names.
+//
+//   - Producer (BRISC) and consumer (NCRISC) each resolve their accessor name
+//     to a sem ID. Test only completes if both land on the same underlying ID.
+//   - If producer's sem::signal ID != consumer's sem::waiter ID, consumer hangs
+//     forever on wait(1).
+//
+// Proves: kernel_bindings_generated.h emits the sem:: namespace correctly, both
+// kernels' views agree on the sem ID, Metal 2.0 allocates the sem (on Gen1).
+//
+// A failure will (unfortunately) manifest as a hang.
+// Any outcome other than "test completes" indicates the name resolution is wrong:
+
+TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    const NodeCoord node{0, 0};
+
+    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    producer.source = KernelSpec::SourceFilePath{
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp"};
+    producer.semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}};
+
+    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    consumer.source = KernelSpec::SourceFilePath{
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp"};
+    consumer.semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}};
+
+    SemaphoreSpec sem;
+    sem.unique_id = "only_sem";
+    sem.target_nodes = node;
+
+    ProgramSpec spec;
+    spec.program_id = "semaphore_accessor_loopback";
+    spec.kernels = {producer, consumer};
+    spec.semaphores = {sem};
+    spec.workers = std::vector<WorkerSpec>{WorkerSpec{
+        .unique_id = "worker_0",
+        .kernels = {"producer", "consumer"},
+        .semaphores = {"only_sem"},
+        .target_nodes = node,
+    }};
+
+    Program program = MakeProgramFromSpec(spec);
+    detail::LaunchProgram(device, program);
+    // If we got here, both kernels resolved their sem accessors to the same ID.
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental::metal2_host_api
