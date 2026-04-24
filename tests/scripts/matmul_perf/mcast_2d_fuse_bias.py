@@ -68,9 +68,10 @@ def build_inputs(device):
 
     a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # Bias expects tile-padded first dim.
-    bias_padded = torch_bias.expand(1, 1, 32, n_size).contiguous()
-    bias = ttnn.from_torch(bias_padded, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Logical shape [1, 1, 1, N]; ttnn pads M=1 up to TILE_HEIGHT internally. Post main
+    # PR #42430 the bias validation checks LOGICAL dim_bias in {1, dim_out}, so
+    # expanding to [1, 1, 32, n] (as done pre-rebase) no longer passes validation.
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
