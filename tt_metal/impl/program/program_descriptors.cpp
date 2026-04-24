@@ -226,21 +226,6 @@ static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& 
     }
 }
 
-template <typename Range>
-static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& core, const Range& args) {
-    KernelDescriptor::CoreRuntimeArgs values;
-    values.reserve(args.size());
-    for (const auto& arg : args) {
-        if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
-            kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
-            values.push_back((*buf)->address());
-        } else {
-            values.push_back(std::get<uint32_t>(arg));
-        }
-    }
-    kd.runtime_args.emplace_back(core, std::move(values));
-}
-
 void KernelDescriptor::emplace_runtime_args(
     const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args) {
     emplace_runtime_args_impl(*this, core, args);
