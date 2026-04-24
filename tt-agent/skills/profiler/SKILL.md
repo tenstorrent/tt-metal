@@ -19,9 +19,6 @@ Pure measurement — never modifies code, never iterates, never hypothesizes
 fixes. Called by `tt:optimizer` once per iteration; invokable directly by a
 developer who wants a one-shot profile.
 
-**Why `layer: tool`:** pipeline-bound to profiling, same shape as `tt:run`. Not
-cross-cutting — it is only meaningful as part of a measure-then-act loop.
-
 ## When to Invoke
 
 - "Profile this test / kernel / op"
@@ -101,11 +98,9 @@ No prescriptions.>
 <paste the full rendered report>
 ```
 
-The `% scope` / `Cum %` columns make "is op X THE bottleneck" a one-glance
-read — essential for utilization-typed goals. `DRAM %` / `FLOPs %` /
-`Abs TFLOPs` / overhead ratio feed bound classification per
-`interpretation.md`. When the report crashes and the pandas fallback is
-used, compute `Abs TFLOPs = 2*M*K*N / FW_ns / 1e3` manually per matmul row.
+`% scope` / `Cum %` answer "is op X THE bottleneck" at a glance (required for
+utilization-typed goals). `DRAM %` / `FLOPs %` / `Abs TFLOPs` / overhead_ratio
+feed bound classification per `interpretation.md`.
 
 ## Caller Contract
 
@@ -113,7 +108,7 @@ used, compute `Abs TFLOPs = 2*M*K*N / FW_ns / 1e3` manually per matmul row.
 - **Output**: path to the profile note, plus top-3 op codes and their device
   durations inline for the caller's convenience.
 - **Failure**: if profiling data cannot be collected, return an error message
-  naming the likely cause. Do not fabricate numbers.
+  naming the likely cause. Report only observed numbers.
 
 ## Progressive Load Table
 

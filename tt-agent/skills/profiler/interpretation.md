@@ -6,9 +6,8 @@
 firmware end for the op. This is the on-device cost and the canonical number
 to minimize.
 
-Rank ops by this column. The top 1-3 dominate the device time budget — any
-optimization push targets one of these unless there is a specific reason
-otherwise.
+Rank ops by this column; the top 1-3 dominate the device-time budget and
+are the default optimization targets.
 
 ## Key CSV columns
 
@@ -24,7 +23,7 @@ otherwise.
 | `DEVICE BRISC KERNEL DURATION [ns]` | Reader (DM0) kernel time — usually dominated by `noc_async_read` traffic and barriers. |
 | `DEVICE NCRISC KERNEL DURATION [ns]` | Writer (DM1) kernel time — `noc_async_write` and output draining. |
 | `DEVICE TRISC0/1/2 KERNEL DURATION [ns]` | Unpack / Math / Pack compute stages. |
-| `HOST DURATION [ns]` | Includes queue time + host dispatch overhead. Inflated on first iteration (cache-miss populates the program cache). |
+| `HOST DURATION [ns]` | Queue time + host dispatch overhead. Inflated on first iter (see First-run caveat below). |
 
 ## Bottleneck tags
 
@@ -41,8 +40,8 @@ the bound.
 | `NOC-stall` | BRISC and NCRISC both high but TRISC low. Data movement is saturating NOC bandwidth — batching, routing, or layout changes help. |
 | `host-dominated` | `FW` is short but `HOST DURATION` is large on runs past the first. Rare for device ops; points to Python or dispatch overhead, not kernel code. |
 
-Use the tag only — do not prescribe the fix in a profile note. Fix selection
-belongs to the caller (developer or `tt:optimizer`).
+Record the tag only. Fix selection belongs to the caller (developer or
+`tt:optimizer`).
 
 ## Matmul bound classification (op-level, from tt-perf-report)
 
@@ -71,9 +70,8 @@ Lever families per class (for the *caller*, not in the note):
   arithmetic intensity via fusion.
 - **Near peak**: stop tuning this op; pick the next bottleneck.
 
-Misclassifying an overhead-bound matmul as compute-bound and tuning fidelity
-or subblocks in isolation wastes iterations — confirm the class from DRAM%
-and FLOPs% before proposing levers.
+Confirm the bound class from DRAM% and FLOPs% before proposing levers.
+Overhead-bound matmuls tuned with compute-bound levers waste iterations.
 
 ## Peak reference figures
 
@@ -107,27 +105,20 @@ fidelity change — the percentage alone is misleading.
 
 ## Overhead confirmation — FW vs KERNEL gap
 
-`DEVICE FW DURATION` spans fw_start → fw_end. `DEVICE KERNEL DURATION` is
-the compute-kernel-only window. The ratio
-
-```
-overhead_ratio = (FW - KERNEL) / FW
-```
-
-is a direct measure of dispatch + barriers + CB-flush overhead.
+`overhead_ratio = (FW - KERNEL) / FW` directly measures dispatch + barriers
++ CB-flush overhead.
 
 | overhead_ratio | Reading |
 |---|---|
-| < 15% | compute/bandwidth dominates — lever selection by DRAM%/FLOPs% table |
-| 15-40% | mixed; blocking decisions by per-RISC tag |
-| > 40% | **dispatch/sync dominates** — confirms overhead-bound class even if FLOPs% is ambiguous |
+| < 15% | compute/bandwidth dominates — use DRAM%/FLOPs% table |
+| 15-40% | mixed; decide from per-RISC tag |
+| > 40% | **dispatch/sync dominates** — overhead-bound even if FLOPs% is ambiguous |
 
-An overhead_ratio > 50% combined with low FLOPs% is the signature of a
-**reshaped-batch matmul**: long sequences folded into a batch dim to keep
-`per_core_M` small, creating many tiny per-chunk dispatches. Typical symptom
-in prefill-path vision or LLM MLPs at seq ≥ 4K. Levers: larger `in0_block_w`,
-larger `out_subblock_h × w`, or (structural) switch to a DRAM-sharded or 1D
-matmul variant that amortizes dispatch differently.
+overhead_ratio > 50% with low FLOPs% signals a **reshaped-batch matmul**
+(long sequences folded into batch to shrink `per_core_M`, producing many
+tiny dispatches — typical in prefill MLPs at seq ≥ 4K). Levers: larger
+`in0_block_w`, larger `out_subblock_h × w`, or switch to a DRAM-sharded
+or 1D matmul variant.
 
 ## Layer-scope profiling: contribution column
 
@@ -145,17 +136,13 @@ goal is utilization-typed (see `skills/optimizer/convergence.md`).
 
 ## First-run caveat
 
-The first iteration of any test populates the program cache. Host times on
-that iteration are inflated. If the test runs the layer only once,
-`HOST DURATION` is unreliable. The device-side columns are still valid.
+First iteration of any test populates the program cache — host times are
+inflated. Device-side columns remain valid.
 
 ## When numbers look wrong
 
-- All device durations = 0 → profiler did not run. Check for env conflicts
-  (`TT_METAL_DPRINT_CORES`, `TT_METAL_WATCHER`, `TTNN_CONFIG_PATH` still set).
-- Only a handful of ops captured but the test ran many → buffer overflow;
-  test needs periodic `ReadDeviceProfilerResults(device)` calls.
-- Wildly different numbers between two otherwise-identical runs → program
-  cache miss on the measured iteration, or another agent's workload
-  interleaving. Re-run; the MCP queue serializes device access but
-  build/compile caches do not.
+| Symptom | Likely cause |
+|---|---|
+| All device durations = 0 | Env conflict (`TT_METAL_DPRINT_CORES`, `TT_METAL_WATCHER`, `TTNN_CONFIG_PATH` still set) |
+| Only a handful of ops captured | Buffer overflow — add periodic `ReadDeviceProfilerResults(device)` calls |
+| Wildly different numbers across runs | Program-cache miss on measured iter, or concurrent agent workload (MCP queue serializes device, not caches) |
