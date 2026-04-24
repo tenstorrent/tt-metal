@@ -270,6 +270,16 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
+def get_allocator_base_address(device, buffer_type):
+    """Return the lowest address (bytes) of the given allocator region.
+
+    For ``ttnn.BufferType.L1`` this is the worker-L1 unreserved base; combined
+    with the per-bank L1 size from :func:`get_memory_view`, callers can derive
+    the absolute L1 top address used by the device-side allocator.
+    """
+    return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
+
+
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice

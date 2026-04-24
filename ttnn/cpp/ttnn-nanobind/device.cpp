@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,9 +33,11 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
@@ -447,6 +450,50 @@ void device_module(nb::module_& m_device) {
         nb::arg("device").noconvert(),
         nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
+
+    constexpr std::string_view get_allocator_base_address_doc = R"doc(
+        Return the base address (in bytes) of the device's allocator region for the given buffer type.
+
+        For ``ttnn.BufferType.L1`` this is the worker-L1 unreserved base, i.e. the lowest address
+        that the allocator is allowed to hand out for tensor / buffer storage on Tensix worker
+        cores. Combined with the worker-L1 size (queryable via :py:func:`ttnn.GetMemoryView`), it
+        defines the address range available for compute-time L1 allocations.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to query                  | ttnn.Device           |             | Yes      |
+        | buffer_type      | Allocator region (L1 / DRAM)     | ttnn.BufferType       |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc";
+    auto buffer_type_to_hal_mem_type = [](const BufferType& buffer_type) {
+        switch (buffer_type) {
+            case BufferType::DRAM: return HalMemType::DRAM;
+            case BufferType::L1:
+            case BufferType::L1_SMALL:
+            case BufferType::TRACE: return HalMemType::L1;
+            default:
+                throw std::invalid_argument(
+                    "GetAllocatorBaseAddress: unsupported buffer_type=" +
+                    std::to_string(static_cast<int>(buffer_type)));
+        }
+    };
+    m_device.def(
+        "GetAllocatorBaseAddress",
+        [buffer_type_to_hal_mem_type](IDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_base_allocator_addr(buffer_type_to_hal_mem_type(buffer_type));
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_allocator_base_address_doc.data());
+    m_device.def(
+        "GetAllocatorBaseAddress",
+        [buffer_type_to_hal_mem_type](MeshDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_base_allocator_addr(buffer_type_to_hal_mem_type(buffer_type));
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_allocator_base_address_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.

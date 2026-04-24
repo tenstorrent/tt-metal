@@ -1640,6 +1640,68 @@ def max_per_core_l1_usage_on_cores(
     return max(per_core.values(), default=0)
 
 
+def per_core_l1_lowest_addr_on_cores(
+    tensors: list[Any],
+    target_cores: set[tuple[int, int]] | list[tuple[int, int]],
+) -> dict[tuple[int, int], int]:
+    """Per-core lowest occupied L1 address across the given tensors.
+
+    Walks the same flat list as :func:`per_core_l1_usage_on_cores`
+    (``OverlappedTensor`` / ``ttnn.Tensor``; ``None`` ignored) and queries
+    each tensor's on-device buffer address.  Returns ``dict[(x, y) -> int]``
+    mapping each core in ``target_cores`` that holds at least one allocation
+    to the **lowest** address occupied by any tracked tensor on that core.
+
+    Top-down L1 allocation means a smaller address ⇒ more memory consumed.
+    Cores in ``target_cores`` with no tracked allocation are omitted from
+    the returned dict; callers should treat them as having unbounded
+    headroom.
+
+    Lockstep tensors (the common case for attention weights) report the
+    same address on every core in their grid via ``buffer_address()``.
+    Per-core-allocated tensors report a distinct address per core via
+    ``experimental_per_core_buffer_address(core)``.
+
+    Tensors that are not on device (host-only) are silently skipped --
+    address queries are only meaningful post-allocation.
+    """
+    target = set(target_cores)
+    seen_fused: set[int] = set()
+    lowest: dict[tuple[int, int], int] = {}
+    for obj in tensors:
+        if obj is None:
+            continue
+        if hasattr(obj, "fused_tensor"):
+            fused = obj.fused_tensor
+            tid = fused.tensor_id
+            if tid in seen_fused:
+                continue
+            seen_fused.add(tid)
+            tt_tensor = fused
+        elif isinstance(obj, ttnn.Tensor):
+            tt_tensor = obj
+        else:
+            continue
+        if not ttnn.is_tensor_storage_on_device(tt_tensor):
+            continue
+        mc = tt_tensor.memory_config()
+        if mc.buffer_type != ttnn.BufferType.L1 or mc.shard_spec is None:
+            continue
+        cores = _core_list(mc.shard_spec.grid)
+        is_per_core = bool(getattr(tt_tensor, "is_per_core_allocated", lambda: False)())
+        for c_xy in cores:
+            if c_xy not in target:
+                continue
+            if is_per_core:
+                addr = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(c_xy[0], c_xy[1]))
+            else:
+                addr = tt_tensor.buffer_address()
+            prev = lowest.get(c_xy)
+            if prev is None or addr < prev:
+                lowest[c_xy] = addr
+    return lowest
+
+
 def _quantize_dequantize_bfp_fn(x, fmt_str):
     """Dequantizer used by ``CompressedTensorAssigner`` for bfp{0,2,4,8}."""
     from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
@@ -1648,99 +1710,126 @@ def _quantize_dequantize_bfp_fn(x, fmt_str):
     return quantize_dequantize_bfp(x, mant_map[fmt_str])
 
 
-def _greedy_trim_experts_by_budget(
-    state_dict: dict[str, torch.Tensor],
-    layer_idx: int,
-    candidate_indices: list[int],
-    assigner: CompressedTensorAssigner,
-    core_grids: SramExpertCoreGrids,
-    l1_budget_bytes: int,
+def _expert_assignments_and_shapes(
+    expert_idx: int,
+    gate_full: torch.Tensor,
+    up_full: torch.Tensor,
+    down_full: torch.Tensor,
     *,
-    mesh_shape: tuple[int, int] = (1, 1),
-    tile_hw: int = 32,
-    attn_per_core_bytes: dict[tuple[int, int], int] | None = None,
-    cap_bytes: int | None = None,
-) -> tuple[list[int], int]:
-    """Greedily trim a ranked expert list to fit the per-core L1 budget.
+    assigner: CompressedTensorAssigner | None,
+    assignment_provider: Callable[[int, int], np.ndarray] | None,
+) -> tuple[list[np.ndarray], list[tuple[int, int]]]:
+    """Compute (assignments, shapes) for one expert's three projections.
 
-    Two accounting modes are supported, selected by whether
-    ``attn_per_core_bytes`` + ``cap_bytes`` are provided:
+    Drives :func:`compute_expert_l1_bytes_per_core` for budgeting.  Mutually
+    exclusive: provide ``assigner`` (CPU-side mixed-precision assignment) or
+    ``assignment_provider`` (pre-computed BSPM tile maps), matching the
+    contract of :func:`prepare_compressed_sram_slots`.
 
-    * **Per-core joint** (``attn_per_core_bytes`` and ``cap_bytes`` given):
-      for each core ``c`` on which experts will land, enforce
-      ``attn_per_core_bytes[c] + running[c] + add[c] <= cap_bytes``.  This
-      matches the real physical L1 constraint and exploits slack when the
-      attention peak and expert peak sit on different cores (e.g. ``gate_mm``
-      col-12 cores vs. the kv_a/o_proj/kv_b2 cluster on y=8/9 cores).
-
-    * **Legacy scalar** (default): enforce
-      ``running_max + expert_max <= l1_budget_bytes`` where each term is a
-      max-per-core over the binding set.  Conservative but fine for simple
-      budget guards (e.g. the ``build_sram_hot_expert_config`` path).
-
-    Mirrors the inner loop of :func:`build_sram_hot_expert_config` but operates
-    on a pre-ranked ``candidate_indices`` list (so the caller controls the
-    ordering, e.g. routing frequency).  Returns ``(selected, bytes_used)``
-    where ``bytes_used`` is the max-per-core byte total across selected
-    experts (same semantic as the legacy path, for logging parity).
+    Float32 cast is required: ``CompressedTensorAssigner`` runs through
+    ``np.asarray(..., dtype=np.float32)`` and rejects bfloat16.
     """
-    joint = attn_per_core_bytes is not None and cap_bytes is not None
-    selected: list[int] = []
-    bytes_used = 0
-    running_per_core: dict[tuple[int, int], int] = {}
-    for expert_idx in candidate_indices:
-        gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
-        up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
-        down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
-
-        # Cast to float32: bfloat16 can't be consumed by the assigner
-        # (downstream ``np.asarray(..., dtype=np.float32)`` rejects it).
-        weights = [
-            state_dict[gate_key].T.contiguous().float(),
-            state_dict[up_key].T.contiguous().float(),
-            state_dict[down_key].T.contiguous().float(),
-        ]
-        assignments = []
-        shapes = []
-        for w in weights:
+    assert (assigner is None) != (assignment_provider is None), "Provide exactly one of assigner or assignment_provider"
+    weights = [gate_full.float(), up_full.float(), down_full.float()]
+    assignments: list[np.ndarray] = []
+    shapes: list[tuple[int, int]] = []
+    for proj_idx, w in enumerate(weights):
+        if assigner is not None:
             result = assigner.assign(w, _quantize_dequantize_bfp_fn)
             assignments.append(result.assignment)
-            shapes.append(tuple(w.shape))
-
-        per_core_add = compute_expert_l1_bytes_per_core(
-            assignments, shapes, core_grids, tile_hw=tile_hw, mesh_shape=mesh_shape
-        )
-        expert_bytes = max(per_core_add.values()) if per_core_add else 0
-
-        if joint:
-            # Per-core joint: reject if ANY core would exceed the cap after
-            # adding this expert.  Unions new-expert cores with already-tracked
-            # cores so "sibling" cores that grew in prior iterations stay
-            # bounded when this expert adds nothing to them.
-            fits = True
-            for c, add in per_core_add.items():
-                attn_c = attn_per_core_bytes.get(c, 0)
-                used_c = running_per_core.get(c, 0)
-                if attn_c + used_c + add > cap_bytes:
-                    fits = False
-                    break
-            if not fits:
-                break
         else:
-            if bytes_used + expert_bytes > l1_budget_bytes:
-                break
+            assignments.append(assignment_provider(expert_idx, proj_idx))
+        shapes.append(tuple(w.shape))
+    return assignments, shapes
 
-        selected.append(expert_idx)
-        for c, add in per_core_add.items():
-            running_per_core[c] = running_per_core.get(c, 0) + add
-        if joint:
-            # True max-per-core over accumulated experts.
-            bytes_used = max(running_per_core.values()) if running_per_core else 0
-        else:
-            # Legacy conservative sum-of-per-expert-maxes (preserved for
-            # logging parity with the scalar budget path).
-            bytes_used += expert_bytes
-    return selected, bytes_used
+
+def _predict_expert_per_core_bytes(
+    expert_idx: int,
+    gate_full: torch.Tensor,
+    up_full: torch.Tensor,
+    down_full: torch.Tensor,
+    core_grids: SramExpertCoreGrids,
+    *,
+    assigner: CompressedTensorAssigner | None,
+    assignment_provider: Callable[[int, int], np.ndarray] | None,
+    tile_hw: int = 32,
+    mesh_shape: tuple[int, int] = (1, 1),
+) -> dict[tuple[int, int], int]:
+    """Predict per-core L1 byte cost of a single expert (host-side lookahead).
+
+    Wraps :func:`_expert_assignments_and_shapes` +
+    :func:`compute_expert_l1_bytes_per_core` so the trim loop in
+    :func:`prepare_compressed_sram_slots` can stop *before* an over-budget
+    allocation is attempted.  The same assignments are recomputed inside
+    ``CompressedTensor.from_torch`` during the actual allocation -- worth
+    the duplicated CPU work since predicting and allocating live in
+    different code paths today.
+    """
+    assignments, shapes = _expert_assignments_and_shapes(
+        expert_idx,
+        gate_full,
+        up_full,
+        down_full,
+        assigner=assigner,
+        assignment_provider=assignment_provider,
+    )
+    return compute_expert_l1_bytes_per_core(assignments, shapes, core_grids, tile_hw=tile_hw, mesh_shape=mesh_shape)
+
+
+def _compute_sram_trim_budget(
+    device,
+    persistent_tensors: list,
+    sram_core_grids: SramExpertCoreGrids,
+    worker_l1_size: int,
+    combined_attn_sram_cap_bytes: int,
+) -> tuple[int, dict[tuple[int, int], int], int]:
+    """Compute ``(boundary_addr, initial_lowest_addr, l1_top_addr)`` for the
+    address-based SRAM expert trim.
+
+    Walks ``persistent_tensors`` (attention + shared + routed reservations)
+    restricted to the SRAM binding cores (gate ∪ up ∪ down), queries the
+    allocator for its worker-L1 base, and turns the combined attn+SRAM cap
+    into a hard floor address:
+
+        l1_top_addr    = worker_l1_unreserved_base + worker_l1_size
+        boundary_addr  = l1_top_addr - combined_attn_sram_cap_bytes
+
+    The returned triple is the input contract of
+    :func:`prepare_compressed_sram_slots`.
+    """
+    sram_core_set = (
+        set(_core_list(sram_core_grids.gate))
+        | set(_core_list(sram_core_grids.up))
+        | set(_core_list(sram_core_grids.down))
+    )
+    initial_lowest_addr = per_core_l1_lowest_addr_on_cores(persistent_tensors, sram_core_set)
+    worker_l1_unreserved_base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    l1_top_addr = worker_l1_unreserved_base + worker_l1_size
+    boundary_addr = l1_top_addr - combined_attn_sram_cap_bytes
+    return boundary_addr, initial_lowest_addr, l1_top_addr
+
+
+def _refresh_lowest_addr_from_alloc(
+    curr_addr: dict[tuple[int, int], int],
+    cts: tuple[tuple[CompressedTensor, ttnn.CoreRangeSet], ...],
+) -> None:
+    """Refine *curr_addr* (per-core lowest L1 address) from real allocator state.
+
+    For each ``(CompressedTensor, grid)`` pair, walk the grid's cores and
+    query the CT's per-core L1 base address; record it as the new lowest
+    occupied address whenever it sits below the current entry.  Top-down
+    L1 allocation means freshly allocated tensors land *below* anything
+    previously allocated, so the new address is the natural new floor.
+
+    Mutates *curr_addr* in place.
+    """
+    for ct, grid in cts:
+        for c_obj in ttnn.corerange_to_cores(grid):
+            c_xy = (c_obj.x, c_obj.y)
+            new_addr = ct.get_data_l1_address_per_core(c_obj)
+            prev = curr_addr.get(c_xy)
+            if prev is None or new_addr < prev:
+                curr_addr[c_xy] = new_addr
 
 
 def prepare_compressed_sram_slots(
@@ -1751,8 +1840,12 @@ def prepare_compressed_sram_slots(
     core_grids: SramExpertCoreGrids,
     assigner: CompressedTensorAssigner | None = None,
     *,
+    boundary_addr: int,
+    initial_lowest_addr: dict[tuple[int, int], int],
+    l1_top_addr: int,
     assignment_provider: Callable[[int, int], np.ndarray] | None = None,
     move_to_device: bool = True,
+    tile_hw: int = 32,
 ) -> SramCompressedExpertSlots:
     """Allocate SRAM hot expert slots as per-core L1 CompressedTensors.
 
@@ -1762,11 +1855,28 @@ def prepare_compressed_sram_slots(
     The returned :class:`SramCompressedExpertSlots` holds CTs that can be
     passed directly to ``ExpertKernel.op()`` as ``sram_cts``.
 
+    Address-boundary budgeting (always on): ``initial_expert_indices`` is
+    treated as a *ranked candidate list* and allocation stops at the first
+    expert whose predicted per-core footprint would push any tracked core's
+    lowest occupied L1 address *below* ``boundary_addr``.  Concretely, for
+    each candidate the predicted delta ``Δ_c`` is compared against the
+    current per-core lowest-allocated address ``A_c`` (bootstrapped from
+    ``initial_lowest_addr``, defaulting to ``l1_top_addr`` for cores not
+    yet touched); the candidate is accepted iff
+    ``A_c - Δ_c >= boundary_addr`` for every core ``c`` in the expert's
+    binding grid.  After each accepted expert lands on device, the address
+    map ``A_c`` is refreshed from real allocator addresses so prediction
+    drift is bounded to a single expert.  To allocate without budgeting,
+    pass ``boundary_addr=worker_l1_unreserved_base`` (the allocator's own
+    floor); this keeps the check trivially satisfied and is the idiomatic
+    "no trim" call.
+
     Args:
         device: Device or mesh device.
         state_dict: HuggingFace state dict with expert weights.
         layer_idx: Decoder layer index.
-        initial_expert_indices: Global expert indices to load into slots.
+        initial_expert_indices: Ranked candidate list of global expert
+            indices (first candidate is preferred).
         core_grids: :class:`SramExpertCoreGrids` assigning a distinct
             (tile-aligned, ``N``-divisible) grid to each projection, matching
             the routed-expert pipeline's per-projection layout (e.g.
@@ -1774,27 +1884,55 @@ def prepare_compressed_sram_slots(
             weights use :meth:`SramExpertCoreGrids.uniform`.
         assigner: ``CompressedTensorAssigner`` for on-the-fly mixed-precision
             encoding.  Mutually exclusive with ``assignment_provider``.
+        boundary_addr: Lower-bound L1 byte address that allocations must
+            stay above.  Typically ``l1_top_addr - cap_bytes`` for a tight
+            cap, or ``worker_l1_unreserved_base`` for the effectively-no-trim
+            case.
+        initial_lowest_addr: Per-core lowest already-occupied L1 address
+            (e.g. from :func:`per_core_l1_lowest_addr_on_cores` over the
+            attention / shared / routed reservations).  Cores not present
+            default to ``l1_top_addr``.  Pass ``{}`` when the allocator is
+            fresh.
+        l1_top_addr: Absolute top of the worker-L1 allocator region
+            (``worker_l1_unreserved_base + worker_l1_size``).  Used to
+            bootstrap untouched cores' "current allocation floor" before
+            any expert lands.
         assignment_provider: Callable ``(expert_idx, proj_idx) -> np.ndarray``
             returning a pre-computed tile assignment (e.g. from a BSPM file).
             Mutually exclusive with ``assigner``.  Only used on the TP=1
             single-device path; the TP>1 height-sharded path always uses
             ``assigner``.
         move_to_device: Whether to place tensors on device.
+        tile_hw: Tile dimension for cost prediction (default 32).
     """
     assert (assigner is None) != (assignment_provider is None), "Provide exactly one of assigner or assignment_provider"
+    assert l1_top_addr > boundary_addr, f"l1_top_addr ({l1_top_addr}) must be > boundary_addr ({boundary_addr})"
     grids = core_grids
-    num_slots = len(initial_expert_indices)
+    requested_experts = list(initial_expert_indices)
     logger.info(
-        "Preparing {} compressed SRAM slots for layer {} (experts: {})",
-        num_slots,
+        "Preparing up to {} compressed SRAM slots for layer {} (experts: {})",
+        len(requested_experts),
         layer_idx,
-        initial_expert_indices,
+        requested_experts,
     )
     logger.info(
         "  SRAM core grids: gate={} cores, up={} cores, down={} cores",
         grids.gate.num_cores(),
         grids.up.num_cores(),
         grids.down.num_cores(),
+    )
+    # Lowest pre-existing per-core address tells us how much room is left
+    # above boundary_addr at the start; min over cores is the tightest
+    # initial headroom.
+    initial_min_addr = min(initial_lowest_addr.values(), default=l1_top_addr)
+    logger.info(
+        "  SRAM trim boundary_addr={} (l1_top={}, headroom={} bytes), "
+        "initial_min_lowest_addr={} (initial headroom above boundary={} bytes)",
+        boundary_addr,
+        l1_top_addr,
+        l1_top_addr - boundary_addr,
+        initial_min_addr,
+        initial_min_addr - boundary_addr,
     )
     t0 = time.perf_counter()
 
@@ -1843,13 +1981,57 @@ def prepare_compressed_sram_slots(
         assert N % mesh_cols == 0, f"N ({N}) must be divisible by mesh_cols ({mesh_cols})"
         return w.reshape(mesh_rows, K // mesh_rows, mesh_cols, N // mesh_cols).permute(0, 2, 1, 3).contiguous()
 
-    for slot_idx, expert_idx in enumerate(initial_expert_indices):
+    # Address-boundary trim state: only tracks per-core lowest occupied L1
+    # address (bootstrapped from real allocator state via the attention prep).
+    # Cores not present default to ``l1_top_addr`` (assumed empty).  After
+    # each accepted expert is allocated, ``curr_addr`` is refreshed from real
+    # allocator addresses so prediction drift stays bounded to a single
+    # expert.
+    curr_addr: dict[tuple[int, int], int] = dict(initial_lowest_addr)
+    mesh_shape_for_predict = (mesh_rows, mesh_cols)
+    selected_experts: list[int] = []
+
+    for slot_idx, expert_idx in enumerate(requested_experts):
         gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
         up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
         down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
 
         gate_full = state_dict[gate_key].T.contiguous()
         up_full = state_dict[up_key].T.contiguous()
+
+        # Predict the next expert's per-core L1 cost (host-side, one-step
+        # lookahead) so we can stop *before* an over-budget allocation.
+        predicted_delta = _predict_expert_per_core_bytes(
+            expert_idx,
+            gate_full,
+            up_full,
+            state_dict[down_key].T.contiguous(),
+            grids,
+            assigner=assigner,
+            assignment_provider=assignment_provider,
+            tile_hw=tile_hw,
+            mesh_shape=mesh_shape_for_predict,
+        )
+        # Cores untouched so far are assumed empty: their next allocation
+        # would land just below ``l1_top_addr`` (top-down growth).
+        overflow_core = next(
+            (c for c, add in predicted_delta.items() if curr_addr.get(c, l1_top_addr) - add < boundary_addr),
+            None,
+        )
+        if overflow_core is not None:
+            proj_addr = curr_addr.get(overflow_core, l1_top_addr) - predicted_delta[overflow_core]
+            logger.info(
+                "  Stopping at expert {} (slot {}): core {} projected addr {} "
+                "would fall below boundary {} (delta={} bytes); selected {} experts so far",
+                expert_idx,
+                slot_idx,
+                overflow_core,
+                proj_addr,
+                boundary_addr,
+                predicted_delta[overflow_core],
+                len(selected_experts),
+            )
+            break
 
         if use_shared_expert_gate_up:
             # Shared-expert-style HEIGHT_SHARDED gate/up: reshuffle +
@@ -1946,17 +2128,32 @@ def prepare_compressed_sram_slots(
                     mesh_mapper_config=mesh_mapper_config,
                 )
             )
+        selected_experts.append(expert_idx)
         logger.debug("  SRAM slot {} ← expert {} prepared", slot_idx, expert_idx)
 
+        # Refresh per-core lowest occupied L1 address from the real
+        # allocator so the next iteration's fit check uses ground truth
+        # (not prefix-summed host predictions).
+        _refresh_lowest_addr_from_alloc(
+            curr_addr,
+            cts=(
+                (gate_cts[-1], grids.gate),
+                (up_cts[-1], grids.up),
+                (down_cts[-1], grids.down),
+            ),
+        )
+
+    num_slots = len(selected_experts)
     logger.info(
-        "Compressed SRAM slots for layer {} done in {:.3f}s ({} slots)",
+        "Compressed SRAM slots for layer {} done in {:.3f}s ({} of {} slots accepted)",
         layer_idx,
         time.perf_counter() - t0,
         num_slots,
+        len(requested_experts),
     )
     return SramCompressedExpertSlots(
         num_slots=num_slots,
-        slot_experts=list(initial_expert_indices),
+        slot_experts=selected_experts,
         gate_proj=gate_cts,
         up_proj=up_cts,
         down_proj=down_cts,
@@ -2147,9 +2344,9 @@ def compute_expert_l1_bytes(
 
     Scalar wrapper around :func:`compute_expert_l1_bytes_per_core`; returns
     the byte total on the most loaded core (or 0 when no projection lands on
-    any core).  Preserved for legacy callers and budgeting tests; the
-    per-core dict form is preferred for joint attention-plus-SRAM budget
-    accounting (see :func:`_greedy_trim_experts_by_budget`).
+    any core).  Retained as a diagnostic/summary helper; the per-core dict
+    form is what :func:`prepare_compressed_sram_slots` uses for
+    attention-plus-SRAM budget accounting against real allocator addresses.
     """
     per_core = compute_expert_l1_bytes_per_core(
         assignments, tensor_shapes, core_grids, tile_hw=tile_hw, mesh_shape=mesh_shape
@@ -2171,39 +2368,25 @@ def _load_routing_frequencies(path: Path | None = None) -> dict[int, list[int]]:
 
 
 def build_sram_hot_expert_config(
-    state_dict: dict[str, torch.Tensor],
     layer_indices: list[int],
-    assigner: CompressedTensorAssigner,
-    core_grids: SramExpertCoreGrids,
-    l1_budget_bytes: int,
     routing_frequencies: dict[int, list[int]],
-    *,
-    tile_hw: int = 32,
-    mesh_shape: tuple[int, int] = (1, 1),
 ) -> SramHotExpertConfig:
-    """Build per-layer SRAM hot expert config using two-pass greedy allocation.
+    """Rank SRAM hot expert candidates by routing frequency (host-only).
 
-    For each layer, experts are sorted by routing frequency (descending).
-    Each candidate's exact L1 byte size is computed via
-    :func:`compute_expert_l1_bytes` using the ``CompressedTensorAssigner``
-    on CPU.  Experts are accumulated until ``l1_budget_bytes`` is exhausted.
+    For each layer in ``layer_indices``, experts are sorted by their
+    activation count in ``routing_frequencies`` (descending) with
+    zero-frequency experts dropped.  The returned config is a pure
+    *candidate ranking* -- no host-side budgeting is performed; the actual
+    per-core L1 fit is decided device-side by
+    :func:`prepare_compressed_sram_slots` against an absolute L1 address
+    boundary (see :func:`prepare_moe_layer_weights`).
 
     Args:
-        state_dict: HuggingFace state dict with expert weight tensors.
         layer_indices: MoE layer indices to consider.
-        assigner: ``CompressedTensorAssigner`` for on-CPU format selection.
-        core_grids: :class:`SramExpertCoreGrids` giving a distinct
-            per-projection grid (gate/up/down) — see
-            :meth:`SramExpertCoreGrids.uniform` for symmetric test cases.
-        l1_budget_bytes: Maximum L1 bytes available per core for hot experts.
         routing_frequencies: ``layer_idx → list[int]`` activation counts.
-        tile_hw: Tile dimension (default 32).
-        mesh_shape: ``(mesh_rows, mesh_cols)`` for the shared-expert-style
-            TP8 layout applied to SRAM slots.  Defaults to ``(1, 1)`` (no TP).
-            See :func:`compute_expert_l1_bytes`.
 
     Returns:
-        ``SramHotExpertConfig`` mapping ``layer_idx → list[expert_idx]``.
+        ``SramHotExpertConfig`` mapping ``layer_idx → ranked list[expert_idx]``.
     """
     config: SramHotExpertConfig = {}
 
@@ -2214,26 +2397,10 @@ def build_sram_hot_expert_config(
             continue
 
         ranked_experts = [e for e in sorted(range(len(freqs)), key=lambda e: freqs[e], reverse=True) if freqs[e] > 0]
-
-        selected, budget_used = _greedy_trim_experts_by_budget(
-            state_dict,
-            layer_idx,
-            ranked_experts,
-            assigner,
-            core_grids,
-            l1_budget_bytes,
-            mesh_shape=mesh_shape,
-            tile_hw=tile_hw,
-        )
-
-        if selected:
-            config[layer_idx] = selected
+        if ranked_experts:
+            config[layer_idx] = ranked_experts
             logger.info(
-                "Layer {}: {} SRAM experts selected ({} / {} bytes used)",
-                layer_idx,
-                len(selected),
-                budget_used,
-                l1_budget_bytes,
+                "Layer {}: {} SRAM expert candidates ranked by routing frequency", layer_idx, len(ranked_experts)
             )
 
     return config
@@ -2507,26 +2674,27 @@ def prepare_moe_layer_weights(
     (e.g. ``results/deepseek-r1-0528``), not the results root.
 
     When ``sram_hot_experts`` includes ``layer_idx``, the listed experts are
-    additionally loaded into L1 SRAM slots as per-core CompressedTensors.
-    ``sram_core_grids`` and ``sram_assigner`` are required in that case.
-    Each projection (gate / up / down) has a distinct ``N`` and must be given
-    its own tile-aligned grid via :class:`SramExpertCoreGrids`; a symmetric
-    single-grid layout (e.g. for unit tests) can be built with
+    treated as a *ranked candidate list* and loaded into L1 SRAM slots as
+    per-core CompressedTensors under an address-based budget:
+
+        l1_top_addr   = worker_l1_unreserved_base + worker_l1_size
+        boundary_addr = l1_top_addr - combined_attn_sram_cap_bytes
+
+    Each candidate expert is accepted only when, for every core in its
+    binding grid, its predicted per-core footprint would leave the new
+    lowest occupied L1 address at or above ``boundary_addr``.  After each
+    accepted expert lands on device the per-core lowest-address map is
+    refreshed from the real allocator so prediction drift stays bounded to
+    one expert.  ``worker_l1_size - cap`` (~471 KiB at the 960 KiB default)
+    is implicitly reserved for runtime scratch (CBs, activation shards,
+    allocator bookkeeping).
+
+    ``sram_core_grids``, ``sram_assigner``, and ``worker_l1_size`` are
+    required whenever ``sram_hot_experts`` specifies this layer.  Each
+    projection (gate / up / down) has a distinct ``N`` and must be given
+    its own tile-aligned grid via :class:`SramExpertCoreGrids`; a
+    symmetric single-grid layout (e.g. for unit tests) can be built with
     :meth:`SramExpertCoreGrids.uniform`.
-
-    When ``worker_l1_size`` is provided alongside ``sram_hot_experts``, the
-    caller-supplied expert list is treated as a *ranked candidate list* and
-    trimmed in place against the per-core joint cap:
-
-        attn_bytes[c] + sram_expert_bytes[c] <= combined_attn_sram_cap_bytes   for all c in SRAM grid
-
-    where ``attn_bytes`` is measured from the actually-allocated fused /
-    standalone attention + shared-expert tensors on the SRAM binding cores
-    and ``sram_expert_bytes`` is the summed per-core footprint of the
-    selected hot experts.  ``worker_l1_size - cap`` (~471 KiB at the 960 KiB
-    default) is reserved for runtime scratch (CBs, activation shards,
-    allocator bookkeeping).  Without ``worker_l1_size`` the list is used
-    verbatim.
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -2562,82 +2730,62 @@ def prepare_moe_layer_weights(
     if sram_expert_indices:
         assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
         assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
+        assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
 
-        if worker_l1_size is not None:
-            mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
-            sram_core_set = (
-                set(_core_list(sram_core_grids.gate))
-                | set(_core_list(sram_core_grids.up))
-                | set(_core_list(sram_core_grids.down))
-            )
-            attn_per_core_bytes = per_core_l1_usage_on_cores(
-                [
-                    attn.q_a_proj,
-                    attn.q_b_proj,
-                    attn.kv_a_proj,
-                    attn.o_proj,
-                    attn.gate_mm,
-                    attn.attn_norm,
-                    attn.q_norm,
-                    attn.kv_norm,
-                    attn.ffn_norm,
-                    attn.gate_bias,
-                    attn.kv_b1_proj,
-                    attn.kv_b2_proj,
-                    shared.shared_gate_proj,
-                    shared.shared_up_proj,
-                    shared.shared_down_proj,
-                    routed.routed_gate_proj,
-                    routed.routed_up_proj,
-                    routed.routed_down_proj,
-                ],
-                sram_core_set,
-            )
-            attn_peak_bytes = max(attn_per_core_bytes.values(), default=0)
-            min_headroom = combined_attn_sram_cap_bytes - attn_peak_bytes
-            logger.info(
-                "SRAM L1 budget (layer {}): cap={} bytes/core, worker_l1={}, scratch_reserve~={} bytes/core, "
-                "attn_peak_on_sram={} bytes/core (min per-core headroom under cap: {} bytes/core)",
-                layer_idx,
-                combined_attn_sram_cap_bytes,
-                worker_l1_size,
-                max(0, worker_l1_size - combined_attn_sram_cap_bytes),
-                attn_peak_bytes,
-                min_headroom,
-            )
-            trimmed, bytes_used = _greedy_trim_experts_by_budget(
-                state_dict,
-                layer_idx,
-                sram_expert_indices,
-                sram_assigner,
-                sram_core_grids,
-                combined_attn_sram_cap_bytes,  # legacy scalar fallback (unused when joint kicks in)
-                mesh_shape=mesh_shape,
-                attn_per_core_bytes=attn_per_core_bytes,
-                cap_bytes=combined_attn_sram_cap_bytes,
-            )
-            logger.info(
-                "SRAM expert selection (layer {}): {} candidates -> {} selected "
-                "(max per-core expert bytes: {}; attn_peak={} / cap={})",
-                layer_idx,
-                len(sram_expert_indices),
-                len(trimmed),
-                bytes_used,
-                attn_peak_bytes,
-                combined_attn_sram_cap_bytes,
-            )
-            sram_expert_indices = trimmed
+        persistent_attn_tensors = [
+            attn.q_a_proj,
+            attn.q_b_proj,
+            attn.kv_a_proj,
+            attn.o_proj,
+            attn.gate_mm,
+            attn.attn_norm,
+            attn.q_norm,
+            attn.kv_norm,
+            attn.ffn_norm,
+            attn.gate_bias,
+            attn.kv_b1_proj,
+            attn.kv_b2_proj,
+            shared.shared_gate_proj,
+            shared.shared_up_proj,
+            shared.shared_down_proj,
+            routed.routed_gate_proj,
+            routed.routed_up_proj,
+            routed.routed_down_proj,
+        ]
+        boundary_addr, attn_lowest_addr, l1_top_addr = _compute_sram_trim_budget(
+            device,
+            persistent_attn_tensors,
+            sram_core_grids,
+            worker_l1_size,
+            combined_attn_sram_cap_bytes,
+        )
+        initial_min_addr = min(attn_lowest_addr.values(), default=l1_top_addr)
+        logger.info(
+            "SRAM L1 budget (layer {}): cap={} bytes/core, l1_top={} (worker_l1_size={}), "
+            "scratch_reserve~={} bytes/core, boundary_addr={}, "
+            "initial_min_lowest_addr={} (initial headroom={} bytes)",
+            layer_idx,
+            combined_attn_sram_cap_bytes,
+            l1_top_addr,
+            worker_l1_size,
+            max(0, worker_l1_size - combined_attn_sram_cap_bytes),
+            boundary_addr,
+            initial_min_addr,
+            initial_min_addr - boundary_addr,
+        )
 
-        if sram_expert_indices:
-            sram_slots = prepare_compressed_sram_slots(
-                device=device,
-                state_dict=state_dict,
-                layer_idx=layer_idx,
-                initial_expert_indices=sram_expert_indices,
-                core_grids=sram_core_grids,
-                assigner=sram_assigner,
-                move_to_device=move_to_device,
-            )
+        sram_slots = prepare_compressed_sram_slots(
+            device=device,
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            initial_expert_indices=sram_expert_indices,
+            core_grids=sram_core_grids,
+            assigner=sram_assigner,
+            move_to_device=move_to_device,
+            boundary_addr=boundary_addr,
+            initial_lowest_addr=attn_lowest_addr,
+            l1_top_addr=l1_top_addr,
+        )
 
     result = DeepSeekV3MoELayerWeights(
         q_a_proj=attn.q_a_proj,

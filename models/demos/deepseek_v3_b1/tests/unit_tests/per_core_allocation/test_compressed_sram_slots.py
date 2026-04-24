@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     SramExpertCoreGrids,
     SramHotExpertConfig,
     _build_l1_compressed_tensor,
+    _predict_expert_per_core_bytes,
     build_sram_hot_expert_config,
     compute_expert_l1_bytes,
     prepare_compressed_sram_slots,
@@ -75,6 +76,31 @@ def _make_assigner(formats=None):
     if formats is None:
         formats = ["bfp8", "bfp4"]
     return CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=formats)
+
+
+def _l1_top_addr(device) -> int:
+    """Absolute top of the worker-L1 allocator region for ``device``."""
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    mv = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    return base + mv.total_bytes_per_bank
+
+
+def _no_trim_budget(device) -> dict:
+    """Budget args that accept every expert the allocator can fit.
+
+    ``boundary_addr`` is pinned to the allocator's own base so the trim
+    check (``curr_addr - delta >= boundary_addr``) is trivially satisfied
+    for any allocation the allocator itself could succeed on.  Use this
+    in tests that exercise the allocation path without enforcing a
+    byte-cap.
+    """
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    mv = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    return {
+        "boundary_addr": base,
+        "initial_lowest_addr": {},
+        "l1_top_addr": base + mv.total_bytes_per_bank,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +176,7 @@ def test_prepare_compressed_sram_slots(device):
         core_grids=SramExpertCoreGrids.uniform(core_grid),
         assigner=assigner,
         move_to_device=True,
+        **_no_trim_budget(device),
     )
 
     assert slots.num_slots == 3
@@ -190,6 +217,7 @@ def test_sram_slot_fmt_tensors(device):
         core_grids=SramExpertCoreGrids.uniform(core_grid),
         assigner=assigner,
         move_to_device=True,
+        **_no_trim_budget(device),
     )
 
     tiles_per_core = (K // TILE_W) * (N // NUM_CORES // TILE_W)
@@ -254,6 +282,7 @@ def test_sram_hot_expert_config_per_layer(device):
         core_grids=uniform_grids,
         assigner=assigner,
         move_to_device=True,
+        **_no_trim_budget(device),
     )
     assert slots3.num_slots == 2
     assert slots3.slot_experts == [0, 5]
@@ -268,6 +297,7 @@ def test_sram_hot_expert_config_per_layer(device):
         core_grids=uniform_grids,
         assigner=assigner,
         move_to_device=True,
+        **_no_trim_budget(device),
     )
     assert slots7.num_slots == 3
     assert slots7.slot_experts == [10, 20, 30]
@@ -281,6 +311,136 @@ def test_sram_hot_expert_config_per_layer(device):
     assert flags3[0] == 0 and flags3[5] == 0 and flags3[10] == 1
     assert flags7[10] == 0 and flags7[20] == 0 and flags7[30] == 0 and flags7[0] == 1
     logger.info("Per-layer config: layer 3 has 2 slots, layer 7 has 3 slots, layer 5 has none")
+
+
+# ---------------------------------------------------------------------------
+# Address-based trim path inside prepare_compressed_sram_slots
+# ---------------------------------------------------------------------------
+
+
+def _predict_one_expert_max_bytes(layer_idx, expert_idx, K, N, assigner, core_grids):
+    """Host-side max-per-core L1 byte prediction for one expert (no device).
+
+    Calls the same predictor used by the trim loop
+    (:func:`_predict_expert_per_core_bytes`) so cap-vs-predictor asymmetry
+    can't sneak past the test.  Returns the max per-core byte total.
+    """
+    sd = _make_state_dict(layer_idx, [expert_idx], K=K, N=N)
+    gate_full = sd[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight"].T.contiguous()
+    up_full = sd[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight"].T.contiguous()
+    down_full = sd[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight"].T.contiguous()
+    per_core = _predict_expert_per_core_bytes(
+        expert_idx,
+        gate_full,
+        up_full,
+        down_full,
+        core_grids,
+        assigner=assigner,
+        assignment_provider=None,
+    )
+    return max(per_core.values()) if per_core else 0
+
+
+def test_prepare_compressed_sram_slots_trim_stops_under_cap(device):
+    """boundary_addr trim path stops allocating before crossing the L1 floor.
+
+    Sizes the cap as ``1.5 * predicted_one_expert_max`` -- enough headroom
+    for one expert (with slack for inter-expert assignment noise), too
+    little for the third -- and converts it to an address boundary
+    ``boundary_addr = l1_top - cap_bytes``.  Asserts the trim loop returns
+    a *strict* prefix of the requested list and that every selected expert
+    landed on device with a real L1 address (post-allocation ground truth).
+    """
+    layer_idx = 11
+    K_local, N_local = 256, 256
+    num_cores = N_local // TILE_W
+
+    core_grid = _build_sram_core_grid(device, num_cores)
+    grids = SramExpertCoreGrids.uniform(core_grid)
+    assigner = _make_assigner()
+
+    one_expert_max = _predict_one_expert_max_bytes(layer_idx, 0, K_local, N_local, assigner, grids)
+    # Tight cap: enough headroom for one expert (with margin for assigner
+    # noise across experts), too small for two.
+    cap_bytes = int(one_expert_max * 1.5)
+
+    l1_top = _l1_top_addr(device)
+    boundary_addr = l1_top - cap_bytes
+
+    expert_indices = [0, 1, 2]
+    sd = _make_state_dict(layer_idx, expert_indices, K=K_local, N=N_local)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=grids,
+        assigner=assigner,
+        move_to_device=True,
+        boundary_addr=boundary_addr,
+        initial_lowest_addr={},  # no baseline allocations; bootstrap from l1_top
+        l1_top_addr=l1_top,
+    )
+
+    assert (
+        0 < slots.num_slots < len(expert_indices)
+    ), f"expected partial selection under cap={cap_bytes}, got {slots.num_slots}"
+    assert slots.slot_experts == expert_indices[: slots.num_slots]
+
+    # Sanity: every selected expert really landed on device (queryable address).
+    for cts, grid in (
+        (slots.gate_proj, grids.gate),
+        (slots.up_proj, grids.up),
+        (slots.down_proj, grids.down),
+    ):
+        for ct in cts:
+            for c_obj in ttnn.corerange_to_cores(grid):
+                addr = ct.get_data_l1_address_per_core(c_obj)
+                assert addr > 0, f"expected non-zero L1 address for core {(c_obj.x, c_obj.y)}, got {addr}"
+                assert (
+                    addr >= boundary_addr
+                ), f"core {(c_obj.x, c_obj.y)}: address {addr} crossed boundary {boundary_addr}"
+    logger.info(
+        "trim under cap={} (boundary={}, l1_top={}, one_expert_max={}): selected={}",
+        cap_bytes,
+        boundary_addr,
+        l1_top,
+        one_expert_max,
+        slots.slot_experts,
+    )
+
+
+def test_prepare_compressed_sram_slots_trim_fits_all_under_large_cap(device):
+    """A generous cap admits every requested expert (sanity for the predicate)."""
+    layer_idx = 12
+    K_local, N_local = 256, 256
+    num_cores = N_local // TILE_W
+    expert_indices = [0, 1, 2]
+
+    sd = _make_state_dict(layer_idx, expert_indices, K=K_local, N=N_local)
+    core_grid = _build_sram_core_grid(device, num_cores)
+    grids = SramExpertCoreGrids.uniform(core_grid)
+
+    l1_top = _l1_top_addr(device)
+    cap_bytes = 64 * 1024 * 1024  # 64 MiB: dwarfs any expert footprint
+    boundary_addr = max(0, l1_top - cap_bytes)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=grids,
+        assigner=_make_assigner(),
+        move_to_device=True,
+        boundary_addr=boundary_addr,
+        initial_lowest_addr={},
+        l1_top_addr=l1_top,
+    )
+
+    assert slots.num_slots == len(expert_indices)
+    assert slots.slot_experts == expert_indices
 
 
 # ---------------------------------------------------------------------------
@@ -376,63 +536,35 @@ def test_compute_expert_l1_bytes_uniform_assignment():
 # ---------------------------------------------------------------------------
 
 
-def test_build_sram_hot_expert_config_budget():
-    """build_sram_hot_expert_config respects L1 budget and prioritizes by frequency."""
+def test_build_sram_hot_expert_config_ranks_by_frequency():
+    """build_sram_hot_expert_config sorts candidates by descending frequency
+    and drops zero-frequency experts.
+    """
     layer_idx = 3
-    num_experts = 8
-    expert_indices = list(range(num_experts))
-    sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
-    assigner = _make_assigner()
-    core_grids = SramExpertCoreGrids.uniform(
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
-    )
-
     freqs = [0] * 256
-    for i, e in enumerate(expert_indices):
-        freqs[e] = 100 - i * 10
+    # Intentionally out-of-order: expert 5 most frequent, then 2, then 0.
+    freqs[0] = 10
+    freqs[2] = 30
+    freqs[5] = 50
+    # Zero-frequency experts must be excluded regardless of index.
+    freqs[7] = 0
 
-    routing_frequencies = {layer_idx: freqs}
+    config = build_sram_hot_expert_config([layer_idx], {layer_idx: freqs})
 
-    large_budget = 10 * 1024 * 1024
-    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grids, large_budget, routing_frequencies)
-    assert layer_idx in config
-    assert len(config[layer_idx]) == num_experts
-
-    tiny_budget = 1
-    config_tiny = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grids, tiny_budget, routing_frequencies)
-    assert config_tiny.get(layer_idx) is None or len(config_tiny.get(layer_idx, [])) == 0
+    assert config[layer_idx] == [5, 2, 0]
 
 
-def test_build_sram_hot_expert_config_zero_budget():
-    """Zero budget yields no selected experts."""
-    layer_idx = 5
-    sd = _make_state_dict(layer_idx, [0, 1], K=K, N=N)
-    assigner = _make_assigner()
-    core_grids = SramExpertCoreGrids.uniform(
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
-    )
-    freqs = [0] * 256
-    freqs[0] = 50
-    freqs[1] = 30
-    routing_frequencies = {layer_idx: freqs}
-
-    config = build_sram_hot_expert_config(sd, [layer_idx], assigner, core_grids, 0, routing_frequencies)
-    assert config.get(layer_idx) is None
+def test_build_sram_hot_expert_config_skips_layer_without_frequencies():
+    """Layers missing from routing_frequencies are dropped from the config."""
+    config = build_sram_hot_expert_config([3, 5], {3: [0] * 256})
+    assert 3 not in config  # all-zero freqs -> no candidates
+    assert 5 not in config  # no frequencies for layer 5
 
 
 def test_build_sram_hot_expert_config_multi_layer():
-    """Multi-layer config produces independent allocations per layer."""
+    """Multi-layer config produces independent rankings per layer."""
     layers = [3, 5]
     experts_per_layer = {3: [0, 1, 2], 5: [4, 5]}
-    sd = {}
-    for li in layers:
-        sd.update(_make_state_dict(li, experts_per_layer[li], K=K, N=N))
-
-    assigner = _make_assigner()
-    core_grids = SramExpertCoreGrids.uniform(
-        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
-    )
-
     routing_frequencies = {}
     for li in layers:
         freqs = [0] * 256
@@ -440,12 +572,11 @@ def test_build_sram_hot_expert_config_multi_layer():
             freqs[e] = 100 - i * 10
         routing_frequencies[li] = freqs
 
-    large_budget = 10 * 1024 * 1024
-    config = build_sram_hot_expert_config(sd, layers, assigner, core_grids, large_budget, routing_frequencies)
+    config = build_sram_hot_expert_config(layers, routing_frequencies)
 
     assert 3 in config and 5 in config
-    assert len(config[3]) == 3
-    assert len(config[5]) == 2
+    assert config[3] == experts_per_layer[3]
+    assert config[5] == experts_per_layer[5]
     logger.info(f"Multi-layer config: {config}")
 
 
@@ -614,6 +745,7 @@ def test_prepare_compressed_sram_slots_bspm(device):
         core_grids=core_grids,
         assignment_provider=assignment_provider,
         move_to_device=True,
+        **_no_trim_budget(device),
     )
 
     assert slots.num_slots == 1
@@ -661,6 +793,7 @@ def test_sram_slot_fmt_tensors_bspm(device):
         core_grids=core_grids,
         assignment_provider=assignment_provider,
         move_to_device=True,
+        **_no_trim_budget(device),
     )
 
     K_gate, N_gate = _GATE_UP_SHAPE
