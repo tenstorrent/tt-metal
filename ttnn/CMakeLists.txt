@@ -166,7 +166,6 @@ target_sources(
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp
-        cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
         core/tensor/tensor_utils.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp

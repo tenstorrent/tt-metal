@@ -514,9 +514,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // copy_tile from these CBs bypasses SrcA and DMAs directly to DST at full FP32.
     // Only SFPU operations (mul_binary_tile, etc.) may be used on data loaded this way.
     auto create_unpack_to_dest_mode = []() {
-        std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-        mode[kPrevMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        mode[kCurMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        mode[kPrevMmOutCbIndex] = UnpackToDestMode::UnpackToDestFp32;
+        mode[kCurMmOutCbIndex] = UnpackToDestMode::UnpackToDestFp32;
         return mode;
     };
 
@@ -540,7 +540,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             kComputeKernelPath,
             all_cores,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
@@ -565,7 +565,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             kComputeKernelPath,
             core_group_1,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = true,
                 .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
@@ -589,7 +589,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 kComputeKernelPath,
                 core_group_2,
                 tt::tt_metal::ComputeConfig{
-                    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .math_fidelity = MathFidelity::HiFi4,
                     .fp32_dest_acc_en = true,
                     .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                     .math_approx_mode = false,

@@ -53,8 +53,6 @@ Each test case uses bfloat16 as L1 data format and tile size as page size. Each 
 - **TensixDataMovementDramNeighbourNumPagesSweep (Test ID: 503)** - Tests different number of pages per bank by sweeping `pages_per_bank` from 1 to 32 while keeping the number of banks fixed. Validates performance across various data sizes.
 - **TensixDataMovementDramNeighbourNumBankSweep (Test ID: 504)** - Tests different numbers of DRAM banks by sweeping from 1 to the maximum available banks. Each configuration uses optimal neighbour mapping for the given number of banks.
 - **TensixDataMovementDramNeighbourSingleRowSweep (Test ID: 505)** - Tests single-row mapping where all cores in a row access the same DRAM bank. Sweeps through different page sizes to test contention patterns.
-- **TensixDataMovementDramNeighbourOneHopSweep (Test ID: 508)** - Starts from the single-bank ideal mapping and adds a second core one column to the right (`x+1`, wrapping) that reads from the same DRAM bank. Sweeps pages to measure bandwidth when a non-adjacent core shares a bank with its ideal neighbour.
-- **TensixDataMovementDramNeighbourLoopBackSweep (Test ID: 509)** - Starts from the single-bank ideal mapping and adds a second core one column to the left (`x-1`, with wrap-around) that reads from the same DRAM bank. Sweeps pages to measure the loop-back traffic pattern where the added core is on the opposite side of the NOC path from the ideal core.
 
 ## Helper Functions
 

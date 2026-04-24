@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
@@ -19,8 +18,7 @@ void kernel_main() {
     uint32_t args_idx = 0;
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
 
-    experimental::CircularBuffer shard_cb(shard_cb_id);
-    uint32_t base_l1_read_addr = shard_cb.get_read_ptr();
+    uint32_t base_l1_read_addr = get_read_ptr(shard_cb_id);
 
     for (uint32_t i = 0; i < num_segments; ++i) {
         uint32_t write_size = args[args_idx++];
