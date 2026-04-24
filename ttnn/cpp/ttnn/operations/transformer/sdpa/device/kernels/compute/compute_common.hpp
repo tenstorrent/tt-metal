@@ -1243,7 +1243,7 @@ ALWI void matmul_blocks(
         /*packer_l1_acc=*/false,
         /*pack_last_to_interm=*/false,
         /*pack_relu=*/false,
-        /*row_major_output=*/true,
+        compute_kernel_lib::OutputLayout::RowMajor,
         OptionalMaskPostCompute,
         compute_kernel_lib::NoPreKBlock>(
         in0_cb,

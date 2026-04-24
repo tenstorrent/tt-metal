@@ -141,11 +141,11 @@ void kernel_main() {
 #endif
 
     // ROW_MAJOR_OUTPUT: factory opts in to absolute-offset packing; writers read row-major.
-    constexpr bool row_major_output =
+    constexpr OutputLayout output_layout =
 #ifdef ROW_MAJOR_OUTPUT
-        true;
+        OutputLayout::RowMajor;
 #else
-        false;
+        OutputLayout::SubblockMajor;
 #endif
 
     // matmul_block packs its last K-block to interm when a downstream phase (bias, untilize)
@@ -215,7 +215,7 @@ void kernel_main() {
 #else
                     mm_out_cb_id;
 #endif
-                matmul_block<in1_transpose_tile, l1_acc, pack_last_to_interm, do_relu, row_major_output, PostFn, PreFn>(
+                matmul_block<in1_transpose_tile, l1_acc, pack_last_to_interm, do_relu, output_layout, PostFn, PreFn>(
                     in0_cb_id,
                     in1_cb_id,
                     phase1_out_cb,
@@ -258,13 +258,15 @@ void kernel_main() {
                     cb_wait_front(bias_cb_id, bias_ntiles);
                 }
 
+                constexpr BiasBroadcast bias_broadcast =
+                    row_broadcast_bias ? BiasBroadcast::RowBroadcast : BiasBroadcast::Elementwise;
 #ifdef SFPU_OP_INIT_ACTIVATION
                 add_bias_bcast_rows<
                     mm_partials_cb_id,
                     bias_cb_id,
                     untilize_mode_out_cb_id,
-                    row_broadcast_bias,
-                    row_major_output,
+                    bias_broadcast,
+                    output_layout,
                     SFPUPostCompute>(
                     in0_num_subblocks,
                     in1_num_subblocks,
@@ -277,8 +279,8 @@ void kernel_main() {
                     mm_partials_cb_id,
                     bias_cb_id,
                     untilize_mode_out_cb_id,
-                    row_broadcast_bias,
-                    row_major_output>(
+                    bias_broadcast,
+                    output_layout>(
                     in0_num_subblocks,
                     in1_num_subblocks,
                     out_subblock_h,

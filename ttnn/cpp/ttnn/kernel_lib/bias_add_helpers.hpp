@@ -9,8 +9,21 @@
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"  // OutputLayout
 
 namespace compute_kernel_lib {
+
+/**
+ * Bias-operand layout in bias_cb selected at compile time.
+ *
+ * RowBroadcast (default): one bias tile per output column, broadcast across
+ *   all M rows of the sub-block via add_tiles_bcast_rows. Logical bias shape
+ *   [1, N] / [..., 1, N].
+ * Elementwise: bias has multiple M rows matching the output sub-block,
+ *   added element-wise via add_tiles. Required when bias_padded_shape[-2]
+ *   == tile_height (see main PR #42430).
+ */
+enum class BiasBroadcast { RowBroadcast, Elementwise };
 
 namespace bias_add_config {
 
@@ -31,21 +44,20 @@ struct NoPostBias {
  * or elementwise), optionally applies a post-bias operation (e.g., SFPU activation),
  * and packs the result to out_cb.
  *
- * The `row_broadcast` template param selects the add mode:
- *   - true  (default): row-broadcast — one bias tile per output column, broadcast across
- *                      all M rows of the sub-block. Bias shape is [1, N] / [..., 1, N].
- *   - false          : elementwise — bias has multiple M rows matching the output sub-block.
+ * The `broadcast` template param selects the add mode:
+ *   - BiasBroadcast::RowBroadcast (default): one bias tile per output column, broadcast
+ *                      across all M rows of the sub-block. Bias shape [1, N] / [..., 1, N].
+ *   - BiasBroadcast::Elementwise: bias has multiple M rows matching the output sub-block.
  *                      Required when bias_padded_shape[-2] == tile_height (see PR #42430).
  *
  * Composes with matmul_block by reading from the same interm_cb that matmul_block
- * packed to (when pack_last_to_interm=true). When the upstream matmul_block runs
- * with row_major_output=true, pass row_major_output=true here too so the bias helper
- * consumes partials_cb and produces out_cb in matching row-major layout; otherwise
- * (default) both layouts are subblock-major.
+ * packed to (when pack_last_to_interm=true). The `output_layout` template must match
+ * the upstream matmul_block's layout so the intermediate CB is consumed in the right
+ * order.
  *
- * CB flow (row_major_output=false): partials_cb (wait+pop per subblock) + bias_cb
+ * CB flow (layout=SubblockMajor): partials_cb (wait+pop per subblock) + bias_cb
  *          (caller owns wait/pop) --> out_cb (reserve+push per subblock).
- * CB flow (row_major_output=true):  partials_cb (wait+pop per M-row-group) + bias_cb
+ * CB flow (layout=RowMajor):      partials_cb (wait+pop per M-row-group) + bias_cb
  *          (caller owns wait/pop) --> out_cb (reserve+push per M-row-group).
  *
  * Uses 4-phase DST management (tile_regs_acquire/commit/wait/release).
@@ -59,13 +71,13 @@ struct NoPostBias {
  * ── Template Parameters ────────────────────────────────────────────────────
  *
  *   partials_cb       CB containing matmul output (= interm_cb from matmul_block).
- *   bias_cb           CB containing bias tiles. Row-broadcast: one tile per output column.
+ *   bias_cb           CB containing bias tiles. RowBroadcast: one tile per output column.
  *                     Elementwise: multiple M rows per column.
  *   out_cb            Output CB for biased result.
- *   row_broadcast     true for add_tiles_bcast_rows, false for add_tiles. (default: true)
- *   row_major_output  When true, consume partials_cb and produce out_cb in row-major
- *                     layout (matches matmul_block with row_major_output=true). Default
- *                     false uses the legacy subblock-major layout.
+ *   broadcast         BiasBroadcast::RowBroadcast (default, add_tiles_bcast_rows) or
+ *                     BiasBroadcast::Elementwise (add_tiles).
+ *   output_layout     OutputLayout::SubblockMajor (default, legacy) or OutputLayout::RowMajor.
+ *                     Must match the upstream matmul_block's layout.
  *   PostBiasFn        Functor called per output sub-block after bias addition, before
  *                     packing. (default: NoPostBias)
  *
@@ -77,15 +89,15 @@ struct NoPostBias {
  *   out_subblock_w     Output sub-block width in tiles.
  *   post_bias          PostBiasFn instance (default: {}).
  *   out_row_width      N-tiles per row of the row-major CB layout. Ignored when
- *                      row_major_output=false. Default 0 derives from
+ *                      output_layout == SubblockMajor. Default 0 derives from
  *                      out_subblock_w * in1_num_subblocks.
  */
 template <
     uint32_t partials_cb,
     uint32_t bias_cb,
     uint32_t out_cb,
-    bool row_broadcast = true,
-    bool row_major_output = false,
+    BiasBroadcast broadcast = BiasBroadcast::RowBroadcast,
+    OutputLayout output_layout = OutputLayout::SubblockMajor,
     typename PostBiasFn = bias_add_config::NoPostBias>
 ALWI void add_bias_bcast_rows(
     uint32_t in0_num_subblocks,
