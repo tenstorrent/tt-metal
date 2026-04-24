@@ -98,12 +98,19 @@ struct ComputeConfigDescriptor {
     bool math_approx_mode = false;
 };
 
-// Declares that a specific runtime arg position holds a buffer base address that
-// changes on every dispatch.  Populated via KernelDescriptor::emplace_runtime_args().
+// Declares that a specific per-core runtime arg position holds a buffer base address
+// that changes on every dispatch.  Populated via KernelDescriptor::emplace_runtime_args().
 // The framework resolves these to RuntimeArgsData* pointers on cache miss and
 // patches them directly on cache hits, bypassing create_descriptor() entirely.
 struct BufferBinding {
     CoreCoord core;
+    uint32_t arg_idx;
+    Buffer* buffer = nullptr;
+};
+
+// Same as BufferBinding but for common (non-per-core) runtime args.
+// Populated via KernelDescriptor::emplace_common_runtime_args().
+struct CommonBufferBinding {
     uint32_t arg_idx;
     Buffer* buffer = nullptr;
 };
@@ -118,6 +125,7 @@ struct KernelDescriptor {
     using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = CoreRuntimeArgs;
     using BufferBindings = ttsl::SmallVector<BufferBinding, 4>;
+    using CommonBufferBindings = ttsl::SmallVector<CommonBufferBinding, 2>;
     using ConfigDescriptor = std::
         variant<ReaderConfigDescriptor, WriterConfigDescriptor, DataMovementConfigDescriptor, ComputeConfigDescriptor>;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
@@ -139,10 +147,11 @@ struct KernelDescriptor {
 
     ConfigDescriptor config;
 
-    // Buffer args declared via emplace_runtime_args().  The framework resolves
-    // these to direct pointers into the cached Program on cache miss, enabling
-    // O(1) patching on cache hits without calling create_descriptor() again.
+    // Buffer args declared via emplace_runtime_args() / emplace_common_runtime_args().
+    // The framework resolves these to direct pointers into the cached Program on cache miss,
+    // enabling O(1) patching on cache hits without calling create_descriptor() again.
     BufferBindings buffer_bindings;
+    CommonBufferBindings common_buffer_bindings;
 
     // Builder for dynamically-constructed runtime arg lists.  Buffer* entries
     // auto-register as buffer bindings; uint32_t entries embed their value.
@@ -168,6 +177,12 @@ struct KernelDescriptor {
     // runtime_args.emplace_back() when some args are buffer base addresses.
     void emplace_runtime_args(const CoreCoord& core, std::initializer_list<std::variant<uint32_t, Buffer*>> args);
     void emplace_runtime_args(const CoreCoord& core, RTArgList args);
+
+    // Push common runtime args, automatically registering any Buffer* entries
+    // as common buffer bindings.  Use this instead of assigning common_runtime_args
+    // directly when some args are buffer base addresses.
+    void emplace_common_runtime_args(std::initializer_list<std::variant<uint32_t, Buffer*>> args);
+    void emplace_common_runtime_args(RTArgList args);
 };
 
 struct ProgramDescriptor {
