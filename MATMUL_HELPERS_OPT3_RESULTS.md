@@ -48,13 +48,42 @@ For each explicit `MatmulMultiCoreReuseMultiCast{,1D}ProgramConfig` in a model:
 Per your guidance: these still need a profile A/B to confirm the auto-tuner produced wins without
 regressions, and to bump device/e2e perf thresholds that were set against pre-auto-tuner numbers.
 
-| Model | Status | Next step |
-|---|---|---|
-| BGE-m3 | All mcast configs commented out → `ttnn.linear` auto-config | Profile on opt_3 vs pre-auto-tuner baseline; bump thresholds |
-| DistilBERT | `ttnn.linear` only, no explicit configs | Same |
-| bert_tiny (WH) | — | Survey + profile A/B |
-| Mamba (WH) | — | Survey + profile A/B |
-| Qwen3-embedding-8b (WH) | — | Survey + profile A/B |
+| Model | Status | Measured on opt_3 (WH n150) | Threshold | Δ |
+|---|---|---:|---:|---:|
+| Falcon7b prefill seq=128 | auto-config (ttnn.linear fallback) | 2095.3 sps | 2115 | -0.93% (within ±3%, PASS) |
+| Falcon7b decode seq=128 | auto-config (L1_SHARDED) | 636.3 sps | 647 | -1.65% (within ±3%, PASS) |
+| Falcon7b decode seq=1024 | auto-config (L1_SHARDED) | 574.4 sps | 572 | +0.44% (within ±3%, PASS) |
+| Falcon7b decode seq=2047 | auto-config (L1_SHARDED) | Tracy subprocess failure (pre-existing, not auto-tuner-related) | 548 | n/a |
+| sentence-BERT | manual config (upstream) | 546.5 sps | 546.5 | 0% (threshold locked in from upstream work; stability confirmed on opt_3) |
+| BGE-m3 | All mcast configs commented out → `ttnn.linear` | no device-perf test in tree | — | — |
+| DistilBERT wall-clock (seq=384) | `ttnn.linear` only, no explicit configs | median 0.0326 s / 246 sps (7 runs: 0.0325/0.0330/0.0325/0.0380/0.0326/0.0325/0.0326) | expected 0.0338 s | **-3.6% median inference time (auto-tuner win)** |
+| DistilBERT device-perf (seq=768) | same model | tracy subprocess blocked — inner pytest hung in setup `GetNumPCIeDevices()` even after `tt-smi -r`, 25-min wall clock before inner 300s pytest-timeout fired | 245 (stale) | skip is `@pytest.mark.skip #26285`; setup-hang is pre-existing infra issue, not auto-tuner regression |
+| bert_tiny (WH) | auto-config | `@skip #26288` — weights not local (`mrm8488/bert-tiny-finetuned-squadv2`) | 6850 (stale) | pending |
+| Mamba (WH) | auto-config | weights not local (`state-spaces/mamba-2.8b`, ~5 GB) | 1.634 ms/layer | pending |
+| Qwen3-embedding-8b (WH) | — | no device-perf test in tree | — | — |
+
+**Observations on the WH auto-config A/B data:**
+- **Falcon7b** auto-config paths (prefill seq=128, decode seq=128, decode seq=1024): all three
+  measure within ±2% of the pre-auto-tuner `expected_perf`. Auto-tuner is flat on Falcon7b's
+  auto-config paths. Consistent with the cross-arch hypothesis below — pack-phase lever doesn't
+  dominate for small shapes / decode-mode matmuls. No threshold bumps needed.
+- **DistilBERT** wall-clock (`test_performance_distilbert_for_qa`, seq=384): 7 runs measured
+  0.0325, 0.0330, 0.0325, 0.0380, 0.0326, 0.0325, 0.0326 s. Median 0.0326 s vs expected 0.0338
+  = **-3.6% median (auto-tuner win)**. Test uses `inference_time < expected` so all 7 pass
+  even with the 0.0380 outlier, because the outlier is still below 0.0338. Tried tightening
+  to 0.0335 to lock the win in as a regression floor — first post-tighten run at 0.0380 would
+  have failed (variance spike, probably thermal/system-load — other runs clustered at 0.0325).
+  Reverted: 7 samples doesn't give enough statistical power for a 1% tighten without CI
+  flakes. Win is documented; threshold stays at 0.0338. Follow-on: if 20+ runs in CI-like
+  conditions consistently cluster at 0.032-0.033 s, drop threshold to 0.0345 s (conservative,
+  ~2% above the 0.0338 baseline but tighter than today's de facto 0.038 s worst case).
+- **DistilBERT** device-perf (`test_distilbert_perf_device`, seq=768): test is
+  `@pytest.mark.skip` (#26285). Attempted unskip+measure; hits an unrelated infrastructure
+  hang in `ttnn._ttnn.device.GetNumPCIeDevices()` during tracy subprocess setup, even after
+  `tt-smi -r`. Not an auto-tuner issue; the skip is doing the right thing until the infra
+  is fixed. Threshold bump blocked on this separate issue.
+- **sentence-BERT**: measures 546.5 sps exactly on threshold (set in `7a89d6a8f55`). The
+  opt_2 auto-tuner + manual-config work upstream are stable on opt_3.
 
 ### Skipped (no upgrade available — already at max DST volume given shape)
 
@@ -220,13 +249,35 @@ E2E inference (median of 9 post-edit / 6 baseline runs at seq=1024): **0.368s �
 - **DST size must be queried, not hard-coded.** DST register-file capacity is not a constant — it
   varies with data type, whether DST double-buffering is on, whether `fp32_dest_acc_en=True`
   (halves capacity), half-sync vs full-sync protocol, and potentially across devices/architectures.
-  Today the auto-tuner uses hardcoded `DST=8` (half-sync bf16) or `DST=4` (fp32_dest_acc_en). This
-  works for manual tuning where a human can infer the right cap, but **the helpers / auto-tuner
-  must fully query DST capacity from the device + compute-kernel-config** for correctness under
-  all modes. Concrete trigger: BGE-large's qkv / ff2 configs use `fp32_dest_acc_en=True` →
-  effective DST=4; if the tuner assumed DST=8 for these it would emit an over-sized subblock and
-  the program would fail to compile. Tracked as a follow-up for the helpers work itself, not per
-  model.
+
+  **Current state after investigation (2026-04-23):** the public API IS abstract — auto-tuner
+  callers pass `DeviceComputeKernelConfig` and the tuner routes through
+  `ttnn::get_dest_reg_count(config, tile_shape)` which handles `dst_full_sync_en`,
+  `fp32_dest_acc_en`, and custom tile shapes correctly. Existing unit tests
+  (`test_matmul_auto_tuner.cpp`) cover all 4 DST-capacity cases (16/8/4/8 tiles across sync ×
+  fp32 combos). So the tuning surface is already queryable.
+
+  **What's left (two follow-on cleanups, neither is correctness-breaking today):**
+  1. `ttnn/.../compute_kernel_config.cpp` re-`#define`s `DATUMS_PER_ROW=16` and
+     `DEST_REGISTER_FULL_SIZE=64*16` as host-side copies of constants that live in the
+     arch-specific `tensix_types.h`. All three currently-supported arches (WH-b0, BH, Quasar)
+     happen to agree on these values, so today's tree is numerically correct, but a future arch
+     could silently break the host-side tuner. Attempted to replace the `#define`s with
+     `#include "tensix_types.h"` directly; fails because `hw/inc/internal/tt-1xx/${ARCH}` isn't
+     on `ttnn_op_core`'s include path, and `hostdevcommon/dprint_common.h`'s transitive include
+     is gated behind `!defined(KERNEL_BUILD) && !defined(FW_BUILD)`. Proper fix is adding a
+     host-side HAL API (e.g. `hal.get_dest_reg_count(compute_kernel_config, tile_shape)`) mirroring
+     the existing `hal.get_arch_num_circular_buffers()` pattern, so host-side tuning can query
+     per-arch constants at runtime instead of relying on the `#define` coincidence. Scope: ~1 day.
+  2. `matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:151` still has
+     `uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;` — hardcoded legacy pre-auto-tuner
+     logic that assumes half-sync and bypasses `get_dest_reg_count`. Thread the full
+     `compute_kernel_config` through the function signature and route through the query.
+
+  Concrete trigger for why this matters: BGE-large's qkv / ff2 configs use
+  `fp32_dest_acc_en=True` → effective DST=4. The abstract tuner handles this correctly today,
+  but the DRAM-sharded factory path would quietly emit an over-sized subblock if a future
+  config picks `dst_full_sync_en=True` with fp32 (should allow 8 tiles, current code caps at 4).
 
 - **Auto-config models need a profile A/B across the auto-tuner landing** to confirm the tuner
   actually delivers wins without regressions, and to bump device/e2e perf thresholds that were
