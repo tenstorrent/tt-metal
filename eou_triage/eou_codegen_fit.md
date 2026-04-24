@@ -4,15 +4,21 @@ I read the milestones doc and the 4 refactoring epics (tt-metal#33823, tt-llk#91
 
 ## Tier 1 — strong candidates (ship these first)
 
-| Issue | Why it's a fit |
-|---|---|
-| [tt-metal#34587](https://github.com/tenstorrent/tt-metal/issues/34587) — pack tilize/untilize bools → `PackMode` enum | **Already has a Claude Code plan attached** (`PACK_MODE_REFACTORING_PLAN.md`). Cross-repo mechanical bool→enum refactor — exactly the shape codegen nails. |
-| [tt-llk#1148](https://github.com/tenstorrent/tt-llk/issues/1148) — `DataCopyType` enum → `enum class` | Purely mechanical C++ refactor + callsite updates. Low ambiguity, high file count. |
-| [tt-metal#23995](https://github.com/tenstorrent/tt-metal/issues/23995) — remove default CB-id values in `llk_math_*unary_*` | Labeled `good-first-issue`. Clear DoD: remove defaults, chase failing callers until APC/BPC green. Loop-on-CI is ideal for an agent. |
-| [tt-llk#880](https://github.com/tenstorrent/tt-llk/issues/880) — remove redundant `llk_math_eltwise_binary_init` w/o-operands overload | Drop one overload + rewrite callers. Tight scope. |
-| [tt-llk#1036](https://github.com/tenstorrent/tt-llk/issues/1036) — make x‑start/x‑end transient (add `TTI_SETADCXX`) | Clear directive: add instruction to missing inits, remove elsewhere. Good for a grep-and-patch agent. |
-| [tt-llk#1161](https://github.com/tenstorrent/tt-llk/issues/1161) — fix y‑/z‑dim in `_llk_unpack_tilize_uninit_` (WH) | Pinpoint one-function fix with exact expected values. |
-| [tt-metal#18347](https://github.com/tenstorrent/tt-metal/issues/18347) — doc strings for compute kernel APIs | Doc generation is a canonical codegen task; issue enumerates target files and gaps. |
+| Issue | Why it's a fit | Prompt |
+|---|---|---|
+| [tt-metal#34587](https://github.com/tenstorrent/tt-metal/issues/34587) — pack tilize/untilize bools → `PackMode` enum | **Already has a Claude Code plan attached** (`PACK_MODE_REFACTORING_PLAN.md`). Cross-repo mechanical bool→enum refactor — exactly the shape codegen nails. | [eou_34587_prompt.md](eou_34587_prompt.md) |
+| [tt-llk#1148](https://github.com/tenstorrent/tt-llk/issues/1148) — `DataCopyType` enum → `enum class` ✓ **Done** (PR open) | Purely mechanical C++ refactor + callsite updates. Low ambiguity, high file count. | [eou_1148_prompt.md](eou_1148_prompt.md) |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `DstSync` enum → `enum class` | ~11 callsites. Identical shape to DataCopyType (BH+WH, qualify SyncHalf/SyncFull). | [eou_43036_dstsync_prompt.md](eou_43036_dstsync_prompt.md) |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `ReluType` enum → `enum class` | ~15 callsites. Pack layer only. Quasar reference available. Note: don't copy Quasar's ReluConfig struct. | [eou_43036_relutype_prompt.md](eou_43036_relutype_prompt.md) |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `ReduceDim` enum → `enum class` | ~115 callsites. Spans math+unpack reduce layers and compute API. Mechanical but wide. | [eou_43036_reducedim_prompt.md](eou_43036_reducedim_prompt.md) |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `EltwiseBinaryType` enum → `enum class` | ~197 callsites. BH/WH have ELWDIV+ELWLESS which Quasar lacks — must not remove them. | [eou_43036_eltwisebinarytype_prompt.md](eou_43036_eltwisebinarytype_prompt.md) |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `PoolType` enum → `enum class` | True callsites low (~10–30); naive grep count inflated by MAX/MIN false positives. BH/WH have MIN which Quasar lacks. High ODR risk (MAX/MIN collide with macros). | [eou_43036_pooltype_prompt.md](eou_43036_pooltype_prompt.md) |
+| [tt-metal#43036](https://github.com/tenstorrent/tt-metal/issues/43036) — `BroadcastType` enum → `enum class` | Largest refactor — NONE/COL/ROW/SCALAR are generic names, NONE especially. Compiler-driven approach recommended after Phase A. Hex values and comments preserved. | [eou_43036_broadcasttype_prompt.md](eou_43036_broadcasttype_prompt.md) |
+| [tt-metal#23995](https://github.com/tenstorrent/tt-metal/issues/23995) — remove default CB-id values in `llk_math_*unary_*` | Labeled `good-first-issue`. Clear DoD: remove defaults, chase failing callers until APC/BPC green. Loop-on-CI is ideal for an agent. | — |
+| [tt-llk#880](https://github.com/tenstorrent/tt-llk/issues/880) — remove redundant `llk_math_eltwise_binary_init` w/o-operands overload | Drop one overload + rewrite callers. Tight scope. | — |
+| [tt-llk#1036](https://github.com/tenstorrent/tt-llk/issues/1036) — make x‑start/x‑end transient (add `TTI_SETADCXX`) | Clear directive: add instruction to missing inits, remove elsewhere. Good for a grep-and-patch agent. | — |
+| [tt-llk#1161](https://github.com/tenstorrent/tt-llk/issues/1161) — fix y‑/z‑dim in `_llk_unpack_tilize_uninit_` (WH) | Pinpoint one-function fix with exact expected values. | — |
+| [tt-metal#18347](https://github.com/tenstorrent/tt-metal/issues/18347) — doc strings for compute kernel APIs | Doc generation is a canonical codegen task; issue enumerates target files and gaps. | — |
 
 ## Tier 2 — good candidates (need a short spec-up before handoff)
 

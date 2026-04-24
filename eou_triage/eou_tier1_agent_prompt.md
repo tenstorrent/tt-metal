@@ -32,7 +32,7 @@ Repository layout cheat-sheet:
 - LLK standalone tests: `tt_metal/tt-llk/tests/sources/`
 - TTNN (do **not** modify unless the issue explicitly says so): `ttnn/`
 
-> **Note on `tt_metal/tt-llk/`:** this directory is a plain source tree in `tt-metal`. Edit files
+> **Note on `tt_metal/tt-llk/`:** this directory is a plain source tree in `tt-metal`, not a submodule anymore. Edit files
 > in-place; there is no submodule commit step required.
 
 ---
