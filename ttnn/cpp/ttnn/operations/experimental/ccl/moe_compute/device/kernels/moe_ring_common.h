@@ -8,11 +8,7 @@
 #include <algorithm>
 #include <stdint.h>
 
-namespace detail {
-
-enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
-
-}  // namespace detail
+#include "../hostdevcommon/config.hpp"
 //=============================================================================
 // MoE Ring All-to-All Configuration
 //
@@ -26,136 +22,206 @@ enum class MoEActivationFunction : uint8_t { SILU = 0, SWIGLU = 1 };
 //    Simplest code pattern
 //=============================================================================
 
+namespace detail {
+inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
+
+template <uint32_t a, uint32_t b>
+constexpr uint32_t div_up() {
+    return (a + b - 1) / b;
+}
+
+}  // namespace detail
+
 namespace moe_ring {
 
 constexpr uint32_t NUM_CORES = 12;
 
-constexpr uint32_t NUM_W0_W1_TILES_H = 224;
-constexpr uint32_t NUM_W2_TILES_H = 64;
-
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
+
+// TODO probably don't need this for W0_W1 and W2 because it's the same
+constexpr uint32_t W0_W1_BLOCK_TILES_W = 4;
+constexpr uint32_t W0_W1_BLOCK_TILES_H = (W0_W1_TXNS_PER_BLOCK * W0_W1_TILES_PER_TXN) / W0_W1_BLOCK_TILES_W;
 
 constexpr uint32_t W2_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W2_TILES_PER_TXN = 14;
 
-constexpr uint32_t W2_BLOCKS_PER_EXPERT = 50;
+constexpr uint32_t TOKENS_PER_CHUNK = 32;
+
+// Let's call this a constant
+constexpr uint32_t W2_TILES_PER_A2A_ITER_W = 4;
+constexpr uint32_t W2_TILES_PER_A2A_ITER_H = (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN) / W2_TILES_PER_A2A_ITER_W;  // 7
+
+static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
 
 //-----------------------------------------------------------------------------
 // Precomputed lookup tables (generated at compile time)
 // Use these if you prefer lookup over runtime computation
 //-----------------------------------------------------------------------------
 
-// Boundary-optimized: tiles[core_id][step]
-constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP_A[NUM_CORES][NUM_CORES] = {
-    // Core 0: sources [0,11,10,9,8,7,6,5,4,3,2,1]
-    {6, 5, 5, 6, 6, 5, 5, 5, 5, 5, 5, 6},
-    // Core 1: sources [1,0,11,10,9,8,7,6,5,4,3,2]
-    {6, 6, 5, 5, 6, 6, 5, 5, 5, 5, 5, 5},
-    // Core 2: sources [2,1,0,11,10,9,8,7,6,5,4,3]
-    {5, 6, 6, 5, 5, 6, 6, 5, 5, 5, 5, 5},
-    // Core 3: sources [3,2,1,0,11,10,9,8,7,6,5,4]
-    {5, 5, 6, 6, 5, 5, 6, 6, 5, 5, 5, 5},
-    // Core 4: sources [4,3,2,1,0,11,10,9,8,7,6,5]
-    {5, 5, 5, 6, 6, 5, 5, 6, 6, 5, 5, 5},
-    // Core 5: sources [5,4,3,2,1,0,11,10,9,8,7,6]
-    {5, 5, 5, 5, 6, 6, 5, 5, 6, 6, 5, 5},
-    // Core 6: sources [6,5,4,3,2,1,0,11,10,9,8,7]
-    {5, 5, 5, 5, 5, 6, 6, 5, 5, 6, 6, 5},
-    // Core 7: sources [7,6,5,4,3,2,1,0,11,10,9,8]
-    {5, 5, 5, 5, 5, 5, 6, 6, 5, 5, 6, 6},
-    // Core 8: sources [8,7,6,5,4,3,2,1,0,11,10,9]
-    {6, 5, 5, 5, 5, 5, 5, 6, 6, 5, 5, 6},
-    // Core 9: sources [9,8,7,6,5,4,3,2,1,0,11,10]
-    {6, 6, 5, 5, 5, 5, 5, 5, 6, 6, 5, 5},
-    // Core 10: sources [10,9,8,7,6,5,4,3,2,1,0,11]
-    {5, 6, 6, 5, 5, 5, 5, 5, 5, 6, 6, 5},
-    // Core 11: sources [11,10,9,8,7,6,5,4,3,2,1,0]
-    {5, 5, 6, 6, 5, 5, 5, 5, 5, 5, 6, 6},
+namespace detail {
+
+constexpr uint32_t compute_a2a_iters(const uint32_t* arr) {
+    return (*std::max_element(arr, arr + NUM_CORES) + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
 };
 
-// Evenly distributed: tiles[core_id][step]
-constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP_B[NUM_CORES][NUM_CORES] = {
-    // Core 0: pattern [6,5,5,6,5,5,6,5,5,6,5,5]
-    {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
-    // Core 1: pattern [5,6,5,5,6,5,5,6,5,5,6,5]
-    {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
-    // Core 2: pattern [5,5,6,5,5,6,5,5,6,5,5,6]
-    {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
-    // Core 3: same as Core 0
-    {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
-    // Core 4: same as Core 1
-    {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
-    // Core 5: same as Core 2
-    {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
-    // Core 6: same as Core 0
-    {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
-    // Core 7: same as Core 1
-    {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
-    // Core 8: same as Core 2
-    {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
-    // Core 9: same as Core 0
-    {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
-    // Core 10: same as Core 1
-    {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
-    // Core 11: same as Core 2
-    {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
-};
+constexpr uint32_t compute_in2_tiles_per_step(const uint32_t* arr) { return *std::max_element(arr, arr + NUM_CORES); };
 
-constexpr uint32_t W2_TILES_PER_CORE_A[NUM_CORES] = {
-    18,
-    18,
-    19,
-    19,
-    19,
-    19,
-    19,
-    19,
-    18,
-    18,
-    19,
-    19,
-};
-
-constexpr uint32_t W2_TILES_PER_CORE_B[NUM_CORES] = {
-    18,
-    19,
-    19,
-    18,
-    19,
-    19,
-    18,
-    19,
-    19,
-    18,
-    19,
-    19,
-};
-
-constexpr uint32_t IN2_TILES_PER_STEP_A = *std::max_element(
-    W0_W1_TILES_PER_CORE_PER_STEP_A[0], W0_W1_TILES_PER_CORE_PER_STEP_A[0] + NUM_CORES, [](uint32_t a, uint32_t b) {
-        return a < b;
-    });
-
-constexpr uint32_t IN2_TILES_PER_STEP_B = *std::max_element(
-    W0_W1_TILES_PER_CORE_PER_STEP_B[0], W0_W1_TILES_PER_CORE_PER_STEP_B[0] + NUM_CORES, [](uint32_t a, uint32_t b) {
-        return a < b;
-    });
-
-constexpr uint32_t NUM_A2A_ITERS_A =
-    (*std::max_element(W2_TILES_PER_CORE_A, W2_TILES_PER_CORE_A + NUM_CORES) + 4 - 1) / 4;
-
-constexpr uint32_t NUM_A2A_ITERS_B =
-    (*std::max_element(W2_TILES_PER_CORE_B, W2_TILES_PER_CORE_B + NUM_CORES) + 4 - 1) / 4;
-
-constexpr std::array<uint32_t, NUM_CORES> COMBINE_W_OFFSET_PER_CORE_B = []() constexpr {
-    std::array<uint32_t, NUM_CORES> arr = {};
+constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(const uint32_t* arr) {
+    std::array<uint32_t, NUM_CORES> out = {};
     uint32_t sum = 0;
     for (uint32_t i = 0; i < NUM_CORES; ++i) {
-        arr[i] = sum;
-        sum += W2_TILES_PER_CORE_B[i];
+        out[i] = sum;
+        sum += arr[i];
     }
-    return arr;
-}();
+    return out;
+}
+
+}  // namespace detail
+
+struct DeepSeekRingConfig {
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 224;
+    static constexpr uint32_t NUM_W2_TILES_H = 64;
+    static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 4;
+
+    // Evenly distributed: tiles[core_id][step]
+    static constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP[NUM_CORES][NUM_CORES] = {
+        // Core 0: pattern [6,5,5,6,5,5,6,5,5,6,5,5]
+        {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
+        // Core 1: pattern [5,6,5,5,6,5,5,6,5,5,6,5]
+        {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
+        // Core 2: pattern [5,5,6,5,5,6,5,5,6,5,5,6]
+        {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
+        // Core 3: same as Core 0
+        {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
+        // Core 4: same as Core 1
+        {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
+        // Core 5: same as Core 2
+        {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
+        // Core 6: same as Core 0
+        {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
+        // Core 7: same as Core 1
+        {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
+        // Core 8: same as Core 2
+        {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
+        // Core 9: same as Core 0
+        {6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5},
+        // Core 10: same as Core 1
+        {5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6, 5},
+        // Core 11: same as Core 2
+        {5, 5, 6, 5, 5, 6, 5, 5, 6, 5, 5, 6},
+    };
+
+    // fixed. Let's say hardcoded for now.
+    static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {
+        18,
+        19,
+        19,
+        18,
+        19,
+        19,
+        18,
+        19,
+        19,
+        18,
+        19,
+        19,
+    };
+
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE);
+
+    static constexpr uint32_t W2_TILES_PER_EXPERT_W = W2_TILES_PER_A2A_ITER_W * NUM_A2A_ITERS;  // 5*4=20
+    static constexpr uint32_t W2_TILES_PER_EXPERT_H =
+        W2_TILES_PER_A2A_ITER_H * ((NUM_W2_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H);  // 70
+
+    static constexpr uint32_t W2_SUBBLOCK_REM = NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H;
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
+        W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // 50
+
+    static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);
+
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(W2_TILES_PER_CORE);
+};
+
+// GPT configuration for hidden_size = intermediate_size = 2880 (90 tiles)
+// Note: This config assumes NUM_W0_W1_TILES_H = NUM_W2_TILES_H = 90
+// For GPT-OSS: K = N = 2880, so both W0/W1 and W2 have 90x90 tile dimensions
+struct GptRingConfig {
+    static constexpr uint32_t NUM_W0_W1_TILES_H = 90;
+    static constexpr uint32_t NUM_W2_TILES_H = 90;
+
+    static constexpr uint32_t OUTPUT_WIDTH_SHARD_DIM = 3;  // vs 4 in DeepSeek
+
+    // Boundary-optimized: tiles[core_id][step] - cores {0,1,4,5,8,9} get 8 tiles
+    static constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP[NUM_CORES][NUM_CORES] = {
+        // Core 0: sources [0,11,10,9,8,7,6,5,4,3,2,1]
+        {8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8},
+        // Core 1: sources [1,0,11,10,9,8,7,6,5,4,3,2]
+        {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7},
+        // Core 2: sources [2,1,0,11,10,9,8,7,6,5,4,3]
+        {7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7},
+        // Core 3: sources [3,2,1,0,11,10,9,8,7,6,5,4]
+        {7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8},
+        // Core 4: sources [4,3,2,1,0,11,10,9,8,7,6,5]
+        {8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8},
+        // Core 5: sources [5,4,3,2,1,0,11,10,9,8,7,6]
+        {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7},
+        // Core 6: sources [6,5,4,3,2,1,0,11,10,9,8,7]
+        {7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7},
+        // Core 7: sources [7,6,5,4,3,2,1,0,11,10,9,8]
+        {7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8},
+        // Core 8: sources [8,7,6,5,4,3,2,1,0,11,10,9]
+        {8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8},
+        // Core 9: sources [9,8,7,6,5,4,3,2,1,0,11,10]
+        {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7},
+        // Core 10: sources [10,9,8,7,6,5,4,3,2,1,0,11]
+        {7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7},
+        // Core 11: sources [11,10,9,8,7,6,5,4,3,2,1,0]
+        {7, 7, 8, 8, 7, 7, 8, 8, 7, 7, 8, 8},
+    };
+
+    // W2 tiles per core: 90 tiles / 12 cores = 7.5 -> 6 cores get 8, 6 cores get 7
+    static constexpr uint32_t W2_TILES_PER_CORE[NUM_CORES] = {8, 8, 7, 7, 8, 8, 7, 7, 8, 8, 7, 7};
+
+    static constexpr auto IN2_TILES_PER_STEP = detail::compute_in2_tiles_per_step(W0_W1_TILES_PER_CORE_PER_STEP[0]);
+
+    static constexpr auto NUM_A2A_ITERS = detail::compute_a2a_iters(W2_TILES_PER_CORE);  // 2
+
+    static constexpr uint32_t W2_TILES_PER_EXPERT_W = NUM_A2A_ITERS * W2_TILES_PER_A2A_ITER_W;  // 8
+    static constexpr uint32_t W2_TILES_PER_EXPERT_H =
+        ((NUM_W2_TILES_H + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) * W2_TILES_PER_A2A_ITER_H;  // 91
+
+    static constexpr uint32_t W2_SUBBLOCK_REM = NUM_W2_TILES_H % W2_TILES_PER_A2A_ITER_H;  // 6
+
+    static constexpr uint32_t W2_BLOCKS_PER_EXPERT =
+        W2_TILES_PER_EXPERT_W * W2_TILES_PER_EXPERT_H / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);  // 26
+
+    static constexpr auto COMBINE_W_OFFSET_PER_CORE = detail::compute_combine_w_offset_per_core(W2_TILES_PER_CORE);
+
+    // Additional GPT-specific constants
+    static constexpr uint32_t COMBINE_SHARD_WIDTH_TILES = 90 / OUTPUT_WIDTH_SHARD_DIM;          // 30
+    static constexpr uint32_t RING_CORES_PER_COMBINE_COL = NUM_CORES / OUTPUT_WIDTH_SHARD_DIM;  // 4
+};
+
+// Template trait for config type selection
+template <ttnn::experimental::prim::detail::MoEConfigType ConfigType>
+struct ConfigTypeSelector;
+
+// Template specialization for DeepSeek
+template <>
+struct ConfigTypeSelector<ttnn::experimental::prim::detail::MoEConfigType::DEEPSEEK> {
+    using type = DeepSeekRingConfig;
+};
+
+// Template specialization for GPT
+template <>
+struct ConfigTypeSelector<ttnn::experimental::prim::detail::MoEConfigType::GPT> {
+    using type = GptRingConfig;
+};
+
+// Helper alias template
+template <ttnn::experimental::prim::detail::MoEConfigType ConfigType>
+using ConfigType_t = typename ConfigTypeSelector<ConfigType>::type;
 
 }  // namespace moe_ring

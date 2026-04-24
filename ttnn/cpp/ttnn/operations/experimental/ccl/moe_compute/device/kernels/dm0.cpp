@@ -24,6 +24,11 @@
     } while (0)
 
 void kernel_main() {
+    // Extract config type from compile-time argument
+    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
+    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
+    using config_t = moe_ring::ConfigType_t<config_type>;
+
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -69,11 +74,11 @@ void kernel_main() {
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
+    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
+    constexpr uint32_t num_w2_tiles_h = config_t::NUM_W2_TILES_H;
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
+    const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -83,11 +88,13 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
+    constexpr uint32_t w0_w1_tiles_w = moe_ring::W0_W1_BLOCK_TILES_W;
+    constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
+        detail::div_up<num_w0_w1_tiles_h, w0_w1_block_tiles_h>();  // 32 (DS)
     constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B / 2;  // 32 * 3 = 96
+        w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP / 2;  // 32 * 3 = 96
     // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
     // W2 reading constants
@@ -96,7 +103,11 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
-    constexpr uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+
+    DPRINT << "dm0 w0_w1_blocks_per_expert: " << w0_w1_blocks_per_expert
+           << " w0_w1_blocks_per_two_elt_tile: " << w0_w1_blocks_per_two_elt_tile
+           << " w2_blocks_per_expert: " << w2_blocks_per_expert << "\n";
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -112,7 +123,8 @@ void kernel_main() {
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
-    constexpr uint32_t w2_total_size_per_expert = 70 * 20 * w2_tile_size;  // We pad 64 to 70 tiles
+    constexpr uint32_t w2_total_size_per_expert =
+        config_t::W2_TILES_PER_EXPERT_W * config_t::W2_TILES_PER_EXPERT_H * w2_tile_size;  // Padded sizes
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 

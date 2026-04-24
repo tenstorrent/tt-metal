@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hostdevcommon/config.hpp"
+#include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
@@ -52,6 +54,8 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
+
+    const uint32_t hidden_size = tilize_input_shape[-1];
 
     const CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
     const CoreRangeSet shard_cores =
@@ -121,10 +125,12 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     ttnn::MemoryConfig output_sharded_memory_config = ttnn::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
-        tt::tt_metal::ShardSpec(shard_cores, {2 * 32, 7168}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
+        tt::tt_metal::ShardSpec(shard_cores, {2 * 32, hidden_size}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    auto tilize_output_shape = ttnn::Shape({shard_cores.num_cores(), 2, 32, 7168});
+    // TOOD (AM) validate that 32 (token dim) * output_shard_width * output_shard_height >= total tokens
+
+    auto tilize_output_shape = ttnn::Shape({shard_cores.num_cores(), 2, 32, hidden_size});
     auto tilize_output_spec = TensorSpec(
         Shape(tilize_output_shape),
         tt::tt_metal::TensorLayout(
@@ -207,7 +213,6 @@ std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
-    const uint32_t output_width_shard_dim,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
@@ -215,7 +220,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<::detail::MoEActivationFunction>& activation_type) {
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -227,9 +232,19 @@ std::vector<ttnn::Tensor> moe_compute(
     const uint32_t total_tokens = input_shape[0] * input_shape[1];
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
-    const auto& num_data_parallel_cores = output_width_shard_dim;
+
+    // Determine num_data_parallel_cores based on hidden size
+    uint32_t num_data_parallel_cores;
+    if (hidden_size == 7168) {
+        num_data_parallel_cores = moe_ring::DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM;
+    } else if (hidden_size == 2880) {
+        num_data_parallel_cores = moe_ring::GptRingConfig::OUTPUT_WIDTH_SHARD_DIM;
+    } else {
+        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
+    }
+
     auto* mesh_device = tilize_input_tensor.device();
-    const auto& combine_cores = get_moe_combine_cores(mesh_device);
+    const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
     ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
         .hidden_size = hidden_size,
@@ -251,9 +266,8 @@ std::vector<ttnn::Tensor> moe_compute(
         OperationType::operation_attributes_t{
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
-            .output_width_shard_dim = output_width_shard_dim,
             .combine_params = combine_params,
-            .activation_type = activation_type.value_or(::detail::MoEActivationFunction::SILU)},
+            .activation_type = activation_type.value_or(ttnn::experimental::prim::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
