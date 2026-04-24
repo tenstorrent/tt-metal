@@ -192,6 +192,12 @@ public:
     // Giving out mutable reference allows user to assign into it.
     DistributedHostBuffer& buffer();
 
+    /**
+     * Moves the DistributedHostBuffer out of the HostTensor's storage, leaving
+     * the storage in a moved-from state.
+     */
+    DistributedHostBuffer take_host_buffer();
+
     // Derivables:
 
     DataType dtype() const;

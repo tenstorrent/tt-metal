@@ -379,6 +379,9 @@ public:
         host_buffer.pinned_memory_ = std::move(pinned_memory);
     }
     static std::shared_ptr<PinnedMemory> GetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
+    static std::shared_ptr<PinnedMemory> GetPinnedMemory(const HostBuffer& host_buffer) {
+        return host_buffer.pinned_memory_;
+    }
 };
 
 void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
@@ -386,6 +389,10 @@ void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMe
 }
 
 std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) {
+    return HostBufferPinnedMemoryHelper::GetPinnedMemory(host_buffer);
+}
+
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(const HostBuffer& host_buffer) {
     return HostBufferPinnedMemoryHelper::GetPinnedMemory(host_buffer);
 }
 

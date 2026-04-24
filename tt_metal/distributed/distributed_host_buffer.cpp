@@ -161,6 +161,20 @@ void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy
     }
 }
 
+void DistributedHostBuffer::apply(const MutableApplyFn& fn, ProcessShardExecutionPolicy policy) {
+    const std::vector<size_t> indices_to_process = get_populated_shard_indices();
+    auto& local_shards = shards_.values();
+    if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
+        std::for_each(
+            indices_to_process.begin(), indices_to_process.end(), [&](size_t i) { fn(local_shards[i]->buffer); });
+    } else {
+        tf::Taskflow taskflow;
+        taskflow.for_each(
+            indices_to_process.begin(), indices_to_process.end(), [&](size_t i) { fn(local_shards[i]->buffer); });
+        detail::GetExecutor().run(taskflow).wait();
+    }
+}
+
 void DistributedHostBuffer::emplace_shards(
     const std::vector<distributed::MeshCoordinate>& coords,
     const ProduceBufferFn& produce_buffer,

@@ -72,6 +72,9 @@ public:
     using ApplyFn = std::function<void(const HostBuffer& buffer)>;
     void apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL) const;
 
+    using MutableApplyFn = std::function<void(HostBuffer& buffer)>;
+    void apply(const MutableApplyFn& fn, ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL);
+
     // NOTE: `coords` are global, so this will skip non local shards.
     // Calls emplace_shard for each coordinate in `coords` using the specified execution policy.
     void emplace_shards(

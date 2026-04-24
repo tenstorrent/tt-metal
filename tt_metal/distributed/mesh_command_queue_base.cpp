@@ -364,9 +364,11 @@ void MeshCommandQueueBase::enqueue_read(
 
         auto buf = host_buffer.get_shard(coord);
         if (buf.has_value()) {
-            shard_data_transfers.push_back(distributed::ShardDataTransfer{coord}
-                                               .host_data(buf->view_bytes().data())
-                                               .region(BufferRegion(0, buf->view_bytes().size())));
+            auto xfer = distributed::ShardDataTransfer{coord}
+                            .host_data(buf->view_bytes().data())
+                            .region(BufferRegion(0, buf->view_bytes().size()));
+            experimental::ShardDataTransferSetPinnedMemory(xfer, experimental::HostBufferGetPinnedMemory(*buf));
+            shard_data_transfers.push_back(std::move(xfer));
         }
     }
 

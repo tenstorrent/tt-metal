@@ -200,6 +200,7 @@ private:
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
 
 std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer);
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(const HostBuffer& host_buffer);
 void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory);
 
 const std::shared_ptr<PinnedMemory>& ShardDataTransferGetPinnedMemory(

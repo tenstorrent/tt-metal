@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include "distributed/pinned_memory_cache.hpp"
 
 namespace tt::tt_metal {
 
@@ -15,7 +16,7 @@ public:
     HostTensorImpl(HostTensorImpl&& other) noexcept = default;
     HostTensorImpl& operator=(const HostTensorImpl& other) = default;
     HostTensorImpl& operator=(HostTensorImpl&& other) noexcept = default;
-    ~HostTensorImpl() = default;
+    ~HostTensorImpl() { experimental::PinnedMemoryCache::instance().release(buffer_); }
 
     // Two step construction for HostTensor,
     // for transiet purpose.
@@ -25,6 +26,7 @@ public:
     const DistributedHostBuffer& buffer() const& { return buffer_; }
     DistributedHostBuffer& buffer() & { return buffer_; }
     DistributedHostBuffer buffer() const&& { return buffer_; }
+    DistributedHostBuffer take_buffer() { return std::move(buffer_); }
     const TensorSpec& spec() const { return spec_; }
     const TensorTopology& topology() const { return topology_; }
     void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
@@ -80,6 +82,11 @@ HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
 }
 
 HostTensor::~HostTensor() = default;
+
+DistributedHostBuffer HostTensor::take_host_buffer() {
+    TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
+    return impl->take_buffer();
+}
 
 const TensorSpec& HostTensor::tensor_spec() const {
     TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");

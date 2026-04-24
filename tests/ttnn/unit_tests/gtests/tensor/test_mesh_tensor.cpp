@@ -831,5 +831,32 @@ TEST_F(MeshTensorDataMovementTest, NonUniformCopyToHost_ShedsExtraShards) {
     expect_host_tensors_eq(expected, dest);
 }
 
+// ---------------------------------------------------------------------------
+//  Large write roundtrip (exceeds pinned-memory threshold)
+// ---------------------------------------------------------------------------
+
+TEST_F(MeshTensorTest, LargeWriteRoundtrip_PinnedMemoryPath) {
+    // 1024 * 9216 * 4 bytes = 36 MB, above the 32 MB pinned-write threshold.
+    const ttnn::Shape shape{1, 1, 1024, 9216};
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    auto dhb = DistributedHostBuffer::create(mesh_device_->shape());
+    distributed::MeshCoordinateRange range(mesh_device_->shape());
+    std::vector<distributed::MeshCoordinate> coords(range.begin(), range.end());
+    dhb.emplace_shards(coords, [&](const distributed::MeshCoordinate&) {
+        std::vector<uint32_t> data(shape.volume());
+        std::iota(data.begin(), data.end(), 0);
+        return HostBuffer(std::move(data));
+    });
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
+    HostTensor host_tensor(std::move(dhb), spec, topology);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
+
+    expect_host_tensors_eq(host_tensor, result);
+}
+
 }  // namespace
 }  // namespace ttnn::distributed::test

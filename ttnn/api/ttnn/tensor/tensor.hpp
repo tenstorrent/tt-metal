@@ -245,6 +245,9 @@ public:
     const HostTensor& host_tensor() const&;
     const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
+    HostTensor& host_tensor() &;
+    HostTensor& host_tensor() && = delete;  // prevents dangling reference to temporaries.
+
     // Returns the associated MeshTensor.
     const MeshTensor& mesh_tensor() const&;
     const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
