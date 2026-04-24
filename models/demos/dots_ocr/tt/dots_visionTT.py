@@ -7,8 +7,8 @@ Reuses ttnn patterns from Qwen2.5-VL / Qwen3-VL (RMSNorm, SwiGLU MLP, LayerNorm+
 for norms/MLP. Rotary position + scaled dot-product attention run in torch with the
 same numerics as `reference/dots_ocr/modeling_dots_vision` (QKV/Proj in ttnn where noted).
 
-The reference `DotsViTPreprocessor` and `DotsVisionTransformer.rot_pos_emb` are used for
-patchify + RoPE indices so unpooled weights and geometry match the PyTorch model.
+The reference `DotsVisionTransformer.rot_pos_emb` is used for RoPE indices so unpooled
+geometry matches the PyTorch model.
 
 Typical `state_dict` prefix: ``"vision_tower."`` (keys like ``vision_tower.blocks.0...``).
 """
@@ -28,7 +28,6 @@ from models.common.rmsnorm import RMSNorm as TtRmsNorm
 from models.demos.dots_ocr.reference.dots_ocr.configuration_dots import DotsVisionConfig
 from models.demos.dots_ocr.reference.dots_ocr.modeling_dots_vision import (
     DotsVisionTransformer,
-    DotsViTPreprocessor,
     apply_rotary_pos_emb_vision,
 )
 from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm as TtLayerNorm
@@ -49,6 +48,7 @@ class DotsVisionTtConfig:
     post_norm: bool
     hidden_size: int
     patch_size: int
+    temporal_patch_size: int
     num_channels: int
 
     @property
@@ -78,6 +78,92 @@ def _qkv_from_state(state_dict: Dict[str, torch.Tensor], key: str) -> torch.Tens
 
 def _wo_from_state(state_dict: Dict[str, torch.Tensor], key: str) -> torch.Tensor:
     return state_dict[key].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+
+
+class DotsPatchEmbedTt(LightweightModule):
+    """TTNN counterpart of reference DotsPatchEmbed (proj + RMSNorm)."""
+
+    def __init__(
+        self,
+        mesh_device: Any,
+        state_dict: Dict[str, torch.Tensor],
+        state_dict_prefix: str,
+        cfg: DotsVisionTtConfig,
+        weight_cache_path: Optional[Any],
+    ):
+        super().__init__()
+        self.mesh = mesh_device
+        self.cfg = cfg
+        self.compute_cfg = _get_compute_cfg()
+        in_dim = cfg.num_channels * cfg.patch_size * cfg.patch_size
+
+        w_conv = state_dict[f"{state_dict_prefix}proj.weight"]  # [D, C, P, P]
+        w_lin = w_conv.reshape(cfg.embed_dim, in_dim).transpose(0, 1).unsqueeze(0).unsqueeze(0)
+        b_key = f"{state_dict_prefix}proj.bias"
+        b_proj = state_dict[b_key] if b_key in state_dict else None
+
+        cache = (
+            (lambda p: (weight_cache_path / p) if weight_cache_path else None) if weight_cache_path else lambda _: None
+        )
+        self.w_proj = ttnn.as_tensor(
+            w_lin,
+            dtype=ttnn.bfloat8_b,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            cache_file_name=cache(f"{state_dict_prefix}proj") if weight_cache_path else None,
+        )
+        self.b_proj = (
+            ttnn.as_tensor(
+                b_proj,
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            if b_proj is not None
+            else None
+        )
+        self.norm = TtRmsNorm(
+            device=mesh_device,
+            dim=cfg.embed_dim,
+            eps=cfg.rms_norm_eps,
+            state_dict=state_dict,
+            state_dict_prefix=state_dict_prefix,
+            weight_key="norm",
+            weight_cache_path=weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+        )
+
+    @torch.inference_mode()
+    def forward(self, x: torch.Tensor, grid_thw=None) -> torch.Tensor:
+        del grid_thw
+        x = x.view(-1, self.cfg.num_channels, self.cfg.temporal_patch_size, self.cfg.patch_size, self.cfg.patch_size)[
+            :, :, 0
+        ]
+        n = x.shape[0]
+        x = x.reshape(n, self.cfg.num_channels * self.cfg.patch_size * self.cfg.patch_size)
+        x_tt = ttnn.from_torch(
+            x.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            device=self.mesh,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        x_tt = ttnn.to_memory_config(x_tt, ttnn.DRAM_MEMORY_CONFIG)
+        x_proj = ttnn.linear(
+            x_tt,
+            self.w_proj,
+            bias=self.b_proj,
+            compute_kernel_config=self.compute_cfg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x_tt)
+        x_proj = self.norm(x_proj, mode=Mode.PREFILL)
+        x_torch = ttnn.to_torch(x_proj)
+        ttnn.deallocate(x_proj)
+        return x_torch[0, 0, :n, : self.cfg.embed_dim].to(x.dtype)
 
 
 class DotsMlpTt(LightweightModule):
@@ -474,8 +560,8 @@ class DotsVisionBlockTt(LightweightModule):
 
 class DotsVisionTransformerTT(LightweightModule):
     """
-    ttnn Dots vision trunk + merger. Patch + RoPE use the reference (torch) for bit-exact
-    numerics; trunk norms/attn/MLP/post/merger use ttnn.
+    ttnn Dots vision trunk + merger. RoPE uses the reference (torch) for bit-exact
+    indices; patch/trunk norms/attn/MLP/post/merger use ttnn.
     """
 
     def __init__(
@@ -512,18 +598,19 @@ class DotsVisionTransformerTT(LightweightModule):
             post_norm=bool(self.dots_cfg.post_norm),
             hidden_size=self.dots_cfg.hidden_size,
             patch_size=self.dots_cfg.patch_size,
+            temporal_patch_size=self.dots_cfg.temporal_patch_size,
             num_channels=self.dots_cfg.num_channels,
+        )
+        self.patch_embed = DotsPatchEmbedTt(
+            mesh_device,
+            state_dict,
+            f"{self.pfx}patch_embed.patchifier.",
+            self.cfg,
+            weight_cache_path,
         )
         # Reference geometry + rope (untrained) for `rot_pos_emb` (buffers only, deterministic).
         self._ref = DotsVisionTransformer(self.dots_cfg)
         self._ref.eval()
-        self._patch: DotsViTPreprocessor = self._ref.patch_embed
-        p_sd = {
-            k.replace(f"{self.pfx}patch_embed.", ""): v
-            for k, v in state_dict.items()
-            if k.startswith(f"{self.pfx}patch_embed.")
-        }
-        self._patch.load_state_dict(p_sd, strict=True)
         if self.dots_cfg.post_norm:
             self.post_norm = TtRmsNorm(
                 device=mesh_device,
@@ -545,10 +632,7 @@ class DotsVisionTransformerTT(LightweightModule):
 
     @torch.inference_mode()
     def _patchify(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
-        patch_dtype = self._patch.patchifier.proj.weight.dtype
-        if hidden_states.dtype != patch_dtype:
-            hidden_states = hidden_states.to(dtype=patch_dtype)
-        return self._patch(hidden_states, grid_thw)
+        return self.patch_embed(hidden_states, grid_thw)
 
     @torch.inference_mode()
     def _rot_pos(self, grid_thw: torch.Tensor) -> torch.Tensor:
