@@ -457,7 +457,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
-        # Combine expects ROW_MAJOR or TILE_LAYOUT input
+        # Combine expects ROW_MAJOR, until input BFLOAT8_B TILE_LAYOUT is fixed
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
         logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
 

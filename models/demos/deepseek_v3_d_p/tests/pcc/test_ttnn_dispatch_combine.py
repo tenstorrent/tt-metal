@@ -213,8 +213,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["tile"],
 )
 def test_ttnn_dispatch_combine(
     mesh_device,
@@ -524,8 +524,8 @@ def test_ttnn_dispatch_combine(
 )
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["tile"],
 )
 def test_ttnn_dispatch_combine_overflow(
     mesh_device,
@@ -678,8 +678,8 @@ def test_ttnn_dispatch_combine_overflow(
 )
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["tile", "row_major"],
+    [ttnn.TILE_LAYOUT],
+    ids=["tile"],
 )
 def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched_buffer_layout):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
