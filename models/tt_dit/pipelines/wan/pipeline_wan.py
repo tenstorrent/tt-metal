@@ -991,7 +991,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 permuted_noise_pred_tt = ts.model.combined_step(
                     do_classifier_free_guidance=self.do_classifier_free_guidance,
-                    spatial_1BNI=ttnn.typecast(permuted_model_input, ttnn.bfloat16),
+                    spatial_1BNI=permuted_model_input,
                     prompt_1BLP=ts.prompt_buffer,
                     negative_prompt_1BLP=ts.negative_prompt_buffer,
                     N=patchified_seqlen,

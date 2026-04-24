@@ -165,7 +165,7 @@ def test_unipc_constructor_validation() -> None:
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_unipc_set_schedule_resets_state(mesh_device: ttnn.MeshDevice) -> None:
-    """set_schedule should clear cached trajectory state between runs."""
+    """set_schedule should reset logical history without reallocating state buffers."""
     solver = UniPCSolver(
         scheduler=UniPCMultistepScheduler(
             use_flow_sigmas=True,
@@ -181,10 +181,16 @@ def test_unipc_set_schedule_resets_state(mesh_device: ttnn.MeshDevice) -> None:
     solver.step(step=0, latent=latent, velocity_pred=velocity)
 
     assert solver._state is not None
+    clean_preds = solver._state.clean_preds
+    corrected = solver._state.corrected
+    assert solver._state.oldest_idx == 1
 
     solver.set_schedule(_NUM_STEPS)
 
-    assert solver._state is None
+    assert solver._state is not None
+    assert solver._state.clean_preds == clean_preds
+    assert solver._state.corrected is corrected
+    assert solver._state.oldest_idx == 0
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)

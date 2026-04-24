@@ -142,6 +142,8 @@ class Tracer:
                 # Trace capture records commands but does not execute them. Execute the trace to
                 # actually compute outputs.
                 ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+                ttnn.synchronize_device(self._device)
+                ttnn.distributed_context_barrier()
 
             # Allow resources referenced by the function to be freed, which might be used to offload
             # weights.
@@ -172,6 +174,8 @@ class Tracer:
                     _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
 
             ttnn.execute_trace(self._device, self._trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+            ttnn.synchronize_device(self._device)
+            ttnn.distributed_context_barrier()
 
         return self._outputs
 

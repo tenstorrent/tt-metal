@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 class _State:
     clean_preds: tuple[ttnn.Tensor, ...]
     corrected: ttnn.Tensor
+    oldest_idx: int = 0
 
 
 class UniPCVariant(Enum):
@@ -61,7 +62,8 @@ class UniPCSolver(Solver):
 
     def set_schedule(self, num_inference_steps: int | None = None, *, device: object = None, **kwargs: object) -> None:
         super().set_schedule(num_inference_steps, device=device, **kwargs)
-        self._state = None
+        if self._state is not None:
+            self._state = _State(self._state.clean_preds, self._state.corrected, 0)
 
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
         self._assert_schedule()
@@ -72,24 +74,24 @@ class UniPCSolver(Solver):
             tuple(ttnn.empty_like(latent) for _ in range(self.order)),
             ttnn.empty_like(latent),
         )
+        clean_preds = _ordered_clean_preds(state.clean_preds, state.oldest_idx)
 
         if step != 0:
             corrected = self._correct(
                 order=_taper(self.order, step - 1, len(self._sigmas) - 1),
                 latent=state.corrected,
                 step=step - 1,
-                clean_preds=(*state.clean_preds, clean_pred),
+                clean_preds=(*clean_preds, clean_pred),
             )
         else:
             corrected = latent
 
-        del latent
-
         ttnn.copy(corrected, state.corrected)
         del corrected
 
-        ttnn.copy(clean_pred, state.clean_preds[0])
-        clean_preds = (*state.clean_preds[1:], state.clean_preds[0])
+        ttnn.copy(clean_pred, state.clean_preds[state.oldest_idx])
+        oldest_idx = (state.oldest_idx + 1) % self.order
+        clean_preds = _ordered_clean_preds(state.clean_preds, oldest_idx)
         del clean_pred
 
         predicted = self._predict(
@@ -99,7 +101,7 @@ class UniPCSolver(Solver):
             clean_preds=clean_preds,
         )
 
-        self._state = _State(clean_preds, state.corrected)
+        self._state = _State(state.clean_preds, state.corrected, oldest_idx)
         return predicted
 
     def _predict(
@@ -171,6 +173,10 @@ class UniPCSolver(Solver):
 
 def _taper(order: int, step: int, num_steps: int) -> int:
     return min(order, step + 1, num_steps - step)
+
+
+def _ordered_clean_preds(clean_preds: tuple[ttnn.Tensor, ...], oldest_idx: int) -> tuple[ttnn.Tensor, ...]:
+    return clean_preds[oldest_idx:] + clean_preds[:oldest_idx]
 
 
 def _log(x: float, /) -> float:
