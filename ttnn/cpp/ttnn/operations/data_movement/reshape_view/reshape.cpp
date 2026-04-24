@@ -287,18 +287,19 @@ ttnn::Tensor reshape_tiled(
     auto updated_mem_config = memory_config;
     // If block/height-sharded output, compute the correct shard spec
     if (updated_mem_config.is_sharded()) {
-        // Synthesize a TensorLayout that reproduces the requested padded shape via an explicit alignment, but with an
-        // interleaved MemoryConfig (no shard_spec). Dropping the shard_spec is what lets the TensorSpec constructor
-        // below skip its shape-fits-shard-grid validation, which would otherwise apply the *input* shard_spec to the
-        // *output* shape and fatal. Pinning the alignment to requested_padded_shape_3d's last two dims (rather than
-        // relying on the page_config's default tile alignment) ensures synthetic_spec.physical_shape() exactly
-        // matches the requested padded shape, even if compute_padded_shape ever produced dims that exceed
-        // tile alignment (e.g., due to shard-aware padding).
-        auto synthetic_layout = TensorLayout(
+        // Synthesize TensorLayout from the requested padded shape, but with an interleaved
+        // MemoryConfig (no shard_spec). Dropping the shard_spec is what lets the TensorSpec
+        // constructor below skip its shape-fits-shard-grid validation, which would otherwise
+        // apply the *input* shard_spec to the *output* shape and fatal. The padded shape
+        // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
+        // exactly matches the requested padded shape, even if compute_padded_shape ever produced
+        // dimensions that exceed tile alignment (e.g., due to shard-aware padding).
+        auto synthetic_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor3d.dtype(),
-            PageConfig(tensor3d.layout()),
+            tensor3d.tensor_spec().page_config(),
             MemoryConfig(updated_mem_config.buffer_type()),
-            tt::tt_metal::Alignment{requested_padded_shape_3d[-2], requested_padded_shape_3d[-1]});
+            requested_shape_3d,
+            requested_padded_shape_3d);
 
         // Construct synthetic TensorSpec
         tt::tt_metal::TensorSpec synthetic_spec(requested_shape_3d, synthetic_layout);
