@@ -193,12 +193,15 @@ E2E inference (median of 9 post-edit / 6 baseline runs at seq=1024): **0.368s �
 
 ### Falcon7b
 
-1. **mm_4h_to_h upgrade to `(4, 2)` + `row_major_output=True`**
-   - DST volume 6/8 → 8/8 (expected ~5% additional kernel-time reduction on this op)
-   - Blocked by L1 overflow: `Statically allocated circular buffers ... clash with L1 buffers`
-     at rmo's forced `out_cb`/`interm0_cb` split
-   - Workaround: drop `in0_block_w` from 8 to 4 to free L1 (in1 CB halves: 156→78 KB). Would
-     double K-iterations (72→144), unclear if net positive — would need measurement.
+1. **mm_4h_to_h upgrade to `(4, 2)` + `row_major_output=True`** — **tested 2026-04-24, not
+   worth it (dead end empirically verified).**
+   - At original `in0_block_w=8`: L1 overflows from rmo's forced `out_cb`/`interm0_cb` split.
+   - At `in0_block_w=4` (halves in1 CB, frees the needed L1): compiles fine. 3-run median
+     3752.3 sps vs current `(1, 6) + in0_block_w=8` at ~3745 sps = **+0.2%** (below 5% bar).
+   - Mechanism: K-iteration doubling (72 → 144 iters on Kt=576) imposes per-iter LLK overhead
+     that roughly cancels the subblock DST volume gain (6/8 → 8/8). Net flat.
+   - Conclusion: this specific shape doesn't benefit from the (4,2)+rmo+lower-ibw tradeoff.
+     Staying with legacy `(1, 6)` at `in0_block_w=8` is correct for `DENSE_4H_TO_H`.
 
 2. **FUSED_QKV_MM_OPTIMIZED_PROGCFG** (`per_core_M=8, per_core_N=21`)
    - Commented-out developer intent: `out_subblock_w=1, # 7,` → legacy-compatible `(1, 7)` volume 7/8
