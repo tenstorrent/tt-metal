@@ -18,6 +18,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace tt::tt_fabric {
 

@@ -16,9 +16,12 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    MAX_PAYLOAD_SIZE_BH,
+    MAX_PAYLOAD_SIZE_WH,
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
@@ -41,10 +44,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
-        (128, 7 * 1024, 16, 4, 2),
+        pytest.param(128, 7 * 1024, 16, 4, 5, True, id="pcc"),
+        pytest.param(3200, 7168, 64, 2, 3, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -193,6 +199,106 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
             id="mesh-2x4",
         ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="perf-linear-8-1link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="perf-linear-8-2link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-linear-8-1link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-linear-8-2link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="perf-ring-8-1link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_WH),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="perf-ring-8-2link-7k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            1,
+            ttnn.Topology.Ring,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-ring-8-1link-14k",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=MAX_PAYLOAD_SIZE_BH),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=[
+                pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                pytest.mark.skipif(not is_blackhole(), reason="14K payload exceeds Wormhole hardware limit"),
+            ],
+            id="perf-ring-8-2link-14k",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -203,10 +309,11 @@ def test_ttnn_combine(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
+    run_pcc_check,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     torch.manual_seed(42)
@@ -226,14 +333,26 @@ def test_ttnn_combine(
 
     signpost(
         f"Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} "
-        f"{num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"{num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
     # Compute configuration
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
-    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
@@ -274,7 +393,7 @@ def test_ttnn_combine(
     )
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -292,6 +411,7 @@ def test_ttnn_combine(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -327,6 +447,13 @@ def test_ttnn_combine(
         device=mesh_device,
         dtype=ttnn.int32,
     )
+    tt_expert_region_offsets = ttnn.from_torch(
+        expert_region_offsets,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
 
     torch_combine = TorchCombineModule(
         dispatch_group_size=dispatch_group_size,
@@ -336,7 +463,7 @@ def test_ttnn_combine(
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
+    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts, expert_region_offsets)
 
     # Run ttnn combine
     tt_combine = TtCombineModule(
@@ -356,7 +483,13 @@ def test_ttnn_combine(
         tt_dispatched_buffer,
         tt_dispatched_metadata,
         tt_expert_token_counts,
+        tt_expert_region_offsets,
     )
+
+    if not run_pcc_check:
+        ttnn.synchronize_device(mesh_device)
+        logger.debug("Skipping PCC validation (run_pcc_check=False)")
+        return
 
     # Step 6: Convert ttnn output to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)

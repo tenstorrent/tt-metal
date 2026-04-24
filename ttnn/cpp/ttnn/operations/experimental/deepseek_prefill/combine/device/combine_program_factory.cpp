@@ -105,6 +105,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     const auto& dispatched_buffer = tensor_args.dispatched_buffer;
     const auto& dispatched_metadata = tensor_args.dispatched_metadata;
     const auto& expert_token_counts = tensor_args.expert_token_counts;
+    const auto& expert_region_offsets = tensor_args.expert_region_offsets;
     const auto& output_tensor = tensor_return_value;
 
     auto* mesh_device = dispatched_buffer.device();
@@ -143,7 +144,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
-    auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
+    auto max_dispatched_tokens_per_expert = dispatched_shape[-2] / operation_attributes.experts_per_chip;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     // Maximum worker cores: one per fabric link.
@@ -199,6 +200,14 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*buffering_factor=*/detail::get_num_pages(expert_token_counts),
         /*cb_id=*/tt::CBIndex::c_2,
         "expert_token_counts");
+    // c_8: expert_region_offsets (reader-only, full tensor)
+    detail::create_tensor_cb(
+        program,
+        sender_core_grid,
+        expert_region_offsets,
+        /*buffering_factor=*/detail::get_num_pages(expert_region_offsets),
+        /*cb_id=*/tt::CBIndex::c_8,
+        "expert_region_offsets");
 
     // c_3, c_4: reader→writer CBs for (route_info, output) per remote entry.
     // The reader pushes both per entry in lockstep, so small buffering (2) suffices.
@@ -295,11 +304,45 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         read_batch_size,
     };
 
-    // Append TensorAccessorArgs for all 4 tensors
+    // Compute and append num_dispatch_groups (index 34, after read_batch_size at 33) from tensor dimensions.
+    // This decouples the combine kernel from the assumption that mesh_cols == num_dispatch_groups.
+    {
+        auto counter_shape = expert_token_counts.tensor_spec().logical_shape();
+        uint32_t num_routed_experts = counter_shape[-1];
+        TT_FATAL(operation_attributes.experts_per_chip > 0, "experts_per_chip must be > 0");
+        TT_FATAL(operation_attributes.dispatch_group_size > 0, "dispatch_group_size must be > 0");
+        TT_FATAL(num_routed_experts > 0, "num_routed_experts must be > 0");
+        uint32_t computed_ndg =
+            num_routed_experts / (operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size);
+        TT_FATAL(
+            computed_ndg > 0 &&
+                computed_ndg * operation_attributes.experts_per_chip * operation_attributes.dispatch_group_size ==
+                    num_routed_experts,
+            "num_dispatch_groups computation failed: routed_experts={} experts_per_chip={} group_size={}",
+            num_routed_experts,
+            operation_attributes.experts_per_chip,
+            operation_attributes.dispatch_group_size);
+        compile_time_args.push_back(computed_ndg);
+
+        log_debug(
+            tt::LogOp,
+            "Combine: num_routed_experts={} computed num_dispatch_groups={}",
+            num_routed_experts,
+            computed_ndg);
+    }
+
+    // Expert region offsets tensor metadata (indices 35-38): CB id, pages, page sizes
+    compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_8));
+    compile_time_args.push_back(detail::get_num_pages(expert_region_offsets));
+    compile_time_args.push_back(detail::get_page_size(expert_region_offsets));
+    compile_time_args.push_back(detail::get_aligned_page_size(expert_region_offsets));
+
+    // Append TensorAccessorArgs for all 5 tensors (starting at index 39)
     tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_region_offsets.buffer()).append_to(compile_time_args);
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
@@ -463,6 +506,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             dispatched_buffer.buffer()->address(),
             dispatched_metadata.buffer()->address(),
             expert_token_counts.buffer()->address(),
+            expert_region_offsets.buffer()->address(),
             output_tensor.buffer()->address(),
             zero_init_semaphore_id,
             zero_init_barrier_semaphore_id,
@@ -482,6 +526,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             dispatched_buffer.buffer()->address(),
             dispatched_metadata.buffer()->address(),
             expert_token_counts.buffer()->address(),
+            expert_region_offsets.buffer()->address(),
             output_tensor.buffer()->address(),
             zero_init_semaphore_id,
             (uint32_t)init_semaphore.address(),
@@ -558,13 +603,15 @@ void CombineProgramFactory::override_runtime_arguments(
             reader_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.expert_token_counts.buffer()->address();
-            reader_runtime_args.at(3) = tensor_return_value.buffer()->address();
+            reader_runtime_args.at(3) = tensor_args.expert_region_offsets.buffer()->address();
+            reader_runtime_args.at(4) = tensor_return_value.buffer()->address();
 
             writer_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
             writer_runtime_args.at(2) = tensor_args.expert_token_counts.buffer()->address();
-            writer_runtime_args.at(3) = tensor_return_value.buffer()->address();
-            writer_runtime_args.at(5) = (uint32_t)shared_variables.init_semaphore.address();
+            writer_runtime_args.at(3) = tensor_args.expert_region_offsets.buffer()->address();
+            writer_runtime_args.at(4) = tensor_return_value.buffer()->address();
+            writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
         }
 
         for (const auto& core : shared_variables.zero_init_cores) {

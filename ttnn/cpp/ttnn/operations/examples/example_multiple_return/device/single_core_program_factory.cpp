@@ -77,10 +77,12 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
     bool math_approx_mode = false;
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .math_approx_mode = math_approx_mode, .compile_args = {}});
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = {}});
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

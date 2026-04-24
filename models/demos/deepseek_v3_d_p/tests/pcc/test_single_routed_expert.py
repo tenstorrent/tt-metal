@@ -20,25 +20,15 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
-    "use_routed_matmul",
-    [
-        pytest.param(False, id="stock-matmul"),
-        pytest.param(True, id="routed-matmul"),
-    ],
-)
-@pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
     [
         (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
+        (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
+        (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
         (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
-        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        # 25K-ish — rounded down to the nearest multiple of FIXED_EXPERT_LENGTH (2048)
-        # so the chunk loop's last iteration stays tile-aligned. Plain 25000 is not
-        # a multiple of 32 and ttnn.narrow rejects the ragged tail.
-        (24576, 7168, 2048),  # DeepSeek V3 dims, 24K tokens (12 × 2048)
     ],
-    ids=["ds-v3-1k", "ds-v3-2k", "ds-v3-4k", "ds-v3-8k", "ds-v3-24k"],
+    ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-4k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -57,17 +47,12 @@ def test_single_routed_expert(
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,
-    use_routed_matmul: bool,
 ):
     """
     Simplest test: 1 chip, 1 expert.
 
     Perfect for profiling the core FFN computation without any mesh complexity.
     """
-    # Stock matmul only supports up to 4K tokens; 8K and 25K require routed-matmul.
-    if not use_routed_matmul and num_tokens > 4096:
-        pytest.skip("stock-matmul is only validated up to 4K tokens")
-
     experts_per_chip = 1
 
     signpost(f"SingleRoutedExpert {num_tokens=} {emb_dim=} {hidden_dim=}")
@@ -86,17 +71,17 @@ def test_single_routed_expert(
     # Create torch reference
     torch_expert = TorchExpert(emb_dim, hidden_dim, weights)
 
-    # Create random input: (experts_per_chip, num_tokens, emb_dim)
-    torch_input = torch.randn(experts_per_chip, num_tokens, emb_dim, dtype=torch.float32)
+    # 2D input (num_tokens, emb_dim) — the single expert's dispatch buffer.
+    torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
     logger.debug(f"Input shape: {torch_input.shape}")
 
     # Run torch reference
     logger.debug("Running torch reference...")
     with torch.no_grad():
-        torch_output = torch_expert(torch_input[0])  # Process first (only) expert's tokens
+        torch_output = torch_expert(torch_input)
     logger.debug(f"Torch output shape: {torch_output.shape}")
 
-    # Create TTNN input
+    # Create TTNN input: 2D (num_tokens, emb_dim), replicated across the 1-device mesh.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -106,79 +91,51 @@ def test_single_routed_expert(
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
-    # Build fake guard tensors to exercise the routed-matmul kernel path.
-    # ROW_MAJOR_LAYOUT uint32; element [i] lands at logical index i. The kernel-side
-    # guard uses TensorAccessor so per-index reads resolve to the correct DRAM bank
-    # regardless of interleaving. Shape (32,) gives one page per tensor — the guard
-    # reads that page once and indexes within L1 scratch.
-    global_expert_idx_table = None
-    expert_token_counts_tt = None
-    if use_routed_matmul:
-        num_global_experts = experts_per_chip  # single-chip test: globals == locals
-        pad = 32
-
-        # Identity mapping: local slot i -> global id i.
-        global_table_torch = torch.zeros((pad,), dtype=torch.int32)
-        for i in range(experts_per_chip):
-            global_table_torch[i] = i
-
-        # Real token count per global expert; other slots stay at 0 (guard skips).
-        token_counts_torch = torch.zeros((pad,), dtype=torch.int32)
-        for i in range(num_global_experts):
-            token_counts_torch[i] = num_tokens
-
-        global_expert_idx_table = ttnn.from_torch(
-            global_table_torch,
-            dtype=ttnn.uint32,
+    # Single-expert auxiliaries (1D, length 1, UINT32 ROW_MAJOR DRAM):
+    #   - global_expert_idx_table[0] = 0   (local 0 -> global 0)
+    #   - expert_token_counts[0]     = num_tokens
+    #   - expert_region_offsets[0]   = 0   (expert's slice starts at row 0)
+    def _make_idx_tensor(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        expert_token_counts_tt = ttnn.from_torch(
-            token_counts_torch,
             dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        ttnn.synchronize_device(mesh_device)
-        logger.debug(f"Fake guard tensors created (identity table, counts={num_tokens})")
+
+    global_expert_idx_tt = _make_idx_tensor([0])
+    expert_token_counts_tt = _make_idx_tensor([num_tokens])
+    expert_region_offsets_tt = _make_idx_tensor([0])
 
     # Create TtRoutedExpert
     logger.debug("Creating TtRoutedExpert...")
     tt_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         max_tokens=num_tokens,
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        global_expert_idx_table=global_expert_idx_table,
     )
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
-    tt_output = tt_expert(
-        tt_input,
-        expert_token_counts=expert_token_counts_tt,
-    )
+    tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
-    # Convert back to torch for comparison
+    # Convert back to torch for comparison. For a 1-device replicated tensor,
+    # ConcatMeshToTensor(dim=0) with 1 slice is a no-op that returns the tensor.
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )
-    # Extract the single expert output: (experts_per_chip, num_tokens, emb_dim) -> (num_tokens, emb_dim)
-    tt_output_single = tt_output_torch[0]
-    logger.debug(f"TTNN output (torch) shape: {tt_output_single.shape}")
+    logger.debug(f"TTNN output (torch) shape: {tt_output_torch.shape}")
 
     # Compare PCC
-    _, pcc = comp_pcc(torch_output, tt_output_single)
+    _, pcc = comp_pcc(torch_output, tt_output_torch)
     logger.debug(f"PCC: {pcc:.6f}")
 
     # Validate

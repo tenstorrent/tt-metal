@@ -13,6 +13,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "internal/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include <array>
 #include <type_traits>
 
 using namespace tt::tt_fabric;
@@ -21,6 +22,15 @@ namespace tt::tt_fabric {
 
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = RoutingFieldsConstants::Mesh;
+
+inline constexpr std::array<std::uint8_t, static_cast<std::size_t>(eth_chan_directions::COUNT)>
+    single_hop_route_cmd_by_direction = {
+        MeshRoutingFields::FORWARD_WEST,   // EAST
+        MeshRoutingFields::FORWARD_EAST,   // WEST
+        MeshRoutingFields::FORWARD_SOUTH,  // NORTH
+        MeshRoutingFields::FORWARD_NORTH,  // SOUTH
+        MeshRoutingFields::NOOP,           // Z
+};
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
@@ -31,6 +41,31 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
         return static_cast<eth_chan_directions>(
             routing_table->inter_mesh_direction_table.get_original_direction(dst_mesh_id));
     }
+}
+
+// Contract: the destination is the final destination and is exactly one EWNS physical fabric hop away.
+// Do not use this helper for Z / inter-mesh traffic, which still relies on router recompute metadata.
+void fabric_set_single_hop_unicast_route_from_direction(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    eth_chan_directions next_hop_direction,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id) {
+    ASSERT(next_hop_direction != eth_chan_directions::Z);
+
+    const auto dir_idx = static_cast<std::uint8_t>(next_hop_direction);
+    ASSERT(dir_idx < eth_chan_directions::COUNT);
+
+    // Edge-router recompute still inspects dst_start_node_id and mcast_params_64 on same-mesh worker traffic.
+    packet_header->mcast_params_64 = 0;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.value = 0;
+    packet_header->route_buffer[0] = single_hop_route_cmd_by_direction[dir_idx];
+}
+
+void fabric_set_single_hop_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
+    fabric_set_single_hop_unicast_route_from_direction(
+        packet_header, get_next_hop_router_direction(dst_mesh_id, dst_dev_id), dst_dev_id, dst_mesh_id);
 }
 
 template <bool mcast = false>

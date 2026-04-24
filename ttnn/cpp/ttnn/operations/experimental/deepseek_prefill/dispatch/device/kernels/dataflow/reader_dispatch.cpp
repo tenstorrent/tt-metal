@@ -86,8 +86,12 @@ void kernel_main() {
     // Batch configuration (index 48)
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(48);
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 49)
-    constexpr auto input_args = TensorAccessorArgs<49>();
+    // Total dispatch buffer token capacity (shared across all local experts).
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(49);
+
+    // TensorAccessorArgs for all 7 tensors (starting at index 50, after the
+    // trailing max_dispatch_buffer_token_size arg).
+    constexpr auto input_args = TensorAccessorArgs<50>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -211,15 +215,14 @@ void kernel_main() {
                     continue;
                 }
                 auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
-                auto expert_index_within_chip = routed_expert % experts_per_chip;
                 auto& offset = offsets[routed_expert];
-                if (offset >= max_dispatched_tokens_per_expert) {
+                if (offset >= max_dispatch_buffer_token_size) {
                     // Token would overflow the dispatch buffer - skip to prevent
                     // out-of-bounds DRAM writes that corrupt memory and cause hangs.
                     offset++;
                     continue;
                 }
-                auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
+                auto page_idx = offset;
 
                 if (expert_chip == linearized_mesh_coord) {
                     volatile tt_l1_ptr int32_t* metadata =

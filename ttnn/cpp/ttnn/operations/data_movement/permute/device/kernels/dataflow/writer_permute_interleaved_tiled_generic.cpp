@@ -3,6 +3,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // X = output width
@@ -73,6 +74,7 @@ void kernel_main() {
     constexpr uint32_t X_t = X_p / TILE_HEIGHT;
 
     constexpr auto cb_out = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_out_exp(cb_out);
 
     //--------------------------------------------------------------------------
     // 3) Runtime Arguments
@@ -206,8 +208,8 @@ void kernel_main() {
         }
 
         // Wait for 1 tile from cb_out
-        cb_wait_front(cb_out, 1);
-        uint32_t transposed_buffer_read_addr = get_read_ptr(cb_out);
+        cb_out_exp.wait_front(1);
+        uint32_t transposed_buffer_read_addr = cb_out_exp.get_read_ptr();
 
         // ---------------------------------------------------------------------
         // 6.1) Write out each W in [w_start..w_end)
@@ -247,7 +249,7 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        cb_out_exp.pop_front(1);
     }
 
     //--------------------------------------------------------------------------
@@ -262,8 +264,9 @@ void kernel_main() {
         // We'll reuse 'dest_multi_idx' for tile indexing
         dest_multi_idx[RANK - 2] = y_t;  // fix the tile dimension in the RANK-2 dimension
 
-        cb_wait_front(tt::CBIndex::c_3, 1);
-        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_3);
+        experimental::CircularBuffer cb3(tt::CBIndex::c_3);
+        cb3.wait_front(1);
+        uint32_t l1_read_ptr = cb3.get_read_ptr();
 
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Unflatten 'tile_idx' => dest_multi_idx
@@ -302,6 +305,6 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(tt::CBIndex::c_3, 1);
+        cb3.pop_front(1);
     }
 }
