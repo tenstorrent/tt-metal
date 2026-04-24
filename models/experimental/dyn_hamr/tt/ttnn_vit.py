@@ -331,7 +331,6 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     del head_dim
     dev = hidden.device()
     ckcfg = _fused_compute_config(dev)
-    ckcfg_lofi = _fused_compute_config_lofi(dev)
     _L1 = ttnn.L1_MEMORY_CONFIG
 
     # --- self-attention via FlashAttention-2 ---
@@ -360,13 +359,13 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     )
     hidden = ttnn.add(hidden, attn_out, memory_config=_L1)
 
-    # --- MLP: LoFi for BFP4 weights (compute-bound now that activations stay in L1) ---
+    # --- MLP: fc1 with fused GELU, fc2 with fused bias ---
     h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"], memory_config=_L1)
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc1_w"],
         bias_tensor=block_params["mlp"]["fc1_b"],
         config=_mm_cfg(192, 1280, 5120, dev),
-        compute_kernel_config=ckcfg_lofi,
+        compute_kernel_config=ckcfg,
         fused_activation=(ttnn.UnaryOpType.GELU, False),
         memory_config=_L1,
     )
@@ -374,7 +373,7 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
         h, block_params["mlp"]["fc2_w"],
         bias_tensor=block_params["mlp"]["fc2_b"],
         config=_mm_cfg(192, 5120, 1280, dev),
-        compute_kernel_config=ckcfg_lofi,
+        compute_kernel_config=ckcfg,
         memory_config=_L1,
     )
     hidden = ttnn.add(hidden, h, memory_config=_L1)
