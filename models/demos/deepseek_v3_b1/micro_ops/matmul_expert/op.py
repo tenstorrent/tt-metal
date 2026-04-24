@@ -120,7 +120,10 @@ def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_
             ttnn.BufferType.L1,
             core_shard_spec,
         )
-        core_mem_config.experimental_set_per_core_allocation(True)
+        # Lockstep alloc so CB allocator sees these regions (per-core alloc is
+        # invisible to CBs and can silently stomp). Flip back to per-core if any
+        # workload needs core-specific L1 offsets for these meta tensors.
+        # core_mem_config.experimental_set_per_core_allocation(True)
         tensors[core_idx] = ttnn.from_torch(
             core_torch,
             dtype=ttnn.uint8,
@@ -153,7 +156,10 @@ def upload_per_core_uint16_tensor(device, all_cores, per_core_data, entries_per_
             ttnn.BufferType.L1,
             core_shard_spec,
         )
-        core_mem_config.experimental_set_per_core_allocation(True)
+        # Lockstep alloc so CB allocator sees these regions (per-core alloc is
+        # invisible to CBs and can silently stomp). Flip back to per-core if any
+        # workload needs core-specific L1 offsets for these meta tensors.
+        # core_mem_config.experimental_set_per_core_allocation(True)
         tensors[core_idx] = ttnn.from_torch(
             core_torch,
             dtype=ttnn.uint8,
@@ -741,18 +747,19 @@ def create_dram_expert_metadata(
         device, compute_cores_list, per_core_block_sizes, num_experts * num_iterations_local
     )
 
+    def _tensor_l1_addr(t, core):
+        # Lockstep tensors return the shared device-wide address via buffer_address();
+        # per-core-allocated tensors require experimental_per_core_buffer_address(core).
+        if hasattr(t, "is_per_core_allocated") and t.is_per_core_allocated():
+            return t.experimental_per_core_buffer_address(core)
+        return t.buffer_address()
+
     expert_offsets_l1_addr_core_values = [
-        (
-            compute_cores_list[i],
-            offset_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
-        )
+        (compute_cores_list[i], _tensor_l1_addr(offset_tensors[i], compute_cores_list[i]))
         for i in range(num_total_cores)
     ]
     block_sizes_l1_addr_core_values = [
-        (
-            compute_cores_list[i],
-            block_size_tensors[i].experimental_per_core_buffer_address(compute_cores_list[i]),
-        )
+        (compute_cores_list[i], _tensor_l1_addr(block_size_tensors[i], compute_cores_list[i]))
         for i in range(num_total_cores)
     ]
 
@@ -966,15 +973,23 @@ def create_dram_expert_tensors_multi_device(
     backing_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, backing_shard_spec
     )
-    dram_backing_tensor = ttnn.from_torch(
-        torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
-        dtype=ttnn.uint8,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=backing_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    if allocate_in1_backing:
+        dram_backing_tensor = ttnn.from_torch(
+            torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=backing_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    else:
+        # Caller (e.g. fused MoE) will overlay cb_in1 and cb_fmt on its own L1 region
+        # (e.g. SDPA buffer) and fill in fmt_cb_l1_addr downstream. Skipping the
+        # replicated backing tensor eliminates a separate L1 allocation that the CB
+        # allocator didn't see (potential silent stomp source).
+        dram_backing_tensor = None
+        cb_in1_base_shifted = 0
     max_subblock_bytes_shifted = (subblock_k * subblock_n * max_tile_size) >> _CB_ADDR_SHIFT
 
     # fmt metadata sync: 2 global sems as atomic counters (0..2).
@@ -993,12 +1008,15 @@ def create_dram_expert_tensors_multi_device(
     pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
     ttnn.synchronize_device(mesh_device)
-    fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
-
-    logger.info(
-        f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
-        f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
-    )
+    if dram_backing_tensor is not None:
+        fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
+        logger.info(
+            f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
+            f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
+        )
+    else:
+        fmt_cb_l1_addr = 0  # placeholder; caller overrides in its CB overlay pass.
+        logger.info(f"  dram_backing SKIPPED (caller will overlay); in1={in1_region_bytes}B, fmt={fmt_region_bytes}B")
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
     # K-split: each core's fmt describes only its K-slice's blocks.

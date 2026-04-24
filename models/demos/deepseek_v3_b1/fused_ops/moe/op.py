@@ -553,6 +553,9 @@ class MoeRoutedExpertOp:
             n_parallel_per_bank=cores_per_dram_bank,
             num_total_experts=num_total_experts,
             is_dram_flags=is_dram_flags,
+            # MoE overlays cb_in1 + cb_fmt on the SDPA buffer in _overlap_cbs_with_sdpa_buffer;
+            # skip the helper's separate L1 backing tensor (invisible to CB allocator, can stomp).
+            allocate_in1_backing=False,
         )
 
         # dram_results layout (one entry per mesh coordinate) is pr42896's 15-element tuple:
@@ -1538,39 +1541,12 @@ class MoeRoutedExpertOp:
                 if "expert_offsets_l1_addr_per_device" in p:
                     p["index_l1_addr"] = index_l1_addr
 
-        # Build cb_fmt CB descriptors for MatmulExpertCompressedDRAM.
-        # Canonical (micro_ops/matmul_expert/op.py:414-427) aliases cb_fmt OVER the
-        # dram_backing_tensor at address_offset=in1_region_bytes so the CB's L1 base
-        # matches fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes.
-        # NCRISC writes fmt via raw L1 pointer at fmt_cb_l1_addr; compute reads via the
-        # CB interface — both must resolve to the same physical L1 region.
-        _dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
-
-        def _build_cb_fmt_descriptor(cb_id, params):
-            if "fmt_per_expert_bytes" not in params:
-                return None
-            fmt_bytes = params["fmt_per_expert_bytes"]
-            page_size = ((max(fmt_bytes, _dram_alignment) + _dram_alignment - 1) // _dram_alignment) * _dram_alignment
-            in1_region_bytes = params["cb_in1_size_bytes"]
-            in1_backing_tensor = params["in1_backing_tensor"]
-            cb_fmt_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                cb_id,
-                in1_backing_tensor,
-                address_offset=in1_region_bytes,
-                total_size=page_size,
-            )
-            cb_fmt_desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=cb_id,
-                    data_format=ttnn.uint8,
-                    page_size=page_size,
-                ),
-            ]
-            return cb_fmt_desc
-
-        gate_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(gate_proj_cb_fmt, gate_proj_params)
-        up_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(up_proj_cb_fmt, up_proj_params)
-        down_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(down_proj_cb_fmt, down_proj_params)
+        # cb_fmt descriptors are now created inside `_overlap_cbs_with_sdpa_buffer`
+        # (aliased on the SDPA KV buffer before cb_in1). Stub values here; overwritten
+        # after overlay so the CB allocator sees the fmt L1 region and won't stomp it.
+        gate_proj_cb_fmt_descriptor = None
+        up_proj_cb_fmt_descriptor = None
+        down_proj_cb_fmt_descriptor = None
 
         # ==================================================================
         # Eltwise Add: down_proj + shared_expert_output
@@ -4163,9 +4139,46 @@ class MoeOp:
         routed_ctx.add_params["cb_in1_descriptor"] = cb23_desc
         kv_offset += cb23_total_size
 
-        # ── CB 9/18: DRAM matmul in1 (gate/up_proj and down_proj share same offset) ──
+        # ── cb_fmt for gate/up/down matmul_expert: allocate in SDPA before cb_in1 so the
+        # CB allocator sees them (no separate in1_backing_tensor needed; fmt_cb_l1_addr
+        # is set here to the SDPA offset and threaded into CT args via proj_params).
+        up_proj_params = routed_ctx.up_proj_params
         gate_proj_params = routed_ctx.gate_proj_params
         down_proj_params = routed_ctx.down_proj_params
+
+        def _overlay_cb_fmt(params, cb_id, proj_label):
+            fmt_page_size = params["fmt_cb_page_size"]
+            # Double-buffered: 2 slots × page_size bytes (kernel toggles fmt_slot ^= 1).
+            fmt_region = 2 * fmt_page_size
+            nonlocal kv_offset
+            fmt_offset = kv_offset
+            desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb_id,
+                kv_buf,
+                address_offset=fmt_offset,
+                total_size=fmt_page_size,
+            )
+            desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_id,
+                    data_format=ttnn.uint8,
+                    page_size=fmt_page_size,
+                ),
+            ]
+            params["fmt_cb_l1_addr"] = kv_addr + fmt_offset
+            params["cb_fmt_descriptor_override"] = desc
+            kv_offset += fmt_region
+            logger.info(
+                f"  cb_fmt[{proj_label}] overlay: offset={fmt_offset} size={fmt_region} "
+                f"fmt_cb_l1_addr=0x{params['fmt_cb_l1_addr']:x}"
+            )
+            return desc
+
+        routed_ctx.gate_proj_cb_fmt_descriptor = _overlay_cb_fmt(gate_proj_params, routed_ctx.gate_proj_cb_fmt, "gate")
+        routed_ctx.up_proj_cb_fmt_descriptor = _overlay_cb_fmt(up_proj_params, routed_ctx.up_proj_cb_fmt, "up")
+        routed_ctx.down_proj_cb_fmt_descriptor = _overlay_cb_fmt(down_proj_params, routed_ctx.down_proj_cb_fmt, "down")
+
+        # ── CB 9/18: DRAM matmul in1 (gate/up_proj and down_proj share same offset) ──
         cb9_total_size = gate_proj_params["in1_total_size"]
         cb18_total_size = down_proj_params["in1_total_size"]
         shared_in1_size = max(cb9_total_size, cb18_total_size)
@@ -5432,6 +5445,110 @@ class MoeOp:
 
         # Apply broadcast modifications (no-op when bcast disabled)
         self._build_bcast_per_device(coord, row, col, chip_id)
+
+        # Debug dump: write device-0 setup state to /tmp for cross-test diffing.
+        # Run single-device test → /tmp/moe_dump_single_dev0.txt.
+        # Run multi-device test  → /tmp/moe_dump_multi_dev0.txt.
+        if row == 0 and col == 0:
+            try:
+                self._dump_setup_debug()
+            except Exception as e:
+                logger.warning(f"MoE debug dump failed: {e}")
+
+    def _dump_setup_debug(self):
+        """Write device-0 CT args, per-core descs, CB descs, and proj params to a file."""
+        ctx = self.ctx
+        routed = ctx.routed_ctx
+        is_single = ctx.mesh_rows * ctx.mesh_cols == 1
+        suffix = "single" if is_single else "multi"
+        path = f"/tmp/moe_dump_{suffix}_dev0.txt"
+
+        def fmt_val(v):
+            if isinstance(v, (int, bool, float, str)):
+                return repr(v)
+            if isinstance(v, dict):
+                return f"<dict len={len(v)}>"
+            if isinstance(v, list):
+                return f"<list len={len(v)}>"
+            return f"<{type(v).__name__}>"
+
+        with open(path, "w") as f:
+            f.write(f"# MoE debug dump ({suffix})\n")
+            f.write(f"# mesh=({ctx.mesh_rows},{ctx.mesh_cols}) num_devices={ctx.mesh_rows*ctx.mesh_cols}\n")
+            f.write(f"# enable_reduce_to_one={ctx.enable_reduce_to_one} enable_bcast={ctx.enable_bcast}\n")
+            f.write(f"# enable_routing={ctx.enable_routing} reconfig_moe_cbs={ctx.reconfig_moe_cbs}\n\n")
+
+            # ---- proj params (numerical only) ----
+            for proj_name in ("gate_proj", "up_proj", "down_proj"):
+                params = getattr(routed, f"{proj_name}_params", None)
+                if params is None:
+                    continue
+                f.write(f"=== {proj_name}_params ===\n")
+                for k in sorted(params.keys()):
+                    v = params[k]
+                    if isinstance(v, (int, bool, float)):
+                        f.write(f"{proj_name}.{k} = {v}\n")
+                f.write("\n")
+
+            # ---- per-core descriptors (sorted by name then core) ----
+            f.write("=== per_core_descriptors ===\n")
+            for desc in sorted(self.device_per_core_descs, key=lambda d: d.named_compile_time_arg):
+                name = desc.named_compile_time_arg
+                core_vals = sorted(
+                    [(c, v) for (c, v) in desc.core_values],
+                    key=lambda cv: (cv[0].x, cv[0].y),
+                )
+                for core, val in core_vals:
+                    f.write(f"per_core[{name}][({core.x},{core.y})] = {val}\n")
+                f.write(f"per_core[{name}].other_value = {desc.other_value}\n")
+            f.write("\n")
+
+            # ---- NCRISC named CT args ----
+            f.write("=== ncrisc_named_ct_args ===\n")
+            for name, val in sorted(self.ncrisc_args, key=lambda x: x[0]):
+                f.write(f"ncrisc.{name} = {fmt_val(val)}\n")
+            f.write("\n")
+
+            # ---- BRISC named CT args ----
+            f.write("=== brisc_named_ct_args ===\n")
+            for name, val in sorted(self.brisc_args, key=lambda x: x[0]):
+                f.write(f"brisc.{name} = {fmt_val(val)}\n")
+            f.write("\n")
+
+            # ---- TRISC named CT args ----
+            f.write("=== trisc_named_ct_args ===\n")
+            for name, val in sorted(self.trisc_args, key=lambda x: x[0]):
+                f.write(f"trisc.{name} = {fmt_val(val)}\n")
+            f.write("\n")
+
+            # ---- CB descriptors (sorted by buffer_index) ----
+            f.write("=== cb_descriptors ===\n")
+            for cb_desc in sorted(
+                [c for c in self.device_cb_descs if c is not None and hasattr(c, "buffer_index")],
+                key=lambda c: c.buffer_index,
+            ):
+                cb_id = cb_desc.buffer_index
+                addr_off = getattr(cb_desc, "address_offset", None)
+                total = getattr(cb_desc, "total_size", None)
+                f.write(f"cb[{cb_id}].address_offset = {addr_off}\n")
+                f.write(f"cb[{cb_id}].total_size = {total}\n")
+                fmts = getattr(cb_desc, "format_descriptors", []) or []
+                for i, fmt in enumerate(fmts):
+                    df = getattr(fmt, "data_format", None)
+                    ps = getattr(fmt, "page_size", None)
+                    tile = getattr(fmt, "tile", None)
+                    f.write(f"cb[{cb_id}].fmt[{i}].data_format = {df}\n")
+                    f.write(f"cb[{cb_id}].fmt[{i}].page_size = {ps}\n")
+                    f.write(f"cb[{cb_id}].fmt[{i}].tile = {tile}\n")
+            f.write("\n")
+
+            # ---- kernel preprocessor defines ----
+            f.write("=== kernel_defines ===\n")
+            for k, v in sorted(self.device_kernel_defines):
+                f.write(f"define.{k} = {v}\n")
+            f.write("\n")
+
+        logger.info(f"MoE debug dump written: {path}")
 
     @staticmethod
     def op(

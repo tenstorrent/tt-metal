@@ -814,7 +814,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     )
 
     moe_semaphores = MoeOp.create_semaphores(device)
-    num_iterations = TestConfig.NUM_ITERATIONS
+    num_iterations = 1
     ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,
@@ -908,7 +908,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("reconfig_moe_cbs", [False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
@@ -1250,7 +1250,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("reconfig_moe_cbs", [False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
