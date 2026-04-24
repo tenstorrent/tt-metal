@@ -66,8 +66,8 @@ On matmul kernel-level assertions, apply the `print(pc)` recipe per
 
 ### 4. Build
 
-Invoke `tt:run` to rebuild. Kernel-only changes in `tt_metal/kernels/`
-skip rebuild (JIT-compiled at runtime) — `tt:run` knows this.
+Invoke `tt:run` to rebuild. For when rebuild is skipped (kernel-only
+edits), see `knowledge/recipes/tt-metal/build.md` § Kernel iteration.
 parameter-search rarely needs a rebuild after the first trial.
 
 ### 5. Run + profile

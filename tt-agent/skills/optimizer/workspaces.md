@@ -40,25 +40,12 @@ spawn. Document the coupling in the final findings.
 
 ## First-time setup per workspace
 
-Runs via `tt:run` so device/host routing is handled:
+`cd $NEW_WS/tt-metal`, then follow `knowledge/recipes/tt-metal/build.md`
+§ First-time build. Run via `tt:run` so device/host routing is handled.
 
-```bash
-cd $NEW_WS/tt-metal
-git submodule update --init --recursive
-bash build_metal.sh -e       # first build, sets up env
-bash create_venv.sh          # uv-backed, fast with warm cache
-```
-
-Activate with:
-
-```bash
-export TT_METAL_HOME=$NEW_WS/tt-metal
-export PYTHONPATH=$TT_METAL_HOME
-source $TT_METAL_HOME/python_env/bin/activate
-```
-
-Each subagent dispatched to this workspace uses the above as its shell
-context's first step.
+Activate per `knowledge/recipes/tt-metal/env.md` (with `$NEW_WS/tt-metal`
+as `TT_METAL_HOME`). Each dispatched subagent uses this activation as
+its first shell step.
 
 ## ccache
 

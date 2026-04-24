@@ -58,11 +58,9 @@ trend-file entry.
 
 - **Target**: op or kernel name + test (pytest path + optional `-k`). If
   the user names only a model, the Extract phase isolates the bottleneck.
-- **Goal**: one of absolute ns, relative %, roofline %, or **utilization**
-  (`≥ X% FLOPs` with target-op-as-THE-bottleneck). Prefer utilization over
-  relative when baseline is already low-utilization — a 30% speedup that
-  leaves the op at 25% FLOPs hasn't fixed it. See `convergence.md` §
-  Success criterion for exact formulas.
+- **Goal**: absolute ns, relative %, roofline %, or utilization %. Formulas
+  and guidance on picking the right type live in `convergence.md` §
+  Success criterion.
 - **Mode** (optional): `parameter-search` or `dataflow-optimize`. Default:
   parameter-search if op has an explicit config struct and bounded
   parameter space; else dataflow-optimize.
@@ -98,7 +96,7 @@ Phase inputs are consumed, not carried forward.
 Repo:
 
 - One commit per iteration on branch `optimizer/<scope>-<YYYY-MM-DD>[-<letter>]`.
-- Commit subject: `opt(<scope>): <short hypothesis> — <metric> (<Δ%> vs best)`.
+- Commit subject format: see `iterate.md` § Record.
 - Never pushed.
 
 ## Per-Iteration Claude Output
