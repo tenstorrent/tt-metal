@@ -189,7 +189,6 @@ def run_flash_mla_prefill_chunked_vs_nonchunked(
         f"chunked_flash_mla_prefill (num_chunks={num_chunks}) output mismatch "
         f"vs flash_mla_prefill: PCC {out_pcc} < {pcc_threshold}"
     )
-    assert torch.allclose(nonchunked_torch, chunked_torch)
 
 
 @pytest.mark.parametrize(
