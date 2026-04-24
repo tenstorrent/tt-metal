@@ -200,15 +200,24 @@ def run_model_device_perf_test_with_merge(
     )
 
 
-def _perf_param(op, worker_file, worker_test, topo, nlinks, payload, expected_ns, op_filter, margin=0.03):
+def _perf_param(
+    op, worker_file, worker_test, topo, nlinks, payload, expected_ns, op_filter, margin=0.03, layout="tile"
+):
     """Build one pytest.param tuple for the perf tests."""
     worker_id = f"perf-{topo}-8-{nlinks}link-{payload}"
+    model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link_{payload}"
+    if layout != "tile":
+        model_name += f"_{layout}"
+    # Only the combine worker has a layout parametrize (tile / row_major);
+    # dispatch has no such axis, so adding "and tile" would match nothing.
+    k_filter = f"perf_no_pcc and {worker_id} and random"
+    if op == "combine":
+        k_filter += f" and {layout}"
     return (
-        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} "
-        f"-k 'perf_no_pcc and {worker_id} and random'",
+        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
         f"deepseek_v3_{op}",
-        f"deepseek_v3_{op}_{topo}_8_{nlinks}link_{payload}",
+        model_name,
         1,  # num_iterations
         1,  # batch_size
         margin,
@@ -223,8 +232,8 @@ def _perf_param(op, worker_file, worker_test, topo, nlinks, payload, expected_ns
 
 # CI set (BH LoudBox pipeline): keep small.
 _DISPATCH_PERF_PARAMS = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, "7k", 3_576_087, ""),
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, "7k", 2_804_940, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, "7k", 3_535_925, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, "7k", 2_820_533, ""),
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
@@ -234,11 +243,11 @@ _COMBINE_PERF_PARAMS = [
         "linear",
         2,
         "7k",
-        4_435_146,
+        4_361_836,
         "CombineDeviceOperation",
     ),
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, "7k", 3_017_923, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, "7k", 3_248_453, "CombineDeviceOperation"
     ),
 ]
 
@@ -248,14 +257,14 @@ _COMBINE_PERF_PARAMS = [
 _DISPATCH_PERF_PARAMS_FULL = [
     _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", topo, nlinks, payload, expected, "")
     for topo, nlinks, payload, expected in [
-        ("linear", 1, "7k", 5_558_477),
-        ("linear", 2, "7k", 3_533_716),
-        ("linear", 1, "14k", 6_640_253),
-        ("linear", 2, "14k", 3_918_331),
-        ("ring", 1, "7k", 4_794_187),
-        ("ring", 2, "7k", 2_815_844),
-        ("ring", 1, "14k", 4_305_734),
-        ("ring", 2, "14k", 2_619_047),
+        ("linear", 1, "7k", 5_554_837),
+        ("linear", 2, "7k", 3_538_366),
+        ("linear", 1, "14k", 6_564_151),
+        ("linear", 2, "14k", 3_907_070),
+        ("ring", 1, "7k", 4_800_871),
+        ("ring", 2, "7k", 2_824_060),
+        ("ring", 1, "14k", 4_329_141),
+        ("ring", 2, "14k", 2_640_502),
     ]
 ]
 _COMBINE_PERF_PARAMS_FULL = [
@@ -270,15 +279,27 @@ _COMBINE_PERF_PARAMS_FULL = [
         "CombineDeviceOperation",
     )
     for topo, nlinks, payload, expected in [
-        ("linear", 1, "7k", 5_995_117),
-        ("linear", 2, "7k", 4_313_204),
-        ("linear", 1, "14k", 5_952_111),
-        ("linear", 2, "14k", 4_194_514),
-        ("ring", 1, "7k", 5_136_507),
-        ("ring", 2, "7k", 3_083_027),
-        ("ring", 1, "14k", 4_513_822),
-        ("ring", 2, "14k", 2_889_739),
+        ("linear", 1, "7k", 5_747_632),
+        ("linear", 2, "7k", 4_366_848),
+        ("linear", 1, "14k", 5_767_986),
+        ("linear", 2, "14k", 4_136_638),
+        ("ring", 1, "7k", 5_427_802),
+        ("ring", 2, "7k", 3_262_982),
+        ("ring", 1, "14k", 4_968_952),
+        ("ring", 2, "14k", 2_975_783),
     ]
+] + [
+    _perf_param(
+        "combine",
+        "test_prefill_combine.py",
+        "test_ttnn_combine",
+        "linear",
+        1,
+        "7k",
+        6_055_667,
+        "CombineDeviceOperation",
+        layout="row_major",
+    ),
 ]
 
 
