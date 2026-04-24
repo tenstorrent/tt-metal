@@ -658,8 +658,11 @@ target_sources(
         cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
         cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp
         cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_matmul.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_unary.cpp
         cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/routed_matmul_device_operation.cpp
         cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/routed_matmul_program_factory.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/routed_unary_device_operation.cpp
+        cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/device/routed_unary_program_factory.cpp
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp

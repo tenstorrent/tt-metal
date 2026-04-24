@@ -4,8 +4,7 @@
 
 #include "routed_matmul.hpp"
 #include "device/routed_matmul_device_operation.hpp"
-
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "routed_unary.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
@@ -44,11 +43,21 @@ ttnn::Tensor routed_matmul(
         optional_output_tensor,
         dtype);
 
-    // Mirror non-routed matmul: when activation is passed via this parameter
-    // (not via program_config.fused_activation), append it as a separate
-    // unary op on the host-side trace rather than fusing into the matmul kernel.
+    // Route the post-activation through a guarded unary op so it early-returns
+    // on device when the matmul's guard would have skipped — keeps the op
+    // separate on the host trace (matmul fused_activation was measured slower)
+    // while avoiding the ~39 µs SiLU that otherwise runs on skipped iterations.
     if (auto fused = ttnn::operations::matmul::get_fused_activation(activation); fused.has_value()) {
-        result = ttnn::unary_chain(result, {fused.value()}, result.memory_config(), optional_output_tensor);
+        result = routed_unary(
+            /*input=*/result,
+            /*op=*/fused.value(),
+            /*global_expert_idx_table=*/global_expert_idx_table.value(),
+            /*expert_token_counts=*/expert_token_counts.value(),
+            /*local_expert_idx=*/local_expert_idx,
+            /*curr_expert_iter=*/curr_expert_iter,
+            /*expert_iter_length=*/expert_iter_length,
+            /*compute_kernel_config=*/compute_kernel_config,
+            /*optional_output_tensor=*/optional_output_tensor);
     }
     return result;
 }
