@@ -1540,12 +1540,11 @@ void MeshDeviceImpl::quiesce_internal() {
     // per-device sequential processing caused Device 4's receiver to complete the
     // handshake before Device 0's sender was even launched.
     log_info(tt::LogMetal, "quiesce_internal: Pass 1 — relaunching fabric workers on all devices");
-    for (const auto& submesh : submeshes_) {
-        if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->restart_fabric_workers_for_quiesce();
-        }
-    }
     // ORDERING: non-MMIO first, MMIO last — see comment in restart_fabric_workers_for_quiesce().
+    // NOTE: we iterate get_devices() directly (not the submesh_ loop) so that the global MMIO-last
+    // ordering is respected across submesh boundaries.  The submesh loop was removed because it
+    // processed devices in submesh-iteration order (MMIO before non-MMIO across submeshes) and
+    // caused Device 7 (non-MMIO) to encounter a broken relay after Device 0 (MMIO) was relaunched.
     auto pass1_devices = get_devices();
     std::stable_sort(pass1_devices.begin(), pass1_devices.end(), [](IDevice* a, IDevice* b) {
         return !a->is_mmio_capable() && b->is_mmio_capable();
@@ -1561,11 +1560,7 @@ void MeshDeviceImpl::quiesce_internal() {
     log_info(tt::LogMetal, "quiesce_internal: Pass 1 complete — all devices relaunched, starting Pass 2 (handshake wait)");
 
     // Phase 3: All devices have relaunched; now wait for handshake completion.
-    for (const auto& submesh : submeshes_) {
-        if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->wait_for_fabric_workers_ready_for_quiesce();
-        }
-    }
+    // (No ordering constraint here — we're just polling, not launching.)
     for (auto* idev : get_devices()) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
