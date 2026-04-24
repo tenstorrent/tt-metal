@@ -10,8 +10,8 @@
  * @brief Implementation of matmul_block helper function.
  *
  * Single pipeline handles both pack strategies:
- *   row_major_output=false → sequential pack_tile_block, per-subblock reserve/push
- *   row_major_output=true  → absolute-offset pack_tile<true>, per-row-group reserve/push
+ *   layout=SubblockMajor → sequential pack_tile_block, per-subblock reserve/push
+ *   layout=RowMajor      → absolute-offset pack_tile<true>, per-row-group reserve/push
  *
  * Both modes share K-loop, reload, L1_ACC management, and pre/post callbacks.
  * SKIP_COMPUTE (microbench define) elides the inner matmul LLK call only.
@@ -24,7 +24,7 @@ template <
     bool packer_l1_acc,
     bool pack_last_to_interm,
     bool pack_relu,
-    bool row_major_output,
+    OutputLayout layout,
     typename PostComputeFn,
     typename PreKBlockFn>
 ALWI void matmul_block(
@@ -105,7 +105,7 @@ ALWI void matmul_block(
             // factory layout). Single reserve here keeps all wait_front /
             // reserve_back increments identical across the K-loop, as the
             // CB-API contract requires.
-            if constexpr (!row_major_output) {
+            if constexpr (layout == OutputLayout::SubblockMajor) {
                 if (block == 0 && !last_out) {
                     cb_reserve_back(out_cb, out_block_num_tiles);
                 }
@@ -118,11 +118,11 @@ ALWI void matmul_block(
             // spill row-major too. Otherwise (software reload path, or !pack_last_to_interm
             // where the last block writes to out_cb), keep non-last subblock-major so the
             // per-subblock reload at the last K-block can read partials contiguously.
-            constexpr bool spill_row_major = row_major_output && packer_l1_acc && pack_last_to_interm;
+            constexpr bool spill_row_major = (layout == OutputLayout::RowMajor) && packer_l1_acc && pack_last_to_interm;
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                if constexpr (row_major_output) {
+                if constexpr (layout == OutputLayout::RowMajor) {
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm CBs don't deadlock.
                     if (last_out) {
@@ -177,7 +177,7 @@ ALWI void matmul_block(
                         post_compute(out_num_tiles);
 
                         tile_regs_commit();
-                        if constexpr (!row_major_output) {
+                        if constexpr (layout == OutputLayout::SubblockMajor) {
                             cb_reserve_back(pack_target, out_num_tiles);
                         }
                         tile_regs_wait();
@@ -195,7 +195,7 @@ ALWI void matmul_block(
                             }
                         }
 
-                        if constexpr (row_major_output) {
+                        if constexpr (layout == OutputLayout::RowMajor) {
                             // Single-row subblock: DST tiles are already contiguous in
                             // row-major order and consecutive in1_subblock iterations land
                             // at adjacent CB positions, so pack_tile_block produces the
@@ -223,7 +223,7 @@ ALWI void matmul_block(
                         }
 
                         tile_regs_release();
-                        if constexpr (!row_major_output) {
+                        if constexpr (layout == OutputLayout::SubblockMajor) {
                             cb_push_back(pack_target, out_num_tiles);
                         }
 
@@ -269,7 +269,7 @@ ALWI void matmul_block(
                     in1_index_subblock_offset += out_subblock_w;
                 }
 
-                if constexpr (row_major_output) {
+                if constexpr (layout == OutputLayout::RowMajor) {
                     if (last_out) {
                         cb_push_back(pack_target, row_group_tiles);
                     } else if constexpr (spill_row_major) {

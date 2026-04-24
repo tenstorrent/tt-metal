@@ -12,6 +12,22 @@
 
 namespace compute_kernel_lib {
 
+/**
+ * Output pack-layout mode selected at compile time on the last K-block.
+ *
+ * SubblockMajor (default, legacy): sequential pack_tile_block per subblock;
+ *   writer reads tiles in subblock-major order. Required by factories that
+ *   emit subblock-major writer kernels.
+ * RowMajor: absolute-offset pack_tile<true> into row-major positions within
+ *   the M-row-group; reserve/push per row-group. Decouples subblock choice
+ *   from output layout so factories can grow subblocks freely, and is the
+ *   mode SDPA callers require for absolute-offset partial writes.
+ *
+ * When matmul_block feeds add_bias_bcast_rows, both must use the same
+ * OutputLayout so the intermediate CB layout matches.
+ */
+enum class OutputLayout { SubblockMajor, RowMajor };
+
 // Default no-op post-compute functor.
 // Called per output sub-block on the last K-block, before packing.
 // Receives out_subblock_num_tiles. Tiles are in DST[0..num_tiles-1].
@@ -31,12 +47,12 @@ struct NoPreKBlock {
  * matmul_block: sub-blocked tiled matrix multiplication C = A × B with K-blocking.
  *
  * One helper serving both standard matmul (non-multicast bmm) and SDPA. Supports two
- * output-pack strategies selected at compile time via row_major_output:
+ * output-pack strategies selected at compile time via layout:
  *
- *   row_major_output=false (default): sequential pack_tile_block per subblock.
+ *   layout=SubblockMajor (default): sequential pack_tile_block per subblock.
  *     Output lands in subblock order. Required by multicast writers that expect
  *     subblock-order tile stream.
- *   row_major_output=true: absolute-offset pack_tile<true> at row-major positions,
+ *   layout=RowMajor: absolute-offset pack_tile<true> at row-major positions,
  *     reserve/push per M-row-group. Decouples subblock choice from output layout so
  *     the factory can pick larger subblocks (the main SDPA perf path). Also the
  *     mode SDPA callers require for absolute-offset partial writes across K chunks.
@@ -63,7 +79,7 @@ struct NoPreKBlock {
  *                     Use when a post-processing phase (bias add, untilize) reads
  *                     from interm_cb.
  *   pack_relu         Enable PACK_RELU on the last K-block when !pack_last_to_interm.
- *   row_major_output  Enable absolute-offset packing on the last K-block (see above).
+ *   layout            OutputLayout: SubblockMajor (default) or RowMajor (see above).
  *   PostComputeFn     Functor called per output sub-block on the last K-block,
  *                     after matmul but before packing. Receives out_subblock_num_tiles.
  *   PreKBlockFn       Functor called at the start of each K-block iteration, before
@@ -105,7 +121,7 @@ template <
     bool packer_l1_acc = false,
     bool pack_last_to_interm = false,
     bool pack_relu = false,
-    bool row_major_output = false,
+    OutputLayout layout = OutputLayout::SubblockMajor,
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock>
 ALWI void matmul_block(

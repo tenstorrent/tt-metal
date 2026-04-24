@@ -75,8 +75,8 @@ void kernel_main() {
             partials_cb,
             bias_cb,
             out_cb,
-            /*row_broadcast=*/true,
-            /*row_major_output=*/false,
+            compute_kernel_lib::BiasBroadcast::RowBroadcast,
+            compute_kernel_lib::OutputLayout::SubblockMajor,
             ReluPostBias>(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, ReluPostBias{});
 #else
         compute_kernel_lib::add_bias_bcast_rows<partials_cb, bias_cb, out_cb>(

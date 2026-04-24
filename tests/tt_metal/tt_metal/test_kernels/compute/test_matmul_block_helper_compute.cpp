@@ -6,7 +6,7 @@
 // (ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp).
 //
 // Exercises the template parameter pack: transpose, packer_l1_acc,
-// pack_last_to_interm, pack_relu, row_major_output, and PostComputeFn.
+// pack_last_to_interm, pack_relu, OutputLayout, and PostComputeFn.
 // PreKBlockFn coverage lives in the dedicated transpose-PreKBlock test.
 //
 // Defines controlling the helper template parameter pack:
@@ -14,7 +14,7 @@
 //   HELPER_PACKER_L1_ACC      — packer_l1_acc=true
 //   HELPER_PACK_LAST_INTERM   — pack_last_to_interm=true  (writer reads c_24)
 //   HELPER_PACK_RELU          — pack_relu=true
-//   HELPER_ROW_MAJOR_OUTPUT   — row_major_output=true
+//   HELPER_ROW_MAJOR_OUTPUT   — layout=OutputLayout::RowMajor
 //   HELPER_POST_COMPUTE_RELU  — PostComputeFn applies relu via SFPU
 //
 // CB layout:
@@ -104,16 +104,16 @@ void kernel_main() {
 #endif
 
 #ifdef HELPER_ROW_MAJOR_OUTPUT
-    constexpr bool row_major_output = true;
+    constexpr compute_kernel_lib::OutputLayout output_layout = compute_kernel_lib::OutputLayout::RowMajor;
 #else
-    constexpr bool row_major_output = false;
+    constexpr compute_kernel_lib::OutputLayout output_layout = compute_kernel_lib::OutputLayout::SubblockMajor;
 #endif
 
     mm_block_init(in0_cb, in1_cb, interm_cb, transpose, out_subblock_w, out_subblock_h, in0_block_w);
 
 #ifdef HELPER_POST_COMPUTE_RELU
     compute_kernel_lib::
-        matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, row_major_output, ReluPostCompute>(
+        matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, output_layout, ReluPostCompute>(
             in0_cb,
             in1_cb,
             out_cb,
@@ -127,7 +127,7 @@ void kernel_main() {
             batch,
             ReluPostCompute{});
 #else
-    compute_kernel_lib::matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, row_major_output>(
+    compute_kernel_lib::matmul_block<transpose, packer_l1_acc, pack_last_to_interm, pack_relu, output_layout>(
         in0_cb,
         in1_cb,
         out_cb,

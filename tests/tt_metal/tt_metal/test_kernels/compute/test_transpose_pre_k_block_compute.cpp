@@ -74,7 +74,7 @@ void kernel_main() {
         /*packer_l1_acc=*/false,
         /*pack_last_to_interm=*/false,
         /*pack_relu=*/false,
-        /*row_major_output=*/false,
+        compute_kernel_lib::OutputLayout::SubblockMajor,
         compute_kernel_lib::NoPostCompute,
         XposeFn>(
         in0_cb,

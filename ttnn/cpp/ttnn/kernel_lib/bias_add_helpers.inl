@@ -18,8 +18,8 @@ template <
     uint32_t partials_cb,
     uint32_t bias_cb,
     uint32_t out_cb,
-    bool row_broadcast,
-    bool row_major_output,
+    BiasBroadcast broadcast,
+    OutputLayout output_layout,
     typename PostBiasFn>
 ALWI void add_bias_bcast_rows(
     uint32_t in0_num_subblocks,
@@ -48,13 +48,13 @@ ALWI void add_bias_bcast_rows(
     reconfig_data_format_srca(partials_cb);
     reconfig_data_format_srcb(bias_cb);
     pack_reconfig_data_format(out_cb);
-    if constexpr (row_broadcast) {
+    if constexpr (broadcast == BiasBroadcast::RowBroadcast) {
         add_bcast_rows_init_short(partials_cb, bias_cb);
     } else {
         add_tiles_init(partials_cb, bias_cb);
     }
 
-    if constexpr (row_major_output) {
+    if constexpr (output_layout == OutputLayout::RowMajor) {
         // Row-major layout: upstream matmul_block pushes one M-row-group
         // (out_subblock_h × out_row_width tiles) per in0_subblock. Tile at row r, column
         // sbw*out_subblock_w + c sits at front+r*out_row_width + sbw*out_subblock_w + c.
@@ -78,7 +78,7 @@ ALWI void add_bias_bcast_rows(
                     for (uint32_t r = 0; r < out_subblock_h; r++) {
                         const uint32_t partial_row_pos = r * out_row_width + col_base;
                         for (uint32_t c = 0; c < out_subblock_w; c++) {
-                            if constexpr (row_broadcast) {
+                            if constexpr (broadcast == BiasBroadcast::RowBroadcast) {
                                 add_tiles_bcast_rows(
                                     partials_cb,
                                     bias_cb,
@@ -137,7 +137,7 @@ ALWI void add_bias_bcast_rows(
                 for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                     uint32_t bias_tile_idx = in1_index_subblock_offset;
                     for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                        if constexpr (row_broadcast) {
+                        if constexpr (broadcast == BiasBroadcast::RowBroadcast) {
                             add_tiles_bcast_rows(partials_cb, bias_cb, i, bias_tile_idx, i);
                         } else {
                             add_tiles(partials_cb, bias_cb, i, bias_tile_idx, i);
