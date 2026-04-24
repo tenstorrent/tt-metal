@@ -6,15 +6,12 @@
 // Reads data from a single-page DRAM buffer and pushes it entry-by-entry into a DFB.
 //
 // Exercises the Metal 2.0 kernel-args feature surface:
-//   producer_args::src_addr     — named RTA (per-node), DRAM source address
-//   producer_args::num_entries  — named CRTA (broadcast), number of entries to transfer
-//   producer_args::bank_id      — named CTA, DRAM bank ID (typically 0 for single-page buffers)
-//   producer_args::entry_size   — named CTA, bytes per DFB entry
-//   get_vararg(0..2)            — three RTA varargs (per-node, positional from 0)
-//   get_common_vararg(0)        — one CRTA vararg (broadcast, positional from 0)
-//
-// Note the custom `producer_args` namespace (distinct from the consumer's default `args`);
-// this verifies the args_namespace feature works end-to-end on HW.
+//   args::src_addr     — named RTA (per-node), DRAM source address
+//   args::num_entries  — named CRTA (broadcast), number of entries to transfer
+//   args::bank_id      — named CTA, DRAM bank ID (typically 0 for single-page buffers)
+//   args::entry_size   — named CTA, bytes per DFB entry
+//   get_vararg(0..2)   — three RTA varargs (per-node, positional from 0)
+//   get_common_vararg(0) — one CRTA vararg (broadcast, positional from 0)
 //
 // Vararg offset verification: the XOR of this kernel's four vararg values is folded into the
 // first word of each DFB entry before push_back. The consumer does the symmetric thing,
@@ -32,10 +29,10 @@ void kernel_main() {
     //   - `const auto`: CRTA, non-constexpr runtime value
     //   - `constexpr auto`: CTAs only — the RTA/CRTA overloads aren't constexpr because
     //     their values aren't known until dispatch time
-    auto src_addr = get_arg(producer_args::src_addr);
-    const auto num_entries = get_arg(producer_args::num_entries);
-    constexpr auto bank_id = get_arg(producer_args::bank_id);
-    auto entry_size = get_arg(producer_args::entry_size);
+    auto src_addr = get_arg(args::src_addr);
+    const auto num_entries = get_arg(args::num_entries);
+    constexpr auto bank_id = get_arg(args::bank_id);
+    auto entry_size = get_arg(args::entry_size);
 
     // Vararg sum: exercises get_vararg(0), get_vararg(1), get_vararg(2), get_common_vararg(0).
     // If any offset is wrong, this XOR won't cancel against the consumer's and the first

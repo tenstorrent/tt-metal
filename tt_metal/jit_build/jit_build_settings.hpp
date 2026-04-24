@@ -50,12 +50,6 @@ public:
         static const std::vector<std::string> k_empty;
         return k_empty;
     }
-    // User-configurable C++ namespace emitted around named RTA/CRTA/CTA accessors in
-    // kernel_args_generated.h. Defaults to "args" when not overridden.
-    virtual const std::string& get_args_namespace() const {
-        static const std::string k_default = "args";
-        return k_default;
-    }
 
     // Called to process additional include paths (e.g., kernel source directory for relative includes)
     virtual void process_include_paths(const std::function<void(const std::string& path)>&) const {}

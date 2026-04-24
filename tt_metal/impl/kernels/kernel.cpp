@@ -108,8 +108,7 @@ Kernel::Kernel(
     bool is_metal2_kernel,
     const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
     const std::vector<std::string>& named_runtime_args,
-    const std::vector<std::string>& named_common_runtime_args,
-    const std::string& args_namespace) :
+    const std::vector<std::string>& named_common_runtime_args) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -120,7 +119,6 @@ Kernel::Kernel(
     dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
     named_runtime_args_(named_runtime_args),
     named_common_runtime_args_(named_common_runtime_args),
-    args_namespace_(args_namespace),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -449,9 +447,8 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(it->second));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
-    // args_namespace is emitted as a C++ namespace in the generated header.
-    // Counts are hashed too — they keep ["a"], [] distinct from [], ["a"].
-    hasher.update(this->args_namespace_);
+    // Named RTA and CRTA counts also need to be hashed!
+    // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
     hasher.update(static_cast<uint64_t>(this->named_runtime_args_.size()));
     for (const auto& name : this->named_runtime_args_) {
         hasher.update(name);

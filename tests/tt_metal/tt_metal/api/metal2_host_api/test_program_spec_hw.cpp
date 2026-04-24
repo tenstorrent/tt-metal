@@ -187,7 +187,6 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 //       get_vararg(idx). Different vararg count per kernel verifies that the baked-in
 //       named_rta_words offset is per-kernel, not shared state.
 //   Vararg CRTAs: get_common_vararg(0) on both kernels.
-//   Custom args_namespace: producer uses `producer_args`, consumer uses default `args`.
 //
 // Not covered here (intentional):
 //   - num_runtime_varargs_per_node (the per-node override path). The internal schema
@@ -227,12 +226,11 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     ProgramSpec spec;
     spec.program_id = "named_args_loopback";
 
-    // Producer: BRISC reads DRAM → DFB. Uses custom `producer_args` namespace, 1 named RTA,
-    // 1 named CRTA, 2 named CTAs, 3 RTA varargs, 1 CRTA vararg.
+    // Producer: BRISC reads DRAM → DFB. 1 named RTA, 1 named CRTA, 2 named CTAs, 3 RTA
+    // varargs, 1 CRTA vararg.
     auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp"};
-    producer.args_namespace = "producer_args";
     producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
     producer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
     producer.runtime_arguments_schema.num_runtime_varargs = 3;

@@ -14,7 +14,6 @@
 //                                 that the baked-in offset is per-kernel, not shared state)
 //   get_common_vararg(0)        — one CRTA vararg
 //
-// Uses the default `args` namespace; the producer uses a custom `producer_args` namespace.
 // See the producer source for the XOR-cancellation verification trick.
 
 #include "api/dataflow/dataflow_api.h"

@@ -143,12 +143,6 @@ struct KernelSpec {
     // Kernel arguments
     //////////////////////////////////////////////////////////////////////////////
 
-    // Namespace for the kernel argument accessors in the kernel source code, e.g.
-    //   auto my_arg = get_arg(my_args_namespace::my_arg_name);
-    // Use a custom namespace to avoid identifier collisions when fusing kernels;
-    // otherwise, use the default "args" namespace.
-    std::string args_namespace = "args";
-
     //----------------------------------------------------------------------------
     // Compile time argument bindings
     // (Bound argument values cannot be changed between Program executions)
@@ -163,7 +157,7 @@ struct KernelSpec {
     // (The VALUES of these arguments are set as ProgramRunParams.)
     //
     // Two mechanisms are supported per kernel:
-    //   - Named RTAs/CRTAs: referenced by name in kernel code via `<args_namespace>::<name>`.
+    //   - Named RTAs/CRTAs: referenced by name in kernel code via `args::<name>`.
     //     (Currently, only uint32_t type is supported.)
     //   - Vararg RTAs/CRTAs: positional, variable-count, always uint32_t.
     //     Indexed from 0 in kernel code via `get_vararg(idx)` / `get_common_vararg(idx)`.

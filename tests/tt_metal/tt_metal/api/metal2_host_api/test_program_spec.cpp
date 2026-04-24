@@ -498,34 +498,6 @@ TEST_F(ProgramSpecTestQuasar, NamedRuntimeArgsSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, CustomArgsNamespaceSucceeds) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].args_namespace = "reader_args";
-    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr"};
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, InvalidArgsNamespaceFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].args_namespace = "9bad";  // starts with a digit
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("args_namespace '9bad' which is not a valid C++ identifier")));
-}
-
-TEST_F(ProgramSpecTestQuasar, EmptyArgsNamespaceFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].args_namespace = "";
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("args_namespace '' which is not a valid C++ identifier")));
-}
-
 TEST_F(ProgramSpecTestQuasar, InvalidNamedRtaIdentifierFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"int"};  // C++ keyword
@@ -1484,12 +1456,11 @@ TEST(AggregateSpecTypes, RuntimeArgSchemaPerNodeOverrideDesignatedInitializers) 
     EXPECT_EQ(schema.num_runtime_varargs, 0u);  // scalar left at default in this example
 }
 
-TEST(AggregateSpecTypes, KernelSpecArgsNamespaceDesignatedInitializers) {
+TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
     KernelSpec k{
         .unique_id = "k",
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeCoord{0, 0},
-        .args_namespace = "reader_args",
         .runtime_arguments_schema =
             KernelSpec::RuntimeArgSchema{
                 .named_runtime_args = {"input_ptr"},
@@ -1499,7 +1470,6 @@ TEST(AggregateSpecTypes, KernelSpecArgsNamespaceDesignatedInitializers) {
                 .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
             },
     };
-    EXPECT_EQ(k.args_namespace, "reader_args");
     EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
 }
 

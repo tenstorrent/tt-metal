@@ -453,13 +453,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Validate named RTA/CRTA schema and named CTAs
     for (const auto& kernel : spec.kernels) {
-        TT_FATAL(
-            IsValidCppIdentifier(kernel.args_namespace),
-            "KernelSpec '{}' has args_namespace '{}' which is not a valid C++ identifier.",
-            kernel.unique_id,
-            kernel.args_namespace);
-
-        // All three kinds share the user namespace — their names must be mutually unique.
+        // All three kinds share the args:: namespace — their names must be mutually unique.
         std::unordered_map<std::string, const char*> seen;  // name -> kind
         auto check_name = [&](const std::string& name, const char* kind) {
             TT_FATAL(
@@ -1422,7 +1416,6 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         // to emit kernel_args_generated.h and factor into the kernel cache key.
         const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
         const auto& named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
-        const auto& args_ns = kernel_spec.args_namespace;
 
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
@@ -1443,8 +1436,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
                     is_metal2_kernel,
                     dfb_handles,
                     named_rtas,
-                    named_crtas,
-                    args_ns);
+                    named_crtas);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
@@ -1456,18 +1448,17 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
                     is_metal2_kernel,
                     dfb_handles,
                     named_rtas,
-                    named_crtas,
-                    args_ns);
+                    named_crtas);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
                 kernel = std::make_shared<DataMovementKernel>(
-                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas, args_ns);
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 kernel = std::make_shared<ComputeKernel>(
-                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas, args_ns);
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
             }
         }
 

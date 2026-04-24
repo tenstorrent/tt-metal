@@ -150,7 +150,6 @@ public:
     const std::vector<std::string>& get_named_common_runtime_args() const override {
         return named_common_runtime_args_;
     }
-    const std::string& get_args_namespace() const override { return args_namespace_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
@@ -208,8 +207,7 @@ protected:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
-        const std::string& args_namespace = "args");
+        const std::vector<std::string>& named_common_runtime_args = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -222,13 +220,11 @@ protected:
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     // Metal 2.0-only members below. is_metal2_kernel_ leads the group; the others are
     // populated only when is_metal2_kernel_ is true. Order of named_runtime_args_ /
-    // named_common_runtime_args_ determines byte-offset layout in the dispatch buffer;
-    // args_namespace_ controls the C++ namespace emitted into kernel_args_generated.h.
+    // named_common_runtime_args_ determines byte-offset layout in the dispatch buffer.
     const bool is_metal2_kernel_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
     const std::vector<std::string> named_runtime_args_;
     const std::vector<std::string> named_common_runtime_args_;
-    const std::string args_namespace_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -264,8 +260,7 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
-        const std::string& args_namespace = "args") :
+        const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -277,8 +272,7 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args,
-            args_namespace),
+            named_common_runtime_args),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -396,8 +390,7 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
-        const std::string& args_namespace = "args") :
+        const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -409,8 +402,7 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args,
-            args_namespace),
+            named_common_runtime_args),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -477,8 +469,7 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
-        const std::string& args_namespace = "args") :
+        const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -490,8 +481,7 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args,
-            args_namespace),
+            named_common_runtime_args),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -544,8 +534,7 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
-        const std::string& args_namespace = "args") :
+        const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -557,8 +546,7 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             named_runtime_args,
-            named_common_runtime_args,
-            args_namespace),
+            named_common_runtime_args),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(

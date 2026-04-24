@@ -116,9 +116,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 }
 
 // METAL 2.0 only:
-// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the user-configurable
-// args namespace. Also emits get_vararg() / get_common_vararg() helpers with the named-args
-// offset baked in — so that vararg indices in kernel code are stable across schema changes.
+// Emits per-kernel accessors for named RTAs, CRTAs, and CTAs inside the `args` namespace.
+// Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
+// in, so that vararg indices in kernel code are stable across schema changes.
 //
 // The generated header itself is never hashed; the kernel cache key is derived in
 // Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
@@ -145,8 +145,6 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             }
         });
 
-    const string& ns = settings.get_args_namespace();
-
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
@@ -157,7 +155,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // so we keep emitting those unconditionally.
     const bool has_named_args = !rta_names.empty() || !crta_names.empty() || !cta_entries.empty();
     if (has_named_args) {
-        content << "namespace " << ns << " {\n";
+        content << "namespace args {\n";
 
         // Named RTAs
         // Here, rta_offset tracks the byte_offset of the RTA in the dispatch buffer.
@@ -179,7 +177,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             content << "constexpr experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
         }
 
-        content << "}  // namespace " << ns << "\n\n";
+        content << "}  // namespace args\n\n";
     }
 
     // Vararg helpers — always emitted.
