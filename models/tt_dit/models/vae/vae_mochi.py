@@ -413,7 +413,7 @@ class ResBlock(Module):
     def _all_gather_hw(self, x_rm, N, T, H, W, C, dump_dir=None, dump_tag=None):
         """All-gather on H and W axes.
 
-        Gathers on dim=1 (H) and dim=2 (W) of the 4D tensor in TILE layout.
+        Gathers H on dim=1 (outer dim) and W on dim=2.
 
         Args:
             x_rm: (N*T, H, W, C) in ROW_MAJOR layout (local per-device data).
@@ -462,16 +462,16 @@ class ResBlock(Module):
                 use_hyperparams=False,
             )
 
-        # Dump after W gather, before untilize (dev0 only)
+        x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(x_tiled)
+
+        # Dump after W gather (dev0 only)
         if dump_dir is not None and dump_tag is not None:
             import os
 
-            _t = ttnn.to_torch(ttnn.get_device_tensors(ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT))[0])
+            _t = ttnn.to_torch(ttnn.get_device_tensors(x_rm)[0])
             torch.save(_t, os.path.join(dump_dir, f"{dump_tag}_ag2_after_w_gather.pt"))
             logger.info(f"[AG_DUMP] {dump_tag}_ag2_after_w_gather: {list(_t.shape)} {_t.dtype}")
-
-        x_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(x_tiled)
 
         return x_rm
 
@@ -658,22 +658,11 @@ class ResBlock(Module):
         saved_grid = norm.core_grid
         norm.core_grid = self.spatial_norm_grid
 
-        # Sub-batch GroupNorm to match the per-device batch_size of the
-        # non-spatial path.  Even with matching grid/nvr, different batch_size
-        # causes different frame-to-vrow tile mapping, changing the FP
-        # reduction order within each virtual row.
-        h_factor = self.parallel_config.h_parallel.factor
-        w_factor = self.parallel_config.w_parallel.factor
-        target_bs = max(1, (batch_size + h_factor * w_factor - 1) // (h_factor * w_factor))
-
-        # Dump the tiled tensor right before GroupNorm via TWO methods:
-        # 1) dump_tensor (mesh_partition + ConcatMesh2dToTensor) — "reliable" path
-        # 2) get_device_tensors()[0] — simpler, known to work from AG dumps
-        # Compare to determine if dump_tensor is misreading the replicated tensor.
+        # Dump the tiled tensor right before GroupNorm
         if dump_dir is not None and dump_tag is not None:
-            norm_input_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
+            pass
 
-            # Method 1: dump_tensor (mesh_partition approach)
+            norm_input_rm = ttnn.to_layout(x_tiled, ttnn.ROW_MAJOR_LAYOUT)
             norm_input_5d = ttnn.reshape(norm_input_rm, [1, batch_size, H_full, W_full, C])
             logical_h_val = logical_h if logical_h > 0 else H_full
             logical_w_val = logical_w if logical_w > 0 else W_full
@@ -684,55 +673,22 @@ class ResBlock(Module):
                 (1, batch_size, logical_h_val, logical_w_val, C),
                 is_gathered=True,
             )
-
-            # Method 2: get_device_tensors()[0] (direct read, no partition)
-            import os
-
-            _t_dev0 = ttnn.to_torch(ttnn.get_device_tensors(norm_input_rm)[0])
-            # Reshape from (batch_size, 1, HW, C) to (batch_size, H_full, W_full, C)
-            _t_dev0 = _t_dev0.reshape(batch_size, H_full, W_full, C)
-            _t_dev0 = _t_dev0[:, :logical_h_val, :logical_w_val, :]
-            torch.save(_t_dev0, os.path.join(dump_dir, f"{dump_tag}_norm_input_dev0.pt"))
-            logger.info(
-                f"[DUMP] {dump_tag}_norm_input_dev0: shape={list(_t_dev0.shape)} mean={_t_dev0.float().mean():.6f}"
-            )
-
             ttnn.deallocate(norm_input_5d)
             ttnn.deallocate(norm_input_rm)
 
-        if batch_size > target_bs:
-            norm_chunks = []
-            for start in range(0, batch_size, target_bs):
-                end = min(start + target_bs, batch_size)
-                chunk = ttnn.reallocate(x_tiled[start:end, :, :, :])
-                chunk = self._run_norm(
-                    norm, chunk, end - start, HW, num_out_blocks, compute_kernel_config=self.norm_compute_config
-                )
-                if output_dtype is not None and chunk.dtype != output_dtype:
-                    chunk = ttnn.typecast(chunk, output_dtype)
-                chunk = ttnn.silu(chunk, output_tensor=chunk)
-                norm_chunks.append(chunk)
-            ttnn.deallocate(x_tiled)
-            if len(norm_chunks) > 1:
-                x_tiled = ttnn.concat(norm_chunks, dim=0)
-                for c in norm_chunks:
-                    ttnn.deallocate(c)
-            else:
-                x_tiled = norm_chunks[0]
-        else:
-            x_tiled = self._run_norm(
-                norm,
-                x_tiled,
-                batch_size,
-                HW,
-                num_out_blocks,
-                dump_dir=dump_dir,
-                dump_tag=dump_tag,
-                compute_kernel_config=self.norm_compute_config,
-            )
-            if output_dtype is not None and x_tiled.dtype != output_dtype:
-                x_tiled = ttnn.typecast(x_tiled, output_dtype)
-            x_tiled = ttnn.silu(x_tiled, output_tensor=x_tiled)
+        x_tiled = self._run_norm(
+            norm,
+            x_tiled,
+            batch_size,
+            HW,
+            num_out_blocks,
+            dump_dir=dump_dir,
+            dump_tag=dump_tag,
+            compute_kernel_config=self.norm_compute_config,
+        )
+        if output_dtype is not None and x_tiled.dtype != output_dtype:
+            x_tiled = ttnn.typecast(x_tiled, output_dtype)
+        x_tiled = ttnn.silu(x_tiled, output_tensor=x_tiled)
 
         # Dump the tiled tensor right after GroupNorm+silu via reliable path
         if dump_dir is not None and dump_tag is not None:
@@ -820,10 +776,22 @@ class ResBlock(Module):
             num_chunks -= 1
             chunk_nt = (NT + num_chunks - 1) // num_chunks
 
+        # Try to find a chunk_nt that evenly divides NT to avoid unequal last
+        # chunk.  Search downward from the computed chunk_nt for the largest
+        # divisor of NT that satisfies the min_norm_batch constraint.
+        if NT % chunk_nt != 0 and num_chunks > 1:
+            for candidate in range(chunk_nt, min_norm_batch - 1, -1):
+                if NT % candidate == 0:
+                    chunk_nt = candidate
+                    num_chunks = NT // chunk_nt
+                    break
+
+        last_chunk = NT - (num_chunks - 1) * chunk_nt if num_chunks > 1 else NT
         logger.info(
             f"[CHUNK_CALC] C={C} NT={NT} H={H} W={W} H_full={H_full} W_full={W_full} "
             f"dtype={x_4d.dtype} gathered_bytes={gathered_bytes/1e9:.3f}GB(bf16) "
-            f"num_chunks={num_chunks} chunk_nt={chunk_nt} min_norm_batch={min_norm_batch} "
+            f"num_chunks={num_chunks} chunk_nt={chunk_nt} last_chunk={last_chunk} "
+            f"even={NT % chunk_nt == 0} min_norm_batch={min_norm_batch} "
             f"norm_HW={norm_HW} logical_h={logical_h} logical_w={logical_w}"
         )
 
