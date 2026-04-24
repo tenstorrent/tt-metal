@@ -75,6 +75,7 @@ void kernel_main() {
             partials_cb,
             bias_cb,
             out_cb,
+            /*row_broadcast=*/true,
             /*row_major_output=*/false,
             ReluPostBias>(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, ReluPostBias{});
 #else
