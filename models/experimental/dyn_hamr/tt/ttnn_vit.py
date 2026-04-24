@@ -239,6 +239,7 @@ def _mlp_grid(device):
 # --------------------------------------------------------------------------- #
 _COMPUTE_CFG = None
 _COMPUTE_CFG_LOFI = None
+_LN_COMPUTE_CFG = None
 
 
 def _fused_compute_config(device: Any) -> Any:
@@ -254,6 +255,21 @@ def _fused_compute_config(device: Any) -> Any:
         packer_l1_acc=True,
     )
     return _COMPUTE_CFG
+
+
+def _ln_compute_config(device: Any) -> Any:
+    """HiFi2 + math_approx for layer_norm — approx rsqrt/sqrt is faster on BH."""
+    global _LN_COMPUTE_CFG
+    if _LN_COMPUTE_CFG is not None:
+        return _LN_COMPUTE_CFG
+    _LN_COMPUTE_CFG = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return _LN_COMPUTE_CFG
 
 
 def _fused_compute_config_lofi(device: Any) -> Any:
@@ -331,10 +347,11 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     del head_dim
     dev = hidden.device()
     ckcfg = _fused_compute_config(dev)
+    lncfg = _ln_compute_config(dev)
     _L1 = ttnn.L1_MEMORY_CONFIG
 
     # --- self-attention via FlashAttention-2 ---
-    h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"], memory_config=_L1)
+    h = ttnn.layer_norm(hidden, weight=block_params["norm1"]["weight"], bias=block_params["norm1"]["bias"], memory_config=_L1, compute_kernel_config=lncfg)
     N_qkv = 3 * num_heads * HEAD_DIM_PAD
     qkv = ttnn.experimental.minimal_matmul(
         h, block_params["attn"]["qkv_w"],
@@ -360,7 +377,7 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
     hidden = ttnn.add(hidden, attn_out, memory_config=_L1)
 
     # --- MLP: fc1 with fused GELU, fc2 with fused bias ---
-    h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"], memory_config=_L1)
+    h = ttnn.layer_norm(hidden, weight=block_params["norm2"]["weight"], bias=block_params["norm2"]["bias"], memory_config=_L1, compute_kernel_config=lncfg)
     h = ttnn.experimental.minimal_matmul(
         h, block_params["mlp"]["fc1_w"],
         bias_tensor=block_params["mlp"]["fc1_b"],
@@ -409,5 +426,6 @@ def forward(
         weight=params["last_norm"]["weight"],
         bias=params["last_norm"]["bias"],
         memory_config=_L1,
+        compute_kernel_config=_ln_compute_config(x.device()),
     )
     return x  # (B, 192, 1280), token-major; L1-resident for fast MANO-head read
