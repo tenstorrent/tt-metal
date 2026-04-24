@@ -73,7 +73,7 @@ jobs:
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: ${{ (startsWith(inputs.ref || github.sha, 'refs/tags/')) && 1 || 500 }}
+          fetch-depth: ${{ (startsWith(inputs.ref, 'refs/tags/') || startsWith(github.ref, 'refs/tags/')) && 1 || 500 }}
           fetch-tags: true # Need tags for `git describe`
 
       - name: 📦 Restore CPM source cache
