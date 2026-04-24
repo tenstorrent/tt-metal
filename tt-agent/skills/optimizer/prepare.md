@@ -39,12 +39,29 @@ note in `~/.tt-agent/notes/` that the Baseline phase reads.
 
 ## Output
 
-A short Prepare note in `~/.tt-agent/notes/`:
+A short note at `~/.tt-agent/notes/prepare-<scope>-<YYYY-MM-DD-HHMMSS>.md`:
 
-- Research pointer (path to `tt:learn` note)
-- Sibling diff highlights (if reused)
-- Dim-validation findings (any actual-vs-derived mismatch)
-- Doc pointers (internal guides, PDFs)
-- Mode-branch confirmation (if sibling has PREFILL/DECODE split)
+```markdown
+# Prepare: <scope>
+
+**Date:** YYYY-MM-DD HH:MM:SS
+**Repo:** tt-metal @ <short-sha>
+**Target:** <op> · test: <test path> -k <filter>
+
+## Research pointer
+<path to `tt:learn` note>
+
+## Sibling-implementation diff
+<summary of divergences; "n/a — not reused" if standalone>
+
+## Dim validation
+<actual-vs-derived mismatches; "all match" if clean>
+
+## Mode-branch confirmation
+<if sibling has PREFILL/DECODE split: which branch target inherits; n/a otherwise>
+
+## Doc pointers
+<internal guides, PDFs in workspace, tech_reports/ references>
+```
 
 The Baseline phase consumes this.

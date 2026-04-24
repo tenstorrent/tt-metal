@@ -103,32 +103,41 @@ Wait for developer choice. On timeout, keep state and stay idle.
 # Overview: <scope>
 
 **Session started:** YYYY-MM-DD HH:MM:SS
+**Last updated:** YYYY-MM-DD HH:MM:SS
 **Repo:** tt-metal
 **Baseline commit:** <short-sha>
 **Target branch(es):** optimizer/<scope>-<date>[-a|-b|...]
 **CCACHE_DIR:** <resolved path>
 **Goal:** <absolute | relative | roofline | utilization>
 
-## Current state
+## Status
 - Baseline: <ns> · Best: <ns> at iter <m> on branch <letter> (<sha>)
-- Δ baseline: -<pct>% · Utilization (best): <flops%>F / <dram%>D / <bound> / <cores> cores
+- Δ baseline: -<pct>% · Utilization (best): <flops%>F / <dram%>D / <bound>
 - Iterations: <n> · Stall counter: <s> / <stall_ask>
 
-## History
+## Iterations
 
-| Iter | WS | Commit | Metric | PCC | Δ best | FLOPs% | DRAM% | Bound | Cores | Hypothesis |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 0 (baseline) | a | abc1234 | 12.1ms | 1.0000 | — | 36% | 11% | overhead | 64 | — |
+Chronological log — one block per iteration. Diff: `cd <workspace> && git show <sha>`.
 
-## Per-iteration contribution breakdown
+### Iter 0 (baseline) — HH:MM:SS · `abc1234`
+Metric: 12.1ms · PCC 1.0000 · 36%F / 11%D / overhead / 64 cores
+
+### Iter 1 — HH:MM:SS · `def5678` [ws a] ← new best
+**Change:** batch 4 noc_async_reads before barrier
+Metric: 11.5ms (Δbest -5%) · PCC 0.9999 · 44%F / 18%D / overhead
+
+### Iter 2 (forensic) — HH:MM:SS · `789abcd` [ws a]
+**Change:** in0_block_w=17 (next K-divisor above 4)
+Result: L1 OOM — 1820 KB CB > 1499 KB budget
+
+### Iter 3 — HH:MM:SS · `xyz0123` [ws a]
+**Change:** in0_block_w=4, per_core_M=8 (coordinated)
+Metric: 11.7ms (+1.7% regression) · PCC 0.9999 · 42%F / 18%D / overhead
+
+## Per-iteration contribution
 
 | # | Change | Saved | % of baseline | Running total |
 |---|---|---|---|---|
-
-## Forensic failures
-
-| # | Iter | What was tried | Result |
-|---|---|---|---|
 
 ## Parameter sweeps (per knob, when non-monotonic)
 
@@ -143,8 +152,13 @@ Wait for developer choice. On timeout, keep state and stay idle.
 
 Rule: anything shown in chat must also land here. Ephemeral chat tables rot.
 
-Truncate History at 100 rows (preserve baseline, current best, and the
-last 50). Contribution and forensic tables never truncated.
+Forensic-failure entries are `### Iter N (forensic)` blocks inline above —
+no separate table. Filter by running `git log --grep "opt(<scope>):
+forensic"`.
+
+Truncate the Iterations log to the last 50 entries once it exceeds 100
+(preserve baseline and current best). Contribution and sweep tables are
+never truncated.
 
 ## Interruption
 
