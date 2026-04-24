@@ -101,7 +101,7 @@ class SamplingGenerator:
 
         self._trace_states: dict[_TraceKey, dict] = {}
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
-        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=seed_batch_size)
+        self.seed_manager = SeedManager(self.tt_sampling, max_batch_size=seed_batch_size, cq_id=self.cq_id)
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -160,6 +160,8 @@ class SamplingGenerator:
         seed = getattr(sampling_params, "seed", None)
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
+        if isinstance(seed, list) and empty_slots and len(seed) > max(empty_slots):
+            seed = [seed[slot] for slot in empty_slots]
         self.seed_manager.reset_seed(seed, empty_slots)
         self.seed_manager.get_new_values(empty_slots, replicate_seeds=replicate_seeds)
         if prompt_tokens is not None:
@@ -596,8 +598,9 @@ class SeedManager:
     subsequent decode pushes until the next ``reset_seed``.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32):
+    def __init__(self, tt_sampling, max_batch_size=32, cq_id=0):
         self.max_batch_size = max_batch_size
+        self.cq_id = cq_id
         self.seeds = [None for _ in range(max_batch_size)]
         # Pre-allocate RNG objects; actual seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
@@ -616,13 +619,8 @@ class SeedManager:
         # prefill — without it the device would re-init from the same values
         # every decode step instead of advancing.
         self._needs_skip = False
-        # Mesh mapper for sharding seeds across rows when sampling_dp > 1
-        if tt_sampling._sampling_dp > 1:
-            self._seed_mapper = ttnn.ShardTensor2dMesh(
-                tt_sampling.mesh_device, dims=tt_sampling._param_dims, mesh_shape=tt_sampling.cluster_shape
-            )
-        else:
-            self._seed_mapper = None
+        # Match the persistent seed tensor layout owned by TTSampling.
+        self._seed_mapper = tt_sampling._seed_mapper
 
     def apply_slot_remap(self, remap):
         """Reindex RNG state after batch condense.
@@ -719,7 +717,9 @@ class SeedManager:
                 return
         else:
             # Advance RNG for each user in empty_slots; non-active slots get MAX_UINT32.
-            new_seeds = [rng.randint(0, 1000000) if i in empty_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)]
+            new_seeds = [
+                rng.randint(0, 1000000) if i in empty_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)
+            ]
             if replicate_seeds:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
@@ -727,5 +727,5 @@ class SeedManager:
         new_seed_tt = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor, cq_id=self.cq_id)
         self._reseted = False
