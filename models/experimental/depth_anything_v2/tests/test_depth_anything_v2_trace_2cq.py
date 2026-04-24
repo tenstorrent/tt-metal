@@ -2,18 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace + Dual Command Queue (2CQ) performance test for Depth Anything V2.
+"""Trace-mode performance test for Depth Anything V2.
 
 This test captures a device execution trace on the first run and replays it
-on subsequent iterations, using dual command queues for overlapped data
-transfer and compute.  This is the standard tt-metal pattern for peak
-throughput measurement.
+on subsequent iterations, eliminating dispatch overhead for peak throughput.
 
 NOTE: This is a skeleton -- full implementation requires hardware validation
-      to tune trace_region_size and verify 2CQ compatibility.
+      to tune trace_region_size.  Dual command queue (2CQ) support can be
+      added once the single-CQ trace path is validated on N300.
 """
 
 import pytest
+import time
 import torch
 from loguru import logger
 from transformers import AutoModelForDepthEstimation
@@ -28,8 +28,8 @@ NUM_WARMUP = 5
 NUM_ITERATIONS = 20
 
 
-def run_trace_2cq_depth_anything_v2(device):
-    """Run inference with trace capture and dual command queues."""
+def run_trace_depth_anything_v2(device):
+    """Run inference with trace capture and replay on a single command queue."""
 
     # 1. Load reference model and convert weights
     torch_model = AutoModelForDepthEstimation.from_pretrained(MODEL_ID, trust_remote_code=True)
@@ -51,7 +51,7 @@ def run_trace_2cq_depth_anything_v2(device):
     ttnn.synchronize_device(device)
     logger.info("Warmup complete.")
 
-    # 4. Capture trace
+    # 4. Capture trace on CQ 0
     logger.info("Capturing execution trace...")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     _output = tt_model(tt_input)
@@ -61,8 +61,6 @@ def run_trace_2cq_depth_anything_v2(device):
     # 5. Replay trace for benchmarking
     logger.info(f"Replaying trace {NUM_ITERATIONS} times...")
     ttnn.synchronize_device(device)
-
-    import time
 
     start = time.perf_counter()
     for _ in range(NUM_ITERATIONS):
@@ -82,13 +80,14 @@ def run_trace_2cq_depth_anything_v2(device):
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 23887872}], indirect=True)
-def test_depth_anything_v2_trace_2cq(device):
-    """Trace + 2CQ performance test.
+def test_depth_anything_v2_trace(device):
+    """Trace-mode performance test (single CQ).
 
-    Expected to achieve higher FPS than the non-traced perf test due to
-    reduced dispatch overhead from trace replay.
+    Captures one execution trace and replays it to measure peak throughput
+    with zero dispatch overhead.  Expected to achieve higher FPS than the
+    non-traced perf test.
     """
-    fps = run_trace_2cq_depth_anything_v2(device)
-    logger.info(f"Depth Anything V2 trace+2CQ FPS: {fps:.1f}")
+    fps = run_trace_depth_anything_v2(device)
+    logger.info(f"Depth Anything V2 trace FPS: {fps:.1f}")
     # Target: > 15 FPS with trace replay
     assert fps > 10, f"FPS {fps:.1f} below minimum threshold of 10"

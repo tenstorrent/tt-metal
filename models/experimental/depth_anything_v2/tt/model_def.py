@@ -626,13 +626,26 @@ class TtDepthAnythingV2:
     """
 
     def __init__(self, config, parameters, device):
+        """Initialize the TT Depth Anything V2 model.
+
+        Args:
+            config: HuggingFace model config (used for architecture hyperparameters).
+            parameters: Model parameters produced by custom_preprocessor.
+            device: Target TT device.
+
+        Note:
+            TTNN execution config is derived internally from the target device and
+            batch size, and is stored on ``self.config`` for internal use.
+            The passed-in ``config`` is retained as ``self.hf_config``.
+        """
+        self.hf_config = config
         self.config = get_model_config(batch_size=1, device=device)
         self.device = device
         # Recursively move all weights to device and wrap dicts with DictNamespace.
         self.parameters = self._move_to_device(parameters, device)
 
-        # neck_hidden_sizes per HuggingFace config: [256, 512, 1024, 1024]
-        neck_sizes = [256, 512, 1024, 1024]
+        # neck_hidden_sizes per HuggingFace config; preserve defaults if absent.
+        neck_sizes = getattr(self.hf_config, "neck_hidden_sizes", [256, 512, 1024, 1024])
         self.reassemble = [
             TtDPTReassembleLayer(
                 self.parameters["neck"]["reassemble"][i],
@@ -760,7 +773,8 @@ def custom_preprocessor(torch_model, name):
         bfloat16 + TILE_LAYOUT, shape (1, hidden_size)  -- 1-D ROW_MAJOR causes
         a Gamma assertion crash inside the LayerNorm kernel.
     * Bias tensors for linear layers:
-        bfloat16 + ROW_MAJOR_LAYOUT.
+        most use bfloat16 + ROW_MAJOR_LAYOUT; the fused QKV bias is stored as
+        bfloat16 + TILE_LAYOUT to match the fused attention path.
     * CLS token / position embeddings:
         bfloat16 + ROW_MAJOR_LAYOUT (converted to TILE at runtime after padding).
     * Patch projection weight:
