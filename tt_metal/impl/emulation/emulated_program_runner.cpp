@@ -32,8 +32,6 @@
 #include <algorithm>
 #include <vector>
 
-#include <enchantum/enchantum.hpp>
-
 #ifndef TT_EMULE_CXX_COMPILER
 #error "TT_EMULE_CXX_COMPILER must be defined by CMake"
 #endif
@@ -242,16 +240,17 @@ namespace tt::tt_metal::emule {
 // ---------------------------------------------------------------------------
 
 struct KernelInfo {
-    std::function<void()> fn;
+    // size 1 for normal kernels; size 4 for Quasar compute (one per TRISC).
+    // Either 4 distinct compiled variants (compile-time TRISC_* guards) or 4
+    // copies of one function (runtime TRISC_ID). When run_all_variants is true,
+    // the launcher iterates and sets __emule_trisc_id per variant.
+    std::vector<std::function<void()>> variants;
+    bool run_all_variants = false;
     std::vector<uint32_t> rt_args;
     std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;
-    bool is_tensix = false;       // true for Tensix/compute kernels (DFB mask uses bits 8-23)
-    uint32_t num_threads = 1;     // number of engines (for get_num_threads())
-    bool needs_trisc_run = false; // run 4 TRISC variants per engine
-    // For Quasar compute with TRISC guards: 4 compiled variant function pointers.
-    // For non-TRISC-guarded compute: all null (use fn 4 times with different __emule_trisc_id).
-    std::function<void()> trisc_fns[4];
+    bool is_tensix = false;    // true for Tensix/compute kernels (DFB mask uses bits 8-23)
+    uint32_t num_threads = 1;  // number of engines (for get_num_threads())
 };
 
 struct DeferredCompile {
@@ -263,30 +262,25 @@ struct DeferredCompile {
 };
 
 struct PendingKernelInfo {
-    std::string cache_key;
+    // Parallels KernelInfo::variants but holds cache keys pending compile-resolution.
+    std::vector<std::string> variant_cache_keys;
+    bool run_all_variants = false;
     std::vector<uint32_t> rt_args;
     std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;
     bool is_tensix = false;
     uint32_t num_threads = 1;
-    bool needs_trisc_run = false;
-    // For Quasar compute: 4 TRISC variant cache keys (UNPACK, MATH, PACK, SFPU).
-    // Empty for non-compute or non-TRISC-guarded kernels.
-    std::string trisc_cache_keys[4];
 };
 
-// DFB allocation info for a single DFB on a core (L1 base + role flags).
+// DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
+// are genuinely new per-core state; everything else (entry_size, num_entries,
+// risc masks, num_producers/consumers, cap) is read from the borrowed config
+// pointer, whose backing DataflowBufferImpl is owned by ProgramImpl and
+// outlives one program execution.
 struct DFBAllocInfo {
     uint32_t dfb_id = 0;
     uint32_t base_addr = 0;
-    uint32_t entry_size = 0;
-    uint32_t num_entries = 0;
-    uint32_t total = 0;
-    uint16_t producer_risc_mask = 0;
-    uint16_t consumer_risc_mask = 0;
-    uint8_t num_producers = 0;
-    uint8_t num_consumers = 0;
-    uint8_t cap = 0;  // consumer access pattern: 0=STRIDED, 1=BLOCKED
+    const tt::tt_metal::experimental::dfb::DataflowBufferConfig* cfg = nullptr;
 };
 
 struct CoreSetup {
@@ -298,6 +292,32 @@ struct CoreSetup {
     std::vector<DFBAllocInfo> dfb_allocs;
     bool has_dfbs = false;
 };
+
+// Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
+// always start at the same position — producer-STRIDED/BLOCKED at the per-slot
+// offset, consumer-BLOCKED at the sub-range base. The 4 DFB role combinations
+// differ only in how these fields are computed (see fill_dfb_slots callers).
+struct DfbSlotInit {
+    uint8_t counter_id;
+    uint32_t base_addr;
+    uint32_t limit;
+    uint32_t ptr;
+};
+
+template <typename SlotFn>
+static void fill_dfb_slots(tt_emule::EmuleDFBInterface& iface, uint32_t n, SlotFn&& slot_fn) {
+    const uint32_t cap = std::min<uint32_t>(n, tt_emule::MAX_TC_SLOTS_PER_DFB);
+    for (uint32_t k = 0; k < cap; ++k) {
+        auto& slot = iface.tc_slots[k];
+        DfbSlotInit s = slot_fn(k);
+        slot.neo_id = 0;
+        slot.counter_id = s.counter_id;
+        slot.base_addr = s.base_addr;
+        slot.limit = s.limit;
+        slot.wr_ptr = s.ptr;
+        slot.rd_ptr = s.ptr;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // JIT Compilation Cache (in-memory + persistent disk cache)
@@ -391,6 +411,47 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 // JIT Kernel Compilation
 // ---------------------------------------------------------------------------
 
+// Rewrite RISC-V-specific inline asm and raw-L1-pointer idioms so the kernel
+// compiles for x86 host.  The rewrites:
+//   1. `asm volatile("csrr %0, mhartid" : "=r"(V));` → `V = __processor_id;`
+//      (x86 assembler rejects RISC-V CSR instructions; the runner sets the
+//      __processor_id TLS before each kernel launch.)
+//   2. `asm volatile("fence" ::: "memory");` → `__sync_synchronize();`
+//      (Host memory barrier is the closest emulation-side equivalent.)
+//   3. `reinterpret_cast<T*>(get_arg_val<uint32_t>(N))` →
+//      `reinterpret_cast<T*>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>(N)))`
+//      (Quasar kernels pass raw L1 firmware offsets as runtime args; x86 needs
+//      translation through the per-thread __emule_bridge_l1 base pointer.)
+// Reads from `src_path`, writes the patched source to `out_path`, and throws
+// on any I/O failure.
+static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
+    std::ifstream in(src_path);
+    if (!in) {
+        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string src = ss.str();
+
+    static const std::regex mhartid_re(
+        R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
+    src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
+
+    static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*:::\s*"memory"\s*\)\s*;)");
+    src = std::regex_replace(src, fence_re, "__sync_synchronize();");
+
+    static const std::regex l1_arg_ptr_re(
+        R"(reinterpret_cast<([^>]+\*)>\s*\(\s*get_arg_val<uint32_t>\s*(\([^)]*\))\s*\))");
+    src = std::regex_replace(
+        src, l1_arg_ptr_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>$2))");
+
+    std::ofstream out(out_path);
+    if (!out) {
+        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
+    }
+    out << src;
+}
+
 static std::function<void()> jit_compile_kernel(
     const std::string& kernel_src_path,
     const std::vector<uint32_t>& compile_args,
@@ -414,48 +475,11 @@ static std::function<void()> jit_compile_kernel(
     }
     std::string dir(tmpdir);
 
-    // 2b. Preprocess the kernel source to substitute RISC-V CSR inline asm that
-    // x86 assemblers reject.  Quasar kernels use `csrr %0, mhartid` to read the
-    // hardware thread id; emulation exposes this via the __processor_id TLS set
-    // by the runner.  The patched source is written to the temp dir and used in
-    // place of the raw kernel; -I kernel_dir (below) keeps relative includes
-    // resolvable.
-    std::string patched_kernel_path;
-    {
-        std::ifstream in(abs_kernel);
-        if (!in) {
-            throw std::runtime_error("jit_compile_kernel: cannot read " + abs_kernel);
-        }
-        std::stringstream ss;
-        ss << in.rdbuf();
-        std::string src = ss.str();
-        // Match: asm volatile("csrr %0, mhartid" : "=r"(VAR));  →  VAR = __processor_id;
-        static const std::regex mhartid_re(
-            R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
-        src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
-        // Match: asm volatile("fence" ::: "memory");  →  __sync_synchronize();
-        // (RISC-V `fence` is rejected by the x86 assembler; host memory barrier
-        // is the closest emulation-side equivalent.)
-        static const std::regex fence_re(
-            R"(asm\s+volatile\s*\(\s*"fence"\s*:::\s*"memory"\s*\)\s*;)");
-        src = std::regex_replace(src, fence_re, "__sync_synchronize();");
-        // Match: reinterpret_cast<T*>(get_arg_val<uint32_t>(N))
-        //   →  reinterpret_cast<T*>(__emule_local_l1_to_ptr(get_arg_val<uint32_t>(N)))
-        // Quasar kernels pass raw L1 firmware offsets as runtime args and then
-        // cast them directly to typed pointers.  On x86 emulation those offsets
-        // are not valid host addresses; __emule_local_l1_to_ptr translates them
-        // via the per-thread __emule_bridge_l1 base pointer.
-        static const std::regex l1_arg_ptr_re(
-            R"(reinterpret_cast<([^>]+\*)>\s*\(\s*get_arg_val<uint32_t>\s*(\([^)]*\))\s*\))");
-        src = std::regex_replace(src, l1_arg_ptr_re,
-            "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>$2))");
-        patched_kernel_path = dir + "/patched_kernel.cpp";
-        std::ofstream out(patched_kernel_path);
-        if (!out) {
-            throw std::runtime_error("jit_compile_kernel: cannot write " + patched_kernel_path);
-        }
-        out << src;
-    }
+    // 2b. Preprocess the kernel source for x86: rewrite RISC-V inline asm
+    // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
+    // keeps relative includes in the patched file resolvable.
+    std::string patched_kernel_path = dir + "/patched_kernel.cpp";
+    preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
 
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
@@ -871,10 +895,10 @@ static void collect_kernels(
                 "TRISC_PACK",
                 "TRISC_ISOLATE_SFPU",
             };
-            std::string trisc_cache_keys[4];
-            std::string cache_key;
+            std::vector<std::string> variant_cache_keys;
+            bool run_all_variants = false;
             bool needs_trisc_compile = false;
-            bool needs_trisc_run = false;
+            bool needs_runtime_trisc = false;
 
             if (is_quasar_compute) {
                 std::ifstream kscan(src_path);
@@ -885,10 +909,8 @@ static void collect_kernels(
                         needs_trisc_compile = true;
                     }
                 }
-                if (needs_trisc_compile) {
-                    needs_trisc_run = true;
-                } else if (kcontent.find("TRISC_ID") != std::string::npos) {
-                    needs_trisc_run = true;
+                if (!needs_trisc_compile && kcontent.find("TRISC_ID") != std::string::npos) {
+                    needs_runtime_trisc = true;
                 }
             }
 
@@ -896,12 +918,20 @@ static void collect_kernels(
                 for (int t = 0; t < 4; t++) {
                     auto trisc_defs = defines;
                     trisc_defs[trisc_define_names[t]] = "1";
-                    trisc_cache_keys[t] = compute_cache_key(trisc_defs);
-                    register_cache_key(trisc_cache_keys[t], trisc_defs);
+                    std::string key = compute_cache_key(trisc_defs);
+                    register_cache_key(key, trisc_defs);
+                    variant_cache_keys.push_back(std::move(key));
                 }
+                run_all_variants = true;
             } else {
-                cache_key = compute_cache_key(defines);
-                register_cache_key(cache_key, defines);
+                std::string key = compute_cache_key(defines);
+                register_cache_key(key, defines);
+                if (needs_runtime_trisc) {
+                    variant_cache_keys.assign(4, key);
+                    run_all_variants = true;
+                } else {
+                    variant_cache_keys.push_back(std::move(key));
+                }
             }
 
             // Determine processor IDs and thread count for this kernel:
@@ -912,14 +942,15 @@ static void collect_kernels(
             uint32_t num_threads = 1;
             if (qdm && qdm->get_dm_processors().size() > 1) {
                 for (const auto& proc : qdm->get_dm_processors()) {
-                    proc_ids.push_back(static_cast<uint8_t>(enchantum::to_underlying(proc)));
+                    proc_ids.push_back(static_cast<uint8_t>(
+                        static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc)));
                 }
                 num_threads = static_cast<uint32_t>(qdm->get_dm_processors().size());
             } else if (qck) {
                 std::set<uint8_t> neo_ids_seen;
                 for (const auto& proc : qck->get_compute_processors()) {
                     uint8_t neo_id = static_cast<uint8_t>(
-                        enchantum::to_underlying(proc) /
+                        static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc) /
                         experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
                     if (neo_ids_seen.insert(neo_id).second) {
                         proc_ids.push_back(neo_id);
@@ -937,17 +968,14 @@ static void collect_kernels(
                         CoreCoord logical_core(x, y);
                         auto& rt_args_data = kernel->runtime_args(logical_core);
                         for (uint8_t proc_id : proc_ids) {
-                            std::string effective_key = needs_trisc_compile
-                                ? trisc_cache_keys[0]
-                                : cache_key;
                             PendingKernelInfo pki{
-                                effective_key, rt_args_data, common_rt,
-                                proc_id, is_tensix, num_threads, needs_trisc_run};
-                            if (needs_trisc_compile) {
-                                for (int t = 0; t < 4; t++) {
-                                    pki.trisc_cache_keys[t] = trisc_cache_keys[t];
-                                }
-                            }
+                                variant_cache_keys,
+                                run_all_variants,
+                                rt_args_data,
+                                common_rt,
+                                proc_id,
+                                is_tensix,
+                                num_threads};
                             pending_core_kernels[logical_core].push_back(std::move(pki));
                         }
                     }
@@ -1198,11 +1226,7 @@ static void setup_core_state(
                 tc.acked.store(0, std::memory_order_relaxed);
             }
 
-            dfb_allocs.push_back({
-                dfb_id, base_addr, cfg.entry_size, cfg.num_entries, total,
-                cfg.producer_risc_mask, cfg.consumer_risc_mask,
-                static_cast<uint8_t>(cfg.num_producers), static_cast<uint8_t>(cfg.num_consumers),
-                static_cast<uint8_t>(cfg.cap)});
+            dfb_allocs.push_back({dfb_id, base_addr, &cfg});
 
             log_debug(
                 tt::LogMetal,
@@ -1249,109 +1273,103 @@ static void launch_cores(
                             uint8_t proc_id = (*cs.ki_list)[t].processor_id;
                             bool is_tensix = (*cs.ki_list)[t].is_tensix;
                             for (auto& alloc : cs.dfb_allocs) {
+                                const auto& cfg = *alloc.cfg;
+                                const uint32_t total = cfg.entry_size * cfg.num_entries;
                                 // Compute proc_bit per-alloc: WH/BH ComputeKernel sets bit 2,
                                 // Quasar uses bits 8+ (detect by presence of high mask bits).
                                 uint16_t proc_bit;
                                 if (is_tensix) {
                                     bool quasar_masks =
-                                        ((alloc.producer_risc_mask | alloc.consumer_risc_mask) & 0xFF00u) != 0;
+                                        ((cfg.producer_risc_mask | cfg.consumer_risc_mask) & 0xFF00u) != 0;
                                     proc_bit = quasar_masks
                                         ? static_cast<uint16_t>(1u << (proc_id + ::dfb::TENSIX_RISC_OFFSET))
                                         : static_cast<uint16_t>(1u << 2);
                                 } else {
                                     proc_bit = static_cast<uint16_t>(1u << proc_id);
                                 }
-                                bool is_blocked = (alloc.cap == static_cast<uint8_t>(::dfb::AccessPattern::BLOCKED));
-                                uint32_t M = is_blocked ? alloc.num_producers
-                                                        : std::max<uint32_t>(alloc.num_producers, alloc.num_consumers);
-                                uint32_t stride_size = M * alloc.entry_size;
+                                bool is_blocked = (cfg.cap == ::dfb::AccessPattern::BLOCKED);
+                                uint32_t M = is_blocked ? cfg.num_producers
+                                                        : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
+                                uint32_t stride_size = M * cfg.entry_size;
                                 if (alloc.dfb_id >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
                                     continue;
                                 }
                                 uint8_t counter_base = static_cast<uint8_t>(alloc.dfb_id * tt_emule::MAX_TC_SLOTS_PER_DFB);
 
-                                bool is_producer = (alloc.producer_risc_mask & proc_bit) != 0;
-                                bool is_consumer = (alloc.consumer_risc_mask & proc_bit) != 0;
+                                bool is_producer = (cfg.producer_risc_mask & proc_bit) != 0;
+                                bool is_consumer = (cfg.consumer_risc_mask & proc_bit) != 0;
                                 if (!is_producer && !is_consumer) {
                                     continue;
                                 }
 
                                 auto& iface = per_thread_dfbs[t][alloc.dfb_id];
                                 iface.active = true;
-                                iface.entry_size = alloc.entry_size;
+                                iface.entry_size = cfg.entry_size;
                                 iface.stride_size = stride_size;
-                                iface.num_entries = alloc.num_entries;
+                                iface.num_entries = cfg.num_entries;
                                 iface.tc_idx = 0;
                                 iface.broadcast_tc = false;
                                 iface.rd_entry_idx = 0;
                                 iface.wr_entry_idx = 0;
 
                                 if (is_producer) {
-                                    uint8_t p = static_cast<uint8_t>(
-                                        std::popcount(alloc.producer_risc_mask & (proc_bit - 1u)));
+                                    uint8_t p =
+                                        static_cast<uint8_t>(std::popcount(cfg.producer_risc_mask & (proc_bit - 1u)));
                                     if (is_blocked) {
                                         // BLOCKED DM-DM: producer broadcasts to all consumer TCs.
                                         iface.broadcast_tc = true;
-                                        iface.num_tcs_to_rr = static_cast<uint8_t>(alloc.num_consumers);
-                                        iface.stride_size = alloc.entry_size;
-                                        uint32_t capacity_per_p = alloc.num_entries / alloc.num_producers;
-                                        for (uint32_t c = 0; c < alloc.num_consumers && c < tt_emule::MAX_TC_SLOTS_PER_DFB; ++c) {
-                                            auto& slot = iface.tc_slots[c];
-                                            slot.neo_id = 0;
-                                            slot.counter_id = counter_base + static_cast<uint8_t>(p * alloc.num_consumers + c);
-                                            slot.base_addr = alloc.base_addr;
-                                            slot.limit = alloc.base_addr + alloc.total;
-                                            uint32_t offset = p * capacity_per_p * alloc.entry_size;
-                                            slot.wr_ptr = alloc.base_addr + offset;
-                                            slot.rd_ptr = alloc.base_addr + offset;
-                                        }
+                                        iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_consumers);
+                                        iface.stride_size = cfg.entry_size;
+                                        uint32_t capacity_per_p = cfg.num_entries / cfg.num_producers;
+                                        uint32_t producer_ptr = alloc.base_addr + p * capacity_per_p * cfg.entry_size;
+                                        fill_dfb_slots(iface, cfg.num_consumers, [&](uint32_t c) {
+                                            return DfbSlotInit{
+                                                static_cast<uint8_t>(counter_base + p * cfg.num_consumers + c),
+                                                alloc.base_addr,
+                                                alloc.base_addr + total,
+                                                producer_ptr};
+                                        });
                                     } else {
-                                        uint32_t num_tcs = M / alloc.num_producers;
+                                        uint32_t num_tcs = M / cfg.num_producers;
                                         iface.num_tcs_to_rr = static_cast<uint8_t>(num_tcs);
-                                        for (uint32_t k = 0; k < num_tcs && k < tt_emule::MAX_TC_SLOTS_PER_DFB; ++k) {
-                                            uint8_t tc_idx = static_cast<uint8_t>(p + k * alloc.num_producers);
-                                            auto& slot = iface.tc_slots[k];
-                                            slot.neo_id = 0;
-                                            slot.counter_id = counter_base + tc_idx;
-                                            slot.base_addr = alloc.base_addr;
-                                            slot.limit = alloc.base_addr + alloc.total;
-                                            uint32_t offset = tc_idx * alloc.entry_size;
-                                            slot.wr_ptr = alloc.base_addr + offset;
-                                            slot.rd_ptr = alloc.base_addr + offset;
-                                        }
+                                        fill_dfb_slots(iface, num_tcs, [&](uint32_t k) {
+                                            uint8_t tc_idx = static_cast<uint8_t>(p + k * cfg.num_producers);
+                                            return DfbSlotInit{
+                                                static_cast<uint8_t>(counter_base + tc_idx),
+                                                alloc.base_addr,
+                                                alloc.base_addr + total,
+                                                alloc.base_addr + tc_idx * cfg.entry_size};
+                                        });
                                     }
                                 } else {
-                                    uint8_t c = static_cast<uint8_t>(
-                                        std::popcount(alloc.consumer_risc_mask & (proc_bit - 1u)));
+                                    uint8_t c =
+                                        static_cast<uint8_t>(std::popcount(cfg.consumer_risc_mask & (proc_bit - 1u)));
                                     if (is_blocked) {
                                         // BLOCKED DM-DM consumer: drain each producer's TC block fully.
-                                        iface.num_tcs_to_rr = static_cast<uint8_t>(alloc.num_producers);
-                                        iface.stride_size = alloc.entry_size;
+                                        iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_producers);
+                                        iface.stride_size = cfg.entry_size;
                                         iface.drain_per_tc = true;
-                                        uint32_t capacity_per_p = alloc.num_entries / alloc.num_producers;
-                                        for (uint32_t p = 0; p < alloc.num_producers && p < tt_emule::MAX_TC_SLOTS_PER_DFB; ++p) {
-                                            auto& slot = iface.tc_slots[p];
-                                            slot.neo_id = 0;
-                                            slot.counter_id = counter_base + static_cast<uint8_t>(p * alloc.num_consumers + c);
-                                            slot.base_addr = alloc.base_addr + p * capacity_per_p * alloc.entry_size;
-                                            slot.limit = slot.base_addr + capacity_per_p * alloc.entry_size;
-                                            slot.rd_ptr = slot.base_addr;
-                                            slot.wr_ptr = slot.base_addr;
-                                        }
+                                        uint32_t capacity_per_p = cfg.num_entries / cfg.num_producers;
+                                        uint32_t sub_range = capacity_per_p * cfg.entry_size;
+                                        fill_dfb_slots(iface, cfg.num_producers, [&](uint32_t p) {
+                                            uint32_t sub_base = alloc.base_addr + p * sub_range;
+                                            return DfbSlotInit{
+                                                static_cast<uint8_t>(counter_base + p * cfg.num_consumers + c),
+                                                sub_base,
+                                                sub_base + sub_range,
+                                                sub_base};
+                                        });
                                     } else {
-                                        uint32_t num_tcs = M / alloc.num_consumers;
+                                        uint32_t num_tcs = M / cfg.num_consumers;
                                         iface.num_tcs_to_rr = static_cast<uint8_t>(num_tcs);
-                                        for (uint32_t k = 0; k < num_tcs && k < tt_emule::MAX_TC_SLOTS_PER_DFB; ++k) {
-                                            uint8_t tc_idx = static_cast<uint8_t>(c + k * alloc.num_consumers);
-                                            auto& slot = iface.tc_slots[k];
-                                            slot.neo_id = 0;
-                                            slot.counter_id = counter_base + tc_idx;
-                                            slot.base_addr = alloc.base_addr;
-                                            slot.limit = alloc.base_addr + alloc.total;
-                                            uint32_t offset = tc_idx * alloc.entry_size;
-                                            slot.rd_ptr = alloc.base_addr + offset;
-                                            slot.wr_ptr = alloc.base_addr + offset;
-                                        }
+                                        fill_dfb_slots(iface, num_tcs, [&](uint32_t k) {
+                                            uint8_t tc_idx = static_cast<uint8_t>(c + k * cfg.num_consumers);
+                                            return DfbSlotInit{
+                                                static_cast<uint8_t>(counter_base + tc_idx),
+                                                alloc.base_addr,
+                                                alloc.base_addr + total,
+                                                alloc.base_addr + tc_idx * cfg.entry_size};
+                                        });
                                     }
                                 }
                             }
@@ -1400,17 +1418,10 @@ static void launch_cores(
                             __emule_logical_x = lx;
                             __emule_logical_y = ly;
 
-                            if (ki.is_tensix) {
-                                __emule_neo_id = ki.processor_id;
-                                __emule_trisc_id = 0;
-                                __emule_num_threads = ki.num_threads;
-                                __emule_my_thread_id = ki.processor_id;
-                            } else {
-                                __emule_neo_id = 0;
-                                __emule_trisc_id = 0;
-                                __emule_num_threads = ki.num_threads;
-                                __emule_my_thread_id = ki.processor_id;
-                            }
+                            __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
+                            __emule_trisc_id = 0;
+                            __emule_num_threads = ki.num_threads;
+                            __emule_my_thread_id = ki.processor_id;
 
                             log_debug(
                                 tt::LogMetal,
@@ -1418,23 +1429,11 @@ static void launch_cores(
                                 kidx, lx, ly, px, py, ki.rt_args.size(), ki.common_rt_args.size());
 
                             try {
-                                if (ki.trisc_fns[0]) {
-                                    // Quasar compute with compile-time TRISC guards:
-                                    // run all 4 compiled variants sequentially.
-                                    for (int trisc = 0; trisc < 4; trisc++) {
-                                        __emule_trisc_id = static_cast<uint8_t>(trisc);
-                                        if (ki.trisc_fns[trisc]) {
-                                            ki.trisc_fns[trisc]();
-                                        }
+                                for (size_t t = 0; t < ki.variants.size(); ++t) {
+                                    if (ki.run_all_variants) {
+                                        __emule_trisc_id = static_cast<uint8_t>(t);
                                     }
-                                } else if (ki.needs_trisc_run) {
-                                    // Runtime TRISC_ID: run same binary 4 times.
-                                    for (int trisc = 0; trisc < 4; trisc++) {
-                                        __emule_trisc_id = static_cast<uint8_t>(trisc);
-                                        ki.fn();
-                                    }
-                                } else {
-                                    ki.fn();
+                                    ki.variants[t]();
                                 }
                             } catch (...) {
                                 kep = std::current_exception();
@@ -1548,17 +1547,10 @@ void execute_program_emulated(IDevice* device, Program& program) {
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
-                resolved_fns.at(pk.cache_key),
-                pk.rt_args,
-                pk.common_rt_args,
-                pk.processor_id,
-                pk.is_tensix,
-                pk.num_threads,
-                pk.needs_trisc_run};
-            if (!pk.trisc_cache_keys[0].empty()) {
-                for (int t = 0; t < 4; t++) {
-                    ki.trisc_fns[t] = resolved_fns.at(pk.trisc_cache_keys[t]);
-                }
+                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.is_tensix, pk.num_threads};
+            ki.variants.reserve(pk.variant_cache_keys.size());
+            for (const auto& key : pk.variant_cache_keys) {
+                ki.variants.push_back(resolved_fns.at(key));
             }
             core_kernels[logical_core].push_back(std::move(ki));
         }
