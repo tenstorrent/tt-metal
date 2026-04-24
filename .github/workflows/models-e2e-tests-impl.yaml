@@ -132,11 +132,20 @@ jobs:
         run: |
           if [ -d "generated/benchmark_data" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py "${{ matrix.test-group.sku }}"
           else
             echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
+      - name: Validate perf and accuracy targets
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        shell: bash
+        run: |
+          python3 .github/scripts/utils/validate_perf_targets.py \
+            --targets-yaml models/model_targets.yaml \
+            --benchmark-dir generated/benchmark_data \
+            --tests-yaml tests/pipeline_reorg/models_e2e_tests.yaml \
+            --sku "${{ matrix.test-group.sku }}"
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
