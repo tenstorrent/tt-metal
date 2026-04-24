@@ -10,7 +10,7 @@
 
 #include <type_traits>
 
-#include "cpp/ttnn/operations/transformer/sdpa/device/sdpa_streaming_qktv.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
