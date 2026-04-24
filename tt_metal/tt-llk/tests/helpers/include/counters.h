@@ -80,10 +80,10 @@ __attribute__((noinline, section(".text.zzz_perf_counters"))) inline void stop_p
 } // namespace llk_perf
 
 // ============================================================================
-// Profiler hooks — ALWAYS compiled (called from zone_scoped in profiler.h).
-// Both NC and WC compile IDENTICAL code. The enabled flag at runtime
-// determines whether counter operations execute.
+// Profiler hooks — only compiled in WC. NC TRISC ELF emits zero counter code.
 // ============================================================================
+
+#ifdef PERF_COUNTERS_COMPILED
 
 namespace llk_perf
 {
@@ -118,6 +118,8 @@ __attribute__((noinline, section(".text.zzz_profiler_hooks"))) void _profiler_co
     }
 }
 } // namespace llk_profiler
+
+#endif // PERF_COUNTERS_COMPILED
 
 // ============================================================================
 // BRISC-only code — only compiled when PERF_COUNTERS_COMPILED is defined.
