@@ -1468,12 +1468,11 @@ static void launch_cores(
                     std::vector<std::exception_ptr> kernel_exceptions(cs.ki_list->size());
                     uint32_t lx = cs.logical_core.x;
                     uint32_t ly = cs.logical_core.y;
-                    uint32_t kernel_idx = 0;
-                    for (auto& ki : *cs.ki_list) {
-                        uint32_t kidx = kernel_idx++;
+                    for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
+                        KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
                         tt_emule::EmuleDFBInterface* dfb_array =
                             cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
-                        threads.emplace_back([&ki,
+                        threads.emplace_back([ki_ptr,
                                               core,
                                               l1_data,
                                               dram_data,
@@ -1488,6 +1487,7 @@ static void launch_cores(
                                               kidx,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
+                            auto& ki = *ki_ptr;
                             __rt_args = ki.rt_args;
                             __common_rt_args = ki.common_rt_args;
                             __emule_bridge_l1 = l1_data;
