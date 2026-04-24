@@ -520,3 +520,32 @@ def test_reshape_tiled_pad_value_sharded(device, input_shape, output_shape, stra
         f"Padded region not filled with pad_value={pad_value} (strategy={strategy}): "
         f"expected sum {expected_pad_sum}, observed {observed_pad_sum}"
     )
+
+
+# ---------------------------------------------------------------------------
+# skip_padding_fill opt-out: callers that handle padding downstream can skip
+# the fill_implicit_tile_padding dispatch.
+# ---------------------------------------------------------------------------
+
+
+def test_reshape_tiled_skip_padding_fill(device):
+    """skip_padding_fill=True preserves logical values and bypasses the pad_value fill."""
+    torch.manual_seed(0)
+    torch_input = torch.arange(1, 13, dtype=torch.float32)  # shape (12,), tile-padded on device
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Opt-out path: logical region must be correct; padded lanes are caller's responsibility.
+    tt_skip = ttnn.reshape(tt_input, (12, 1, 1), pad_value=42.0, skip_padding_fill=True)
+    logical_skip = ttnn.to_torch(tt_skip).reshape(-1)
+    assert torch.equal(logical_skip, torch_input), "skip_padding_fill=True must not corrupt logical values"
+
+    # Sanity: default path (skip_padding_fill=False) still writes pad_value into padding.
+    tt_filled = ttnn.reshape(tt_input, (12, 1, 1), pad_value=42.0)
+    full = _read_padded_region(tt_filled).reshape(-1)
+    pad_count = full.numel() - logical_skip.numel()
+    assert pad_count > 0, "Test expects output to have tile padding"
+    observed = full.sum().item() - logical_skip.sum().item()
+    expected = pad_count * 42.0
+    assert abs(observed - expected) < 1e-3 * max(
+        1.0, abs(expected)
+    ), f"Default path regressed: expected pad sum {expected}, observed {observed}"

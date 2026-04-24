@@ -286,7 +286,8 @@ ttnn::Tensor reshape_tiled(
     const MemoryConfig& memory_config,
     const PadValue& pad_value,
     const bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
     const float fill_value = detail::pad_value_as_float(pad_value);
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
@@ -334,7 +335,9 @@ ttnn::Tensor reshape_tiled(
                 recreate_mapping_tensor,
                 sub_core_grid);
             // Fill implicit tile padding while still in bfloat16/interleaved (cheaper than on BFLOAT8_B).
-            output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+            if (!skip_padding_fill) {
+                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+            }
             output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             if (memory_config.is_sharded()) {
                 auto output_mem_config =
@@ -381,7 +384,7 @@ ttnn::Tensor reshape_tiled(
         // budget overflows on some block-sharded grids.
         const bool output_has_tile_padding = (requested_shape_3d[-1] % tt::constants::TILE_WIDTH != 0) ||
                                              (requested_shape_3d[-2] % tt::constants::TILE_HEIGHT != 0);
-        if (output_has_tile_padding) {
+        if (!skip_padding_fill && output_has_tile_padding) {
             if (output_tensor_3d.memory_config().is_sharded()) {
                 // TODO(fill_pad): drop this s2i/i2s detour once prim::fill_pad supports
                 // sharded buffers without overflowing fill_pad_writer's per-core runtime-arg cap.
@@ -444,7 +447,7 @@ ttnn::Tensor reshape_tiled(
     // Symmetric with the direct sharded path: skip the dispatch when the output is tile-aligned.
     const bool interleaved_output_has_tile_padding = (requested_shape_3d[-1] % tt::constants::TILE_WIDTH != 0) ||
                                                      (requested_shape_3d[-2] % tt::constants::TILE_HEIGHT != 0);
-    if (interleaved_output_has_tile_padding) {
+    if (!skip_padding_fill && interleaved_output_has_tile_padding) {
         output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
     }
 
@@ -466,7 +469,8 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -552,7 +556,8 @@ ttnn::Tensor ttnn::reshape(
         mem_config,
         pad_value.value_or(default_pad_value),
         reshape_map_mode == TileReshapeMapMode::RECREATE,
-        sub_core_grid);
+        sub_core_grid,
+        skip_padding_fill);
 }
 
 ttnn::Tensor ttnn::reshape(
@@ -561,8 +566,9 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
-    return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid, skip_padding_fill);
 }
 
 ttnn::Tensor ttnn::reshape(
@@ -571,12 +577,14 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
     return reshape(
         tensor,
         operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
         reshape_map_mode,
-        sub_core_grid);
+        sub_core_grid,
+        skip_padding_fill);
 }
