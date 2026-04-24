@@ -911,8 +911,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
 
     # Persist test results as a sidecar JSON so CI can surface them in
     # the GitHub job summary even when the trace step itself fails.
-    test_results_file = os.path.join(output_dir, "_test_results.json")
-    os.makedirs(output_dir, exist_ok=True)
+    test_results_dir = os.path.dirname(output_dir) if output_dir.endswith(".json") else output_dir
+    test_results_dir = test_results_dir or "."
+    test_results_file = os.path.join(test_results_dir, "_test_results.json")
+    os.makedirs(test_results_dir, exist_ok=True)
     try:
         with open(test_results_file, "w") as f:
             json.dump(
@@ -926,8 +928,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
                 f,
                 indent=2,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to write test results sidecar: %s", exc, exc_info=True)
 
     return {
         "success": result.returncode == 0,
@@ -1269,9 +1271,7 @@ Examples (Import existing traces):
         if not args.load and "test_stats" in result:
             stats = result["test_stats"]
             if stats["total"] > 0:
-                print(
-                    f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})"
-                )
+                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
             else:
                 # Fallback if we couldn't parse the output
                 print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")

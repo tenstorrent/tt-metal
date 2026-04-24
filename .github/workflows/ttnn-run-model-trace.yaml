@@ -396,9 +396,9 @@ jobs:
         run: |
           RESULTS_FILE="model_tracer/traced_operations/_test_results.json"
           if [[ ! -f "$RESULTS_FILE" ]]; then
-            echo "### Pytest Results — \`$SLUG\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "> No test results file found (test may not have started)." >> $GITHUB_STEP_SUMMARY
+            echo "### Pytest Results — \`$SLUG\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> No test results file found (test may not have started)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
