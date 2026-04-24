@@ -2998,6 +2998,11 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
+
+#if defined(COMPILE_FOR_TRISC)
+        deepseek_compute_kernel_init();
+#endif
+
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (persistent_mode) {
             constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
