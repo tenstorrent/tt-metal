@@ -4854,7 +4854,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1485568,
+            "worker_l1_size": 1461000,
         }
     ],
     indirect=True,

@@ -841,13 +841,13 @@ class BaseLMHeadStage(StageKind):
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
                     eh_mm_fused_grid,
-                    (BaseLMHeadStage.M, eh_mm_shard_width),
+                (BaseLMHeadStage.M, 15360),
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
             eh_mm_fused_buffer = ttnn.from_torch(
                 torch.zeros(
-                    (num_devices, BaseLMHeadStage.M, num_eh_mm_fused_cores * eh_mm_shard_width),
+                    (num_devices, BaseLMHeadStage.M, 15360*num_eh_mm_fused_cores), # clean up later
                     dtype=torch.bfloat16,
                 ),
                 dtype=ttnn.bfloat16,

@@ -1194,7 +1194,7 @@ class LMHeadSampling:
                 )
                 # MTP metadata landing buffer on argmax final core (NCRISC unicast from exit input core).
                 metadata_output_l1_addr = 0
-                if metadata_tensor is not None and is_exit_device:
+                if metadata_tensor is not None:
                     _metadata_buf = ttnn.get_device_tensors(metadata_tensor)[device_idx]
                     metadata_output_l1_addr = int(_metadata_buf.buffer_address())
 
@@ -1965,28 +1965,83 @@ class LMHeadSampling:
                             )
                         ],
                     )
-                    sampling_topk_in_scores_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sampling_total_input_tiles * sampling_bf16_tile_size,
-                        core_ranges=argmax_core_grid,
-                        format_descriptors=[
+
+                    #                mcast_dst_cb_format = ttnn.CBFormatDescriptor(
+                    #     buffer_index=mcast_dst_cb,
+                    #     data_format=data_format,
+                    #     page_size=input_tile_size,
+                    #     tile=mcast_dst_tile_descriptor,
+                    # )
+                    
+                    #                     mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    #     mcast_dst_cb,
+                    #     fused_buffer_device,
+                    #     address_offset=0,
+                    #     total_size=num_tiles_k * input_tile_size,
+                    #     core_ranges=all_cores,
+                    # )
+                    # mcast_dst_cb_descriptor.format_descriptors = [mcast_dst_cb_format]
+                    
+                    if enable_mtp_on_device:
+                        sampling_topk_in_scores_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            sampling_topk_in_scores_cb,
+                            eh_mm_fused_per_device[device_idx],
+                            address_offset=0,
+                            total_size=sampling_total_input_tiles * sampling_bf16_tile_size,
+                            core_ranges=argmax_core_grid,
+                        )
+                        sampling_topk_in_scores_cb_descriptor.format_descriptors = [
                             ttnn.CBFormatDescriptor(
                                 buffer_index=sampling_topk_in_scores_cb,
                                 data_format=ttnn.bfloat16,
                                 page_size=sampling_bf16_tile_size,
                             )
-                        ],
-                    )
-                    sampling_topk_in_indices_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sampling_total_input_tiles * sampling_uint32_tile_size,
-                        core_ranges=argmax_core_grid,
-                        format_descriptors=[
+                        ]
+                        print("eh fused per device shape=", eh_mm_fused_per_device[device_idx].shape, flush=True)
+
+                        print("Sampling scores total_size=", sampling_total_input_tiles * sampling_bf16_tile_size, flush=True)
+                        print("Sampling scores page_size=", sampling_bf16_tile_size, flush=True)
+                        print("Sampling indices total_size=", sampling_total_input_tiles * sampling_uint32_tile_size, flush=True)
+                        print("Sampling indices page_size=", sampling_uint32_tile_size, flush=True)
+
+                        sampling_topk_in_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            sampling_topk_in_indices_cb,
+                            eh_mm_fused_per_device[device_idx],
+                            address_offset=sampling_total_input_tiles * sampling_bf16_tile_size,
+                            total_size=sampling_total_input_tiles * sampling_uint32_tile_size,
+                            core_ranges=argmax_core_grid,
+                        )
+                        sampling_topk_in_indices_cb_descriptor.format_descriptors = [
                             ttnn.CBFormatDescriptor(
                                 buffer_index=sampling_topk_in_indices_cb,
                                 data_format=ttnn.uint32,
                                 page_size=sampling_uint32_tile_size,
                             )
-                        ],
-                    )
+                        ]
+                    else:
+                        sampling_topk_in_scores_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=sampling_total_input_tiles * sampling_bf16_tile_size,
+                            core_ranges=argmax_core_grid,
+                            format_descriptors=[
+                                ttnn.CBFormatDescriptor(
+                                    buffer_index=sampling_topk_in_scores_cb,
+                                    data_format=ttnn.bfloat16,
+                                    page_size=sampling_bf16_tile_size,
+                                )
+                            ],
+                        )
+                        sampling_topk_in_indices_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=sampling_total_input_tiles * sampling_uint32_tile_size,
+                            core_ranges=argmax_core_grid,
+                            format_descriptors=[
+                                ttnn.CBFormatDescriptor(
+                                    buffer_index=sampling_topk_in_indices_cb,
+                                    data_format=ttnn.uint32,
+                                    page_size=sampling_uint32_tile_size,
+                                )
+                            ],
+                        )
+
                     sampling_topk_out_scores_cb_descriptor = ttnn.CBDescriptor(
                         total_size=sampling_bf16_tile_size,
                         core_ranges=argmax_core_grid,

@@ -55,9 +55,13 @@
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
+// NOTE: rmsnorm.hpp must come before sampling.hpp because sampling.hpp transitively
+// includes api/compute/reduce.h, whose template default arguments reference the
+// REDUCE_OP / REDUCE_DIM macros that rmsnorm.hpp defines. Reordering avoids
+// "REDUCE_OP was not declared in this scope" errors at TRISC compile time.
+#include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/sampling.hpp"
 #include "../../../unified_kernels/socket_send.hpp"
-#include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
 #include "../../../metadata/metadata.hpp"
