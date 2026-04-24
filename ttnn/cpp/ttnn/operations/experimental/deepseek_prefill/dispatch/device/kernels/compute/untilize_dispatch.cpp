@@ -46,14 +46,11 @@ void kernel_main() {
     uint32_t batch_counter = 0;
 
     while (true) {
-        DPRINT_DISPATCH << "Processing batch " << batch_counter << ENDL();
-
         cb_reserve_back(cb_untilize_id, read_batch_size);
         cb_wait_front(cb_signal_id, 1);
         uint32_t val = read_tile_value(cb_signal_id, 0, 0);
         cb_pop_front(cb_signal_id, 1);
         if (val == ROUTE_INFO_SENTINEL) {
-            DPRINT_DISPATCH << "Received sentinel, stopping" << ENDL();
             break;
         }
         for (uint32_t block = 0; block < num_blocks; block++) {
@@ -64,7 +61,6 @@ void kernel_main() {
 
         cb_push_back(cb_untilize_id, read_batch_size);
 
-        DPRINT_DISPATCH << "Processed batch " << batch_counter << ENDL();
         batch_counter++;
     }
     pack_untilize_uninit(cb_untilize_id);

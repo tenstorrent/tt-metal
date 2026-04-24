@@ -51,9 +51,6 @@ void kernel_main() {
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
 
-    DPRINT_DISPATCH << "Idle reader " << core_id << "/" << total_workers << " total_batches=" << total_batches
-                    << ENDL();
-
     for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {
         uint32_t tile_base_page = batch_idx * tiles_per_row;
 
@@ -75,8 +72,6 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_input_id, block_ct_dim);
         }
-
-        DPRINT_DISPATCH << "Idle reader " << core_id << " queued batch " << batch_idx << ENDL();
     }
 
     // Send sentinel to compute to break out of its loop
@@ -85,6 +80,4 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
     signal_ptr[0] = ROUTE_INFO_SENTINEL;
     cb_push_back(cb_signal_id, 1);
-
-    DPRINT_DISPATCH << "Idle reader " << core_id << " done" << ENDL();
 }

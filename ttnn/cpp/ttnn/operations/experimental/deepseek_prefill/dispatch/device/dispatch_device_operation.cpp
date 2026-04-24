@@ -15,11 +15,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
-        tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE ||
-            tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Input tensor must be TILE or ROW_MAJOR layout, got {}",
-        tensor_args.input_tensor.layout());
-    TT_FATAL(
         tensor_args.weights_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Weights tensor must be ROW_MAJOR layout");
     TT_FATAL(

@@ -110,9 +110,6 @@ void kernel_main() {
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
     uint32_t metadata_scratch_addr = get_write_ptr(cb_metadata_scratch_id);
 
-    DPRINT_DISPATCH << "Idle writer " << core_id << "/" << total_workers << " total_batches=" << total_batches
-                    << " recv_buf=" << sender_receive_buf_l1_addr << ENDL();
-
     for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {
         // 1. Wait for compute to finish untilizing this batch
         cb_wait_front(cb_untilize_id, read_batch_size);
@@ -177,9 +174,5 @@ void kernel_main() {
 
         // 6. Release untilize CB
         cb_pop_front(cb_untilize_id, read_batch_size);
-
-        DPRINT_DISPATCH << "Idle writer " << core_id << " sent batch " << batch_idx << ENDL();
     }
-
-    DPRINT_DISPATCH << "Idle writer " << core_id << " done" << ENDL();
 }
