@@ -133,9 +133,9 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
+    constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
+    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<num_w0_w1_tiles_h, w0_w1_block_tiles_h>();
     constexpr uint32_t w0_w1_blocks_per_expert =
         w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP /
         2;  // 32 * 3 = 96
@@ -200,10 +200,10 @@ void kernel_main() {
     // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     // DEBUG
-    uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
+    // uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
-        NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
+        // NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 
