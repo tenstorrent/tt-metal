@@ -136,14 +136,17 @@ ttnn::Tensor routed_expert_ffn_default(
 }  // namespace detail
 
 ttnn::Tensor routed_expert_ffn(
-    uint32_t curr_expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output,
-    const std::optional<ttnn::Tensor>& max_expert_iter) {
+    const std::optional<ttnn::Tensor>& global_expert_idx_table,
+    const std::optional<ttnn::Tensor>& expert_token_counts,
+    uint32_t local_expert_idx,
+    uint32_t curr_expert_iter,
+    uint32_t expert_iter_length) {
     const uint32_t M_tiles = x.padded_shape()[-2] / ttnn::TILE_SIZE;
     const bool is_wormhole = x.device()->arch() == tt::ARCH::WORMHOLE_B0;
 
@@ -165,10 +168,21 @@ ttnn::Tensor routed_expert_ffn(
         x.dtype());
 
     if (is_wormhole) {
+        // WH path has no guard; the routed-specific args are silently dropped.
         return detail::routed_expert_ffn_wh(x, gate_proj, up_proj, down_proj, compute_kernel_config, output);
     }
     return detail::routed_expert_ffn_bh(
-        curr_expert_iter, x, gate_proj, up_proj, down_proj, compute_kernel_config, std::move(output), max_expert_iter);
+        x,
+        gate_proj,
+        up_proj,
+        down_proj,
+        compute_kernel_config,
+        std::move(output),
+        global_expert_idx_table,
+        expert_token_counts,
+        local_expert_idx,
+        curr_expert_iter,
+        expert_iter_length);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn

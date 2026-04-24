@@ -25,8 +25,6 @@ void bind_routed_expert_ffn(nb::module_& mod) {
             output   = activated @ down_proj
 
         Args:
-            curr_expert_iter (int): Index of the current expert iteration. Used only on
-                Blackhole; pass 0 on Wormhole.
             x (ttnn.Tensor): Input tensor.
             gate_proj (ttnn.Tensor): Gate projection weight (emb_dim, hidden_dim).
             up_proj (ttnn.Tensor): Up projection weight (emb_dim, hidden_dim).
@@ -35,18 +33,26 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to None.
             output (ttnn.Tensor, optional): Pre-allocated output tensor for in-place write of the final matmul result. Defaults to None.
-            max_expert_iter (ttnn.Tensor, optional): DRAM uint32 tile-layout scalar tensor. When provided, the three Blackhole matmuls dispatch via the forked routed_matmul device op (reader/compute guard). When None, falls back to ttnn::matmul.
+            global_expert_idx_table (ttnn.Tensor, optional): DRAM uint32 TILE_LAYOUT tensor of shape (1, 1, experts_per_chip) mapping local expert slots to global expert ids. When paired with ``expert_token_counts``, enables the Blackhole routed matmul path whose per-chunk guard skips iff ``expert_token_counts[global_expert_idx_table[local_expert_idx]] <= curr_expert_iter * expert_iter_length``. Falls back to ttnn::matmul when either tensor is None.
+            expert_token_counts (ttnn.Tensor, optional): DRAM uint32 TILE_LAYOUT tensor of shape (1, 1, num_global_experts). See ``global_expert_idx_table`` for semantics.
+            local_expert_idx (int, optional): Index into ``global_expert_idx_table``. Defaults to 0.
+            curr_expert_iter (int, optional): Index of the current chunk iteration (Blackhole only). Defaults to 0.
+            expert_iter_length (int, optional): Tokens per chunk iteration (Blackhole only). Defaults to 0.
 
         Returns:
             ttnn.Tensor: Output tensor with the same shape as ``x``.
 
         Example:
             >>> output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-                    curr_expert_iter, x, gate_proj, up_proj, down_proj,
-                    compute_kernel_config=compute_kernel_config)
+                    x, gate_proj, up_proj, down_proj,
+                    compute_kernel_config=compute_kernel_config,
+                    global_expert_idx_table=table,
+                    expert_token_counts=counts,
+                    local_expert_idx=local_idx,
+                    curr_expert_iter=chunk_idx,
+                    expert_iter_length=2048)
         )doc",
         &routed_expert_ffn,
-        nb::arg("curr_expert_iter"),
         nb::arg("x").noconvert(),
         nb::arg("gate_proj").noconvert(),
         nb::arg("up_proj").noconvert(),
@@ -54,7 +60,11 @@ void bind_routed_expert_ffn(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none(),
-        nb::arg("max_expert_iter") = nb::none());
+        nb::arg("global_expert_idx_table") = nb::none(),
+        nb::arg("expert_token_counts") = nb::none(),
+        nb::arg("local_expert_idx") = 0u,
+        nb::arg("curr_expert_iter") = 0u,
+        nb::arg("expert_iter_length") = 0u);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

@@ -22,7 +22,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -330,223 +329,131 @@ class TtRoutedExpert(LightweightModule):
 
     def _expert_ffn(
         self,
-        curr_expert_iter: int,
-        x: ttnn.Tensor,
+        tokens: ttnn.Tensor,
+        out: ttnn.Tensor,
         gate_proj: ttnn.Tensor,
         up_proj: ttnn.Tensor,
         down_proj: ttnn.Tensor,
-        out: Optional[ttnn.Tensor] = None,
-        max_expert_iter_container: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
+        local_expert_idx: int,
+        expert_iter_length: int,
+        global_expert_idx_table: Optional[ttnn.Tensor] = None,
+        expert_token_counts: Optional[ttnn.Tensor] = None,
+    ) -> None:
         """
-        Single expert FFN computation.
+        Chunked expert FFN: splits ``tokens`` into ``expert_iter_length``-sized
+        chunks and dispatches each chunk through the experimental routed_expert_ffn
+        op, writing results into the matching slice of ``out``.
+
+        Each chunk passes its index as ``curr_expert_iter``. On Blackhole, when
+        both ``global_expert_idx_table`` and ``expert_token_counts`` are provided,
+        the op routes through the forked device op whose per-kernel guard skips
+        iff ``expert_token_counts[global_expert_idx_table[local_expert_idx]]
+        <= curr_expert_iter * expert_iter_length`` — no device-to-host sync. On
+        Wormhole the guard parameters are ignored.
 
         Args:
-            curr_expert_iter: Index of the current chunk iteration within the expert loop.
-                Used only on the Blackhole path; pass 0 on Wormhole.
-            x: Input tensor. Shape is (1, tokens, emb_dim) for the Blackhole path
-                (after ttnn.narrow) or (tokens, emb_dim) for the Wormhole path
-                (after tensor indexing).
-            gate_proj: Gate projection weight (emb_dim, hidden_dim)
-            up_proj: Up projection weight (emb_dim, hidden_dim)
-            down_proj: Down projection weight (hidden_dim, emb_dim)
-            out: Optional pre-allocated output tensor for in-place matmul result.
-                When provided, the final matmul writes directly into this buffer.
-                When None, a new tensor is allocated for the output.
-
-        Returns:
-            Output tensor matching the shape of ``x``.
+            tokens: Per-expert input slice, shape (1, num_tokens, emb_dim).
+            out: Pre-allocated per-expert output slice, same shape as ``tokens``.
+            gate_proj, up_proj, down_proj: Expert projection weights.
+            local_expert_idx: Index into ``global_expert_idx_table`` for this slot.
+            expert_iter_length: Chunk size in tokens (guard compares against
+                ``curr_expert_iter * expert_iter_length``).
+            global_expert_idx_table: DRAM uint32 TILE_LAYOUT tensor shaped
+                (1, 1, experts_per_chip).
+            expert_token_counts: DRAM uint32 TILE_LAYOUT tensor shaped
+                (1, 1, num_global_experts).
         """
+        num_tokens = tokens.shape[1]
+        expert_iters = ceil(num_tokens / expert_iter_length)
+        expert_lengths = [expert_iter_length] * expert_iters
+        expert_lengths[-1] = num_tokens - expert_iter_length * (expert_iters - 1)
 
-        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
-            curr_expert_iter,
-            x,
-            gate_proj,
-            up_proj,
-            down_proj,
-            compute_kernel_config=self.compute_kernel_config,
-            output=out,
-            max_expert_iter=max_expert_iter_container,
-        )
+        start = 0
+        for curr_expert_iter in range(expert_iters):
+            signpost(f"FFN iteration {curr_expert_iter+1}/{expert_iters}")
+            expert_tokens = ttnn.narrow(tokens, dim=1, start=start, length=expert_lengths[curr_expert_iter])
+            expert_out = ttnn.narrow(out, dim=1, start=start, length=expert_lengths[curr_expert_iter])
+            start += expert_lengths[curr_expert_iter]
 
-    def _bh_forward_impl(
+            ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+                expert_tokens,
+                gate_proj,
+                up_proj,
+                down_proj,
+                compute_kernel_config=self.compute_kernel_config,
+                output=expert_out,
+                global_expert_idx_table=global_expert_idx_table,
+                expert_token_counts=expert_token_counts,
+                local_expert_idx=local_expert_idx,
+                curr_expert_iter=curr_expert_iter,
+                expert_iter_length=expert_iter_length,
+            )
+            logger.debug(f"FFN iteration {curr_expert_iter+1} output shape {expert_out.shape}")
+
+    def forward(
         self,
         dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-        max_expert_iter_container: Optional[ttnn.Tensor] = None,
+        global_expert_idx_table: Optional[ttnn.Tensor] = None,
+        expert_token_counts: Optional[ttnn.Tensor] = None,
+        expert_iter_length: Optional[int] = None,
     ) -> ttnn.Tensor:
         """
-        Blackhole forward implementation using narrow and in-place writes.
+        Process dispatched tokens through local experts.
 
-        Pre-allocates the output tensor with empty_like and uses narrow to extract
-        per-expert slices and write FFN results directly into the output buffer,
-        avoiding extra allocations from unsqueeze/concat.
+        Pre-allocates the output tensor with empty_like, narrows per-expert slices
+        for both input and output, and writes FFN results directly into the output
+        buffer — avoiding the extra allocations that unsqueeze/concat would incur.
 
-        Early-stop behavior:
-            max_expert_iter_container (device tensor, optional): threaded through
-            to each routed matmul. The kernel reads it from DRAM per dispatch
-            and skips iterations where curr_expert_iter > max_expert_iter.  No
-            device-to-host sync - the loop dispatches every iteration and the
-            on-device guard decides execute vs. skip.
+        Architecture dispatch happens inside the underlying experimental op, so the
+        same code path runs on Wormhole and Blackhole. On Blackhole, when both
+        ``global_expert_idx_table`` and ``expert_token_counts`` are supplied, each
+        routed matmul reads them on-device and skips chunks where the expert's
+        token count is already past the current chunk's starting offset. On
+        Wormhole the guard tensors are ignored.
 
         Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
+            dispatched_buffer: Dispatched tokens, shape (experts_per_chip, max_tokens, emb_dim).
+            global_expert_idx_table: DRAM uint32 TILE_LAYOUT tensor of shape
+                (1, 1, experts_per_chip) mapping local expert slots to global
+                expert ids.
+            expert_token_counts: DRAM uint32 TILE_LAYOUT tensor of shape
+                (1, 1, num_global_experts). Indexed by global expert id; holds
+                the real token count per expert.
+            expert_iter_length: Chunk size in tokens. Defaults to
+                ``self.MAX_EXPERT_LENGTH`` when None.
 
         Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
+            expert_outputs: Expert output tensor, same shape as ``dispatched_buffer``.
         """
+        if expert_iter_length is None:
+            expert_iter_length = self.MAX_EXPERT_LENGTH
+
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        # Convert input to activations dtype if needed
         if dispatched_buffer.dtype != self.activations_dtype:
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
 
         expert_outputs = ttnn.empty_like(dispatched_buffer)
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
-            # Extract tokens for this expert
-            # Shape: (1, max_tokens, emb_dim)
             tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
             out = ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1)
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
-            expert_iters = ceil(tokens.shape[1] / self.MAX_EXPERT_LENGTH)
-            expert_lengths = [self.MAX_EXPERT_LENGTH] * expert_iters
-            expert_lengths[-1] = tokens.shape[1] - self.MAX_EXPERT_LENGTH * (expert_iters - 1)  # Handle any remainder
-            start = 0
-            for curr_expert_iter in range(expert_iters):
-                signpost(f"FFN iteration {curr_expert_iter+1}/{expert_iters} for Expert {local_expert+1}")
-                expert_tokens = ttnn.narrow(tokens, dim=1, start=start, length=expert_lengths[curr_expert_iter])
-                expert_out = ttnn.narrow(out, dim=1, start=start, length=expert_lengths[curr_expert_iter])
-                start += expert_lengths[curr_expert_iter]
-
-                # Run FFN — pass curr_expert_iter so the on-device guard compares the
-                # chunk iteration index against the max_expert_iter tensor.
-                output = self._expert_ffn(
-                    curr_expert_iter,
-                    expert_tokens,
-                    self.gate_projs[local_expert],
-                    self.up_projs[local_expert],
-                    self.down_projs[local_expert],
-                    out=expert_out,
-                    max_expert_iter_container=max_expert_iter_container,
-                )
-                logger.debug(
-                    f"Expert {local_expert}: FFN iteration {curr_expert_iter+1} output shape {expert_out.shape}"
-                )
-
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
-
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
-        return expert_outputs
-
-    def _wh_forward_impl(
-        self,
-        dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-    ) -> ttnn.Tensor:
-        """
-        Wormhole forward implementation using indexing, unsqueeze, and concat.
-
-        Extracts per-expert tokens via tensor indexing, runs the FFN, then
-        reassembles the output by unsqueezing and concatenating along the expert
-        dimension.
-
-        Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
-
-        Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
-        """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
-
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
-
-        expert_outputs_list = []
-        for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
-
-            # Extract tokens for this expert
-            # Shape: (max_tokens, emb_dim)
-            tokens = dispatched_buffer[local_expert, :, :]
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
-
-            # Run FFN
-            # curr_expert_iter is unused on the Wormhole path; pass 0.
-            output = self._expert_ffn(
-                0,
+            self._expert_ffn(
                 tokens,
+                out,
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
-                out=None,  # Let the FFN allocate output since we will concatenate later
+                local_expert_idx=local_expert,
+                expert_iter_length=expert_iter_length,
+                global_expert_idx_table=global_expert_idx_table,
+                expert_token_counts=expert_token_counts,
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            logger.debug(f"Expert {local_expert}: output shape {out.shape}")
 
-            # Add expert dimension back
-            # Shape: (1, max_tokens, emb_dim)
-            output = ttnn.unsqueeze(output, dim=0)
-            expert_outputs_list.append(output)
-
-        # Concatenate along expert dimension
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.concat(expert_outputs_list, dim=0)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
         return expert_outputs
-
-    def forward(
-        self,
-        dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-        max_expert_iter_container: Optional[ttnn.Tensor] = None,
-    ) -> ttnn.Tensor:
-        """
-        Process dispatched tokens through local experts.
-
-        Dispatches to the architecture-specific implementation based on the
-        current device type (Wormhole or Blackhole).
-
-        Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
-            max_expert_iter_container: Optional DRAM uint32 scalar tile.  When
-                provided, each routed matmul reads it on-device and skips
-                iterations where curr_expert_iter > max_expert_iter. Avoids
-                any device-to-host sync. Blackhole only.
-
-        Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
-        """
-        if is_wormhole_b0():
-            return self._wh_forward_impl(dispatched_buffer, expert_token_counts)
-        elif is_blackhole():
-            return self._bh_forward_impl(dispatched_buffer, expert_token_counts, max_expert_iter_container)
-        else:
-            raise ValueError("Unsupported device architecture")

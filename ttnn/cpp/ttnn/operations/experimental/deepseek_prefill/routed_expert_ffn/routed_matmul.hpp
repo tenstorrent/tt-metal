@@ -15,16 +15,19 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
 // Internal (not python-bound) forked matmul with a runtime-gated early-return.
-// Each kernel reads max_expert_iter[0,0] from DRAM at entry; if curr_expert_iter > max_expert_iter,
-// the kernel returns without touching CBs or semaphores. Output on skip is
-// whatever was in the optional_output_tensor before — caller must avoid reading
-// skipped slices.
+// Each kernel reads two DRAM tables at entry and skips iff
+//   expert_token_counts[global_expert_idx_table[local_expert_idx]]
+//       <= curr_expert_iter * expert_iter_length.
+// Output on skip is whatever was in the optional_output_tensor before — caller
+// must avoid reading skipped slices.
 //
 // Argument order mirrors ttnn::matmul. program_config and compute_kernel_config are
 // optional in the signature for API parity but are required in practice: the forked
 // factory only supports MatmulMultiCoreReuseMultiCastProgramConfig and has no
-// auto-select path, so passing nullopt TT_FATALs. max_expert_iter and curr_expert_iter
-// are the routed-specific parameters and are required.
+// auto-select path, so passing nullopt TT_FATALs. global_expert_idx_table and
+// expert_token_counts are the routed-specific required device tensors;
+// local_expert_idx / curr_expert_iter / expert_iter_length are the three
+// runtime scalars the guard reads.
 //
 // Intended BH-only.
 ttnn::Tensor routed_matmul(
@@ -38,7 +41,10 @@ ttnn::Tensor routed_matmul(
     const std::optional<const ttnn::Activation>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& max_expert_iter = std::nullopt,
-    uint32_t curr_expert_iter = 0);
+    const std::optional<ttnn::Tensor>& global_expert_idx_table = std::nullopt,
+    const std::optional<ttnn::Tensor>& expert_token_counts = std::nullopt,
+    uint32_t local_expert_idx = 0,
+    uint32_t curr_expert_iter = 0,
+    uint32_t expert_iter_length = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn

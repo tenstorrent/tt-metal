@@ -18,18 +18,26 @@ ttnn::Tensor routed_matmul(
     const std::optional<const ttnn::Activation>& activation,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::Tensor> optional_output_tensor,
-    const std::optional<ttnn::Tensor>& max_expert_iter,
-    uint32_t curr_expert_iter) {
+    const std::optional<ttnn::Tensor>& global_expert_idx_table,
+    const std::optional<ttnn::Tensor>& expert_token_counts,
+    uint32_t local_expert_idx,
+    uint32_t curr_expert_iter,
+    uint32_t expert_iter_length) {
     TT_FATAL(program_config.has_value(), "routed_matmul: program_config is required (no auto-select path)");
     TT_FATAL(
         compute_kernel_config.has_value(), "routed_matmul: compute_kernel_config is required (no auto-select path)");
-    TT_FATAL(max_expert_iter.has_value(), "routed_matmul: max_expert_iter is required");
+    TT_FATAL(global_expert_idx_table.has_value(), "routed_matmul: global_expert_idx_table is required");
+    TT_FATAL(expert_token_counts.has_value(), "routed_matmul: expert_token_counts is required");
+    TT_FATAL(expert_iter_length > 0, "routed_matmul: expert_iter_length must be > 0");
 
     auto result = ttnn::prim::routed_matmul(
         input_tensor_a,
         input_tensor_b,
-        max_expert_iter.value(),
+        global_expert_idx_table.value(),
+        expert_token_counts.value(),
+        local_expert_idx,
         curr_expert_iter,
+        expert_iter_length,
         program_config.value(),
         compute_kernel_config.value(),
         memory_config,

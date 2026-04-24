@@ -13,15 +13,18 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
 ttnn::Tensor routed_expert_ffn_bh(
-    uint32_t curr_expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output,
-    const std::optional<ttnn::Tensor>& max_expert_iter) {
-    const bool use_routed = max_expert_iter.has_value();
+    const std::optional<ttnn::Tensor>& global_expert_idx_table,
+    const std::optional<ttnn::Tensor>& expert_token_counts,
+    uint32_t local_expert_idx,
+    uint32_t curr_expert_iter,
+    uint32_t expert_iter_length) {
+    const bool use_routed = global_expert_idx_table.has_value() && expert_token_counts.has_value();
     // Blackhole compute grid is 11x10 = 110 cores (test config; was 11x8 = 88).
     // All configs below are tuned for this grid; bail loudly if the device
     // can't supply it. gate/up is output-sharded with
@@ -92,8 +95,11 @@ ttnn::Tensor routed_expert_ffn_bh(
             /*activation=*/std::string("silu"),
             /*compute_kernel_config=*/compute_kernel_config,
             /*optional_output_tensor=*/std::nullopt,
-            /*max_expert_iter=*/max_expert_iter,
-            /*curr_expert_iter=*/curr_expert_iter);
+            /*global_expert_idx_table=*/global_expert_idx_table,
+            /*expert_token_counts=*/expert_token_counts,
+            /*local_expert_idx=*/local_expert_idx,
+            /*curr_expert_iter=*/curr_expert_iter,
+            /*expert_iter_length=*/expert_iter_length);
         up_result = routed_matmul(
             /*input_tensor_a=*/x,
             /*input_tensor_b=*/up_proj,
@@ -103,8 +109,11 @@ ttnn::Tensor routed_expert_ffn_bh(
             /*activation=*/std::nullopt,
             /*compute_kernel_config=*/compute_kernel_config,
             /*optional_output_tensor=*/std::nullopt,
-            /*max_expert_iter=*/max_expert_iter,
-            /*curr_expert_iter=*/curr_expert_iter);
+            /*global_expert_idx_table=*/global_expert_idx_table,
+            /*expert_token_counts=*/expert_token_counts,
+            /*local_expert_idx=*/local_expert_idx,
+            /*curr_expert_iter=*/curr_expert_iter,
+            /*expert_iter_length=*/expert_iter_length);
     } else {
         gate_result = ttnn::matmul(
             /*input_tensor_a=*/x,
@@ -191,8 +200,11 @@ ttnn::Tensor routed_expert_ffn_bh(
             /*activation=*/std::nullopt,
             /*compute_kernel_config=*/compute_kernel_config,
             /*optional_output_tensor=*/std::move(output),
-            /*max_expert_iter=*/max_expert_iter,
-            /*curr_expert_iter=*/curr_expert_iter);
+            /*global_expert_idx_table=*/global_expert_idx_table,
+            /*expert_token_counts=*/expert_token_counts,
+            /*local_expert_idx=*/local_expert_idx,
+            /*curr_expert_iter=*/curr_expert_iter,
+            /*expert_iter_length=*/expert_iter_length);
     } else {
         result = ttnn::matmul(
             /*input_tensor_a=*/activated,

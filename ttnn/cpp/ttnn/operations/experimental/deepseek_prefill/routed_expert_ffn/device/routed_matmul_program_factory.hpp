@@ -13,9 +13,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::d
 
 // Forked 2D-mcast matmul program factory. Same layout/config as matmul's 2D mcast
 // factory; the reader and compute kernels are replaced with forked variants that
-// read a scalar from the max_expert_iter tensor and early-return when
-// curr_expert_iter > max_expert_iter. curr_expert_iter is passed as a per-kernel runtime arg so the
-// program can be cached across iterations.
+// read the global_expert_idx_table and expert_token_counts tensors from DRAM and
+// early-return when expert_token_counts[global_expert_idx_table[local_expert_idx]]
+// <= curr_expert_iter * expert_iter_length. The three runtime scalars
+// (local_expert_idx, curr_expert_iter, expert_iter_length) are passed as per-kernel
+// runtime args so the program can be cached across experts and chunk iterations.
 struct RoutedMatmulMcast2DProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle mm_kernel_in0_sender_id{};

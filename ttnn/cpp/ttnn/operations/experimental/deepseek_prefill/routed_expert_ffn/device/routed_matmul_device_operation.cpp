@@ -20,13 +20,22 @@ void RoutedMatmulDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.a.storage_type() == StorageType::DEVICE, "routed_matmul: a must be on device");
     TT_FATAL(tensor_args.b.storage_type() == StorageType::DEVICE, "routed_matmul: b must be on device");
+
     TT_FATAL(
-        tensor_args.max_expert_iter.storage_type() == StorageType::DEVICE,
-        "routed_matmul: max_expert_iter must be on device");
+        tensor_args.global_expert_idx_table.storage_type() == StorageType::DEVICE,
+        "routed_matmul: global_expert_idx_table must be on device");
     TT_FATAL(
-        tensor_args.max_expert_iter.buffer() != nullptr &&
-            tensor_args.max_expert_iter.buffer()->buffer_type() == BufferType::DRAM,
-        "routed_matmul: max_expert_iter must be in DRAM");
+        tensor_args.global_expert_idx_table.buffer() != nullptr &&
+            tensor_args.global_expert_idx_table.buffer()->buffer_type() == BufferType::DRAM,
+        "routed_matmul: global_expert_idx_table must be in DRAM");
+
+    TT_FATAL(
+        tensor_args.expert_token_counts.storage_type() == StorageType::DEVICE,
+        "routed_matmul: expert_token_counts must be on device");
+    TT_FATAL(
+        tensor_args.expert_token_counts.buffer() != nullptr &&
+            tensor_args.expert_token_counts.buffer()->buffer_type() == BufferType::DRAM,
+        "routed_matmul: expert_token_counts must be in DRAM");
 }
 
 void RoutedMatmulDeviceOperation::validate_on_program_cache_miss(
@@ -72,10 +81,11 @@ RoutedMatmulDeviceOperation::tensor_return_value_t RoutedMatmulDeviceOperation::
 
 ttsl::hash::hash_t RoutedMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    // Exclude attrs.curr_expert_iter. Include everything else that can affect kernel
+    // Exclude the three runtime scalars (local_expert_idx, curr_expert_iter,
+    // expert_iter_length). Include everything else that can affect kernel
     // compilation / program layout: program config, compute config, memory config,
-    // output dtype, and the tensor specs (shape/dtype/layout) of a, b, max_expert_iter,
-    // plus whether an optional output was supplied.
+    // output dtype, and the tensor specs (shape/dtype/layout) of a, b, and the two
+    // guard tables, plus whether an optional output was supplied.
     return ttsl::hash::hash_objects_with_default_seed(
         attrs.program_config,
         attrs.compute_kernel_config,
@@ -83,7 +93,8 @@ ttsl::hash::hash_t RoutedMatmulDeviceOperation::compute_program_hash(
         attrs.output_dtype,
         args.a.tensor_spec(),
         args.b.tensor_spec(),
-        args.max_expert_iter.tensor_spec(),
+        args.global_expert_idx_table.tensor_spec(),
+        args.expert_token_counts.tensor_spec(),
         args.optional_output_tensor.has_value());
 }
 
@@ -94,8 +105,11 @@ namespace ttnn::prim {
 ttnn::Tensor routed_matmul(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
-    const ttnn::Tensor& max_expert_iter,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& expert_token_counts,
+    uint32_t local_expert_idx,
     uint32_t curr_expert_iter,
+    uint32_t expert_iter_length,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config,
@@ -119,8 +133,14 @@ ttnn::Tensor routed_matmul(
 
     return ttnn::device_operation::launch<OperationType>(
         rmm::RoutedMatmulParams{
-            program_config, compute_kernel_config, resolved_output_mem_cfg, out_dtype, curr_expert_iter},
-        rmm::RoutedMatmulInputs{a, b, max_expert_iter, std::move(optional_output_tensor)});
+            program_config,
+            compute_kernel_config,
+            resolved_output_mem_cfg,
+            out_dtype,
+            local_expert_idx,
+            curr_expert_iter,
+            expert_iter_length},
+        rmm::RoutedMatmulInputs{a, b, global_expert_idx_table, expert_token_counts, std::move(optional_output_tensor)});
 }
 
 }  // namespace ttnn::prim

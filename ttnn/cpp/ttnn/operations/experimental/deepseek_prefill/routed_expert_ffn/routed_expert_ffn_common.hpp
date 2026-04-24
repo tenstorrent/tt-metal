@@ -51,15 +51,24 @@ ttnn::Tensor routed_expert_ffn_wh(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output);
 
-// Blackhole-optimized path (14x10 grid)
+// Blackhole-optimized path (14x10 grid). When both global_expert_idx_table and
+// expert_token_counts are provided, each matmul dispatches via the forked routed
+// device op and evaluates the per-chunk guard on-device:
+//   skip iff expert_token_counts[global_expert_idx_table[local_expert_idx]]
+//         <= curr_expert_iter * expert_iter_length.
+// When either tensor is nullopt, falls back to plain ttnn::matmul (the scalars
+// are ignored in that case).
 ttnn::Tensor routed_expert_ffn_bh(
-    uint32_t curr_expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<ttnn::Tensor> output,
-    const std::optional<ttnn::Tensor>& max_expert_iter);
+    const std::optional<ttnn::Tensor>& global_expert_idx_table,
+    const std::optional<ttnn::Tensor>& expert_token_counts,
+    uint32_t local_expert_idx,
+    uint32_t curr_expert_iter,
+    uint32_t expert_iter_length);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

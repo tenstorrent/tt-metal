@@ -4,9 +4,10 @@
 //
 // Forked from
 // ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
-// The only change is the BRISC-side guard block at the top of kernel_main:
-// this core reads a scalar from max_expert_iter in DRAM, signals the local guard
-// semaphore, and returns early if curr_expert_iter > max_expert_iter. See ../guard.h.
+// The only change is the guard block at the top of kernel_main: this core reads
+// global_expert_idx_table and expert_token_counts from DRAM and returns early
+// if expert_token_counts[global_expert_idx_table[local_expert_idx]]
+// <= curr_expert_iter * expert_iter_length. See ../guard.h.
 
 #include <stdint.h>
 

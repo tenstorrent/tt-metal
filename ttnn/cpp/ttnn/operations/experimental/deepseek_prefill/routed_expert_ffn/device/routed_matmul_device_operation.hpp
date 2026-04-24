@@ -42,8 +42,11 @@ namespace ttnn::prim {
 ttnn::Tensor routed_matmul(
     const ttnn::Tensor& a,
     const ttnn::Tensor& b,
-    const ttnn::Tensor& max_expert_iter,
+    const ttnn::Tensor& global_expert_idx_table,
+    const ttnn::Tensor& expert_token_counts,
+    uint32_t local_expert_idx,
     uint32_t curr_expert_iter,
+    uint32_t expert_iter_length,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,

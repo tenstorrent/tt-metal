@@ -12,18 +12,23 @@
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn {
 
 ttnn::Tensor routed_expert_ffn(
-    uint32_t curr_expert_iter,
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
     const ttnn::Tensor& up_proj,
     const ttnn::Tensor& down_proj,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<ttnn::Tensor> output = std::nullopt,
-    // Optional max_expert_iter tensor (uint32 DRAM scalar tile). When provided, each of
-    // the 3 BH matmuls dispatches via the forked routed_matmul device op that
-    // threads max_expert_iter/curr_expert_iter through to the reader/compute kernel guard.
-    // When absent, falls back to ttnn::matmul — identical to pre-routed behavior.
-    const std::optional<ttnn::Tensor>& max_expert_iter = std::nullopt);
+    // Optional guard tensors. When both are provided (BH only), each of the three
+    // matmuls dispatches via the forked routed_matmul device op, whose per-kernel
+    // guard reads expert_token_counts[global_expert_idx_table[local_expert_idx]]
+    // and skips the chunk iff that value <= curr_expert_iter * expert_iter_length.
+    // When either is nullopt, falls back to ttnn::matmul — identical to pre-routed
+    // behavior, and the three scalars below are ignored.
+    const std::optional<ttnn::Tensor>& global_expert_idx_table = std::nullopt,
+    const std::optional<ttnn::Tensor>& expert_token_counts = std::nullopt,
+    uint32_t local_expert_idx = 0,
+    uint32_t curr_expert_iter = 0,
+    uint32_t expert_iter_length = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn
 
