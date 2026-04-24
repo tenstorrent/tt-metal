@@ -425,6 +425,36 @@ def serialize_operation_parameters(
         # Serialize keyword arguments
         serialized_kwargs = {k: serialize_value(v, f"kwarg_{k}") for k, v in function_kwargs.items()}
 
+        # Propagate 2D tensor topology from inputs to outputs.
+        # C++ op runtime creates output tensors with 1D topology (factory
+        # methods flatten MeshShape to 1D). If any input tensor has correct
+        # 2D topology (set by create_tensor_on_mesh), propagate it to the
+        # output so the trace captures the correct distribution info.
+        if return_value is not None and isinstance(return_value, ttnn.Tensor):
+            try:
+                out_topo = return_value.tensor_topology()
+                out_dist = list(out_topo.distribution_shape())
+                if len(out_dist) == 1:
+                    # Output has 1D topology; look for a 2D input to copy from
+                    for arg in function_args:
+                        if isinstance(arg, ttnn.Tensor):
+                            in_topo = arg.tensor_topology()
+                            in_dist = list(in_topo.distribution_shape())
+                            if len(in_dist) >= 2:
+                                return_value.update_tensor_topology(in_topo)
+                                break
+                    else:
+                        # Check kwargs too (e.g., output_tensor)
+                        for v in function_kwargs.values():
+                            if isinstance(v, ttnn.Tensor):
+                                in_topo = v.tensor_topology()
+                                in_dist = list(in_topo.distribution_shape())
+                                if len(in_dist) >= 2:
+                                    return_value.update_tensor_topology(in_topo)
+                                    break
+            except Exception:
+                pass  # Best-effort; don't break tracing
+
         # Serialize return value if provided
         serialized_return_value = None
         if return_value is not None:

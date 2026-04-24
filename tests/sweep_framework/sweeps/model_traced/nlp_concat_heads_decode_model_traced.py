@@ -71,7 +71,9 @@ def run(
     else:
         shape = input_a_shape
 
-    # num_heads is required - try to infer from shape if missing
+    # num_heads is required - try to get from kwargs or infer from shape
+    if num_heads is None:
+        num_heads = kwargs.get("num_heads", None)
     if num_heads is None:
         # Try to infer from input shape: [B, 1, H, D] where H might be num_heads or head_dim
         # For nlp_concat_heads_decode, input is typically [1, 1, num_heads, head_dim]

@@ -83,13 +83,6 @@ def run(
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     if input_a_dtype == ttnn.uint16:
-        if is_mesh_device:
-            # ttnn.from_torch(int32, dtype=uint16, mesh_mapper=ReplicateTensorToMesh)
-            # corrupts data on mesh devices — the internal conversion path mangles
-            # uint16 values regardless of input range (PCC drops to 0.1-0.8).
-            # Still execute the op (with int32 proxy dtype) so the operation tracer
-            # records the config for sweep validation; use relaxed PCC.
-            input_a_dtype = ttnn.int32
         # Use torch.int32 for uint16 input — matching the pattern in working unit tests
         # (test_typecast_int.py).  torch.int16 causes sign-extension corruption for
         # values >32767 during from_torch conversion.
@@ -155,7 +148,7 @@ def run(
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
+    output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 

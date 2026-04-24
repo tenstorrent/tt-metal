@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, extract_named_tensor_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -118,6 +118,30 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Check for indices_tensor named tensor kwarg (pre-allocated output tensor for indices)
+    indices_tensor_info = extract_named_tensor_kwargs(kwargs, "indices_tensor")
+    if indices_tensor_info is not None and not is_host:
+        # Build the indices output shape: same as input but last dim = k
+        it_shape = tuple(indices_tensor_info["shape"]) if indices_tensor_info["shape"] else list(shape)
+        it_dtype = indices_tensor_info.get("dtype") or input_a_dtype
+        it_layout = indices_tensor_info.get("layout") or input_a_layout
+        it_mem_cfg = indices_tensor_info.get("memory_config") or input_a_memory_config
+        it_dtype = parse_dict_value("indices_tensor_dtype", it_dtype) if isinstance(it_dtype, dict) else it_dtype
+        it_layout = parse_dict_value("indices_tensor_layout", it_layout) if isinstance(it_layout, dict) else it_layout
+        it_mem_cfg = parse_dict_value("indices_tensor_memory_config", it_mem_cfg) if isinstance(it_mem_cfg, dict) else it_mem_cfg
+        it_placement = indices_tensor_info.get("tensor_placement")
+
+        torch_preallocated_indices = torch.zeros(it_shape, dtype=torch.float32)
+        if is_mesh_device and it_placement:
+            preallocated_indices = create_tensor_on_mesh(
+                torch_preallocated_indices, device, it_dtype, it_layout, it_mem_cfg, it_placement,
+            )
+        else:
+            preallocated_indices = ttnn.from_torch(
+                torch_preallocated_indices, dtype=it_dtype, layout=it_layout, device=device, memory_config=it_mem_cfg,
+            )
+        op_kwargs["indices_tensor"] = preallocated_indices
 
     start_time = start_measuring_time()
     topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **op_kwargs)

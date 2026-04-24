@@ -106,21 +106,12 @@ def run(
     else:
         raise ValueError("Either input_b_shape or weight_shape must be provided")
 
-    # Squeeze leading dimensions of 1 from weight shape to make it 2D
-    # E.g., (1, 1, 128256, 2048) -> (128256, 2048)
-    if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
-        # Remove leading 1s
-        squeezed_shape = weight_shape_actual
-        while len(squeezed_shape) > 2 and squeezed_shape[0] == 1:
-            squeezed_shape = squeezed_shape[1:]
-
-        # If still not 2D, there are non-1 leading dims - this is truly invalid
-        if len(squeezed_shape) != 2:
-            raise ValueError(f"Cannot convert weight shape {weight_shape_actual} to 2D - has non-1 leading dimensions")
-
-        weight_shape_actual = squeezed_shape
-
-    num_embeddings = weight_shape_actual[0]
+    # Extract num_embeddings from the weight shape.
+    # The weight shape may be 4D (e.g., (1, 1, 131072, 64)) as traced from the model,
+    # or 2D (e.g., (131072, 64)). We preserve the original shape so that the ttnn tensor
+    # matches the master trace's original_shape, but we need the second-to-last dim for
+    # num_embeddings (the vocabulary size).
+    num_embeddings = weight_shape_actual[-2]
 
     # Generate input indices tensor (random integers in range [0, num_embeddings))
     torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)

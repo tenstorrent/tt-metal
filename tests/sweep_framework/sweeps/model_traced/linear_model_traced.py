@@ -82,7 +82,7 @@ def run(
     dtype=None,  # Output dtype
     core_grid=None,  # Core grid configuration
     program_config=None,  # Program configuration
-    compute_kernel_config=None,  # Compute kernel configuration
+    compute_kernel_config="__ABSENT__",  # Compute kernel configuration
     activation=None,  # Activation function
     *,
     device,
@@ -107,6 +107,9 @@ def run(
         memory_config = parse_dict_value("memory_config", memory_config)
     if isinstance(core_grid, dict):
         core_grid = parse_dict_value("core_grid", core_grid)
+    has_compute_kernel_config = compute_kernel_config != "__ABSENT__"
+    if compute_kernel_config == "__ABSENT__":
+        compute_kernel_config = None
     if isinstance(compute_kernel_config, dict):
         compute_kernel_config = parse_dict_value("compute_kernel_config", compute_kernel_config)
     if isinstance(dtype, (dict, str)):
@@ -358,10 +361,10 @@ def run(
 
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
-        elif original_compute_kernel_config is not None:
-            # Parsing may have returned None but the master trace had this kwarg.
-            # Pass the original value so the sweep call matches.
-            linear_kwargs["compute_kernel_config"] = original_compute_kernel_config
+        elif has_compute_kernel_config:
+            # Master trace had compute_kernel_config (possibly None). Pass it so the
+            # sweep call matches the master trace kwargs.
+            linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
         if core_grid is not None:
             linear_kwargs["core_grid"] = core_grid

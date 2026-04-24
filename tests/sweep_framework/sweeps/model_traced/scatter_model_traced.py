@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, extract_named_tensor_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -74,6 +74,11 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", kwargs.get("input_tensor_placement", None))
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # Extract named tensor kwargs for index and src to get correct dtypes
+    index_tensor_info = extract_named_tensor_kwargs(kwargs, "index")
+    src_tensor_info = extract_named_tensor_kwargs(kwargs, "src")
+
     op_kwargs = build_op_kwargs(
         kwargs,
         exclude={
@@ -103,12 +108,22 @@ def run(
         index_shape = kwargs.get("index_shape", shape)
         src_shape = kwargs.get("src_shape", shape)
 
+    # Determine dtypes for index and src tensors from vector config
+    index_dtype = ttnn.uint16  # default; master trace typically expects uint16
+    if index_tensor_info is not None and index_tensor_info.get("dtype") is not None:
+        idx_dt = index_tensor_info["dtype"]
+        index_dtype = parse_dict_value("index_dtype", idx_dt) if isinstance(idx_dt, dict) else idx_dt
+    src_dtype = input_a_dtype  # default
+    if src_tensor_info is not None and src_tensor_info.get("dtype") is not None:
+        src_dt = src_tensor_info["dtype"]
+        src_dtype = parse_dict_value("src_dtype", src_dt) if isinstance(src_dt, dict) else src_dt
+
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
     torch_index_tensor = torch.randint(0, shape[dim], index_shape, dtype=torch.int64)
     torch_src_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), src_dtype
     )(src_shape)
 
     torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor)
@@ -128,7 +143,7 @@ def run(
             index_tensor = create_tensor_on_mesh(
                 torch_index_tensor,
                 device,
-                ttnn.int32,
+                index_dtype,
                 input_a_layout,
                 input_a_memory_config,
                 input_a_tensor_placement,
@@ -136,7 +151,7 @@ def run(
             src_tensor = create_tensor_on_mesh(
                 torch_src_tensor,
                 device,
-                input_a_dtype,
+                src_dtype,
                 input_a_layout,
                 input_a_memory_config,
                 input_a_tensor_placement,
@@ -151,22 +166,22 @@ def run(
             )
             index_tensor = ttnn.from_torch(
                 torch_index_tensor,
-                dtype=ttnn.int32,
+                dtype=index_dtype,
                 layout=input_a_layout,
                 device=device,
                 memory_config=input_a_memory_config,
             )
             src_tensor = ttnn.from_torch(
                 torch_src_tensor,
-                dtype=input_a_dtype,
+                dtype=src_dtype,
                 layout=input_a_layout,
                 device=device,
                 memory_config=input_a_memory_config,
             )
     else:
         input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_a_dtype, layout=input_a_layout)
-        index_tensor = ttnn.from_torch(torch_index_tensor, dtype=ttnn.int32, layout=input_a_layout)
-        src_tensor = ttnn.from_torch(torch_src_tensor, dtype=input_a_dtype, layout=input_a_layout)
+        index_tensor = ttnn.from_torch(torch_index_tensor, dtype=index_dtype, layout=input_a_layout)
+        src_tensor = ttnn.from_torch(torch_src_tensor, dtype=src_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.scatter(input_tensor, dim=dim, index=index_tensor, src=src_tensor, **op_kwargs)

@@ -123,7 +123,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs)
+    output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

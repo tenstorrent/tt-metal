@@ -11,7 +11,7 @@ from functools import partial
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs, parse_dict_value
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
     create_mesh_device,
@@ -74,6 +74,9 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # Check for output_tensor named tensor kwarg (pre-allocated output tensor)
+    output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+
     # The master trace may record output_tensor=None and min=None as explicit kwargs.
     # build_op_kwargs filters None values, so add them back when present in the test vector.
     for key in ("output_tensor", "min"):
@@ -123,6 +126,28 @@ def run(
             device=device,
             memory_config=input_a_memory_config,
         )
+
+    # Create pre-allocated output tensor if the master config specifies one
+    if output_tensor_info is not None and not is_host:
+        ot_shape = tuple(output_tensor_info["shape"]) if output_tensor_info["shape"] else shape
+        ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
+        ot_layout = output_tensor_info.get("layout") or input_a_layout
+        ot_mem_cfg = output_tensor_info.get("memory_config") or input_a_memory_config
+        ot_dtype = parse_dict_value("output_tensor_dtype", ot_dtype) if isinstance(ot_dtype, dict) else ot_dtype
+        ot_layout = parse_dict_value("output_tensor_layout", ot_layout) if isinstance(ot_layout, dict) else ot_layout
+        ot_mem_cfg = parse_dict_value("output_tensor_memory_config", ot_mem_cfg) if isinstance(ot_mem_cfg, dict) else ot_mem_cfg
+        ot_placement = output_tensor_info.get("tensor_placement")
+
+        torch_preallocated = torch.zeros(shape, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            preallocated_output = create_tensor_on_mesh(
+                torch_preallocated, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement,
+            )
+        else:
+            preallocated_output = ttnn.from_torch(
+                torch_preallocated, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg,
+            )
+        op_kwargs["output_tensor"] = preallocated_output
 
     start_time = start_measuring_time()
     output_tensor = ttnn.clamp(input_tensor_a, **op_kwargs)
