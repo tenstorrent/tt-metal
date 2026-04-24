@@ -203,7 +203,18 @@ def _restore_topology(
         mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
     elif ndim == 1:
         # 1D distribution — e.g. [32]
-        dist_shape = ttnn.MeshShape([dist_parsed[0]])
+        # Try 1D MeshShape first; fall back to 2D (1, N) if the C++ API
+        # rejects the 1D form (some builds only support 2D MeshShape).
+        total = dist_parsed[0]
+        is_2d_fallback = False
+        try:
+            dist_shape = ttnn.MeshShape(total)
+        except (TypeError, RuntimeError):
+            is_2d_fallback = True
+            try:
+                dist_shape = ttnn.MeshShape(1, total)
+            except (TypeError, RuntimeError):
+                dist_shape = ttnn.MeshShape(total, 1)
 
         placements = []
         for entry in (placement_entries or []):
@@ -214,8 +225,15 @@ def _restore_topology(
                 placements.append(ttnn.PlacementReplicate())
         if not placements:
             placements.append(ttnn.PlacementReplicate())
+        # If we fell back to 2D MeshShape, ensure we have exactly 2 placements
+        if is_2d_fallback and len(placements) < 2:
+            placements.insert(0, ttnn.PlacementReplicate())
 
-        mesh_coords = [ttnn.MeshCoordinate([i]) for i in range(dist_parsed[0])]
+        try:
+            mesh_coords = [ttnn.MeshCoordinate(i) for i in range(total)]
+        except (TypeError, RuntimeError):
+            # Fall back to 2D coordinates matching the dist_shape fallback
+            mesh_coords = [ttnn.MeshCoordinate(0, i) for i in range(total)]
     else:
         return  # Nothing to restore
 
