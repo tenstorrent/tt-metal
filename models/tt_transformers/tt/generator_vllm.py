@@ -22,7 +22,7 @@ from vllm.model_executor.models.mistral3 import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalDataDict
-from vllm.multimodal.profiling import BaseDummyInputsBuilder
+from vllm.multimodal.processing import BaseDummyInputsBuilder
 
 import ttnn
 from models.common.llama_models import create_vision_mask

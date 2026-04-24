@@ -206,7 +206,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto dispatch_to_concrete = [&tensor_spec, padded_output]<typename T>(HostBuffer host_buffer) {
         if (padded_output) {
             if (tensor_spec.layout() == Layout::TILE) {
-                auto row_major_data = tensor_impl::convert_layout_tile_to_row_major(
+                auto row_major_data = tensor_impl::to_row_major_layout(
                     tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
                 return RowMajorHostBuffer::create_padded(HostBuffer(std::move(row_major_data)), tensor_spec);
             }
@@ -1351,6 +1351,85 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "is_per_core_allocated",
+            [](const Tensor& self) -> bool {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
+                    return false;
+                }
+                return experimental::per_core_allocation::is_per_core_allocation(
+                    self.mesh_buffer().device_local_config().sharding_args);
+            },
+            R"doc(
+            Returns True if this tensor was allocated with experimental per-core L1 allocation.
+
+            Per-core allocated tensors have a different physical address per core, so they
+            cannot be queried with ``buffer_address()``. Use this property to branch between
+            ``buffer_address()`` and ``experimental_per_core_buffer_address(core)``.
+
+            .. code-block:: python
+
+                if tensor.is_per_core_allocated():
+                    addr = tensor.experimental_per_core_buffer_address(core)
+                else:
+                    addr = tensor.buffer_address()
+
+        )doc")
+        .def(
+            "buffer_page_size",
+            [](const Tensor& self) -> uint32_t {
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return self.mesh_buffer().page_size();
+            },
+            R"doc(
+            Get the page size of the underlying buffer in bytes.
+
+            For tiled tensors, this is the tile size. For row-major tensors,
+            this is the stick size (width * element_size).
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "buffer_num_pages",
+            [](const Tensor& self) -> uint32_t {
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return self.mesh_buffer().num_pages();
+            },
+            R"doc(
+            Get the number of pages in the underlying buffer.
+
+            For tiled tensors, this is the number of tiles.
+            For row-major tensors, this is the number of sticks (rows).
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "buffer_aligned_page_size",
+            [](const Tensor& self) -> uint32_t {
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                auto* ref_buffer = self.mesh_buffer().get_reference_buffer();
+                TT_FATAL(ref_buffer != nullptr, "Could not get reference buffer.");
+                return ref_buffer->aligned_page_size();
+            },
+            R"doc(
+            Get the aligned page size of the underlying buffer in bytes.
+
+            This is the page size rounded up to the buffer's alignment requirement
+            (e.g., DRAM alignment). Used for efficient DMA transfers.
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "element_size",
+            [](const Tensor& self) -> uint32_t {
+                return tt::datum_size(datatype_to_dataformat_converter(self.dtype()));
+            },
+            R"doc(
+            Get the size of a single element in bytes for this tensor's data type.
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
@@ -1495,6 +1574,17 @@ void pytensor_module(nb::module_& mod) {
                 .. code-block:: python
 
                     topology = tt_tensor.tensor_topology()
+            )doc")
+        .def(
+            "update_tensor_topology",
+            [](Tensor& self, const tt::tt_metal::TensorTopology& topology) { self.update_tensor_topology(topology); },
+            nb::arg("topology"),
+            R"doc(
+                Update the topology of the tensor.
+
+                .. code-block:: python
+
+                    tt_tensor.update_tensor_topology(new_topology)
             )doc")
         .def_prop_rw(
             "tensor_id",

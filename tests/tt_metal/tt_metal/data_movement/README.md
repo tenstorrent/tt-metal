@@ -52,12 +52,15 @@ Both API versions run the same test cases but use different underlying implement
 | Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
-| DRAM Neighbour Tests        | 502-505                         | Each core reads from its clostest DRAM.                                                 |
+| DRAM Neighbour Tests        | 502-505, 508-509                | Each core reads from its closest DRAM.                                                  |
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 | PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
+| Matmul                      | 1000-1025                       | 1D matmul DM tests: in0 multicast + in1 DRAM read across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
+| Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
+| Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
 
 
 ## Running Tests

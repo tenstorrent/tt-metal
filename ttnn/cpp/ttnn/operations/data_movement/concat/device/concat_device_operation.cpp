@@ -12,7 +12,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/cluster.hpp>  // for GetClusterType
 
 using namespace tt::tt_metal;
 
@@ -25,33 +24,43 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     }
 
     const auto& input_tensors = tensor_args.input_tensors;
-    const bool is_sharded = input_tensors[0].is_sharded();
 
-    if (!is_sharded) {
+    if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
         return ConcatProgramFactory{};
     }
 
-    // Sharded cases - determine which specific factory to use
-    const bool output_is_sharded = args.output_mem_config.is_sharded();
-
-    if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
-            TT_FATAL(
-                input_tensors[0].layout() == input_tensors[1].layout(),
-                "Expected all input tensors to have the same layout for 2-tensor sharded concat");
-
-            if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
-                return ConcatS2SRMProgramFactory{};
-            }
-            return ConcatS2STiledProgramFactory{};
-
-        }  // Multi-tensor s2s case
-        return ConcatS2SMultiProgramFactory{};
+    if (const bool output_is_sharded = args.output_mem_config.is_sharded(); !output_is_sharded) {
+        return ConcatS2IProgramFactory{};
     }
-    // Sharded-to-interleaved (s2i) case
-    return ConcatS2IProgramFactory{};
+
+    const bool input_nd_sharded = (TensorMemoryLayout::ND_SHARDED == input_tensors[0].memory_config().memory_layout());
+    const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
+    if (!input_nd_sharded && !output_nd_sharded) {
+        // specific cases for 2 tensors
+        if (input_tensors.size() == 2) {
+            if (input_tensors[0].layout() == input_tensors[1].layout()) {
+                if (3 == args.dim) {
+                    if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
+                        0 == input_tensors[0].padded_shape()[-1] % args.groups &&
+                        0 == input_tensors[1].padded_shape()[-1] % args.groups) {
+                        return ConcatS2SRMProgramFactory{};
+                    }
+                    if (input_tensors[0].shard_spec().has_value() && input_tensors[1].shard_spec().has_value()) {
+                        return ConcatS2STiledProgramFactory{};
+                    }
+                }
+            }
+        }
+
+        // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
+        if (2 == args.dim || 3 == args.dim) {
+            return ConcatS2SMultiProgramFactory{};
+        }
+    }
+
+    // default factory
+    // including ND sharded tensors
+    return ConcatProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -113,12 +122,17 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
+    if (!shard_first) {
+        TT_FATAL(
+            !args.output_mem_config.is_sharded(),
+            "Cannot concat interleaved inputs into a sharded output. "
+            "Either shard the inputs first or use an interleaved output memory config.");
+    }
     if (shard_first) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
             "Sharded output and inputs must have the same memory layout.");
-        TT_FATAL(args.output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
         TT_FATAL(
             args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
@@ -191,7 +205,7 @@ namespace {
 using namespace tt::constants;
 
 // Calculate maximum tensors per concat based on runtime args limit
-uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
+uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors) {
     // Runtime args are limited by available L1 kernel config memory.
     // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
     // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
@@ -219,19 +233,14 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
     //
     // Theoretical limit: 5 + 6N <= 256  =>  N <= 41.8  =>  N_max = 41
     //
-    // However, empirical testing shows slightly higher limits work:
-    //   - ETH dispatch (N300/T3K): 47 works, 48 hangs
-    //   - WORKER dispatch: 49 works, 50 hangs
-    //
-    // The dispatch core type affects the limit because ETH cores have different
-    // buffer sizes than WORKER cores for storing kernel arguments.
+    // Empirical testing shows N=47 works across all dispatch core types.
+    // We use 47 as a universal safe limit for interleaved concat.
     //
     // IMPORTANT: This limit does NOT depend on:
     //   - Tensor shape/size (only number of tensors matters)
     //   - Tensor dtype (bfloat16 vs float32, etc.)
     //
     // It DOES depend on:
-    //   - Dispatch core type (ETH vs WORKER - different buffer sizes)
     //   - Memory layout (sharded vs interleaved - different kernels)
 
     const bool is_sharded = input_tensors[0].is_sharded();
@@ -252,45 +261,11 @@ uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tenso
         return std::max(2u, safe_max);
     }
 
-    // Interleaved concat - use empirically determined limits based on dispatch type
-    // N300, T3K, and N300_2x2 clusters default to ETH dispatch which has lower limits
-    auto cluster_type = tt::tt_metal::GetClusterType();
-    bool likely_eth_dispatch =
-        (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-         cluster_type == tt::tt_metal::ClusterType::N300_2x2);
+    // Universal safe limit for interleaved concat across all dispatch core types.
+    // See GitHub issue #42105 for details on why per-dispatch-type limits were unreliable.
+    constexpr uint32_t max_tensors = 47;
 
-    // Theoretical limit from formula: 5 + 6N <= 256 => N <= 41.8 => N_max = 41
-    // However, empirical testing shows slightly higher limits work in practice:
-    //
-    // ETH dispatch (Ethernet cores):
-    //   - N=47: PASS
-    //   - N=48: HANG
-    //   ETH cores have smaller buffers for kernel arguments than WORKER cores.
-    //
-    // WORKER dispatch (Tensix cores):
-    //   - N=49: PASS
-    //   - N=50: HANG
-    //
-    // The difference between theoretical (41) and empirical limits (47/49) suggests
-    // some args may be shared or optimized at runtime. We use the empirical limits
-    // as they're more permissive while still being safe.
-    //
-    // Reference: GitHub issue investigating concat hangs on N300 with ETH dispatch.
-    // Test file: tests/ttnn/unit_tests/operations/data_movement/test_concat_hang_repro.py
-    uint32_t max_tensors;
-    if (likely_eth_dispatch) {
-        max_tensors = 47;  // ETH dispatch limit (48+ causes hang)
-    } else {
-        max_tensors = 49;  // WORKER dispatch limit (50+ causes hang)
-    }
-
-    log_debug(
-        tt::LogOp,
-        "ttnn.concat: Interleaved concat - max_tensors = {} (cluster_type = {}, likely_eth_dispatch = {}, dim = {})",
-        max_tensors,
-        static_cast<int>(cluster_type),
-        likely_eth_dispatch,
-        dim);
+    log_debug(tt::LogOp, "ttnn.concat: Interleaved concat - max_tensors = {}", max_tensors);
 
     return max_tensors;
 }
@@ -316,9 +291,9 @@ Tensor concat_impl(
     }
 
     // Handle large number of tensors by splitting into batches
-    // calculate_max_tensors_per_concat returns the maximum safe value (e.g., 47 for ETH dispatch)
+    // calculate_max_tensors_per_concat returns the maximum safe value (47 for interleaved)
     // We batch when we have MORE than the safe limit, using batches of exactly the safe limit
-    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors, dim);
+    const uint32_t max_tensors_per_concat = calculate_max_tensors_per_concat(input_tensors);
     if (input_tensors.size() > max_tensors_per_concat) {
         // Split into batches and concat each batch
         std::vector<Tensor> intermediate_results;

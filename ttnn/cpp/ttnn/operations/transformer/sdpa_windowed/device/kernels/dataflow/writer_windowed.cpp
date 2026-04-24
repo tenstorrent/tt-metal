@@ -4,8 +4,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
@@ -42,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
 
@@ -52,7 +52,12 @@ void kernel_main() {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {

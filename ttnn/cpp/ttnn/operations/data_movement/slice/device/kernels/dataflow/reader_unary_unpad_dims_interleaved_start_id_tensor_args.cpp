@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
@@ -27,43 +30,49 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
-    constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    // Create experimental objects for Device 2.0 API
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_tensor(cb_id_tensor);
+    experimental::Noc noc;
+
+    // Get tile size from CB interface
+    const uint32_t tile_size = cb_in0.get_tile_size();
 
     // Create TensorAccessors for start and end tensors
-    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr, tile_size);
-    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr, tile_size);
+    const auto start_tensor_accessor = TensorAccessor(start_args, start_addr);
+    const auto end_tensor_accessor = TensorAccessor(end_args, end_addr);
 
     // Read start and end indices from tensors using TensorAccessor
     uint32_t start_indices[num_dims];
     uint32_t end_indices[num_dims];
 
     // Read start tensor data using separate circular buffer
-    cb_reserve_back(cb_id_tensor, 1);
-    uint32_t start_buffer_l1_addr = get_write_ptr(cb_id_tensor);
-    noc_async_read_tile(0, start_tensor_accessor, start_buffer_l1_addr);
-    noc_async_read_barrier();
+    cb_tensor.reserve_back(1);
+    uint32_t start_buffer_l1_addr = cb_tensor.get_write_ptr();
+    noc.async_read(start_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
 
     volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
 
     for (uint32_t i = 0; i < num_dims; i++) {
         start_indices[i] = start_data[i];
     }
-    cb_pop_front(cb_id_tensor, 1);
+    cb_tensor.pop_front(1);
 
     // Read end tensor data using separate circular buffer
-    cb_reserve_back(cb_id_tensor, 1);
-    uint32_t end_buffer_l1_addr = get_write_ptr(cb_id_tensor);
-    noc_async_read_tile(0, end_tensor_accessor, end_buffer_l1_addr);
-    noc_async_read_barrier();
+    cb_tensor.reserve_back(1);
+    uint32_t end_buffer_l1_addr = cb_tensor.get_write_ptr();
+    noc.async_read(end_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
 
     volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
 
     for (uint32_t i = 0; i < num_dims; i++) {
         end_indices[i] = end_data[i];
     }
-    cb_pop_front(cb_id_tensor, 1);
+    cb_tensor.pop_front(1);
 
     uint32_t start_offset = 0;
 
@@ -96,11 +105,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         uint32_t old_src_tile_id = src_tile_id;
 
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+        cb_in0.reserve_back(1);
+        noc.async_read(s0, cb_in0, tile_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb_in0.push_back(1);
 
         src_tile_id++;
         for (uint32_t j = 0; j < num_dims; ++j) {

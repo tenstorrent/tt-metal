@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     constexpr uint32_t tiles_per_channel_dim = get_compile_time_arg_val(0);
@@ -20,30 +21,32 @@ void kernel_main() {
 
     // Initialize interleaved address generator for DRAM access
     constexpr auto src_args = TensorAccessorArgs<3>();
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+
+    experimental::Noc noc;
+    experimental::CB cb_in0(cb_id_in0);
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;
     for (uint32_t i = start_block_id; i < end_block_id; ++i) {
         // Reserve space in the circular buffer for a row of tiles
         for (uint32_t j = 0; j < tiles_per_width_dim; ++j) {
-            cb_reserve_back(cb_id_in0, tiles_per_channel_dim);
-            uint64_t l1_write_addr = get_write_ptr(cb_id_in0);
+            cb_in0.reserve_back(tiles_per_channel_dim);
+            uint32_t l1_offset = 0;
 
             // Read each tile in the current row
             for (uint32_t k = 0; k < tiles_per_channel_dim; ++k) {
                 // Calculate tile index and read from DRAM to L1
                 uint32_t tile_index = tiles_per_width_dim * tiles_per_channel_dim * i + tiles_per_channel_dim * j + k;
-                noc_async_read_tile(tile_index, s, l1_write_addr);
-
-                l1_write_addr += tile_bytes;
+                noc.async_read(s, cb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = l1_offset});
+                l1_offset += tile_bytes;
             }
 
-            noc_async_read_barrier();
+            noc.async_read_barrier();
 
             // Ensure all async reads are complete before proceeding
             // Push the completed row of tiles to the circular buffer
-            cb_push_back(cb_id_in0, tiles_per_channel_dim);
+            cb_in0.push_back(tiles_per_channel_dim);
         }
     }
 }

@@ -9,7 +9,6 @@ import numpy as np
 import PIL
 import pytest
 import torch
-from diffusers.utils import export_to_video
 from loguru import logger
 
 import ttnn
@@ -87,6 +86,9 @@ def test_pipeline_inference(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        target_height=height,
+        target_width=width,
+        num_frames=num_frames,
     )
 
     prompt = "The cat in the hat runs up the hill to the house."
@@ -107,6 +109,7 @@ def test_pipeline_inference(
                 seed=seed,
                 guidance_scale=guidance_scale,
                 guidance_scale_2=guidance_scale_2,
+                output_type="uint8",
             )
 
         if hasattr(result, "frames"):
@@ -126,11 +129,10 @@ def test_pipeline_inference(
         # Remove batch dimension
         frames = frames[0]
         output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
-        try:
-            export_to_video(frames, output_filename, fps=16)
-            logger.info(f"Saved video to: {output_filename}")
-        except AttributeError as e:
-            logger.info(f"AttributeError: {e}")
+        from models.tt_dit.utils.video import export_to_video
+
+        export_to_video(frames, output_filename, fps=16)
+        logger.info(f"Saved video to: {output_filename}")
 
     if no_prompt:
         run(prompt=prompt, number=0, seed=42)

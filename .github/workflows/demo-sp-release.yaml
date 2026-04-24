@@ -43,10 +43,11 @@ on:
           - deepseek_decode
           - wan22
           - sp1_deepseek
+          - sp4_deepseek
 
   schedule:
-    # Run daily at 3 AM UTC
-    - cron: "0 3 * * *"
+    # Run daily at 3 AM UTCP_a
+    - cron: "0 3 * * 1-5"
 
 permissions:
   contents: write
@@ -122,3 +123,15 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       sp-config: sp1
+
+  deepseek-sp4-tests:
+    name: "SP4 DeepSeek Tests"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: sp4

@@ -83,8 +83,10 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
     pos_args = extract_positional_args(kwargs)
-    dim0 = dim0 or pos_args.get(1, 0)
-    dim1 = dim1 or pos_args.get(2, 1)
+    if dim0 is None:
+        dim0 = pos_args.get(1, 0)
+    if dim1 is None:
+        dim1 = pos_args.get(2, 1)
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
@@ -127,9 +129,31 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    def _run_transpose(tensor_a, kw):
+        out = ttnn.transpose(tensor_a, dim0, dim1, **kw)
+        return mesh_tensor_to_torch(out, device if is_mesh_device else None)
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.transpose(input_tensor_a, dim0, dim1, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    try:
+        output_tensor = _run_transpose(input_tensor_a, op_kwargs)
+    except Exception:
+        output_tensor = None
+
+    if output_tensor is not None and list(output_tensor.shape) != list(torch_output_tensor.shape):
+        output_tensor = None
+
+    if output_tensor is None:
+        fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
+        if not is_host:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
+
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)

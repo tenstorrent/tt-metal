@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -110,14 +107,14 @@ void kernel_main() {
          * compute E[(x)^2]
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init(cb_x2, cb_scaler, cb_ex2);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_x2, Wt);
         // cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                reduce_tile(cb_x2, cb_scaler, wt + wtr, scaler0, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, wt + wtr, scaler0, dst0);
             }
             // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
