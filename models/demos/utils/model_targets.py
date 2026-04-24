@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared resolver for centralized model perf/accuracy targets."""
 
 from __future__ import annotations
@@ -11,11 +15,10 @@ import yaml
 DEFAULT_MODEL_TARGETS_PATH = str(Path(__file__).resolve().parents[2] / "model_targets.yaml")
 
 _SKU_ALIASES = {
-    "n150": {"n150", "p150", "wh_n150"},
-    "n300": {"n300", "p300", "wh_n300"},
-    "t3k": {"t3k", "p150x8", "wh_llmbox_perf"},
-    "glx": {"glx", "tg", "bhglx", "wh_galaxy_perf"},
-    "blackhole": {"blackhole", "bh"},
+    "wormhole": {"n300", "n150", "wh_n150", "wh_n300", "tg", "wh_llmbox_perf", "wh_galaxy_perf"},
+    "t3k": {"t3k" },
+    "glx": {"glx", "bhglx" },
+    "blackhole": {"blackhole", "bh", "p150", "p300", "p150x8"},
 }
 
 

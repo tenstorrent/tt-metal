@@ -88,9 +88,7 @@ def test_validate_perf_targets_success(tmp_path):
     (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
 
     tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(
-        yaml.safe_dump(tests_yaml), encoding="utf-8"
-    )
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
 
     result = _run_validator(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -132,9 +130,7 @@ def test_validate_perf_targets_detects_regression(tmp_path):
     }
     (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
     tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(
-        yaml.safe_dump(tests_yaml), encoding="utf-8"
-    )
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
 
     result = _run_validator(tmp_path)
     assert result.returncode == 1
@@ -179,9 +175,7 @@ def test_validate_perf_targets_todo_entry_respects_strict_flag(tmp_path):
     }
     (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
     tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(
-        yaml.safe_dump(tests_yaml), encoding="utf-8"
-    )
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
 
     non_strict = _run_validator(tmp_path, strict_missing=False)
     assert non_strict.returncode == 0, non_strict.stdout + non_strict.stderr
