@@ -219,11 +219,16 @@ def _sanitize_cli_path(
     if "\x00" in raw_path:
         raise ValueError(f"Invalid {arg_name}: path contains null byte")
 
-    candidate = Path(raw_path).expanduser()
     try:
-        sanitized = candidate.resolve(strict=False)
+        sanitized = Path(raw_path).resolve(strict=False)
     except OSError as exc:
         raise ValueError(f"Invalid {arg_name}: failed to resolve path '{raw_path}' ({exc})") from exc
+
+    project_root = Path.cwd().resolve()
+    try:
+        sanitized.relative_to(project_root)
+    except ValueError:
+        raise ValueError(f"Invalid {arg_name}: path '{sanitized}' must be within the project root '{project_root}'")
 
     if expect_dir:
         if sanitized.exists() and not sanitized.is_dir():
