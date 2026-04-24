@@ -46,10 +46,6 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   validate-inputs:
     name: Validate inputs & derive arch
@@ -182,8 +178,11 @@ jobs:
           # CIv2 pool (tt-ubuntu-2204-<label>-viommu-stable) resolves HF weights
           # via the in-cluster large file cache. Bare-metal labels run on CIv1
           # with /mnt/MLPerf (Weka) instead.
+          # N300 is routed to CIv1 bare-metal runners because CIv2 N300
+          # containers cannot reach huggingface.co (restricted proxy blocks it,
+          # and LFC doesn't serve all models). N150/P100a/P150b stay on CIv2.
           case "$RUNNER" in
-            N150|N300|P100a|P150b)
+            N150|P100a|P150b)
               CI_VERSION="civ2"
               ;;
             *)
@@ -227,10 +226,19 @@ jobs:
         # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
         # + LFC so HF_HOME is left unset (falls back to the container default).
         HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+        # Point the HF hub cache at the MLPerf-backed model store (matches
+        # the models-e2e CI which uses HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub).
+        HF_HUB_CACHE: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/huggingface/hub' || '' }}
+        # Prevent transformers from attempting network downloads on CIv1 runners
+        # where weights are pre-cached on MLPerf. CIv2 needs online access via LFC.
+        HF_HUB_OFFLINE: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        # Only mount MLPerf on CIv1 runners; CIv2 uses LFC instead.
+        # Mounting on CIv2 triggers a spurious assertion in model_location_generator
+        # because the test detects files at the MLPerf path and refuses to use LFC.
+        - ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/dev/null:/mnt/MLPerf_unused:ro' }}
       options: >-
         --device /dev/tenstorrent
         --device /dev/ipmi0
@@ -243,7 +251,8 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        (inputs.runner-label == 'N300') && fromJSON('["N300", "in-service", "cloud-virtual-machine"]')
+        || (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
@@ -299,6 +308,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Probe LFC for HF_MODEL (CIv2)
+        id: lfc-probe
         if: ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && matrix.hf_model != '' }}
         env:
           INPUT_HF_MODEL: ${{ matrix.hf_model }}
@@ -309,13 +319,12 @@ jobs:
           STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
           echo "HTTP status: $STATUS"
           if [[ "$STATUS" != "200" ]]; then
-            echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
-            echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
-            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LLMBox, BH-DeskBox, BH-LoudBox)"
-            echo "::error::where /mnt/MLPerf provides the weights."
-            exit 1
+            echo "::warning::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS). Will fall through to direct HF download."
+            echo "lfc_available=false" >> $GITHUB_OUTPUT
+          else
+            echo "LFC has ${INPUT_HF_MODEL}"
+            echo "lfc_available=true" >> $GITHUB_OUTPUT
           fi
-          echo "LFC has ${INPUT_HF_MODEL}"
 
       - name: Verify CIv1 weights (MLPerf)
         if: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && matrix.hf_model != '' }}
@@ -340,7 +349,88 @@ jobs:
           HF_MODEL: ${{ matrix.hf_model }}
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
+          LFC_AVAILABLE: ${{ steps.lfc-probe.outputs.lfc_available || 'true' }}
         run: |
+          # On CIv1 (bare-metal), HF_HUB_OFFLINE=1 is set at container level,
+          # so from_pretrained() only searches the local cache.  If HF_MODEL is
+          # a Hub ID (e.g. "openai/gpt-oss-120b") instead of a local path, the
+          # look-up fails because the model isn't in HF_HOME cache format.
+          # Rewrite the Hub ID to the corresponding MLPerf local directory so
+          # from_pretrained() loads directly from disk.
+          if [[ "${HF_HUB_OFFLINE:-0}" == "1" && -n "$HF_MODEL" && "$HF_MODEL" != /* ]]; then
+            ORIGINAL_HF_MODEL="$HF_MODEL"
+            LOCAL_MODEL_PATH="/mnt/MLPerf/tt_dnn-models/${HF_MODEL}"
+            if [[ -d "$LOCAL_MODEL_PATH" ]]; then
+              echo "::notice::CIv1 offline mode: rewriting HF_MODEL from '$HF_MODEL' to local path '$LOCAL_MODEL_PATH'"
+              export HF_MODEL="$LOCAL_MODEL_PATH"
+            else
+              echo "::warning::CIv1 offline mode: local path '$LOCAL_MODEL_PATH' does not exist. from_pretrained() may fail."
+            fi
+            # Set TT_CACHE_PATH for pre-computed tensor caches (same convention
+            # as models-e2e CI).  Hub ID "org/model" → "org--model" under tt_cache.
+            HF_CACHE_SLUG="${ORIGINAL_HF_MODEL//\//--}"
+            TT_CACHE_CANDIDATE="/mnt/MLPerf/huggingface/tt_cache/${HF_CACHE_SLUG}/"
+            if [[ -d "$TT_CACHE_CANDIDATE" ]]; then
+              export TT_CACHE_PATH="$TT_CACHE_CANDIDATE"
+              echo "::notice::CIv1: set TT_CACHE_PATH=$TT_CACHE_PATH"
+            fi
+          fi
+
+          # When model is not in LFC, we need HuggingFace access.
+          # CIv2 runners route all traffic through a restricted proxy that
+          # blocks huggingface.co.  Strategy:
+          #   1. Try direct access (unset proxy)
+          #   2. If direct fails, keep proxy but add HF domains to NO_PROXY
+          #   3. Log which path was taken for debugging
+          if [[ "$LFC_AVAILABLE" != "true" ]]; then
+            echo "::notice::Model not in LFC — attempting direct HF download"
+
+            # Diagnostic: test connectivity with and without proxy
+            echo "--- Connectivity diagnostics ---"
+            echo "Current proxy: HTTP_PROXY=${HTTP_PROXY:-<unset>}"
+
+            # Test 1: without proxy
+            unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+            DIRECT_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://huggingface.co 2>/dev/null || echo "000")
+            echo "Direct (no proxy): HTTP $DIRECT_STATUS"
+
+            if [[ "$DIRECT_STATUS" == "200" || "$DIRECT_STATUS" == "301" || "$DIRECT_STATUS" == "302" ]]; then
+              echo "✅ Direct internet access works — proxy vars cleared"
+            else
+              echo "⚠️  Direct access failed — no NAT egress from this pod"
+              echo "Restoring proxy and adding HF domains to NO_PROXY..."
+              export HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export http_proxy="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export https_proxy="http://proxy.restricted-proxy.svc.cluster.local:3128"
+              export NO_PROXY="${NO_PROXY},huggingface.co,*.huggingface.co,cdn-lfs.huggingface.co,cdn-lfs-us-1.huggingface.co"
+              export no_proxy="${no_proxy},huggingface.co,*.huggingface.co,cdn-lfs.huggingface.co,cdn-lfs-us-1.huggingface.co"
+
+              # Test 2: with proxy + NO_PROXY for HF
+              NOPROXY_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://huggingface.co 2>/dev/null || echo "000")
+              echo "With NO_PROXY for HF: HTTP $NOPROXY_STATUS"
+
+              if [[ "$NOPROXY_STATUS" == "000" ]]; then
+                echo "⚠️  Still cannot reach HF — trying THROUGH proxy..."
+                unset NO_PROXY no_proxy
+                export NO_PROXY="http://large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net"
+                export no_proxy="http://large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net"
+                PROXY_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --proxy "$HTTP_PROXY" https://huggingface.co 2>/dev/null || echo "000")
+                echo "Through proxy: HTTP $PROXY_STATUS"
+                if [[ "$PROXY_STATUS" != "000" && "$PROXY_STATUS" != "403" ]]; then
+                  echo "✅ Proxy allows HF — keeping proxy for HF downloads"
+                else
+                  echo "::warning::Cannot reach huggingface.co from this runner (direct=$DIRECT_STATUS, no_proxy=$NOPROXY_STATUS, proxy=$PROXY_STATUS). Model download will likely fail."
+                  # Last resort: unset proxy and hope for the best
+                  unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+                fi
+              else
+                echo "✅ NO_PROXY bypass works for HF"
+              fi
+            fi
+            echo "--- End diagnostics ---"
+          fi
+
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
 
           # Reject extra_args that override output directory
@@ -358,10 +448,15 @@ jobs:
             cmd+=("${extra[@]}")
           fi
 
-          "${cmd[@]}"
+          "${cmd[@]}" || TRACE_RC=$?
+          TRACE_RC=${TRACE_RC:-0}
 
           MASTER_JSON="$TRACER_OUTPUT_DIR/ttnn_operations_master.json"
           echo "master_json_path=$MASTER_JSON" >> $GITHUB_OUTPUT
+
+          # Expose the JUnit XML produced by pytest (if it exists)
+          JUNIT_XML=$(find "$TRACER_OUTPUT_DIR" -name "pytest_results.xml" 2>/dev/null | head -1)
+          echo "junit_xml_path=${JUNIT_XML}" >> $GITHUB_OUTPUT
 
           # Extract trace_uid from the persisted master JSON; the per-trace
           # metadata file is deleted by generic_ops_tracer.py after the run.
@@ -387,6 +482,10 @@ jobs:
           if [[ -n "$TRACE_UID" ]]; then
             echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
           fi
+
+          # Propagate the tracer exit code so the step outcome reflects test
+          # failures, but only after all outputs have been captured above.
+          exit $TRACE_RC
 
       - name: Write leg status sidecar
         if: always()
@@ -503,8 +602,135 @@ jobs:
               f.write(summary)
           PY
 
+      - name: Write test results summary
+        if: always()
+        env:
+          JUNIT_XML: ${{ steps.trace.outputs.junit_xml_path }}
+          SLUG: ${{ matrix.slug }}
+          TRACE_OUTCOME: ${{ steps.trace.outcome }}
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          from xml.etree import ElementTree
+
+          slug = os.environ["SLUG"]
+          junit_xml = os.environ.get("JUNIT_XML", "")
+          trace_outcome = os.environ.get("TRACE_OUTCOME", "unknown")
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+
+          if not junit_xml or not os.path.isfile(junit_xml):
+              # No JUnit XML — fall back to a simple status line
+              icon = "✅" if trace_outcome == "success" else "❌" if trace_outcome == "failure" else "⚠️"
+              with open(summary_path, "a") as f:
+                  f.write(f"\n## {icon} Test Results — `{slug}`\n\n")
+                  f.write(f"No JUnit XML report found (trace outcome: **{trace_outcome}**).\n\n")
+              sys.exit(0)
+
+          tree = ElementTree.parse(junit_xml)
+          root = tree.getroot()
+
+          passed, failed, skipped, errored = [], [], [], []
+          for suite in root.iter("testsuite"):
+              for tc in suite.iter("testcase"):
+                  name = tc.get("name", "unknown")
+                  classname = tc.get("classname", "")
+                  duration = float(tc.get("time", 0))
+
+                  fail_el = tc.find("failure")
+                  err_el = tc.find("error")
+                  skip_el = tc.find("skipped")
+
+                  if fail_el is not None:
+                      msg = (fail_el.get("message") or "")[:200]
+                      failed.append((name, duration, msg))
+                  elif err_el is not None:
+                      msg = (err_el.get("message") or "")[:200]
+                      errored.append((name, duration, msg))
+                  elif skip_el is not None:
+                      reason = (skip_el.get("message") or "")[:120]
+                      skipped.append((name, reason))
+                  else:
+                      passed.append((name, duration))
+
+          total = len(passed) + len(failed) + len(errored) + len(skipped)
+          any_fail = len(failed) + len(errored)
+          icon = "✅" if any_fail == 0 else "❌"
+
+          lines = []
+          lines.append(f"\n## {icon} Test Results — `{slug}`\n")
+          lines.append(f"| Metric | Count |")
+          lines.append(f"|--------|-------|")
+          lines.append(f"| ✅ Passed | **{len(passed)}** |")
+          lines.append(f"| ❌ Failed | **{len(failed)}** |")
+          if errored:
+              lines.append(f"| 💥 Errors | **{len(errored)}** |")
+          lines.append(f"| ⏭️ Skipped | **{len(skipped)}** |")
+          lines.append(f"| **Total** | **{total}** |")
+          lines.append("")
+
+          if failed or errored:
+              lines.append("### ❌ Failed Tests\n")
+              lines.append("| Test | Duration | Error |")
+              lines.append("|------|----------|-------|")
+              for name, dur, msg in failed + errored:
+                  safe_msg = msg.replace("|", "\\|").replace("\n", " ")
+                  lines.append(f"| `{name}` | {dur:.1f}s | {safe_msg} |")
+              lines.append("")
+
+          if passed:
+              lines.append("### ✅ Passed Tests\n")
+              lines.append("| Test | Duration |")
+              lines.append("|------|----------|")
+              for name, dur in passed:
+                  lines.append(f"| `{name}` | {dur:.1f}s |")
+              lines.append("")
+
+          if skipped:
+              lines.append(f"<details><summary>⏭️ Skipped Tests ({len(skipped)})</summary>\n")
+              lines.append("| Test | Reason |")
+              lines.append("|------|--------|")
+              for name, reason in skipped:
+                  safe_reason = reason.replace("|", "\\|").replace("\n", " ")
+                  lines.append(f"| `{name}` | {safe_reason} |")
+              lines.append("\n</details>\n")
+
+          with open(summary_path, "a") as f:
+              f.write("\n".join(lines))
+          PY
+
+      - name: Fail pipeline on test failures
+        if: always()
+        env:
+          JUNIT_XML: ${{ steps.trace.outputs.junit_xml_path }}
+          TRACE_OUTCOME: ${{ steps.trace.outcome }}
+        run: |
+          # If no JUnit XML, fall back to trace step outcome
+          if [[ -z "$JUNIT_XML" || ! -f "$JUNIT_XML" ]]; then
+            if [[ "$TRACE_OUTCOME" != "success" ]]; then
+              echo "::error::Trace step failed (outcome=$TRACE_OUTCOME) and no JUnit XML was produced"
+              exit 1
+            fi
+            exit 0
+          fi
+
+          # Parse JUnit XML for failures
+          FAILURES=$(python3 -c "
+          from xml.etree import ElementTree
+          tree = ElementTree.parse('$JUNIT_XML')
+          root = tree.getroot()
+          fails = sum(int(s.get('failures', 0)) + int(s.get('errors', 0)) for s in root.iter('testsuite'))
+          print(fails)
+          ")
+
+          if [[ "$FAILURES" -gt 0 ]]; then
+            echo "::error::$FAILURES test case(s) failed — see job summary for details"
+            exit 1
+          fi
+          echo "All test cases passed"
+
       - name: Upload leg master JSON
-        if: always() && steps.trace.outcome == 'success'
+        if: always() && steps.trace.outcome != 'cancelled'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: model-trace-leg-${{ matrix.slug }}

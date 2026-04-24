@@ -814,7 +814,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params"] + extra_args
+        junit_xml_path = os.path.join(trace_dir, "pytest_results.xml")
+        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params", f"--junit-xml={junit_xml_path}"] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         cmd = [python_cmd, test_path, "--trace-params"] + extra_args
@@ -823,6 +824,13 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     # The operation_tracer.py checks TTNN_OPERATION_TRACE_DIR env var
     env = os.environ.copy()
     env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
+
+    # Disable pytest-timeout during tracing.  Model tracing can legitimately
+    # take longer than the default pytest timeout (300 s) because it records
+    # every op invocation.  The GitHub Actions step-level timeout-minutes
+    # already guards against genuine hangs, so per-test timeouts are
+    # redundant and cause trace data loss.
+    env["PYTEST_TIMEOUT"] = "0"
 
     # Disable fast runtime mode to enable operation tracing
     # Fast mode skips the tracing decorator for performance
