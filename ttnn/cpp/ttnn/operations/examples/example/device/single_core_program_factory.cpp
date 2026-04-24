@@ -88,7 +88,7 @@ ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
 
     // Compute kernel (eltwise_sfpu.cpp reads num_tiles via get_arg_val, i.e. runtime args)
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp";
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_group_1;
     compute_desc.config = ComputeConfigDescriptor{
