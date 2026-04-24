@@ -34,8 +34,7 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 
 
 class TtRoutedExpert(LightweightModule):
-    MAX_EXPERT_LENGTH = 2048
-    MAX_EXPERT_ITERS = ceil(25_000 / MAX_EXPERT_LENGTH)
+    FIXED_EXPERT_LENGTH = 2048
 
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
@@ -343,25 +342,24 @@ class TtRoutedExpert(LightweightModule):
         up_proj: ttnn.Tensor,
         down_proj: ttnn.Tensor,
         local_expert_idx: int,
-        expert_iter_length: int,
-        global_expert_idx_table: Optional[ttnn.Tensor] = None,
         expert_token_counts: Optional[ttnn.Tensor] = None,
     ) -> None:
         """
         Blackhole chunked expert FFN: splits ``tokens`` into
-        ``expert_iter_length``-sized chunks and dispatches each chunk through the
-        experimental routed_expert_ffn op, writing results into the matching
-        slice of ``out``.
+        ``self.FIXED_EXPERT_LENGTH``-sized chunks and dispatches each chunk
+        through the experimental routed_expert_ffn op, writing results into the
+        matching slice of ``out``.
 
-        When both ``global_expert_idx_table`` and ``expert_token_counts`` are
-        provided, the op routes through the forked device op whose per-kernel
-        guard skips iff ``expert_token_counts[global_expert_idx_table[local_expert_idx]]
-        <= curr_expert_iter * expert_iter_length`` — no device-to-host sync.
+        Reads ``self.global_expert_idx_table`` (set at __init__). When both
+        that and ``expert_token_counts`` are non-None, the op routes through
+        the forked device op whose per-kernel guard skips iff
+        ``expert_token_counts[global_expert_idx_table[local_expert_idx]]
+        <= curr_expert_iter * FIXED_EXPERT_LENGTH`` — no device-to-host sync.
         """
         num_tokens = tokens.shape[1]
-        expert_iters = ceil(num_tokens / expert_iter_length)
-        expert_lengths = [expert_iter_length] * expert_iters
-        expert_lengths[-1] = num_tokens - expert_iter_length * (expert_iters - 1)
+        expert_iters = ceil(num_tokens / self.FIXED_EXPERT_LENGTH)
+        expert_lengths = [self.FIXED_EXPERT_LENGTH] * expert_iters
+        expert_lengths[-1] = num_tokens - self.FIXED_EXPERT_LENGTH * (expert_iters - 1)
 
         start = 0
         for curr_expert_iter in range(expert_iters):
@@ -377,11 +375,11 @@ class TtRoutedExpert(LightweightModule):
                 down_proj,
                 compute_kernel_config=self.compute_kernel_config,
                 output=expert_out,
-                global_expert_idx_table=global_expert_idx_table,
+                global_expert_idx_table=self.global_expert_idx_table,
                 expert_token_counts=expert_token_counts,
                 local_expert_idx=local_expert_idx,
                 curr_expert_iter=curr_expert_iter,
-                expert_iter_length=expert_iter_length,
+                expert_iter_length=self.FIXED_EXPERT_LENGTH,
             )
             logger.debug(f"FFN iteration {curr_expert_iter+1} output shape {expert_out.shape}")
 
@@ -409,12 +407,11 @@ class TtRoutedExpert(LightweightModule):
         self,
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: Optional[ttnn.Tensor],
-        expert_iter_length: int,
     ) -> ttnn.Tensor:
         """
         Blackhole forward: pre-allocates the output with empty_like, narrows
         per-expert input/output slices, and writes FFN results in-place.
-        Reads ``self.global_expert_idx_table`` for the on-device guard.
+        ``self.global_expert_idx_table`` is picked up inside ``_bh_expert_ffn``.
         """
         expert_outputs = ttnn.empty_like(dispatched_buffer)
         for local_expert in range(self.experts_per_chip):
@@ -431,8 +428,6 @@ class TtRoutedExpert(LightweightModule):
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
                 local_expert_idx=local_expert,
-                expert_iter_length=expert_iter_length,
-                global_expert_idx_table=self.global_expert_idx_table,
                 expert_token_counts=expert_token_counts,
             )
             logger.debug(f"Expert {local_expert}: output shape {out.shape}")
@@ -468,7 +463,6 @@ class TtRoutedExpert(LightweightModule):
         self,
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: Optional[ttnn.Tensor] = None,
-        expert_iter_length: Optional[int] = None,
     ) -> ttnn.Tensor:
         """
         Process dispatched tokens through local experts.
@@ -477,25 +471,20 @@ class TtRoutedExpert(LightweightModule):
           - Blackhole: pre-allocates output + narrow + in-place write, uses the
             forked routed_matmul device op with on-device guard when
             ``self.global_expert_idx_table`` (set in __init__) and
-            ``expert_token_counts`` are both non-None.
+            ``expert_token_counts`` are both non-None. Chunk size is
+            ``self.FIXED_EXPERT_LENGTH``.
           - Wormhole: indexing + concat (no narrow, no guard — WH lacks the
-            forked path). ``expert_token_counts`` and ``expert_iter_length`` are
-            ignored.
+            forked path). ``expert_token_counts`` is ignored.
 
         Args:
             dispatched_buffer: Dispatched tokens, shape (experts_per_chip, max_tokens, emb_dim).
             expert_token_counts: DRAM uint32 ROW_MAJOR_LAYOUT tensor of token counts
                 per global expert. Blackhole only. Varies per forward call (unlike
                 ``global_expert_idx_table`` which is fixed at __init__).
-            expert_iter_length: Chunk size in tokens (Blackhole only).
-                Defaults to ``self.MAX_EXPERT_LENGTH`` when None.
 
         Returns:
             expert_outputs: Expert output tensor, same shape as ``dispatched_buffer``.
         """
-        if expert_iter_length is None:
-            expert_iter_length = self.MAX_EXPERT_LENGTH
-
         logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
         if dispatched_buffer.dtype != self.activations_dtype:
@@ -508,7 +497,6 @@ class TtRoutedExpert(LightweightModule):
             expert_outputs = self._bh_forward_impl(
                 dispatched_buffer,
                 expert_token_counts=expert_token_counts,
-                expert_iter_length=expert_iter_length,
             )
         else:
             raise ValueError("Unsupported device architecture")

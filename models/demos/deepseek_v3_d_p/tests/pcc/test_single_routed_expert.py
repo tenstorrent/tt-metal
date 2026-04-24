@@ -33,7 +33,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
         (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
         (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
         (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        # 25K-ish — rounded down to the nearest multiple of MAX_EXPERT_LENGTH (2048)
+        # 25K-ish — rounded down to the nearest multiple of FIXED_EXPERT_LENGTH (2048)
         # so the chunk loop's last iteration stays tile-aligned. Plain 25000 is not
         # a multiple of 32 and ttnn.narrow rejects the ragged tail.
         (24576, 7168, 2048),  # DeepSeek V3 dims, 24K tokens (12 × 2048)
