@@ -83,11 +83,12 @@ class TtnnDetect:
         y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.squeeze(y, dim=0)
+        # Slices may alias y; materialize before freeing y. n_anchors must be read before deallocate(y).
+        n_anchors = y.shape[1]
         ya, yb = y[:, :, :64], y[:, :, 64:144]
-        deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
         ya = ttnn.reallocate(ya)
         yb = ttnn.reallocate(yb)
-        n_anchors = y.shape[1]
+        deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
         ya = ttnn.reshape(ya, (ya.shape[0], n_anchors * 4, 16))
         ya = ttnn.softmax(ya, dim=-1)
         ya = ttnn.to_layout(ya, ttnn.ROW_MAJOR_LAYOUT)
