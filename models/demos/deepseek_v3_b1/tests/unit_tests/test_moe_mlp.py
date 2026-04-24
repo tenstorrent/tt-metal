@@ -980,15 +980,20 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     )
 
     # ── Create SDPA buffers for CB memory overlap (required by fused MoE) ──
+    # Allocated as uint8 ROW_MAJOR so the test can read raw CB bytes back host-side
+    # and reinterpret them against torch goldens. Byte sizes match the original
+    # bfloat8_b TILE / bfloat16 TILE_8x32 layouts the kernel expects.
     device_grid_size = submesh.compute_with_storage_grid_size()
     kv_cache_shard_height = SDPA.KV_CACHE_SHARD_HEIGHT
     kvpe_dim = SDPA.KVPE_DIM
     num_mcast_cores = len(ttnn.corerange_to_cores(mcast_grid))
-    kv_cache_shard_spec = ttnn.ShardSpec(mcast_grid, (kv_cache_shard_height, kvpe_dim), ttnn.ShardOrientation.ROW_MAJOR)
+    # bfloat8_b 32x32 tile = 1088 B; (256/32)*(576/32)*1088 = 8*18*1088 = 156672 B/shard
+    kv_cache_bytes_per_shard = (kv_cache_shard_height // 32) * (kvpe_dim // 32) * 1088
+    kv_cache_shard_spec = ttnn.ShardSpec(mcast_grid, (1, kv_cache_bytes_per_shard), ttnn.ShardOrientation.ROW_MAJOR)
     sdpa_kv_cache_buffer = ttnn.from_torch(
-        torch.zeros((kv_cache_shard_height * num_mcast_cores, kvpe_dim), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
+        torch.zeros((num_mcast_cores, kv_cache_bytes_per_shard), dtype=torch.uint8),
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=submesh,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
@@ -1002,22 +1007,23 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
     )
     num_full_cores = device_grid_size.x * device_grid_size.y
+    # bfloat16 8x32 tile = 512 B; (40/8)*(544/32)*512 = 5*17*512 = 43520 B/shard
+    sdpa_out_interm_bytes_per_shard = (sdpa_out_interm_shard_height // 8) * (sdpa_out_interm_shard_width // 32) * 512
     sdpa_out_interm_shard_spec = ttnn.ShardSpec(
         full_device_grid,
-        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+        (1, sdpa_out_interm_bytes_per_shard),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sdpa_out_interm_buffer = ttnn.from_torch(
-        torch.zeros((sdpa_out_interm_shard_height * num_full_cores, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        torch.zeros((num_full_cores, sdpa_out_interm_bytes_per_shard), dtype=torch.uint8),
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=submesh,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             sdpa_out_interm_shard_spec,
         ),
-        tile=Tiles.TILE_8x32,
     )
 
     # ── ReduceToOne tensors and semaphores ──
