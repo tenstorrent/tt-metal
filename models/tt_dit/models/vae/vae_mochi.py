@@ -195,12 +195,7 @@ class ResBlock(Module):
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
 
         # When spatial parallelism is used, GroupNorm runs on the full gathered
-        # tensor (all frames replicated).  The init grid is based on
-        # time_parallel.factor=1 which gives larger grid_y.  This causes a
-        # different nvr (tile-row-to-core mapping) vs the non-spatial path,
-        # changing FP reduction order and degrading PCC.  Compute the grid that
-        # a pure time-parallel config would use (equiv_time_factor = h*w) so we
-        # can override GroupNorm's grid in the spatial path.
+        # tensor (all frames replicated).
         h_factor = parallel_config.h_parallel.factor
         w_factor = parallel_config.w_parallel.factor
         if h_factor > 1 or w_factor > 1:
@@ -518,8 +513,6 @@ class ResBlock(Module):
             HW, (HW + self._max_hw_per_block.get(C, 1000) - 1) // self._max_hw_per_block.get(C, 1000)
         )
         # Override GroupNorm grid to match the non-spatial (time-parallel) path.
-        # The spatial init grid has larger grid_y → larger nvr → different FP
-        # reduction order, which degrades PCC.
         saved_grid = norm.core_grid
         norm.core_grid = self.spatial_norm_grid
 
@@ -574,44 +567,30 @@ class ResBlock(Module):
         NT = N * T
         output_dtype = x_4d.dtype  # all_gather forces bf16; restore this dtype after norm
 
-        # Estimate gathered tensor size.  _all_gather_hw always casts to bf16
-        # before gathering, so the gathered tensor is bf16 regardless of input dtype.
-        gathered_bytes = NT * H_full * W_full * C * 2  # bf16 = 2 bytes
-        import os
+        # Compute the maximum frames per chunk from a 1 GB memory budget.
+        # _all_gather_hw casts to bf16 before gathering, so 2 bytes per element.
+        max_frames = max(1, (1024 * 1024 * 1024) // (H_full * W_full * C * 2))
 
-        max_bytes = int(os.environ.get("CHUNK_MAX_BYTES", 1 * 1024 * 1024 * 1024))  # 1 GB default
-        num_chunks = max(1, (gathered_bytes + max_bytes - 1) // max_bytes)
-        chunk_nt = (NT + num_chunks - 1) // num_chunks
-        chunk_nt = max(1, chunk_nt)
-
-        # GroupNorm requires Ht % nvr == 0 where Ht = batch_size * ceil(HW/32).
-        # For certain HW values (e.g. 2000 → 63 tile rows), no valid grid exists
-        # for small batch sizes.  Enforce a minimum chunk_nt so GroupNorm always
-        # gets a valid grid configuration.
+        # GroupNorm requires a minimum batch_size for certain HW values
+        # (e.g. HW=2000 → 63 tile rows has no valid grid for batch_size=1).
         needs_h_unpad = logical_h > 0 and H_full > logical_h
         needs_w_unpad = logical_w > 0 and W_full > logical_w
         norm_h = logical_h if needs_h_unpad else H_full
         norm_w = logical_w if needs_w_unpad else W_full
-        norm_HW = norm_h * norm_w
-        min_norm_batch = self._min_valid_norm_batch(norm, norm_HW)
-        chunk_nt = max(chunk_nt, min_norm_batch)
-        num_chunks = max(1, (NT + chunk_nt - 1) // chunk_nt)
-        # Ensure the last chunk is also >= min_norm_batch.  If the remainder is
-        # too small, reduce num_chunks so the last chunk absorbs more frames.
-        remainder = NT % chunk_nt
-        if remainder > 0 and remainder < min_norm_batch and num_chunks > 1:
-            num_chunks -= 1
-            chunk_nt = (NT + num_chunks - 1) // num_chunks
+        min_norm_batch = self._min_valid_norm_batch(norm, norm_h * norm_w)
 
-        # Try to find a chunk_nt that evenly divides NT to avoid unequal last
-        # chunk.  Search downward from the computed chunk_nt for the largest
-        # divisor of NT that satisfies the min_norm_batch constraint.
-        if NT % chunk_nt != 0 and num_chunks > 1:
-            for candidate in range(chunk_nt, min_norm_batch - 1, -1):
-                if NT % candidate == 0:
-                    chunk_nt = candidate
-                    num_chunks = NT // chunk_nt
+        # Find the largest divisor of NT in [min_norm_batch, max_frames].
+        # This guarantees all chunks are equal size and satisfy GroupNorm constraints.
+        chunk_nt = NT  # default: no chunking
+        if NT > max_frames:
+            for d in range(min(max_frames, NT), max(min_norm_batch, 1) - 1, -1):
+                if NT % d == 0:
+                    chunk_nt = d
                     break
+            else:
+                # No exact divisor found; use max_frames (accept unequal last chunk).
+                chunk_nt = max(max_frames, min_norm_batch)
+        num_chunks = (NT + chunk_nt - 1) // chunk_nt
 
         if num_chunks == 1:
             x_gathered = self._all_gather_hw(x_4d, N, T, H, W, C)
@@ -787,12 +766,10 @@ class ResBlock(Module):
         ttnn.deallocate(x_conv2_NTHWC)
 
         x_tiled_NTHWC = ttnn.add(x_conv2_tiled_NTHWC, residual_tiled_NTHWC)
-
         x_NTHWC = self.untilize_reshape(x_tiled_NTHWC, shapes)
         ttnn.deallocate(x_conv2_tiled_NTHWC)
         ttnn.deallocate(residual_tiled_NTHWC)
         ttnn.deallocate(x_tiled_NTHWC)
-
         return x_NTHWC
 
 
@@ -1202,14 +1179,6 @@ class MochiVAEDecoder(Module):
 
         # Final projection
         x_NTHWC = self.output_proj(x_NTHWC)
-
-        # NOTE: Do NOT slice H/W padding per-device here.  When W is padded
-        # for divisibility by w_factor and then doubled by depth_to_spacetime,
-        # the padding columns are concentrated at the global boundary (on the
-        # last device), not distributed uniformly.  Slicing each device to
-        # logical_w // w_factor would discard valid columns from inner devices
-        # and create gaps in the gathered output.  Instead, the caller gathers
-        # the full padded tensor and slices globally (see postprocess_output).
 
         return x_NTHWC
 
