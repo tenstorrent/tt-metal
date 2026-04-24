@@ -345,7 +345,6 @@ class TtMoe(LightweightModule):
         scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2]))
         )
-
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
@@ -402,7 +401,6 @@ class TtMoe(LightweightModule):
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
         # Convert x to TILE_LAYOUT for shared expert
-
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
 
         shared_output = self.shared_expert(x)
