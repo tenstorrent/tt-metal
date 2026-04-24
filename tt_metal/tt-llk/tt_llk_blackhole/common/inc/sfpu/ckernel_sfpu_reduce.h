@@ -183,6 +183,7 @@ inline void perform_reduce_col_sum_avg()
             TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0); // LREG0 = upper + lower (float)
         }
 
+        // Result of column reduction now stored in LREG0 as 4 partial sums
         // Step 3: Transpose to rearrange the 4 partial sums for final reduction
         TTI_SFPTRANSP(0, 0, 0, 0);
 

@@ -165,8 +165,13 @@ inline void perform_reduce_col_sum_avg()
         }
         else
         {
-            lltt::replay(6, 5); // Half reduce with NOPs for 2-cycle SFPADD latency
-            TTI_SFPNOP;         // Wait for LREG0 result before store/average
+            lltt::replay(6, 4); // Half reduce with NOP for 2-cycle SFPADD latency
+            if constexpr (pool_type != AVG)
+            {
+                // SUM path: next op is SFPSTORE LREG0, needs NOP to cover SFPADD's 2-cycle latency.
+                // AVG path: first SFPLOADI in perform_float_average() is independent of LREG0 and fills the slot.
+                TTI_SFPNOP;
+            }
         }
 
         // Perform averaging if requested (different for int vs float)
@@ -443,7 +448,7 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset)
             TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second);
             TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
 
-            // Replay the full tree-reduce buffer (both int and float use 6 interleaved instructions)
+            // Replay the full tree-reduce buffer (both int and float use 6 instructions)
             lltt::replay(0, 6);
 
             // Horizontal reduction: consolidate all 8 SFPU columns into column 0 (interleaved for latency hiding)
@@ -515,13 +520,9 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
             else
             {
                 TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-                TTI_SFPNOP; // Required for Wormhole float latency
                 TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG1, 0);
-                TTI_SFPNOP;
                 TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                TTI_SFPNOP;
                 TTI_SFPADD(p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG3, 0);
-                TTI_SFPNOP;
             }
         }
 
@@ -762,10 +763,10 @@ inline void init_reduce_sum_avg()
     }
     else
     {
-        // Float replay buffer: 11 instructions total
+        // Float replay buffer: 10 instructions total
         // Positions 0-5: Full reduce, interleaved to eliminate NOPs (B hides A's 2-cycle latency)
-        // Positions 6-10: Half reduce for LREG0-3 only, with NOPs for dependent SFPADD chains
-        lltt::record(0, 11);
+        // Positions 6-9: Half reduce for LREG0-3 only, with NOP for dependent SFPADD chain
+        lltt::record(0, 10);
 
         // Full reduce (positions 0-5): interleaved upper/lower face summation
         TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // A1
@@ -775,12 +776,12 @@ inline void init_reduce_sum_avg()
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0); // A3
         TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0); // B3 (hides A3 latency)
 
-        // Half reduce (positions 6-10): upper face only, NOPs required for 2-cycle SFPADD latency
+        // Half reduce (positions 6-9): upper face only, NOP required for 2-cycle SFPADD latency
+        // Reorders A1/A3/A2 so A1 and A3 (disjoint outputs) issue back-to-back; only A3's latency before A2 needs a NOP.
         TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // A1
-        TTI_SFPNOP;                                                                   // Cover A1 latency
-        TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG1, 0); // A2
-        TTI_SFPNOP;                                                                   // Cover A2 latency
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0); // A3
+        TTI_SFPNOP;                                                                   // Cover A3 latency (A1 is already available)
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0); // A2
     }
 }
 
