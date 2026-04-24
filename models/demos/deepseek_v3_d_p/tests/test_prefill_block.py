@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     create_hf_model,
     extract_layer_state_dict,
     get_4d_causal_mask,
+    tokenize_prompt_to_isl,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 

@@ -20,6 +20,7 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -362,6 +363,7 @@ class TtMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
+        signpost(header="MoE_START")
         logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
 
@@ -594,4 +596,5 @@ class TtMoe(LightweightModule):
                 expert_token_counts=tt_expert_token_counts,
             )
 
+        signpost(header="MoE_END")
         return final_output, intermediates
