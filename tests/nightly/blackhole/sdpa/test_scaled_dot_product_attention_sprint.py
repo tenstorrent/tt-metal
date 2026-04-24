@@ -2,16 +2,232 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Single-chip SDPA tests for Blackhole covering WAN 2.2 and DeepSeek MLA 100K configurations.
+
+Layout and naming mirror tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py so each "suite"
+(WAN, MLA, ...) owns its own chunk-size sweep and dtype/shape parameters. The MLA suite is
+sized to replicate the work performed by ring_joint_sdpa at ring iteration 0 — where each
+device runs plain causal SDPA on its local Q/K/V slice (``balancing=false``, ``causality=true``,
+no KV halving).
+"""
+
 import os
 import math
 import torch
+from dataclasses import dataclass, field
 from itertools import product
+from typing import Dict, List
+
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 import ttnn
 from loguru import logger
 import pytest
+
+from tests.nightly.sdpa_perf_utils import (
+    post_process_ops_log,
+    compute_math_utilization,
+    compute_sdpa_flops,
+)
+
+
+# ============================================================================
+# HARDWARE CONFIGURATION (single chip, BH)
+# ============================================================================
+
+SDPA_GRID = [11, 10]  # 11 cols x 10 rows; matches Galaxy per-chip SDPA grid
+NUM_CORES = SDPA_GRID[0] * SDPA_GRID[1]  # 110
+
+BATCH_SIZE = 1
+
+
+# ============================================================================
+# MODEL CONFIGURATIONS
+# ============================================================================
+
+
+@dataclass
+class ModelConfig:
+    """Benchmark configuration for a single-chip SDPA suite (WAN, MLA, ...)."""
+
+    name: str
+    nhq: int
+    nkv: int  # 1 for MLA/MQA; nhq for standard MHA
+    seq_len: int
+    d_q: int  # Q head dim
+    d_k: int  # K head dim (must equal d_q: QK^T matmul constraint). Kept for parity with ring_joint_sdpa.
+    d_v: int  # V head dim (may differ from d_q/d_k for MLA)
+    is_causal: bool
+    q_dtype: ttnn.DataType
+    kv_dtype: ttnn.DataType
+
+    # Chunk-size sweep (cross-product is per-model)
+    q_chunk_sizes: List[int]
+    k_chunk_sizes: List[int]
+
+    # Ring-iter single-chip proxy (see sdpa_config.hpp). All non-"none" cases enable flat
+    # B*NH*q_num_chunks work distribution across the full programmed grid.
+    # "none" → hierarchical (default).
+    # "diag" → flat + causal. Mirrors ring iter 0 per-device work (requires is_causal=True).
+    # "up"   → flat + non-causal. K-loop halved (proxy of ring_index > ring_id).
+    # "down" → flat + non-causal. Only the heavy Q half assigned (proxy of ring_index < ring_id).
+    ring_proxy_case: str = "none"
+
+
+def generate_model_configs() -> Dict[str, ModelConfig]:
+    """Single-chip suites sized to match per-device work on Galaxy/QB."""
+    configs = [
+        # WAN 2.2 — 1xGalaxy analog (single-chip seq = per-device seq on Galaxy)
+        ModelConfig(
+            name="wan2_2_1xGLX_analog",
+            nhq=10,
+            nkv=10,
+            seq_len=9472,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[224, 256, 288],
+            k_chunk_sizes=[128, 256, 512],
+        ),
+        # WAN 2.2 — 4xGalaxy analog
+        ModelConfig(
+            name="wan2_2_4xGLX_analog",
+            nhq=10,
+            nkv=10,
+            seq_len=2368,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[224, 256, 288],
+            k_chunk_sizes=[128, 256, 512],
+        ),
+        # DeepSeek MLA 100K — replicates ring_joint_sdpa ring iter 0 per-device work.
+        # At iter 0 for causal+balanced: causality=true, balancing=false, iter_num_kv_chunks
+        # is not halved — i.e. plain causal SDPA on local Q/K/V. nhq=32 matches Galaxy per-device
+        # head count; grid 11x10 matches Galaxy per-chip SDPA columns.
+        ModelConfig(
+            name="mla_100k_ring_iter_0",
+            nhq=32,
+            nkv=1,
+            seq_len=3200,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],
+            k_chunk_sizes=[160],
+            ring_proxy_case="diag",
+        ),
+        # DeepSeek MLA 128K — same ring iter 0 semantics as the 100K suite, longer local seq.
+        ModelConfig(
+            name="mla_128k_ring_iter_0",
+            nhq=32,
+            nkv=1,
+            seq_len=4096,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[128],
+            k_chunk_sizes=[128],
+            ring_proxy_case="diag",
+        ),
+        # DeepSeek MLA 100K — ring non-diag iter UP proxy. Mirrors iter-0 shape/chunking; the kernel
+        # only walks the lower half of K per Q (k_num_chunks/2), matching the per-device K-iters a
+        # ring iter with ring_index > ring_id performs.
+        ModelConfig(
+            name="mla_100k_ring_iter_up",
+            nhq=32,
+            nkv=1,
+            seq_len=3200,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],
+            k_chunk_sizes=[160],
+            ring_proxy_case="up",
+        ),
+        # DeepSeek MLA 100K — ring non-diag iter DOWN proxy. Only the heavy Q half is assigned
+        # (q_num_chunks/2 slots) and each slot walks the full K length, matching the work a ring
+        # iter with ring_index < ring_id performs via its is_balanced Q-skip.
+        ModelConfig(
+            name="mla_100k_ring_iter_down",
+            nhq=32,
+            nkv=1,
+            seq_len=3200,
+            d_q=576,
+            d_k=576,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            q_chunk_sizes=[160],
+            k_chunk_sizes=[160],
+            ring_proxy_case="down",
+        ),
+    ]
+    return {c.name: c for c in configs}
+
+
+MODEL_CONFIGS = generate_model_configs()
+
+
+def get_test_case_id(config: ModelConfig, q_chunk_size: int, k_chunk_size: int) -> str:
+    return f"{config.name}-q{q_chunk_size}-k{k_chunk_size}"
+
+
+def generate_test_configs(model_configs: Dict[str, ModelConfig]):
+    """Build flat (config_tuple, id) list for parametrize across all suites."""
+    configs = []
+    config_ids = []
+    for model in model_configs.values():
+        for q_chunk, k_chunk in product(model.q_chunk_sizes, model.k_chunk_sizes):
+            assert model.d_k == model.d_q, (
+                f"QK^T requires d_q == d_k; got d_q={model.d_q}, d_k={model.d_k} " f"in model {model.name}"
+            )
+            configs.append(
+                (
+                    BATCH_SIZE,
+                    model.nhq,
+                    model.nkv,
+                    model.seq_len,
+                    model.d_q,
+                    model.d_k,
+                    model.d_v,
+                    q_chunk,
+                    k_chunk,
+                    model.is_causal,
+                    model.q_dtype,
+                    model.kv_dtype,
+                    model.ring_proxy_case,
+                )
+            )
+            config_ids.append(get_test_case_id(model, q_chunk, k_chunk))
+    return configs, config_ids
+
+
+TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MODEL_CONFIGS)
+TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
 
 
 def fa_rand(*shape):
@@ -25,34 +241,58 @@ def is_watcher_enabled():
     return os.environ.get("TT_METAL_WATCHER") is not None
 
 
-def run_sdpa_noncausal(
+def _build_tt_qkv(device, Q, K, V, q_dtype, kv_dtype):
+    tt_Q = ttnn.from_torch(Q, dtype=q_dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    return tt_Q, tt_K, tt_V
+
+
+def _torch_reference(Q, K, V, nhq, nkv, is_causal):
+    """Expand K/V to match Q heads (GQA/MQA), then run torch SDPA."""
+    if nkv != nhq:
+        assert nhq % nkv == 0
+        K = K.repeat_interleave(nhq // nkv, dim=1)
+        V = V.repeat_interleave(nhq // nkv, dim=1)
+    return torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
+
+
+# ============================================================================
+# CORE RUNNERS
+# ============================================================================
+
+
+def run_sdpa(
     device,
     b,
-    nh,
+    nhq,
     nkv,
     sq,
-    d,
+    d_q,
+    d_k,
+    d_v,
     q_chunk_size,
     k_chunk_size,
-    dtype,
-    sk=None,
-    pcc_threshold=0.9998,
+    is_causal,
+    q_dtype,
+    kv_dtype,
+    ring_proxy_case="none",
+    *,
+    pcc_threshold=0.9997,
     rmse_threshold=None,
     do_check=True,
 ):
-    # Ensure same seed, reproducibility
+    """Single-chip SDPA. Handles MHA (d_q == d_v, nkv == nhq) and MLA (d_v < d_q, nkv == 1)."""
+    assert d_k == d_q, f"QK^T requires d_q == d_k; got d_q={d_q}, d_k={d_k}"
     torch.manual_seed(1234)
-    if sk is None:
-        sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=[11, 10],
+        compute_with_storage_grid_size=SDPA_GRID,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        ring_proxy_case=_ring_proxy_case_enum(ring_proxy_case),
     )
-
-    # BH adaptation: use init_device_compute_kernel_config instead of WormholeComputeKernelConfig
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -61,18 +301,16 @@ def run_sdpa_noncausal(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, sq, d)
-    K = fa_rand(b, nkv, sk, d)
-    V = fa_rand(b, nkv, sk, d)
+    Q = fa_rand(b, nhq, sq, d_q)
+    K = fa_rand(b, nkv, sq, d_k)
+    V = fa_rand(b, nkv, sq, d_v)
 
-    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_Q, tt_K, tt_V = _build_tt_qkv(device, Q, K, V, q_dtype, kv_dtype)
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
         tt_V,
-        is_causal=False,
+        is_causal=is_causal,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
@@ -80,56 +318,60 @@ def run_sdpa_noncausal(
     if not do_check:
         return
 
-    tt_back = ttnn.to_torch(tt_back)
-    # Slice out any tile-padding
-    tt_back = tt_back[:, :, :sq, :]
+    tt_torch = ttnn.to_torch(tt_back)[:, :, :sq, :d_v]
 
-    if nkv > 1 and nkv != nh:
-        assert nh % nkv == 0
-        K = K.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
-        V = V.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
+    if ring_proxy_case == "up":
+        # UP proxy: kernel computes attn(Q, K[:, :, :L/2], V[:, :, :L/2]) over all Q positions.
+        half = sq // 2
+        gt = _torch_reference(Q, K[:, :, :half, :], V[:, :, :half, :], nhq, nkv, is_causal=False)
+        tt_back_cmp = tt_torch
+    elif ring_proxy_case == "down":
+        # DOWN proxy: kernel writes attn(Q[:, :, L/2:], K, V) into the heavy-half Q rows only;
+        # light-half rows of the output are undefined (ring kernel also leaves them untouched).
+        half = sq // 2
+        gt = _torch_reference(Q[:, :, half:, :], K, V, nhq, nkv, is_causal=False)
+        tt_back_cmp = tt_torch[:, :, half:, :]
+    else:
+        gt = _torch_reference(Q, K, V, nhq, nkv, is_causal)
+        tt_back_cmp = tt_torch
 
-    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
-
-    out_pass, out_pcc = comp_pcc(gt, tt_back, pcc_threshold)
+    out_pass, out_pcc = comp_pcc(gt, tt_back_cmp, pcc_threshold)
+    rmse = torch.sqrt(((gt - tt_back_cmp) ** 2).mean()).item()
     logger.debug(f"python vs pytorch: {out_pcc}")
-    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
     logger.debug(f"rmse: {rmse}")
     if rmse_threshold is not None:
         assert rmse < rmse_threshold
-
     assert out_pass
 
 
 def run_sdpa_determinism(
     device,
     b,
-    nh,
+    nhq,
     nkv,
     sq,
-    d,
+    d_q,
+    d_k,
+    d_v,
     q_chunk_size,
     k_chunk_size,
-    dtype,
+    is_causal,
+    q_dtype,
+    kv_dtype,
+    ring_proxy_case="none",
     num_iterations=10,
-    sk=None,
 ):
-    """
-    Run SDPA multiple times with the same inputs and return all outputs.
-    Efficient: creates inputs once and reuses them for all iterations.
-    """
+    """Run SDPA ``num_iterations`` times on the same input and assert bit-exact match."""
+    assert d_k == d_q, f"QK^T requires d_q == d_k; got d_q={d_q}, d_k={d_k}"
     torch.manual_seed(1234)
-    if sk is None:
-        sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=[11, 10],
+        compute_with_storage_grid_size=SDPA_GRID,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        ring_proxy_case=_ring_proxy_case_enum(ring_proxy_case),
     )
-
-    # BH adaptation: use init_device_compute_kernel_config instead of WormholeComputeKernelConfig
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -138,28 +380,27 @@ def run_sdpa_determinism(
         packer_l1_acc=False,
     )
 
-    # Create inputs once
-    Q = fa_rand(b, nh, sq, d)
-    K = fa_rand(b, nkv, sk, d)
-    V = fa_rand(b, nkv, sk, d)
+    Q = fa_rand(b, nhq, sq, d_q)
+    K = fa_rand(b, nkv, sq, d_k)
+    V = fa_rand(b, nkv, sq, d_v)
+    tt_Q, tt_K, tt_V = _build_tt_qkv(device, Q, K, V, q_dtype, kv_dtype)
 
-    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    # DOWN proxy leaves the light-half Q output rows untouched, so their values are determined
+    # by prior DRAM contents at buffer allocation — they can legally differ across iterations.
+    # Compare only the kernel-written rows.
+    light_half = sq // 2 if ring_proxy_case == "down" else 0
 
-    # Run SDPA multiple times and compare each output to the first
     reference = None
     for i in range(num_iterations):
         tt_out = ttnn.transformer.scaled_dot_product_attention(
             tt_Q,
             tt_K,
             tt_V,
-            is_causal=False,
+            is_causal=is_causal,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
-        # Convert to torch and slice out padding
-        torch_out = ttnn.to_torch(tt_out)[:, :, :sq, :]
+        torch_out = ttnn.to_torch(tt_out)[:, :, light_half:sq, :d_v]
         if reference is None:
             reference = torch_out
         elif not torch.equal(reference, torch_out):
@@ -173,63 +414,107 @@ def run_sdpa_determinism(
     logger.info(f"SDPA determinism verified: all {num_iterations} outputs are exactly equal")
 
 
-# WAN 2.2 model shapes for BH
-INPUT_SHAPES = [
-    # batch, num_heads, sequence_length, head_dim
-    [1, 10, 9472, 128],  # WAN 2.2: 1x Galaxy analog (single device seq len)
-    [1, 10, 2368, 128],  # WAN 2.2: 4x Galaxy analog (per-device seq len)
-]
-INPUT_IDS = [
-    "wan2_2_1xGLX_analog",
-    "wan2_2_4xGLX_analog",
-]
+# ============================================================================
+# TESTS
+# ============================================================================
 
-Q_CHUNK_SIZES = [224, 256, 288]
-K_CHUNK_SIZES = [128, 256, 512]
+_PARAMS = "b,nhq,nkv,s,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,q_dtype,kv_dtype,ring_proxy_case"
+
+
+_RING_PROXY_CASE_MAP = {
+    "none": ttnn.RingProxyCase.NONE,
+    "diag": ttnn.RingProxyCase.DIAG,
+    "up": ttnn.RingProxyCase.UP,
+    "down": ttnn.RingProxyCase.DOWN,
+}
+
+
+def _ring_proxy_case_enum(ring_proxy_case: str):
+    if ring_proxy_case not in _RING_PROXY_CASE_MAP:
+        raise ValueError(f"Invalid ring_proxy_case: {ring_proxy_case!r}")
+    return _RING_PROXY_CASE_MAP[ring_proxy_case]
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
-@pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
-)
-def test_sdpa_sweep_perf_impl(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
-    # nkv = nh for non-GQA case
-    run_sdpa_noncausal(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, do_check=False)
+@pytest.mark.parametrize(_PARAMS, TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_sdpa_sweep_perf_impl(
+    device,
+    b,
+    nhq,
+    nkv,
+    s,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    q_dtype,
+    kv_dtype,
+    ring_proxy_case,
+):
+    run_sdpa(
+        device,
+        b,
+        nhq,
+        nkv,
+        s,
+        d_q,
+        d_k,
+        d_v,
+        q_chunk_size,
+        k_chunk_size,
+        is_causal,
+        q_dtype,
+        kv_dtype,
+        ring_proxy_case,
+        do_check=False,
+    )
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
-@pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
-)
-def test_sdpa_accuracy(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
-    """
-    Test SDPA accuracy for the given shapes and chunk size configurations.
-    Verifies PCC > 0.9997 against PyTorch reference.
-    """
-    # nkv = nh for non-GQA case
-    pcc_threshold = 0.9997
-    rmse_threshold = 4e-2
-    run_sdpa_noncausal(
+@pytest.mark.parametrize(_PARAMS, TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_sdpa_accuracy(
+    device,
+    b,
+    nhq,
+    nkv,
+    s,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    q_dtype,
+    kv_dtype,
+    ring_proxy_case,
+):
+    """PCC + RMSE accuracy check against a torch SDPA reference."""
+    # MLA with bfloat8_b K/V needs a looser PCC threshold than bf16 MHA.
+    if kv_dtype == ttnn.bfloat8_b:
+        pcc_threshold = 0.994
+        rmse_threshold = None  # bf8 accumulation noise makes RMSE thresholds brittle
+    else:
+        pcc_threshold = 0.9997
+        rmse_threshold = 4e-2
+
+    run_sdpa(
         device,
         b,
-        nh,
-        nh,
+        nhq,
+        nkv,
         s,
-        d,
+        d_q,
+        d_k,
+        d_v,
         q_chunk_size,
         k_chunk_size,
-        dtype,
+        is_causal,
+        q_dtype,
+        kv_dtype,
+        ring_proxy_case,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
         do_check=True,
@@ -237,67 +522,83 @@ def test_sdpa_accuracy(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
 
 
 # === TEST 3: DETERMINISM VERIFICATION ===
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
-@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
-@pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
-)
-def test_sdpa_determinism(device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
-    """
-    Test SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
-    """
-    num_iterations = 10
-    run_sdpa_determinism(device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, num_iterations=num_iterations)
-
-
-from tests.nightly.sdpa_perf_utils import (
-    post_process_ops_log,
-    compute_cores_used,
-    compute_math_utilization,
-)
-
-
-def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_count):
-    """Single-chip SDPA utilization (local_seq == total_seq, arch=blackhole)."""
-    return compute_math_utilization(seqlen, seqlen, head_dim, head_dim, num_heads, duration_ns, core_count)
+@pytest.mark.parametrize(_PARAMS, TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_sdpa_determinism(
+    device,
+    b,
+    nhq,
+    nkv,
+    s,
+    d_q,
+    d_k,
+    d_v,
+    q_chunk_size,
+    k_chunk_size,
+    is_causal,
+    q_dtype,
+    kv_dtype,
+    ring_proxy_case,
+):
+    run_sdpa_determinism(
+        device,
+        b,
+        nhq,
+        nkv,
+        s,
+        d_q,
+        d_k,
+        d_v,
+        q_chunk_size,
+        k_chunk_size,
+        is_causal,
+        q_dtype,
+        kv_dtype,
+        ring_proxy_case,
+        num_iterations=10,
+    )
 
 
 # === TEST 4: PERFORMANCE TABLE (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
-@pytest.mark.parametrize(
-    "b, nh, s, d",
-    INPUT_SHAPES,
-    ids=INPUT_IDS,
-)
-def test_sdpa_create_perf_table(b, nh, s, d):
+@pytest.mark.parametrize("model_name", TEST_CONFIG_MODELS)
+def test_sdpa_create_perf_table(model_name):
     """
-    Sweep chunk sizes for a given SDPA shape and print a performance table.
-    Shows the best chunk size configurations ranked by kernel duration.
-    Skipped on CI - run locally with tracy profiler.
+    Sweep a model's chunk-size configurations and print a ranked performance table.
+    Skipped on CI — run locally with the tracy profiler.
     """
     from tracy.process_model_log import run_device_profiler
 
-    # NOTE: Hardcoded for Blackhole (11x10 grid = 110 cores)
-    # Cannot query device here as it causes TLB resource contention with subprocess tests
-    num_cores = 110
+    model = MODEL_CONFIGS[model_name]
+
+    # Collect the parametrize ids that belong to this model.
+    sweep = [(cfg, cfg_id) for cfg, cfg_id in zip(TEST_CONFIGS, TEST_CONFIG_IDS) if cfg_id.startswith(model_name + "-")]
 
     subdir = "ttnn_sdpa_performance"
     perf_results = []
 
-    for q_chunk_size, k_chunk_size in product(Q_CHUNK_SIZES, K_CHUNK_SIZES):
+    for config, config_id in sweep:
+        (
+            b,
+            nhq,
+            nkv,
+            s,
+            d_q,
+            d_k,
+            d_v,
+            q_chunk_size,
+            k_chunk_size,
+            is_causal,
+            q_dtype,
+            kv_dtype,
+            ring_proxy_case,
+        ) = config
+        flatten_work = ring_proxy_case != "none"
         float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
         cols = ["ATTRIBUTES"]
-
-        # Build the test command for this specific configuration
-        test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16"
-        shape_id = INPUT_IDS[INPUT_SHAPES.index([b, nh, s, d])]
         command = (
             f"pytest tests/nightly/blackhole/sdpa/"
             f"test_scaled_dot_product_attention_sprint.py::test_sdpa_sweep_perf_impl"
-            f"[{shape_id}-{test_id}]"
+            f"[{config_id}]"
         )
 
         try:
@@ -305,39 +606,59 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             r = post_process_ops_log(
                 subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
             )
-
             core_count = int(r["CORE COUNT"][0])
             duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
 
-            # Compute parallelization factors
-            B = 1
-            batch_parallel = min(B, num_cores)
-            nh_parallel = min(num_cores // batch_parallel, nh)
-            max_q_parallel = num_cores // (batch_parallel * nh_parallel)
-
-            cores_used = compute_cores_used(s, q_chunk_size, compute_cores=num_cores, num_heads=nh)
-            cores_idle = num_cores - cores_used
-            core_util_pct = (cores_used * 100.0) / num_cores
-
-            # Compute iterations per core
             k_num_chunks = math.ceil(s / k_chunk_size)
             q_num_chunks = math.ceil(s / q_chunk_size)
-            q_per_core = math.ceil(q_num_chunks / max_q_parallel)
-            iters_per_core = q_per_core * k_num_chunks
+            # Ring proxy: DOWN halves assigned Q slots; UP halves the K-loop per slot. Perf accounting
+            # below mirrors what the kernel actually walks.
+            q_slots_factor = 0.5 if ring_proxy_case == "down" else 1.0
+            k_iters_factor = 0.5 if ring_proxy_case == "up" else 1.0
 
-            # Compute padding waste
+            if flatten_work:
+                # Flat work spreads B*NH*q_num_chunks evenly across the full programmed grid,
+                # so every core does real work — no hierarchical batch × heads × q_parallel idle tail.
+                total_q_slots_work = int(b * nhq * q_num_chunks * q_slots_factor)
+                q_per_core = math.ceil(total_q_slots_work / NUM_CORES)
+                cores_used = NUM_CORES
+                total_q_slots = q_per_core * NUM_CORES
+                wasted_q_slots = max(0, total_q_slots - total_q_slots_work)
+            else:
+                # Hierarchical distribution: batch × heads × q_chunks — cores beyond the product are idle.
+                batch_parallel = min(b, NUM_CORES)
+                nh_parallel = min(NUM_CORES // batch_parallel, nhq)
+                max_q_parallel = NUM_CORES // (batch_parallel * nh_parallel)
+                q_per_core = math.ceil(q_num_chunks / max_q_parallel)
+                cores_used = batch_parallel * nh_parallel * max_q_parallel
+                total_q_slots = max_q_parallel * q_per_core
+                wasted_q_slots = max(0, total_q_slots - q_num_chunks)
+
+            iters_per_core = int(q_per_core * k_num_chunks * k_iters_factor)
+            cores_idle = NUM_CORES - cores_used
+            core_util_pct = (cores_used * 100.0) / NUM_CORES
+
             q_padded_total = q_num_chunks * q_chunk_size
             k_padded_total = k_num_chunks * k_chunk_size
             actual_work = s * s
             padded_work = q_padded_total * k_padded_total
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
 
-            # Compute work distribution (slot) waste
-            total_q_slots = max_q_parallel * q_per_core
-            wasted_q_slots = total_q_slots - q_num_chunks
             slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
 
-            utilization = compute_sdpa_utilization(s, d, nh, duration_ns, core_count)
+            # Math util uses distinct d_q/d_v and respects causal masking. Denominator uses the
+            # full programmed grid (NUM_CORES), matching what the op is actually scheduled on.
+            # Ring proxy UP/DOWN: kernel walks a rectangle half the L² causal one. Pass the effective
+            # (sq, sk) with is_causal=False — numerator FLOPs land on the same count as iter-0 causal.
+            if ring_proxy_case == "up":
+                mm_sq, mm_sk, mm_causal = s, s // 2, False
+            elif ring_proxy_case == "down":
+                mm_sq, mm_sk, mm_causal = s // 2, s, False
+            else:
+                mm_sq, mm_sk, mm_causal = s, s, is_causal
+            utilization = compute_math_utilization(
+                mm_sq, mm_sk, d_q, d_v, nhq, duration_ns, NUM_CORES, is_causal=mm_causal
+            )
 
             perf_results.append(
                 {
@@ -356,32 +677,39 @@ def test_sdpa_create_perf_table(b, nh, s, d):
                 }
             )
             logger.info(
-                f"q={q_chunk_size}, k={k_chunk_size}: {duration_ns/1e6:.3f} ms, "
-                f"util={utilization:.1f}%, cores={cores_used}/{num_cores} ({core_util_pct:.0f}%), "
+                f"[{model_name}] q={q_chunk_size}, k={k_chunk_size}: {duration_ns/1e6:.3f} ms, "
+                f"util={utilization:.1f}%, cores={cores_used}/{NUM_CORES} ({core_util_pct:.0f}%), "
                 f"iters/core={iters_per_core}"
             )
 
         except Exception as e:
             if isinstance(e, KeyboardInterrupt):
                 raise
-            logger.error(f"Error running SDPA with q_chunk_size={q_chunk_size}, k_chunk_size={k_chunk_size}: {e}")
-            perf_results.append(
-                {
-                    "q_chunk_size": q_chunk_size,
-                    "k_chunk_size": k_chunk_size,
-                    "duration_ns": None,
-                }
+            logger.error(
+                f"Error running [{model_name}] with q_chunk_size={q_chunk_size}, k_chunk_size={k_chunk_size}: {e}"
             )
+            perf_results.append({"q_chunk_size": q_chunk_size, "k_chunk_size": k_chunk_size, "duration_ns": None})
 
-    # Sort by duration (best first)
     valid_results = [r for r in perf_results if r["duration_ns"] is not None]
     valid_results.sort(key=lambda x: x["duration_ns"])
 
-    mm_flops = 4 * s * s * d * nh
+    # Use the MLA config's first chunk sizes for the model summary — b/nhq/s/d_q/d_v are constant per model.
+    # Ring proxy cases: the walked rectangle is half of the L² one (same FLOPs as iter-0 causal).
+    if model.ring_proxy_case == "up":
+        summary_sq, summary_sk, summary_causal = model.seq_len, model.seq_len // 2, False
+    elif model.ring_proxy_case == "down":
+        summary_sq, summary_sk, summary_causal = model.seq_len // 2, model.seq_len, False
+    else:
+        summary_sq, summary_sk, summary_causal = model.seq_len, model.seq_len, model.is_causal
+    mm_flops = compute_sdpa_flops(summary_sq, summary_sk, model.d_q, model.d_v, model.nhq, summary_causal)
 
-    # Print summary table
     print(f"\n{'='*170}")
-    print(f"SDPA Performance Sweep: b={b}, nh={nh}, s={s}, d={d}")
+    print(
+        f"SDPA Performance Sweep ({model_name.upper()}): "
+        f"b={BATCH_SIZE}, nhq={model.nhq}, nkv={model.nkv}, s={model.seq_len}, "
+        f"d_q={model.d_q}, d_v={model.d_v}, causal={model.is_causal}, "
+        f"ring_proxy_case={model.ring_proxy_case}"
+    )
     print(f"MM FLOPs: {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
     print(f"{'='*170}")
     header = "| Rank | q_chunk | k_chunk | Duration (ms) | Cores Used | Cores Idle | Core Util | Iters/Core | Pad Waste | Slot Waste | Math Util |"
@@ -405,10 +733,9 @@ def test_sdpa_create_perf_table(b, nh, s, d):
     if valid_results:
         best = valid_results[0]
         print(
-            f"\nBest configuration: q_chunk_size={best['q_chunk_size']}, "
-            f"k_chunk_size={best['k_chunk_size']} "
+            f"\nBest configuration: q_chunk_size={best['q_chunk_size']}, k_chunk_size={best['k_chunk_size']} "
             f"({best['duration_ms']:.3f} ms, {best['utilization']:.1f}% math util, "
-            f"{best['cores_used']}/{num_cores} cores, {best['iters_per_core']} iters/core, "
+            f"{best['cores_used']}/{NUM_CORES} cores, {best['iters_per_core']} iters/core, "
             f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
         )
     print(f"{'='*170}\n")

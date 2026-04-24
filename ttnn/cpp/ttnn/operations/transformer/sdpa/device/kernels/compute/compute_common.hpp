@@ -1667,7 +1667,9 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool flatten_work = false,
+    RingProxyMode proxy_mode = RingProxyMode::None>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1727,7 +1729,8 @@ void sdpa_inner_loop(
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const bool is_chain_participant = false) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1738,17 +1741,23 @@ void sdpa_inner_loop(
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
             uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
+            if constexpr (flatten_work) {
+                // Flat work: q_iter is a global index into B*NQH*q_num_effective. Reader/writer do
+                // the (nb, nq, q_chunk) decomposition; compute only needs q_chunk.
+                q_chunk = proxy_q_chunk(q_iter, q_num_chunks, use_zigzag_balancing, proxy_mode);
             } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
+#if defined BALANCED_Q_PARALLEL
+                uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
+                if (q_iter < q_chunk_div_2) {             // bottom half
+                    q_chunk = local_q_start + q_iter;
+                } else {
+                    uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
+                    q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
+                }
 #else
-            q_chunk = local_q_start + q_iter;
+                q_chunk = local_q_start + q_iter;
 #endif
+            }
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -1756,6 +1765,9 @@ void sdpa_inner_loop(
             q_start_tile = q_chunk * Sq_chunk_t;
             if (is_causal) {
                 q_high_tile = q_start_tile + Sq_chunk_t;
+                // Chain participants loop full K for CB sync; this bound lets them pop & skip past
+                // the diagonal instead of doing masked-out matmul/softmax cycles.
+                causal_k_limit = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
             } else {
                 q_high_tile = Skt;
             }
@@ -1781,8 +1793,15 @@ void sdpa_inner_loop(
 
         uint32_t k_chunk_end;
         if constexpr (sdpa_type == STANDARD) {
-            // loop while k_low < q_high => (k_chunk * Sk_chunk_t) < q_high_tile.
-            k_chunk_end = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
+            // UP proxy halves the K loop. Chain cores walk the full K range so reader + writer +
+            // compute stay in lockstep; the lightweight causal mask zeroes columns past q_high.
+            if constexpr (proxy_mode == RingProxyMode::Up) {
+                k_chunk_end = iter_k_chunk_end / 2;
+            } else if (is_chain_participant) {
+                k_chunk_end = iter_k_chunk_end;
+            } else {
+                k_chunk_end = (q_high_tile + Sk_chunk_t - 1) / Sk_chunk_t;
+            }
         } else {  // RING or JOINT.
             k_chunk_end = iter_k_chunk_end;
         }
@@ -1802,7 +1821,8 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            if (sdpa_type == RING && k_chunk >= causal_k_limit && is_causal) {
+            if (is_causal && k_chunk >= causal_k_limit &&
+                (sdpa_type == RING || (sdpa_type == STANDARD && is_chain_participant))) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
@@ -2151,7 +2171,9 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool flatten_work = false,
+    RingProxyMode proxy_mode = RingProxyMode::None>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2190,7 +2212,9 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false,
+    const bool is_chain_participant = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2209,7 +2233,9 @@ void sdpa_standard(
         is_chunked,
         scale_fp32,
         sliding_window_size,
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        flatten_work,
+        proxy_mode>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2265,7 +2291,11 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        /*is_balanced=*/false,
+        use_zigzag_balancing,
+        /*is_last_ring_iter=*/true,
+        is_chain_participant);
 }
 
 /**

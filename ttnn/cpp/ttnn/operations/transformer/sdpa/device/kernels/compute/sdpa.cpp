@@ -48,6 +48,9 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(30) == 1;
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(31);
     constexpr bool uniform_dataformat = get_compile_time_arg_val(32) == 1;
+    constexpr RingProxyMode proxy_mode = static_cast<RingProxyMode>(get_compile_time_arg_val(33));
+    constexpr bool flatten_work = proxy_uses_flat_work(proxy_mode);
+    constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -56,14 +59,28 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
     const uint32_t num_phases = get_arg_val<uint32_t>(7);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(8);
     uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(9);
+    // Tail args (phase-2, flat-work, chain) are read in the order the host emits them; each pair
+    // is gated by the matching host predicate so slots never collide.
+    uint32_t argidx = 10;
     uint32_t chunked_q_chunk_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(10);
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
+
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    if constexpr (flatten_work) {
+        global_q_start = get_arg_val<uint32_t>(argidx++);
+        global_q_count = get_arg_val<uint32_t>(argidx++);
+    }
+
+    uint32_t is_chain_participant = 0;
+#if defined(SDPA_KV_CHAIN_ENABLED)
+    is_chain_participant = get_arg_val<uint32_t>(argidx++);
+#endif
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -166,69 +183,136 @@ void kernel_main() {
             cb_wait_front(cb_mask_in, 2);
         }
 
-        for (uint32_t phase = 0; phase < num_phases; ++phase) {
-            if (phase == 0) {
-                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
-            } else {
-                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
-            }
+        // Flat work folds (nb, nq, q_iter) into one global range; reader/writer do the full
+        // (nb, nq, q_chunk) decomposition, compute only needs q_chunk via proxy_q_chunk.
+        const uint32_t iter_q_start = flatten_work ? global_q_start : 0;
+        const uint32_t iter_q_end = flatten_work ? global_q_start + global_q_count : q_chunks_per_core;
+        const uint32_t sdpa_local_q_start = flatten_work ? 0u : local_q_start;
 
-            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                    sdpa_standard<
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        cb_attention_sink,
-                        Sq_chunk_t,
-                        Sk_chunk_t,
-                        DHt,
-                        vDHt,
-                        use_attention_sink,
-                        is_causal,
-                        use_provided_mask,
-                        use_padded_mask,
-                        is_chunked,
-                        scale_fp32,
-                        sliding_window_size,
-                        use_lightweight_causal_mask>(
-                        Skt,
-                        qk_in0_block_w,
-                        qk_subblock_w,
-                        qk_subblock_h,
-                        qk_in0_num_subblocks,
-                        qk_in1_num_subblocks,
-                        qk_num_blocks,
-                        out_in0_block_w,
-                        out_subblock_w,
-                        out_subblock_h,
-                        out_in0_num_subblocks,
-                        out_in1_num_subblocks,
-                        out_num_blocks,
-                        0,                  // iter_q_start
-                        q_chunks_per_core,  // iter_q_end
-                        q_num_chunks,
-                        local_q_start,
-                        chunked_q_chunk_offset,
-                        k_num_chunks,
-                        q_chunk_tiles,
-                        k_chunk_tiles,
-                        v_chunk_tiles,
-                        qk_chunk_tiles,
-                        out_chunk_tiles,
-                        cb_q_in,
-                        cb_k_in,
-                        cb_v_in,
-                        cb_mask_in,
-                        cb_col_identity,
-                        cb_out_im_A,
-                        cb_out_im_B,
-                        cb_max_A,
-                        cb_max_B,
-                        cb_sum_A,
-                        cb_sum_B,
-                        cb_exp_max_diff,
-                        cb_out,
-                        lw_mask);
+        for (uint32_t phase = 0; phase < num_phases; ++phase) {
+            chunked_q_chunk_offset = (phase == 0) ? chunked_q_chunk_offset_phase_1 : chunked_q_chunk_offset_phase_2;
+
+            if constexpr (flatten_work) {
+                sdpa_standard<
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_attention_sink,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    vDHt,
+                    use_attention_sink,
+                    is_causal,
+                    use_provided_mask,
+                    use_padded_mask,
+                    is_chunked,
+                    scale_fp32,
+                    sliding_window_size,
+                    use_lightweight_causal_mask,
+                    flatten_work,
+                    proxy_mode>(
+                    Skt,
+                    qk_in0_block_w,
+                    qk_subblock_w,
+                    qk_subblock_h,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_num_blocks,
+                    out_in0_block_w,
+                    out_subblock_w,
+                    out_subblock_h,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_num_blocks,
+                    iter_q_start,
+                    iter_q_end,
+                    q_num_chunks,
+                    sdpa_local_q_start,  // unused under flatten_work; kept for signature parity
+                    chunked_q_chunk_offset,
+                    k_num_chunks,
+                    q_chunk_tiles,
+                    k_chunk_tiles,
+                    v_chunk_tiles,
+                    qk_chunk_tiles,
+                    out_chunk_tiles,
+                    cb_q_in,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in,
+                    cb_col_identity,
+                    cb_out_im_A,
+                    cb_out_im_B,
+                    cb_max_A,
+                    cb_max_B,
+                    cb_sum_A,
+                    cb_sum_B,
+                    cb_exp_max_diff,
+                    cb_out,
+                    lw_mask,
+                    /*use_zigzag_balancing=*/flat_use_zigzag,
+                    /*is_chain_participant=*/is_chain_participant != 0);
+            } else {
+                for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                    for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                        sdpa_standard<
+                            cb_qk_im,
+                            cb_identity_scale_in,
+                            cb_attention_sink,
+                            Sq_chunk_t,
+                            Sk_chunk_t,
+                            DHt,
+                            vDHt,
+                            use_attention_sink,
+                            is_causal,
+                            use_provided_mask,
+                            use_padded_mask,
+                            is_chunked,
+                            scale_fp32,
+                            sliding_window_size,
+                            use_lightweight_causal_mask,
+                            flatten_work,
+                            proxy_mode>(
+                            Skt,
+                            qk_in0_block_w,
+                            qk_subblock_w,
+                            qk_subblock_h,
+                            qk_in0_num_subblocks,
+                            qk_in1_num_subblocks,
+                            qk_num_blocks,
+                            out_in0_block_w,
+                            out_subblock_w,
+                            out_subblock_h,
+                            out_in0_num_subblocks,
+                            out_in1_num_subblocks,
+                            out_num_blocks,
+                            iter_q_start,
+                            iter_q_end,
+                            q_num_chunks,
+                            sdpa_local_q_start,
+                            chunked_q_chunk_offset,
+                            k_num_chunks,
+                            q_chunk_tiles,
+                            k_chunk_tiles,
+                            v_chunk_tiles,
+                            qk_chunk_tiles,
+                            out_chunk_tiles,
+                            cb_q_in,
+                            cb_k_in,
+                            cb_v_in,
+                            cb_mask_in,
+                            cb_col_identity,
+                            cb_out_im_A,
+                            cb_out_im_B,
+                            cb_max_A,
+                            cb_max_B,
+                            cb_sum_A,
+                            cb_sum_B,
+                            cb_exp_max_diff,
+                            cb_out,
+                            lw_mask,
+                            /*use_zigzag_balancing=*/flat_use_zigzag,
+                            /*is_chain_participant=*/is_chain_participant != 0);
+                    }
                 }
             }
         }

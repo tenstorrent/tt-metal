@@ -31,6 +31,10 @@ void kernel_main() {
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
 
     constexpr auto out_args = TensorAccessorArgs<21>();
+    constexpr RingProxyMode proxy_mode =
+        static_cast<RingProxyMode>(get_compile_time_arg_val(out_args.next_compile_time_args_offset()));
+    constexpr bool flatten_work = proxy_uses_flat_work(proxy_mode);
+    constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -44,11 +48,19 @@ void kernel_main() {
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
     uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
     const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
+    uint32_t argidx = 12;
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(12);
-        write_offset_phase_2 = get_arg_val<uint32_t>(13);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(argidx++);
+        write_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
+    }
+
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    if constexpr (flatten_work) {
+        global_q_start = get_arg_val<uint32_t>(argidx++);
+        global_q_count = get_arg_val<uint32_t>(argidx++);
     }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
@@ -109,68 +121,61 @@ void kernel_main() {
         }
     }
 
-    uint32_t chunk_start_t_in_q_chunks = 0;
-    uint32_t write_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
-        if (phase == 0) {
-            chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_1;
-            write_offset = write_offset_phase_1;
-        } else {
-            chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_2;
-            write_offset = write_offset_phase_2;
-        }
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                    uint32_t q_chunk;
+        const uint32_t chunk_start_t_in_q_chunks =
+            (phase == 0) ? chunk_start_t_in_q_chunks_phase_1 : chunk_start_t_in_q_chunks_phase_2;
+        const uint32_t write_offset = (phase == 0) ? write_offset_phase_1 : write_offset_phase_2;
+
+        // Walk the (nb, nq, q_chunk) work items this core owns. Flat proxy mode decodes each
+        // slot from a single linear index; hierarchical mode linearises its (nb, nq, q_iter)
+        // nested iteration into the same loop so the mask-gen + write body appears once.
+        const uint32_t heads_local = local_nh_end - local_nh_start;
+        const uint32_t total_q_iters =
+            flatten_work ? global_q_count : (local_batch_end - local_batch_start) * heads_local * q_chunks_per_core;
+
+        for (uint32_t gq = 0; gq < total_q_iters; ++gq) {
+            uint32_t nb, nq, q_chunk;
+            if constexpr (flatten_work) {
+                const auto w =
+                    decompose_flat_q_index(global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, proxy_mode);
+                nb = w.nb;
+                nq = w.nq;
+                q_chunk = w.q_chunk;
+            } else {
+                const auto w = decompose_hierarchical_index(gq, heads_local, q_chunks_per_core);
+                nb = local_batch_start + w.nb_idx;
+                nq = local_nh_start + w.nq_idx;
 #if defined BALANCED_Q_PARALLEL
-                    uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                    if (q_iter < q_chunk_div_2) {  // bottom half
-                        q_chunk = local_q_start + q_iter;
-                    } else {
-                        uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                    }
+                constexpr bool kBalancedQParallel = true;
 #else
-                    q_chunk = local_q_start + q_iter;
+                constexpr bool kBalancedQParallel = false;
 #endif
-
-                    // Generate mask only when user didn't provide one.
-                    // Lightweight path already has a single -inf tile fronted — skip generate_mask.
-                    if constexpr (!use_provided_mask && !use_lightweight_mask) {
-                        generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
-                            Sq_chunk_t,
-                            Sk_chunk_t,
-                            q_chunk,
-                            chunk_start_t_in_q_chunks,
-                            true,
-                            false,
-                            unpadded_Sk,
-                            0,
-                            is_causal);
-                    }
-
-                    // Wait for compute to deliver output chunk
-                    /*
-                      Determine how many rows of OUT will be written. Both start and end rows are
-                      capped by valid_Sqt, since Sq padding is independent of Sk padding.
-                    */
-                    const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
-                    const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
-                    const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-                    uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-                    write_block(
-                        out_writer,
-                        cb_out,
-                        out_chunk_tiles,
-                        out_row_tile_count,
-                        vDHt,
-                        out_tile_id,
-                        tile_bytes,
-                        barrier_threshold);
-                }
+                q_chunk =
+                    balanced_q_chunk(w.q_iter, local_q_start, q_chunks_per_core, q_num_chunks, kBalancedQParallel);
             }
+
+            // Generate mask only when user didn't provide one.
+            // Lightweight path already has a single -inf tile fronted — skip generate_mask.
+            if constexpr (!use_provided_mask && !use_lightweight_mask) {
+                generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
+                    Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0, is_causal);
+            }
+
+            // Wait for compute to deliver output chunk. Both start and end rows are capped by valid_Sqt,
+            // since Sq padding is independent of Sk padding.
+            const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+            const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
+            const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
+            const uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            write_block(
+                out_writer,
+                cb_out,
+                out_chunk_tiles,
+                out_row_tile_count,
+                vDHt,
+                out_tile_id,
+                tile_bytes,
+                barrier_threshold);
         }
     }
 }

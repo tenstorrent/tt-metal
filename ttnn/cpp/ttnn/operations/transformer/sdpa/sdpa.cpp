@@ -34,6 +34,12 @@ ttnn::Tensor scaled_dot_product_attention(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
+    // d_v < d_q routes to MLA; equal dims stay on the non-MLA path; d_v > d_q falls through so
+    // validation emits the clearer "K and V hidden dim must match" error.
+    const uint32_t d_q = input_tensor_q.logical_shape()[-1];
+    const uint32_t d_v = input_tensor_v.logical_shape()[-1];
+    const bool use_mla = d_v < d_q;
+
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -46,8 +52,8 @@ ttnn::Tensor scaled_dot_product_attention(
         sliding_window_size,
         std::nullopt,  // chunk_start_idx
         std::nullopt,  // chunk_start_idx_tensor
-        false,         // use_mla
-        std::nullopt,  // head_dim_v
+        use_mla,
+        use_mla ? std::optional<uint32_t>(d_v) : std::nullopt,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val);

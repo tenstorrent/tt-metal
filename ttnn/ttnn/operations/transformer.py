@@ -7,6 +7,7 @@ from typing import Optional
 import ttnn
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
+RingProxyCase = ttnn._ttnn.operations.transformer.RingProxyCase
 
 
 def _golden_function(

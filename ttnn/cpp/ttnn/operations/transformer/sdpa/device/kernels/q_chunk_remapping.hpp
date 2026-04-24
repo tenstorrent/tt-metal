@@ -57,3 +57,78 @@ FORCE_INLINE uint32_t remap_q_index(uint32_t linear_index, uint32_t num_q_chunks
     }
     return linear_index;
 }
+
+// Single-chip ring-iter proxy. Values mirror ttnn::operations::transformer::RingProxyCase and
+// are passed from the host as a compile-time arg. None => hierarchical (no flat work).
+enum class RingProxyMode : uint8_t { None = 0, Diag = 1, Up = 2, Down = 3 };
+
+FORCE_INLINE constexpr bool proxy_uses_flat_work(RingProxyMode m) { return m != RingProxyMode::None; }
+
+struct FlatQIndex {
+    uint32_t nb;
+    uint32_t nq;
+    uint32_t q_chunk;
+};
+
+// Effective Q chunk count + offset for a given proxy mode. Down halves the Q space and points at
+// the heavy half; Diag / Up / None keep the full range at offset 0.
+struct ProxyQRange {
+    uint32_t q_num_effective;
+    uint32_t q_chunk_offset;
+};
+
+FORCE_INLINE constexpr ProxyQRange proxy_q_range(uint32_t q_num_chunks, RingProxyMode proxy) {
+    if (proxy == RingProxyMode::Down) {
+        return {q_num_chunks / 2, q_num_chunks / 2};
+    }
+    return {q_num_chunks, 0};
+}
+
+// Decompose a flat index in [0, B*NQH*q_num_effective) into (nb, nq, q_chunk). q_chunk is shifted
+// into the physical Q range (so Down returns the heavy half directly).
+FORCE_INLINE FlatQIndex decompose_flat_q_index(
+    uint32_t linear_index, uint32_t q_num_chunks, uint32_t NQH, bool use_zigzag, RingProxyMode proxy) {
+    const ProxyQRange range = proxy_q_range(q_num_chunks, proxy);
+    const uint32_t flat = remap_q_index(linear_index, range.q_num_effective, use_zigzag);
+    return {
+        /*nb=*/flat / (NQH * range.q_num_effective),
+        /*nq=*/(flat / range.q_num_effective) % NQH,
+        /*q_chunk=*/flat % range.q_num_effective + range.q_chunk_offset,
+    };
+}
+
+// Compute-side q_chunk lookup. Compute doesn't need the (nb, nq) split — reader/writer do.
+FORCE_INLINE uint32_t proxy_q_chunk(uint32_t q_iter, uint32_t q_num_chunks, bool use_zigzag, RingProxyMode proxy) {
+    const ProxyQRange range = proxy_q_range(q_num_chunks, proxy);
+    return remap_q_index(q_iter, range.q_num_effective, use_zigzag) % range.q_num_effective + range.q_chunk_offset;
+}
+
+// Hierarchical iteration: decompose a linear gq ∈ [0, B_local * H_local * Q_per_core) into
+// (nb_idx, nq_idx, q_iter) in lexicographic order (nb outer, nq middle, q_iter inner).
+struct HierarchicalIndex {
+    uint32_t nb_idx;
+    uint32_t nq_idx;
+    uint32_t q_iter;
+};
+FORCE_INLINE HierarchicalIndex
+decompose_hierarchical_index(uint32_t gq, uint32_t heads_local, uint32_t q_chunks_per_core) {
+    return {
+        /*nb_idx=*/gq / (q_chunks_per_core * heads_local),
+        /*nq_idx=*/(gq / q_chunks_per_core) % heads_local,
+        /*q_iter=*/gq % q_chunks_per_core,
+    };
+}
+
+// Pick the q_chunk for a given q_iter slot. BALANCED_Q_PARALLEL (causal + even chunks) interleaves
+// light and heavy halves so cores see even work; plain mode is consecutive.
+FORCE_INLINE uint32_t balanced_q_chunk(
+    uint32_t q_iter, uint32_t local_q_start, uint32_t q_chunks_per_core, uint32_t q_num_chunks, bool balanced) {
+    if (!balanced) {
+        return local_q_start + q_iter;
+    }
+    const uint32_t half = q_chunks_per_core / 2;
+    if (q_iter < half) {
+        return local_q_start + q_iter;  // bottom half: forward from local_q_start
+    }
+    return q_num_chunks - 1 - (local_q_start + (q_iter - half));  // top half: backward from end
+}
