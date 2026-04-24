@@ -24,7 +24,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
@@ -36,6 +36,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
         tensor_args.dtype());
+    validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
 }
 
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
@@ -50,37 +51,12 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             break;
     }
 
-    TensorSpec tensor_spec(
+    return build_reduce_output_tensor_spec(
         output_shape,
-        tt::tt_metal::TensorLayout(
-            operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(Layout::TILE),
-            MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
-
-    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            return tensor_spec.height_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
-
-        auto nd_shard_spec_copy = nd_shard_spec;
-        if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W ||
-            operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
-            nd_shard_spec_copy.shard_shape[-1] = 1;
-        }
-        if ((operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
-             operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) &&
-            nd_shard_spec_copy.shard_shape.rank() > 1) {
-            nd_shard_spec_copy.shard_shape[-2] = 1;
-        }
-        return tensor_spec.sharded(
-            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
-    }
-
-    return tensor_spec;
+        operation_attributes.output_dtype,
+        operation_attributes.output_mem_config,
+        tensor_args.memory_config(),
+        operation_attributes.dim);
 }
 
 ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
