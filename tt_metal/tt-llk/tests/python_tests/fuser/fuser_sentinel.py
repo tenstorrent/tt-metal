@@ -52,7 +52,7 @@ class FuserSentinel:
             input_format=operation.output.data_format,
             output_format=operation.output.data_format,
             is_fp32_dest_acc_en=config.dest_acc,
-            unpacking_to_dest=False,
+            unpacking_to_dest=True,
             chip_arch=config.architecture,
         )
 
