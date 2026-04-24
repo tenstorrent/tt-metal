@@ -294,9 +294,8 @@ def test_multimodal_demo_text(
 
     generator = Generator(model, model_args, mesh_device)
 
-    # With paged ``page_table`` + ``tt_kv_cache``, prefill is allowed to use host
-    # prefill trace when `enable_trace` and `can_enable_trace` match (text-only
-    # rows: ``prefill_text_only_trace``; image rows: untraced e2e path in generator)
+    # With paged ``page_table`` + ``tt_kv_cache``, prefill host trace when
+    # ``enable_trace``, ``can_enable_trace``, and (for images) batch-1 vision e2e trace match.
     logger.info("Warming up model...")
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,

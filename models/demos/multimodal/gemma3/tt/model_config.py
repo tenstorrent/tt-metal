@@ -71,9 +71,9 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
 
-        # Full prefill trace during warmup runs two 27B prefills per seq length and stalls demos. For gemma-3-27b,
-        # warmup uses untraced prefill only to compile kernels; trace records on the first real prefill.
-        self.warmup_prefill_capture_trace = self.base_model_name != "gemma-3-27b"
+        # Prewarm prefill host traces (same path as `model.py`) for all Gemma3 sizes, including 27B — longer
+        # startup than untraced-only warmup, but tracing is enabled for warmup sweeps and vision compile.
+        self.warmup_prefill_capture_trace = True
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
@@ -123,10 +123,9 @@ class ModelArgs(TTModelArgs):
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
-            # gemma-3-27b: text-only prefill tracing (vLLM v1 flow).
-            # Vision prefill cannot be traced because image features vary per request;
-            # TtGemmaModel.prepare_inputs_prefill skips the vision/scatter path when
-            # trace_enabled=True.
+            # gemma-3-27b: host prefill trace for supported padded seq lens. For TtGemmaModel
+            # with images, the vision tower runs before the traced graph; merged activations feed
+            # the same decoder trace as text (batch-1 only; batched+vision stays untraced).
             "gemma-3-27b": {
                 "N150": [128, 1024],
                 "N300": [128, 1024],
