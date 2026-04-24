@@ -9,7 +9,7 @@ import torch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
-    DataCopyType,
+    ApproximationMode,
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
@@ -22,7 +22,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
-    DATA_COPY_TYPE,
+    APPROX_MODE,
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -81,11 +81,12 @@ def generate_trigonometry_combinations(formats_list: List[FormatConfig]):
     Generate trigonometry test combinations.
 
     Returns: List of (format, dest_acc, dest_sync, implied_math_format,
-    input_dimensions, mathop) tuples.
+    input_dimensions, mathop, approx_mode) tuples.
     """
     combinations = []
 
     dest_sync_modes = (DestSync.Half, DestSync.Full)
+    approx_modes = (ApproximationMode.No, ApproximationMode.Yes)
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
@@ -103,16 +104,18 @@ def generate_trigonometry_combinations(formats_list: List[FormatConfig]):
                 ]:
                     for input_dimensions in [[32, 32]]:
                         for mathop in TRIGONOMETRY_MATHOPS:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    implied_math_format,
-                                    input_dimensions,
-                                    mathop,
+                            for approx_mode in approx_modes:
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        implied_math_format,
+                                        input_dimensions,
+                                        mathop,
+                                        approx_mode,
+                                    )
                                 )
-                            )
 
     return combinations
 
@@ -121,7 +124,6 @@ def prepare_trig_inputs(
     src_A: torch.Tensor,
     mathop: MathOperation,
     input_format: DataFormat,
-    output_format: DataFormat,
 ) -> torch.Tensor:
     """
     Prepare inputs per-op with safe value ranges that the Quasar kernel can handle:
@@ -174,11 +176,13 @@ SFPU_TRIGONOMETRY_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_implied_math_input_dims_mathop=generate_trigonometry_combinations(
+    formats_dest_acc_sync_implied_math_input_dims_mathop_approx=generate_trigonometry_combinations(
         SFPU_TRIGONOMETRY_FORMATS
     ),
 )
-def test_sfpu_trigonometry_quasar(formats_dest_acc_sync_implied_math_input_dims_mathop):
+def test_sfpu_trigonometry_quasar(
+    formats_dest_acc_sync_implied_math_input_dims_mathop_approx,
+):
     """
     Test trigonometry SFPU operations (sin, cos, acosh, asinh, atanh) on Quasar.
 
@@ -186,9 +190,15 @@ def test_sfpu_trigonometry_quasar(formats_dest_acc_sync_implied_math_input_dims_
     compile time. The five trig ops' dispatcher specializations are defined in
     that source.
     """
-    (formats, dest_acc, dest_sync, implied_math_format, input_dimensions, mathop) = (
-        formats_dest_acc_sync_implied_math_input_dims_mathop[0]
-    )
+    (
+        formats,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        input_dimensions,
+        mathop,
+        approx_mode,
+    ) = formats_dest_acc_sync_implied_math_input_dims_mathop_approx[0]
 
     torch.manual_seed(42)
 
@@ -200,9 +210,7 @@ def test_sfpu_trigonometry_quasar(formats_dest_acc_sync_implied_math_input_dims_
         sfpu=False,
     )
 
-    src_A = prepare_trig_inputs(
-        src_A, mathop, formats.input_format, formats.output_format
-    )
+    src_A = prepare_trig_inputs(src_A, mathop, formats.input_format)
 
     num_faces = 4
 
@@ -223,7 +231,7 @@ def test_sfpu_trigonometry_quasar(formats_dest_acc_sync_implied_math_input_dims_
         templates=[
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            DATA_COPY_TYPE(DataCopyType.A2D),
+            APPROX_MODE(approx_mode),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(dest_sync),
         ],
