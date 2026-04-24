@@ -33,11 +33,15 @@ inline void _calculate_fill_(const int iterations, const std::uint32_t value_bit
 }
 
 // Broadcast an integer constant to all elements of Dest with an explicit store mode.
-// SFPMEM_MODE: p_sfpu::sfpmem::INT32 for 32-bit integer dest, sfpmem::UINT16 for 16-bit.
-template <std::uint32_t SFPMEM_MODE>
+// FMT selects the Dest element type; only Int32 (32-bit) and UInt16 (16-bit) are supported.
+template <DataFormat FMT>
 inline void _calculate_fill_int_(const int iterations, const std::uint32_t value)
 {
-    if constexpr (SFPMEM_MODE == p_sfpu::sfpmem::UINT16)
+    static_assert(FMT == DataFormat::Int32 || FMT == DataFormat::UInt16, "_calculate_fill_int_ supports only DataFormat::Int32 and DataFormat::UInt16");
+
+    constexpr std::uint32_t SFPMEM_MODE = (FMT == DataFormat::UInt16) ? p_sfpu::sfpmem::UINT16 : p_sfpu::sfpmem::INT32;
+
+    if constexpr (FMT == DataFormat::UInt16)
     {
         // 16-bit store: load lower 16 bits only
         TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, value & 0xFFFF);
@@ -58,9 +62,9 @@ inline void _calculate_fill_int_(const int iterations, const std::uint32_t value
 
 // Broadcast a bit-pattern constant to all elements of Dest.
 // Semantically identical to _calculate_fill_; provided for API compatibility.
-inline void _calculate_fill_bitcast_(const int iterations, const std::uint32_t value_bit_mask)
+inline void _calculate_fill_bitcast_(const int iterations, const std::uint32_t value)
 {
-    _calculate_fill_(iterations, value_bit_mask);
+    _calculate_fill_(iterations, value);
 }
 
 } // namespace sfpu

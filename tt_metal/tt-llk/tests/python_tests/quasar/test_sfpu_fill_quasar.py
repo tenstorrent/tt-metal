@@ -100,8 +100,8 @@ def generate_sfpu_fill_combinations(
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        # 32-bit formats require dest_acc=Yes; non-32-bit formats use both
-        # (filtered below by the bit-width-match rule)
+        # SFPU unpack_to_dest requires bit-width match: 32-bit formats pair with
+        # dest_acc=Yes, non-32-bit formats pair with dest_acc=No.
         dest_acc_modes = (
             (DestAccumulation.Yes,) if in_fmt.is_32_bit() else (DestAccumulation.No,)
         )
