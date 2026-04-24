@@ -124,7 +124,6 @@ jobs:
         VLLM_ALLOW_LONG_MAX_MODEL_LEN: 1
         HF_HUB_OFFLINE: 0
         HF_HUB_CACHE: /root/ai-summary/hub
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         TT_CACHE_HOME: /root/ai-summary/tt_cache
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
@@ -161,6 +160,19 @@ jobs:
         timeout-minutes: 10
         with:
           runner-label: ${{ matrix.test-group.runner-label }}
+
+      - name: 🔑 Load HF token from runner
+        shell: bash
+        run: |
+          TOKEN_FILE=/root/ai-summary/.hf_token
+          if [ -f "$TOKEN_FILE" ]; then
+            TOKEN=$(cat "$TOKEN_FILE")
+            echo "::add-mask::$TOKEN"
+            echo "HF_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "HF token loaded from $TOKEN_FILE"
+          else
+            echo "::warning::HF token file not found at $TOKEN_FILE — gated model downloads will 401"
+          fi
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@v4
