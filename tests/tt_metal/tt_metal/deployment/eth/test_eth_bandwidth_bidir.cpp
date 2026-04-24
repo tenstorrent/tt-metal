@@ -90,6 +90,9 @@ static void track_eth_progress_timeout(
             uint32_t t1 = read_eth_l1_u32(send_device, send_core, recv_l1_address);
             uint32_t t2 = read_eth_l1_u32(recv_device, recv_core, recv_l1_address);
             log_critical(tt::LogTest, "recv_buffer[0]: {} {}", t1, t2);
+            t1 = read_eth_l1_u32(send_device, send_core, iter_l1_addr + 4);
+            t2 = read_eth_l1_u32(recv_device, recv_core, iter_l1_addr + 4);
+            log_critical(tt::LogTest, "state: {} {}", t1, t2);
 
             exit(1);
         }
@@ -223,8 +226,8 @@ static bool run_test_bandwidth_bidir(
     pass &= bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
     pass &= bandwidth_check(recv_device, recv_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
 
-    pass &= data_check(recv_device, recv_core, recv_l1_address, inputs) || true;
-    pass &= data_check(send_device, send_core, recv_l1_address, inputs) || true;
+    // pass &= data_check(recv_device, recv_core, recv_l1_address, inputs) || true;
+    // pass &= data_check(send_device, send_core, recv_l1_address, inputs) || true;
 
     return pass;
 }
