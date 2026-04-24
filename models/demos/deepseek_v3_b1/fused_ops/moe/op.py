@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32, get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
 class MoeSem:
@@ -832,7 +832,7 @@ class MoeRoutedExpertOp:
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
         device = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0].device()
 
-        gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
         mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
         sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
@@ -1044,6 +1044,7 @@ class MoeRoutedExpertOp:
                 weights_overlapped=gate_mm_weights_tensor,
                 k_num_tiles=num_tiles_k,
                 fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
+                fused_activation_approx_mode=False,
             )
 
             # Gate MM Gather
@@ -1361,7 +1362,7 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Per-core bank_id, vc, sender_idx
         # ==================================================================
-        gate_proj_optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        gate_proj_optimal_workers = get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
         core_to_bank_id = {}
         for bank_id, core in enumerate(gate_proj_optimal_workers):
             core_to_bank_id[(core.x, core.y)] = bank_id
@@ -1546,14 +1547,7 @@ class MoeRoutedExpertOp:
             ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
             ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
-            # Index mcast receiver (routing only)
-            ("index_mcast_receiver_semaphore_addr", ctx.index_mcast_receiver_semaphore_addr),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
-            ("index_mcast_num_pages", ctx.index_mcast_num_pages),
-            # Expert scale mcast receiver (routing only)
-            ("expert_scale_mcast_receiver_semaphore_addr", ctx.expert_scale_mcast_receiver_semaphore_addr),
-            ("mul_cb_scalar_src", ctx.mul_cb_scalar_src),
-            ("expert_scale_mcast_num_pages", ctx.expert_scale_mcast_num_pages),
             # Mul reader (setup mul_in1 buffer)
             ("mul_cb_in1", ctx.mul_cb_in1),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -1570,10 +1564,6 @@ class MoeRoutedExpertOp:
             ),
             ("down_proj_gather_dst_cb", ctx.down_proj_gather_params["dst_cb"]),
             ("down_proj_gather_dst_num_pages", ctx.down_proj_gather_params["dst_num_pages"]),
-            # down_proj mcast receiver
-            ("down_proj_mcast_receiver_semaphore_addr", ctx.down_proj_mcast_params["receiver_semaphore_addr"]),
-            ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
             # Eltwise add
             ("add_cb_in0", ctx.add_cb_in0),
             ("add_cb_in1", ctx.add_cb_in1),
@@ -1715,6 +1705,8 @@ class MoeRoutedExpertOp:
             ("down_proj_mcast_src_cb", ctx.down_proj_mcast_params["src_cb"]),
             ("down_proj_mcast_dst_cb", ctx.down_proj_mcast_params["dst_cb"]),
             ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
+            # down_proj mcast receiver
+            ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
             # CB reset addresses for DRAM matmul working buffers
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
             ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
@@ -1748,6 +1740,10 @@ class MoeRoutedExpertOp:
             ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"] if ctx.enable_routing else 0),
             ("gate_mm_out_w", ctx.gate_mm_params["out_w"] if ctx.enable_routing else 0),
             ("gate_mm_fused_activation", ctx.gate_mm_params["fused_activation"] if ctx.enable_routing else 0),
+            (
+                "gate_mm_fused_activation_approx_mode",
+                ctx.gate_mm_params["fused_activation_approx_mode"] if ctx.enable_routing else 0,
+            ),
             # Gate compute (routing only)
             ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
@@ -2617,9 +2613,6 @@ class MoeSharedExpertOp:
             ("shared_og_noc1_receiver_semaphore_addr", shared_ctx.output_gather_params["noc1_receiver_semaphore_addr"]),
             ("shared_og_dst_cb", shared_ctx.output_gather_params["dst_cb"]),
             ("shared_og_dst_num_pages", shared_ctx.output_gather_params["dst_num_pages"]),
-            # Output mcast receiver (DRAM cores receive into add_cb_in1) — separate semaphore
-            ("shared_output_mcast_data_receiver_semaphore_addr", shared_ctx.output_mcast_receiver_semaphore_addr),
-            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         brisc_args = [
             # Gate gather (A) sender (MoeGather: sender on BRISC)
@@ -2659,6 +2652,8 @@ class MoeSharedExpertOp:
             ("shared_output_mcast_data_size_bytes", shared_ctx.output_mcast_params["data_size_bytes"]),
             ("shared_output_mcast_src_cb", shared_ctx.output_gather_params["dst_cb"]),  # read from output gather dst
             ("shared_output_mcast_src_num_pages", shared_ctx.output_mcast_params["src_num_pages"]),
+            # Output mcast receiver
+            ("shared_output_mcast_dst_num_pages", shared_ctx.output_mcast_params["dst_num_pages"]),
         ]
         trisc_args = [
             # Gate/Up matmul
@@ -3009,6 +3004,7 @@ class MoeOp:
         output_tensor=None,
         k_num_tiles=0,
         fused_activation=0,
+        fused_activation_approx_mode=True,
         weights_core_ranges_override=None,
     ):
         """
@@ -3026,7 +3022,7 @@ class MoeOp:
                            will be created by the overlap function.
             k_num_tiles: K dimension in tiles
             fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
-
+            fused_activation_approx_mode: Whether to use approximate activation (default False)
         Returns:
             Dictionary with matmul parameters and CB descriptors
         """
@@ -3059,6 +3055,7 @@ class MoeOp:
             "k_num_tiles": k_num_tiles,
             "out_w": out_w,
             "fused_activation": fused_activation,
+            "fused_activation_approx_mode": fused_activation_approx_mode,
             "core_grid": core_grid,
             "num_cores": core_grid.num_cores(),
             "weights_cb_descriptor": weights_cb_descriptor,
@@ -3067,7 +3064,7 @@ class MoeOp:
         }
 
     @staticmethod
-    def golden(
+    def golden_single_device(
         input_tensor,
         shared_gate_weights,
         shared_up_weights,
@@ -3152,6 +3149,118 @@ class MoeOp:
             hardcoded_expert_index=hardcoded_expert_index,
             explicit_expert_scale=explicit_expert_scale,
         )
+
+    @staticmethod
+    def golden(
+        input_tensor,
+        shared_gate_weights,
+        shared_up_weights,
+        shared_down_weights,
+        gate_proj_weights_dict,
+        up_proj_weights_dict,
+        down_proj_weights_dict,
+        rmsnorm_gamma,
+        routing_weights_tensor,
+        bias_tensor,
+        rmsnorm_epsilon=1e-6,
+        routing_mode=True,
+        eps=1e-20,
+        scaling_factor=2.5,
+        include_residual=True,
+        top_k=8,
+        topk_groups=4,
+    ):
+        """
+        Clean PyTorch golden for post-attention MoE: y = h + MoE(h).
+
+        routing_mode controls all modes:
+          - True: normal routed MoE (grouped noaux gate + top-k weighted experts)
+          - False: dense MLP mode (single expert 0 with unit scale)
+          - list[int]: hardcoded expert indices; weights come from gate scores for those experts
+        """
+        import torch
+
+        def _as_2d(t: torch.Tensor) -> torch.Tensor:
+            return t.reshape(1, -1).to(torch.bfloat16)
+
+        def _reshape_weight(w: torch.Tensor, in_dim: int):
+            # Supports [K, N] and [1,1,K,N] tensors.
+            w2 = w.to(torch.bfloat16)
+            if w2.ndim == 2:
+                return w2
+            return w2.reshape(in_dim, -1)
+
+        def _compute_grouped_topk(scores_flat: torch.Tensor, bias_flat: torch.Tensor):
+            n_routed = scores_flat.shape[-1]
+            n_groups = int(bias_tensor.shape[-2])
+            experts_per_group = n_routed // n_groups
+            scores_for_choice = scores_flat + bias_flat
+
+            grouped = scores_for_choice.reshape(1, n_groups, experts_per_group)
+            summed_experts_per_group = min(2, experts_per_group)
+            group_scores = torch.topk(grouped, k=summed_experts_per_group, dim=-1, sorted=True)[0].sum(dim=-1)
+            sel_topk_groups = min(topk_groups, n_groups)
+            group_idx = torch.topk(group_scores, k=sel_topk_groups, dim=-1, sorted=True)[1]
+
+            group_mask = torch.zeros_like(group_scores)
+            group_mask.scatter_(1, group_idx, 1)
+            score_mask = group_mask.unsqueeze(-1).expand(1, n_groups, experts_per_group).reshape(1, n_routed)
+            masked_scores = scores_for_choice.masked_fill(~score_mask.bool(), float("-inf"))
+
+            sel_top_k = min(top_k, n_routed)
+            topk_idx = torch.topk(masked_scores, k=sel_top_k, dim=-1, sorted=True)[1]
+            topk_weight = scores_flat.gather(1, topk_idx)
+            if sel_top_k > 1:
+                topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + eps)
+            topk_weight = topk_weight * scaling_factor
+            return topk_weight, topk_idx
+
+        # RMSNorm(h) for MoE input.
+        x = _as_2d(input_tensor)
+        variance = x.pow(2).mean(-1, keepdim=True)
+        norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon)) * _as_2d(rmsnorm_gamma)
+
+        # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual.
+        sh_gate = _reshape_weight(shared_gate_weights, norm_x.shape[-1])
+        sh_up = _reshape_weight(shared_up_weights, norm_x.shape[-1])
+        sh_down = _reshape_weight(shared_down_weights, sh_gate.shape[-1])
+        shared_hidden = torch.nn.functional.silu(norm_x @ sh_gate) * (norm_x @ sh_up)
+        shared_output = shared_hidden @ sh_down
+        if include_residual:
+            shared_output = shared_output + x
+
+        # Routed branch selection/weights.
+        topk_scores = None
+        topk_indices = None
+        if routing_mode is False:
+            selected_experts = sorted(gate_proj_weights_dict.keys())
+            selected_scales = [torch.tensor(1.0, dtype=torch.bfloat16)] * len(selected_experts)
+        else:
+            logits = norm_x @ routing_weights_tensor.to(norm_x.dtype)
+            scores = torch.sigmoid(logits)
+            scores_flat = scores.reshape(1, -1)
+            bias_flat = bias_tensor.reshape(1, -1).to(scores_flat.dtype)
+            # Hardware gate produces top-k slots; both expert-index selection and
+            # expert-scale mcast are indexed by per-device slot offset.
+            # Keep this available for hardcoded mode parity.
+            gate_topk_scores, gate_topk_indices = _compute_grouped_topk(scores_flat, bias_flat)
+
+            topk_scores, topk_indices = gate_topk_scores, gate_topk_indices
+            selected_experts = [int(i) for i in topk_indices[0].tolist()]
+            selected_scales = [topk_scores[0, i] for i in range(len(selected_experts))]
+
+        routed_sum = torch.zeros_like(shared_output)
+        for expert_idx, expert_scale in zip(selected_experts, selected_scales, strict=True):
+            gate_w = _reshape_weight(gate_proj_weights_dict[expert_idx], norm_x.shape[-1])
+            up_w = _reshape_weight(up_proj_weights_dict[expert_idx], norm_x.shape[-1])
+            down_w = _reshape_weight(down_proj_weights_dict[expert_idx], gate_w.shape[-1])
+            gate_out = torch.nn.functional.silu(norm_x @ gate_w)
+            up_out = norm_x @ up_w
+            routed_hidden = gate_out * up_out * expert_scale
+            routed_sum = routed_sum + (routed_hidden @ down_w)
+
+        final_output = (shared_output + routed_sum).reshape(1, 1, 1, -1)
+        return topk_scores, topk_indices, final_output
 
     @staticmethod
     def _overlap_cbs_with_sdpa_buffer(
@@ -3913,8 +4022,10 @@ class MoeOp:
                 ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                 ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
-                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_socket else 0),
+                ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
+                ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
+                ("reduce_enable_downstream_socket", 1 if self.downstream_sockets else 0),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
@@ -3965,14 +4076,16 @@ class MoeOp:
         ]
 
         # Per-core runtime args for reduce worker and fabric cores
-        # Aggregation: on ROOT1, shard_idx==0 aggregates all shards and sends downstream
+        # Persistent-signal sync: first worker (shard_idx==0) coordinates persistent signaling
         agg_sem_addr = self.sem_addrs[MoeSem.REDUCE_AGG_SYNC]
-        agg_core_noc_x = 0
-        agg_core_noc_y = 0
+        persistent_core_noc_x = 0
+        persistent_core_noc_y = 0
         if device_role == MESH_ROOT1:
-            agg_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["worker_cores_list"][0])
-            agg_core_noc_x = agg_core_phys.x
-            agg_core_noc_y = agg_core_phys.y
+            persistent_core_phys = routed_ctx.device.worker_core_from_logical_core(
+                reduce_params["worker_cores_list"][0]
+            )
+            persistent_core_noc_x = persistent_core_phys.x
+            persistent_core_noc_y = persistent_core_phys.y
 
         # Persistent signal: on ROOT1, aggregator worker signals a fabric core via local NOC,
         # then the fabric core sends a fabric atomic inc to the bcast sender on the entry device.
@@ -4021,13 +4134,16 @@ class MoeOp:
             worker_agg_sem_addr = 0
             worker_agg_noc_x = 0
             worker_agg_noc_y = 0
+            worker_metadata_addr = 0
 
             if device_role == MESH_ROOT1:
                 worker_agg_sem_addr = agg_sem_addr
-                worker_agg_noc_x = agg_core_noc_x
-                worker_agg_noc_y = agg_core_noc_y
-                if shard_idx == 0 and self.downstream_socket is not None:
-                    socket_config_addr = self.downstream_socket.get_config_buffer_address()
+                worker_agg_noc_x = persistent_core_noc_x
+                worker_agg_noc_y = persistent_core_noc_y
+                if self.downstream_sockets is not None:
+                    socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
+                if self._metadata_l1_addr != 0:
+                    worker_metadata_addr = self._metadata_l1_addr
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
 
@@ -4044,6 +4160,7 @@ class MoeOp:
                         out_tensor.buffer_address(),
                         shard_idx,
                         socket_config_addr,
+                        worker_metadata_addr,
                         worker_agg_sem_addr,
                         worker_agg_noc_x,
                         worker_agg_noc_y,
@@ -4103,74 +4220,12 @@ class MoeOp:
             bcast_num_targets_forward = bcast_ring_size - bcast_ring_index - 1
             bcast_num_targets_backward = bcast_ring_index
 
-        bcast_start_distance_forward = 1 if bcast_num_targets_forward > 0 else 0
-        bcast_range_hops_forward = bcast_num_targets_forward
-        bcast_start_distance_backward = 1 if bcast_num_targets_backward > 0 else 0
-        bcast_range_hops_backward = bcast_num_targets_backward
-
         bcast_data_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
         bcast_core_noc_x = bcast_data_core_physical.x
         bcast_core_noc_y = bcast_data_core_physical.y
 
-        bcast_wait_output_semaphore = bcast_is_secondary_sender or (
-            not bcast_is_sender and not bcast_is_secondary_sender
-        )
-        bcast_reset_global_semaphore = bcast_is_secondary_sender or (
-            not bcast_is_sender and not bcast_is_secondary_sender
-        )
-        bcast_out_ready_sem_wait_value = 1
-
         bcast_intermediate_per_device = ttnn.get_device_tensors(ctx.bcast_intermediate_tensor)
         bcast_intermediate_device = bcast_intermediate_per_device[chip_id]
-
-        self.ncrisc_args.extend(
-            [
-                ("bcast_num_pages_to_read", bp["input_num_pages"]),
-                ("bcast_tensor0_page_size", bp["page_size_bytes"]),
-                ("bcast_num_targets_forward_direction", bcast_num_targets_forward),
-                ("bcast_num_targets_backward_direction", bcast_num_targets_backward),
-                ("bcast_is_sender", int(bcast_is_sender)),
-                ("bcast_core_noc_x", bcast_core_noc_x),
-                ("bcast_core_noc_y", bcast_core_noc_y),
-                ("bcast_is_secondary_sender", int(bcast_is_secondary_sender)),
-                ("bcast_has_secondary_target", int(bcast_has_secondary_target)),
-                ("bcast_start_distance_in_hops_forward", bcast_start_distance_forward),
-                ("bcast_range_hops_forward", bcast_range_hops_forward),
-                ("bcast_start_distance_in_hops_backward", bcast_start_distance_backward),
-                ("bcast_range_hops_backward", bcast_range_hops_backward),
-                ("bcast_use_socket", int(bcast_use_socket)),
-            ]
-        )
-
-        self.brisc_args.extend(
-            [
-                ("bcast_num_pages_to_read", bp["input_num_pages"]),
-                ("bcast_is_sender", int(bcast_is_sender)),
-                ("bcast_use_socket", int(bcast_use_socket)),
-            ]
-        )
-
-        self.brisc_common_rt_args = [
-            int(ctx.socket.get_config_buffer_address()) if bcast_use_socket else 0,
-            int(bcast_socket_page_size) if bcast_use_socket else 0,
-            1 if bcast_use_socket else 0,
-        ]
-
-        bcast_ncrisc_common_rt_args = [
-            int(bcast_intermediate_device.buffer_address()),
-            int(bp["out_ready_sem_addr"]),
-            int(bcast_wait_output_semaphore),
-            int(bcast_reset_global_semaphore),
-            bcast_core_noc_x,
-            bcast_core_noc_y,
-            bcast_out_ready_sem_wait_value,
-            int(bp["barrier_sem_addr"]),
-            bcast_core_noc_x,
-            bcast_core_noc_y,
-            bcast_ring_index,
-            int(bp["secondary_sync_sem_addr"]),
-            0,  # num_connections (updated below)
-        ]
 
         mesh_device = ctx.mesh_device
         mesh_rows = routed_ctx.mesh_rows
@@ -4191,8 +4246,51 @@ class MoeOp:
         if bcast_has_secondary_target:
             secondary_coord = ttnn.MeshCoordinate(row, 1 - sender_col)
             self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-        bcast_num_connections = len(self.bcast_dst_nodes)
-        bcast_ncrisc_common_rt_args[-1] = int(bcast_num_connections)
+        bcast_num_neighbors = len(self.bcast_dst_nodes)
+
+        bcast_tensor_size_bytes = bp["page_size_bytes"] * bp["input_num_pages"]
+        bcast_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        bcast_chunk_size_bytes = min(bcast_tensor_size_bytes, bcast_max_payload)
+        bcast_last_chunk_size_bytes = bcast_tensor_size_bytes % bcast_chunk_size_bytes or bcast_chunk_size_bytes
+        bcast_num_chunks = (bcast_tensor_size_bytes + bcast_chunk_size_bytes - 1) // bcast_chunk_size_bytes
+
+        bcast_num_links = 1
+
+        self.ncrisc_args.extend(
+            [
+                ("bcast_num_pages_to_read", bp["input_num_pages"]),
+                ("bcast_tensor0_page_size", bp["page_size_bytes"]),
+                ("bcast_num_neighbors", bcast_num_neighbors),
+                ("bcast_num_links", bcast_num_links),
+                ("bcast_is_sender", int(bcast_is_sender)),
+                ("bcast_chunk_size_bytes", bcast_chunk_size_bytes),
+                ("bcast_last_chunk_size_bytes", bcast_last_chunk_size_bytes),
+                ("bcast_num_chunks", bcast_num_chunks),
+                ("bcast_use_socket", int(bcast_use_socket)),
+            ]
+        )
+
+        self.brisc_args.extend(
+            [
+                ("bcast_num_pages_to_read", bp["input_num_pages"]),
+                ("bcast_is_sender", int(bcast_is_sender)),
+                ("bcast_use_socket", int(bcast_use_socket)),
+            ]
+        )
+
+        self.brisc_common_rt_args = [
+            int(ctx.socket.get_config_buffer_address()) if bcast_use_socket else 0,
+            int(bcast_socket_page_size) if bcast_use_socket else 0,
+            1 if bcast_use_socket else 0,
+        ]
+
+        bcast_ncrisc_common_rt_args = [
+            int(bcast_intermediate_device.buffer_address()),
+            bcast_core_noc_x,
+            bcast_core_noc_y,
+            int(bp["out_ready_sem_addr"]),
+            0,
+        ]
 
         bcast_ncrisc_base = len(self.ncrisc_common_rt_args)
         for i, (name, _val) in enumerate(self.ncrisc_args):
@@ -4201,7 +4299,7 @@ class MoeOp:
                 break
         self.ncrisc_common_rt_args.extend(bcast_ncrisc_common_rt_args)
 
-        if bcast_num_connections > 0:
+        if bcast_num_neighbors > 0:
             bcast_ncrisc_per_core = [(routed_ctx.sender_core, [])]
             if self.device_rt_args_desc is not None:
                 self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(
@@ -4291,10 +4389,15 @@ class MoeOp:
                     )
                 ):
                     bcast_writer_rt_args_ref = kernel.runtime_args[bcast_worker_core.x][bcast_worker_core.y]
-                    bcast_fabric_args = ttnn.setup_routing_plane_connection(
-                        self.bcast_fabric_node_id, self.bcast_dst_nodes, [0], program, idx, bcast_worker_core
-                    )
-                    bcast_writer_rt_args_ref.extend(bcast_fabric_args)
+                    payload = []
+                    for dst_node in self.bcast_dst_nodes:
+                        payload.append(int(dst_node.mesh_id))
+                        payload.append(int(dst_node.chip_id))
+                        setup_args = ttnn.setup_fabric_connection(
+                            self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
+                        )
+                        payload.extend(setup_args)
+                    bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
 
     # ==================================================================
@@ -4339,14 +4442,18 @@ class MoeOp:
         cb_id_context=None,
         worker_core_grid=None,
         is_torus=False,
-        downstream_socket=None,
+        downstream_sockets=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        forward_metadata_size_bytes=0,
+        metadata_l1_addr=0,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
-        self.downstream_socket = downstream_socket
+        self.downstream_sockets = downstream_sockets
+        self._forward_metadata_size_bytes = forward_metadata_size_bytes
+        self._metadata_l1_addr = metadata_l1_addr
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
@@ -4593,7 +4700,12 @@ class MoeOp:
                 ctx.gate_output_scores_tensor,
                 ctx.gate_output_indices_tensor,
             ]
-        io_tensors += [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]
+        for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
+            backing = getattr(wt, "data", None)
+            if backing is not None:
+                io_tensors += [backing, wt.assignment]
+            else:
+                io_tensors += [wt]
         if ctx.final_output_tensor is not None:
             io_tensors += [ctx.final_output_tensor]
         io_tensors += [
@@ -4746,8 +4858,8 @@ class MoeOp:
         worker_core_grid=None,
         # Torus topology support
         is_torus=False,
-        # Downstream socket for reduce aggregator to send reduced output
-        downstream_socket=None,
+        # Per-worker downstream sockets for reduce workers to send reduced output
+        downstream_sockets=None,
         cb_id_context=None,
     ):
         """
@@ -4819,9 +4931,10 @@ class MoeOp:
             noc_mode=noc_mode,
             worker_core_grid=worker_core_grid,
             is_torus=is_torus,
-            downstream_socket=downstream_socket,
+            downstream_sockets=downstream_sockets,
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+            persistent_mode=persistent_mode,
         )
 
         # ==================================================================

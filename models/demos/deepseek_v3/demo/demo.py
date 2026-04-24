@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -6,14 +6,24 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from glob import glob
 from pathlib import Path
 
+import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling.sampling_params import SamplingParams
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
+from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_MAX_SEQ_LEN,
+    DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SAMPLING_TOP_K,
+    DEFAULT_SAMPLING_TOP_P,
+    USERS_PER_ROW,
+    get_fabric_config,
+)
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -30,21 +40,32 @@ def _build_output_data(
     prompts: list[str] | None,
     generations: list[dict],
     statistics: dict,
+    model_params: dict,
     random_weights: bool,
 ) -> dict:
     output_data = {
         "prompts": prompts if prompts else [],
         "generations": [],
         "statistics": statistics,
+        "model_params": model_params,
     }
     for i, gen_result in enumerate(generations):
-        output_data["generations"].append(
-            {
-                "index": i + 1,
-                "prompt": _prompt_text_for_index(prompts, random_weights, i),
-                "text": gen_result.get("text"),
-            }
-        )
+        generation_record = {
+            "index": i + 1,
+            "prompt": _prompt_text_for_index(prompts, random_weights, i),
+            "text": gen_result.get("text"),
+        }
+        for key in (
+            "accuracy_top1",
+            "accuracy_top5",
+            "garbage_token_count",
+            "garbage_tokens_checked",
+            "garbage_token_topk",
+            "garbage_token_debug",
+        ):
+            if key in gen_result:
+                generation_record[key] = gen_result[key]
+        output_data["generations"].append(generation_record)
     return output_data
 
 
@@ -66,6 +87,37 @@ def _write_json_output(path: Path, payload: dict, label: str) -> None:
         raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
+def _resolve_tt_metal_commit() -> str:
+    """Resolve the tt-metal commit used for this run."""
+    repo_root = Path(__file__).resolve().parents[4]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commit = result.stdout.strip()
+    except Exception:
+        commit = ""
+
+    return commit or "unknown"
+
+
+def _is_primary_artifact_writer() -> bool:
+    # Prefer global launcher ranks when available; TT_MESH_HOST_RANK is mesh-local
+    # and can repeat across submeshes in a multi-mesh launch.
+    for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK", "TT_MESH_HOST_RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -82,6 +134,48 @@ def _print_performance_metrics(results: dict) -> None:
         trace_str = f"{trace_metric:.2f}" if trace_metric is not None else "N/A (requires --max-new-tokens >= 128)"
         logger.info(f"Trace execution tokens/sec/user @128th token: {trace_str}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+        tt_metal_commit = statistics.get("tt-metal_commit")
+        if tt_metal_commit:
+            logger.info(f"tt-metal commit: {tt_metal_commit}")
+
+
+def _format_model_params_for_reporting(model_params: dict, summarize_sampling: bool = True) -> dict:
+    """Summarize sampling arrays for concise reporting."""
+    if not summarize_sampling:
+        return model_params
+
+    sampling = model_params.get("sampling")
+    if not isinstance(sampling, dict):
+        return model_params
+
+    formatted_sampling = {}
+    for key, value in sampling.items():
+        if isinstance(value, (list, tuple)):
+            if value and all(v == value[0] for v in value):
+                formatted_sampling[key] = {"same_value_all_users": value[0], "count": len(value)}
+            else:
+                formatted_sampling[key] = {
+                    "same_value_all_users": False,
+                    "note": "all values are not same",
+                    "first_3_values": list(value[:3]),
+                    "count": len(value),
+                }
+        else:
+            formatted_sampling[key] = value
+
+    return {**model_params, "sampling": formatted_sampling}
+
+
+def _print_model_params(results: dict, summarize_sampling: bool = True) -> None:
+    """Print model parameters from model_params."""
+    if "model_params" in results and results["model_params"]:
+        logger.info("=== Model Parameters ===")
+        model_params = _format_model_params_for_reporting(
+            results["model_params"], summarize_sampling=summarize_sampling
+        )
+        for key in sorted(model_params):
+            logger.info(f"{key}: {model_params[key]}")
+        logger.info("=====================")
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -120,7 +214,42 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
-    p.add_argument("--cache-dir", type=str, required=True)
+    p.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=DEFAULT_MAX_SEQ_LEN,
+        help=f"Maximum configured sequence length for the demo runtime (default: {DEFAULT_MAX_SEQ_LEN}).",
+    )
+    p.add_argument(
+        "--sampling-temperature",
+        type=float,
+        default=DEFAULT_SAMPLING_TEMPERATURE,
+        help=f"Sampling temperature (default: {DEFAULT_SAMPLING_TEMPERATURE}).",
+    )
+    p.add_argument(
+        "--sampling-top-k",
+        type=int,
+        default=DEFAULT_SAMPLING_TOP_K,
+        help=f"Top-k value for sampling (default: {DEFAULT_SAMPLING_TOP_K}).",
+    )
+    p.add_argument(
+        "--sampling-top-p",
+        type=float,
+        default=DEFAULT_SAMPLING_TOP_P,
+        help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
+    )
+    p.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Optional reference/test cache directory. Also used as the legacy TT weight-cache root when --use-weight-cache is set.",
+    )
+    p.add_argument(
+        "--use-weight-cache",
+        action="store_true",
+        default=False,
+        help="Load a prebuilt current-format legacy TT weight cache from --cache-dir instead of converting DeepSeek weights in memory. Older-format and unversioned caches must be regenerated first.",
+    )
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -213,7 +342,7 @@ def create_parser() -> argparse.ArgumentParser:
         dest="force_recalculate",
         action="store_true",
         default=False,
-        help="Force regeneration of cached TTNN weight files and config.",
+        help="Legacy compatibility flag. The stacked DeepSeek path converts weights directly in memory, so this is ignored there.",
     )
     p.add_argument(
         "--stop-at-eos",
@@ -228,6 +357,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Always record max-new-tokens even after EOS.",
     )
     p.set_defaults(stop_at_eos=True)
+    p.add_argument(
+        "--max-users-per-row",
+        type=int,
+        default=USERS_PER_ROW,
+        help=f"Maximum number of active users per row for demo decode (default: {USERS_PER_ROW}).",
+    )
     return p
 
 
@@ -330,7 +465,10 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
+    max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
+    max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
+    use_weight_cache: bool = False,
     random_weights: bool = False,
     single_layer: str | None = None,
     override_num_layers: int | None = None,
@@ -350,6 +488,9 @@ def run_demo(
     stop_at_eos: bool = True,
     checkpoint_jsonl: str | Path | None = None,
     enable_mtp: bool = False,
+    sampling_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+    sampling_top_k: int = DEFAULT_SAMPLING_TOP_K,
+    sampling_top_p: float = DEFAULT_SAMPLING_TOP_P,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -361,9 +502,25 @@ def run_demo(
         raise SystemExit("Missing model path. Provide --model-path.")
     model_path = Path(model_path)
 
-    if cache_dir is None:
-        raise SystemExit("Missing cache directory. Provide --cache-dir.")
-    cache_dir = Path(cache_dir)
+    cache_dir = None if cache_dir is None else Path(cache_dir)
+
+    if use_weight_cache and cache_dir is None:
+        raise SystemExit("--use-weight-cache requires --cache-dir pointing at the legacy TT weight-cache root.")
+    if use_weight_cache and force_recalculate:
+        raise SystemExit("--use-weight-cache cannot be combined with --force-recalculate.")
+
+    if sampling_temperature < 0:
+        raise SystemExit("--sampling-temperature must be >= 0 (use 0 for greedy decoding).")
+    if not (0.0 < sampling_top_p <= 1.0):
+        raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
+    if sampling_top_k < 0:
+        raise SystemExit(
+            "--sampling-top-k must be >= 0. For top-k=0, use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
+        )
+    if sampling_top_k == 0 and sample_on_device:
+        raise SystemExit(
+            "--sampling-top-k=0 is not supported when sampling on device. Use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
+        )
 
     # Validate model directory per mode
     validate_model_path(
@@ -379,6 +536,8 @@ def run_demo(
     fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
+    dispatch_core_config = ttnn.DispatchCoreConfig(type=ttnn.DispatchCoreType.WORKER, axis=ttnn.DispatchCoreAxis.COL)
+    logger.info("Setting dispatch core axis to ttnn.DispatchCoreAxis.COL")
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
@@ -398,9 +557,18 @@ def run_demo(
         if enable_mtp:
             trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+        )
     else:
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
+
+    # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
+    # torch inherits this setting, which makes CPU-side computations extremely slow.
+    if requested_system_name.upper() in ("DUAL", "QUAD"):
+        num_torch_threads = max(1, os.cpu_count())
+        logger.info(f"Restoring torch num_threads to {num_torch_threads}")
+        torch.set_num_threads(num_torch_threads)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
@@ -412,6 +580,17 @@ def run_demo(
                 "Failed to load tokenizer from model path. Ensure the directory contains tokenizer files (e.g., tokenizer.model or tokenizer.json)."
             )
             raise
+
+    batch_size_per_row = max_users_per_row
+    batch_size = batch_size_per_row * mesh_device.shape[0]
+
+    # Configure sampling
+    # sampling values of all users are assumed to be the same when initialized with run_demo function.
+    sampling_params = SamplingParams(
+        temperature=[sampling_temperature] * batch_size,
+        top_p=[sampling_top_p] * batch_size,
+        top_k=[sampling_top_k] * batch_size,
+    )
 
     gen = None
     try:
@@ -435,26 +614,35 @@ def run_demo(
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":
-            gen = DeepseekGeneratorDP(
-                mesh_device=mesh_device,
-                model_path=model_path,
-                cache_dir=cache_dir,
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(
-                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
-                ),
-                single_layer=(single_layer if random_weights else None),
-                enable_trace=enable_trace,
-                enable_mem_profile=enable_mem_profile,
-                signpost=signpost,
-                prefill_max_tokens=prefill_max_tokens,
-                force_recalculate=force_recalculate,
-                profile_decode=profile_decode,
-                sample_on_device=sample_on_device,
-                enable_mtp=enable_mtp,
-            )
+            try:
+                gen = DeepseekGeneratorDP(
+                    mesh_device=mesh_device,
+                    model_path=model_path,
+                    cache_dir=cache_dir,
+                    use_weight_cache=use_weight_cache,
+                    tokenizer=tokenizer,
+                    random_weights=bool(random_weights),
+                    dense_layers=(1 if random_weights and single_layer else None),
+                    override_num_layers=(
+                        override_num_layers if override_num_layers is not None else (1 if random_weights else None)
+                    ),
+                    single_layer=(single_layer if random_weights else None),
+                    enable_trace=enable_trace,
+                    enable_mem_profile=enable_mem_profile,
+                    signpost=signpost,
+                    max_seq_len=max_seq_len,
+                    prefill_max_tokens=prefill_max_tokens,
+                    force_recalculate=force_recalculate,
+                    profile_decode=profile_decode,
+                    sample_on_device=sample_on_device,
+                    enable_mtp=enable_mtp,
+                    batch_size_per_row=max_users_per_row,
+                    sampling_params=sampling_params,
+                )
+            except (FileNotFoundError, ValueError) as e:
+                if use_weight_cache:
+                    raise SystemExit(str(e)) from e
+                raise
         else:
             raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
@@ -535,7 +723,7 @@ def run_demo(
                         if pre_tokenized_prompts is not None
                         else None
                     )
-                    batch_generations, batch_stats = gen.generate(
+                    batch_generations, batch_stats, model_params = gen.generate(
                         batch_prompts,
                         max_new_tokens=max_new_tokens,
                         teacher_forcing=token_acc,
@@ -576,7 +764,7 @@ def run_demo(
                         if any(key in s for s in all_stats):
                             statistics[key] = sum(float(s.get(key, 0) or 0) for s in all_stats)
             else:
-                generations, statistics = gen.generate(
+                generations, statistics, model_params = gen.generate(
                     prompt_list,
                     max_new_tokens=max_new_tokens,
                     teacher_forcing=token_acc,
@@ -595,11 +783,28 @@ def run_demo(
                     result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
                 if token_acc is not None and i == 0:  # Only compute accuracy for first generation
                     acc = token_acc.compute_accuracy()
+                    garbage_token_debug = token_acc.format_garbage_token_details(gen.tokenizer)
+                    garbage_token_count = len(garbage_token_debug)
+                    garbage_tokens_checked = token_acc.num_garbage_check_tokens()
+                    garbage_token_topk = token_acc.topk_candidate_k if token_acc.has_garbage_check() else None
+                    if garbage_token_topk is not None:
+                        logger.info(
+                            "Teacher-forcing garbage tokens: {}/{} checked against teacher top-{}",
+                            garbage_token_count,
+                            garbage_tokens_checked,
+                            garbage_token_topk,
+                        )
+                        for line in garbage_token_debug:
+                            logger.warning(line)
                     result.update(
                         {
                             "accuracy_top1": acc.get("top1"),
                             "accuracy_top5": acc.get("top5"),
-                            "predicted_tokens": token_acc._pred_tokens,
+                            "predicted_tokens": list(token_acc._pred_tokens),
+                            "garbage_token_count": garbage_token_count,
+                            "garbage_tokens_checked": garbage_tokens_checked,
+                            "garbage_token_topk": garbage_token_topk,
+                            "garbage_token_debug": garbage_token_debug,
                         }
                     )
                 results.append(result)
@@ -617,7 +822,8 @@ def run_demo(
                 checkpoint_fh.flush()
                 os.fsync(checkpoint_fh.fileno())
 
-            return {"generations": results, "statistics": statistics}
+            statistics["tt-metal_commit"] = _resolve_tt_metal_commit()
+            return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
             if checkpoint_fh is not None:
                 checkpoint_fh.close()
@@ -660,7 +866,10 @@ def main() -> None:
         args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
+        max_seq_len=args.max_seq_len,
+        max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
+        use_weight_cache=bool(args.use_weight_cache),
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
         override_num_layers=args.override_num_layers,
@@ -676,9 +885,13 @@ def main() -> None:
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
         force_recalculate=bool(args.force_recalculate),
+        sampling_temperature=args.sampling_temperature,
+        sampling_top_k=args.sampling_top_k,
+        sampling_top_p=args.sampling_top_p,
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),
+        repeat_batches=args.repeat_batches,
     )
 
     saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
@@ -690,9 +903,12 @@ def main() -> None:
             prompts=args.prompts,
             generations=results["generations"],
             statistics=results.get("statistics", {}),
+            model_params=_format_model_params_for_reporting(
+                results.get("model_params", {}),
+            ),
             random_weights=bool(args.random_weights),
         )
-        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+        if _is_primary_artifact_writer():
             _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before
@@ -707,6 +923,20 @@ def main() -> None:
             else:
                 print("[random-weights mode] token IDs:")
                 print(gen_result["tokens"])  # type: ignore
+            if "accuracy_top1" in gen_result or "garbage_token_count" in gen_result:
+                accuracy_top1 = gen_result.get("accuracy_top1")
+                accuracy_top5 = gen_result.get("accuracy_top5")
+                garbage_count = int(gen_result.get("garbage_token_count", 0) or 0)
+                garbage_checked = int(gen_result.get("garbage_tokens_checked", 0) or 0)
+                garbage_topk = gen_result.get("garbage_token_topk")
+                if accuracy_top1 is not None and accuracy_top5 is not None:
+                    print(f"Accuracy: top1={100 * float(accuracy_top1):.1f}% top5={100 * float(accuracy_top5):.1f}%")
+                if garbage_topk is not None:
+                    print(
+                        f"Garbage tokens: {garbage_count}/{garbage_checked} checked against teacher top-{garbage_topk}"
+                    )
+                for line in gen_result.get("garbage_token_debug", []) or []:
+                    print(f"  {line}")
             print("-" * 30)
 
         print("=====================\n")
@@ -716,6 +946,9 @@ def main() -> None:
 
     # Print performance metrics if available
     _print_performance_metrics(results)
+
+    # Print model parameters if available
+    _print_model_params(results)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,18 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    create_passthrough_pipeline_configuration,
+    create_single_galaxy_deepseek_pipeline_configuration,
+)
+from models.demos.deepseek_v3_b1.demo.stage import TOKEN_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
+    MeshWrapper,
+    ParallelSocketInterface,
+    SocketInterface,
+    _group_by_device,
+)
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
@@ -25,6 +36,53 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def _blitz_mesh_coord_tuple(coord) -> tuple:
+    """Normalize MeshCoordinate from BlitzDecodePipelineStage for equality checks."""
+    n = int(coord.dims())
+    return tuple(int(coord[i]) for i in range(n))
+
+
+def assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs):
+    """
+    Inter-mesh Blitz stages must pair distinct logical devices for ingress vs egress on each mesh.
+    (Mirrors C++ control-plane exit-node pairing: identical entry/exit fabric nodes break setup_fabric_connection.)
+    """
+    assert (
+        len(pipeline_config) == num_procs + 1
+    ), f"expected {num_procs + 1} pipeline stages (procs + loopback), got {len(pipeline_config)}"
+    for i, stage in enumerate(pipeline_config):
+        assert stage.stage_index == i, f"stage_index mismatch at list position {i}: {stage.stage_index}"
+        entry_t = _blitz_mesh_coord_tuple(stage.entry_node_coord)
+        exit_t = _blitz_mesh_coord_tuple(stage.exit_node_coord)
+        assert entry_t != exit_t, (
+            f"Blitz stage {i}: entry and exit mesh coordinates must differ "
+            f"(same coord implies same fabric node id / fabric src==dst TT_FATAL). "
+            f"entry={entry_t} exit={exit_t}"
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_blitz_decode_pipeline_inter_mesh_exit_coords_distinct(mesh_device):
+    """Lightweight check: generate_blitz_decode_pipeline pairs distinct entry/exit chips per stage."""
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
 
 @pytest.mark.parametrize(
@@ -63,7 +121,9 @@ def create_fabric_router_config(max_payload_size):
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -73,10 +133,6 @@ def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size,
     my_mesh_id = mesh_device.get_system_mesh_id()
 
     is_pipeline_start = my_mesh_id == 0
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    # Number of pipeline stages is equal to the number of processes + 1 for the loopback stage
-    assert len(pipeline_config) == num_procs + 1
 
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
@@ -250,7 +306,9 @@ def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-host pipeline with embedding: H2D receives token, looks up embedding row, streams it through pipeline stages across hosts, D2H sends embedding row back."""
-    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+    pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+    num_procs = int(ttnn.distributed_context_get_size())
+    assert_blitz_pipeline_inter_mesh_exit_invariants(pipeline_config, num_procs)
 
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -268,9 +326,6 @@ def test_multi_host_loopback_pipeline_with_embedding(
 
     my_mesh_id = mesh_device.get_system_mesh_id()
     is_pipeline_start = my_mesh_id == 0
-
-    num_procs = int(ttnn.distributed_context_get_size())
-    assert len(pipeline_config) == num_procs + 1
 
     pipeline_core_coord = ttnn.CoreCoord(0, 0)
 
@@ -644,3 +699,503 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
             )
 
     pipeline_block.terminate()
+
+
+def _dispatch_merged_programs(all_entries, mesh_device):
+    """Merge (device_coord, program) entries by device and dispatch in a single generic_op.
+
+    When multiple looping kernels target the same device (e.g. H2D/D2H + entry/exit
+    d2d_exchange), they must be merged into a single program so all kernels start
+    simultaneously on different cores. Sequential generic_op calls would deadlock
+    because the first kernel's infinite loop blocks the device command queue.
+    """
+    dummy_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device
+    )
+
+    groups = _group_by_device(all_entries)
+
+    mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+    for device_coord, progs in groups:
+        merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
+        mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
+
+    return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
+
+
+@pytest.mark.parametrize(
+    "tensor_size_bytes, fifo_size, num_iterations",
+    [
+        (64, 128, 128),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_channels",
+    [1, 4, 8],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_pipeline_block_parallel_devices(mesh_device, tensor_size_bytes, fifo_size, num_iterations, num_channels):
+    """Test PipelineBlock with per-device parallel forwarding stages.
+
+    Process 0 manually sets up N independent H2D/D2H + exit/entry socket
+    interfaces matching the per-device core layout. Forwarding stages (processes
+    1+) use PipelineBlock with pipeline_device_coords, exercising the
+    _init_parallel_device_forwarding_stage code path end-to-end.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+    is_pipeline_start = my_mesh_id == 0
+    num_procs = int(ttnn.distributed_context_get_size())
+
+    mesh_rows, mesh_cols = mesh_device.shape
+    num_mesh_devices = int(mesh_rows) * int(mesh_cols)
+    assert num_channels <= num_mesh_devices
+
+    device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))][
+        :num_channels
+    ]
+
+    core_entry = ttnn.CoreCoord(0, 0)
+    core_exit = ttnn.CoreCoord(0, 1)
+    core_io = ttnn.CoreCoord(0, 2)
+
+    if is_pipeline_start:
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+        h2d_sockets = []
+        d2h_sockets = []
+        host_ios = []
+
+        for dc in device_coords:
+            h2d = ttnn.H2DSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.BufferType.L1,
+                fifo_size,
+                ttnn.H2DMode.HOST_PUSH,
+            )
+            d2h = ttnn.D2HSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dc, core_io),
+                fifo_size,
+            )
+            hio = HostInterface(
+                h2d,
+                d2h,
+                tensor_size_bytes,
+                tensor_size_bytes,
+                core_to_core_socket_buffer_size=fifo_size,
+                h2d_downstream_core=ttnn.MeshCoreCoord(dc, core_exit),
+                d2h_upstream_core=ttnn.MeshCoreCoord(dc, core_entry),
+            )
+            h2d_sockets.append(h2d)
+            d2h_sockets.append(d2h)
+            host_ios.append(hio)
+
+        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+
+        exit_socket_interface = ParallelSocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            send_core_coords=exit_send_cores,
+            recv_core_coords=exit_recv_cores,
+            upstream_sockets=[hio.get_downstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
+        )
+
+        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+
+        entry_socket_interface = ParallelSocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            send_core_coords=entry_send_cores,
+            recv_core_coords=entry_recv_cores,
+            downstream_sockets=[hio.get_upstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
+        all_entries = []
+        for hio in host_ios:
+            all_entries.extend(hio._build_programs())
+        all_entries.extend(exit_socket_interface.build_programs())
+        all_entries.extend(entry_socket_interface.build_programs())
+        _dispatch_merged_programs(all_entries, mesh_device)
+
+        tensor_size_datums = tensor_size_bytes // 4
+        for i in range(num_iterations):
+            torch_input = torch.arange(
+                i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.float32
+            ).reshape(1, tensor_size_datums)
+
+            for ch in range(num_channels):
+                input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                h2d_sockets[ch].write_tensor(input_tensor)
+
+            for ch in range(num_channels):
+                torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.float32)
+                output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                d2h_sockets[ch].read_tensor(output_tensor)
+
+                result_torch = ttnn.to_torch(output_tensor)
+                assert torch.equal(torch_input, result_torch), (
+                    f"Channel {ch}, iteration {i}: data mismatch!\n" f"Expected: {torch_input}\nGot: {result_torch}"
+                )
+
+        logger.info(f"Data integrity verified for {num_channels} channels x {num_iterations} iterations")
+        ttnn.distributed_context_barrier()
+        for hio in host_ios:
+            hio.terminate(False)
+        entry_socket_interface.terminate(False)
+        exit_socket_interface.terminate(True)
+
+    else:
+        pipeline_block = PipelineBlock(
+            mesh_device,
+            core_entry,
+            fifo_size,
+            fifo_size,
+            tensor_size_bytes,
+            tensor_size_bytes,
+            pipeline_device_coords=device_coords,
+            pipeline_exit_core_coord=core_exit,
+            exit_upstream_cores=[],
+        )
+        pipeline_block.run()
+        pipeline_block.terminate()
+
+
+@pytest.mark.parametrize(
+    "tensor_size_bytes, fifo_size, num_iterations",
+    [
+        (64, 128, 128),
+        (1024, 2048, 64),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_channels",
+    [1, 4, 8],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_multi_host_multi_channel_parallel_loopback_pipeline(
+    mesh_device, tensor_size_bytes, fifo_size, num_iterations, num_channels
+):
+    """Test loopback pipeline with N parallel channels across devices.
+
+    Each channel uses a DIFFERENT device in the mesh (not different cores on the
+    same device). Process 0 manually sets up N independent H2D/D2H pairs and
+    ParallelSocketInterface for exit/entry (loopback). Forwarding stages (processes
+    1+) use PipelineBlock with pipeline_device_coords.
+
+    Core assignments per device:
+      - core_io (0,2): H2D receiver + D2H sender (process 0 only)
+      - core_entry (0,0): entry d2d_exchange (receives from previous process)
+      - core_exit (0,1): exit d2d_exchange (sends to next process)
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    my_mesh_id = mesh_device.get_system_mesh_id()
+    is_pipeline_start = my_mesh_id == 0
+    num_procs = int(ttnn.distributed_context_get_size())
+
+    mesh_rows, mesh_cols = mesh_device.shape
+    num_mesh_devices = int(mesh_rows) * int(mesh_cols)
+    assert num_channels <= num_mesh_devices, f"num_channels={num_channels} exceeds mesh devices={num_mesh_devices}"
+
+    device_coords = [ttnn.MeshCoordinate(r, c) for r in range(int(mesh_rows)) for c in range(int(mesh_cols))][
+        :num_channels
+    ]
+
+    core_entry = ttnn.CoreCoord(0, 0)
+    core_exit = ttnn.CoreCoord(0, 1)
+    core_io = ttnn.CoreCoord(0, 2)
+
+    print(f"Mesh ID {my_mesh_id}: {num_channels} channels on devices {device_coords}")
+
+    if is_pipeline_start:
+        ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
+
+        h2d_sockets = []
+        d2h_sockets = []
+        host_ios = []
+
+        for i, dev_coord in enumerate(device_coords):
+            print(f"Mesh ID {my_mesh_id}: Channel {i}: H2D/D2H on device {dev_coord} core {core_io}")
+            h2d = ttnn.H2DSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dev_coord, core_io),
+                ttnn.BufferType.L1,
+                fifo_size,
+                ttnn.H2DMode.HOST_PUSH,
+            )
+            d2h = ttnn.D2HSocket(
+                mesh_device,
+                ttnn.MeshCoreCoord(dev_coord, core_io),
+                fifo_size,
+            )
+            hio = HostInterface(
+                h2d,
+                d2h,
+                tensor_size_bytes,
+                tensor_size_bytes,
+                core_to_core_socket_buffer_size=fifo_size,
+                h2d_downstream_core=ttnn.MeshCoreCoord(dev_coord, core_exit),
+                d2h_upstream_core=ttnn.MeshCoreCoord(dev_coord, core_entry),
+            )
+            h2d_sockets.append(h2d)
+            d2h_sockets.append(d2h)
+            host_ios.append(hio)
+        print(f"Mesh ID {my_mesh_id}: Created {num_channels} H2D/D2H pairs on {num_channels} devices")
+
+        exit_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        exit_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+        print(f"Mesh ID {my_mesh_id}: Creating Exit ParallelSocketInterface")
+
+        exit_socket_interface = ParallelSocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            send_core_coords=exit_send_cores,
+            recv_core_coords=exit_recv_cores,
+            upstream_sockets=[hio.get_downstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
+        )
+
+        entry_send_cores = [ttnn.MeshCoreCoord(dc, core_exit) for dc in device_coords]
+        entry_recv_cores = [ttnn.MeshCoreCoord(dc, core_entry) for dc in device_coords]
+        print(f"Mesh ID {my_mesh_id}: Creating Entry ParallelSocketInterface (loopback)")
+
+        entry_socket_interface = ParallelSocketInterface(
+            tensor_size_bytes,
+            fifo_size,
+            send_core_coords=entry_send_cores,
+            recv_core_coords=entry_recv_cores,
+            downstream_sockets=[hio.get_upstream_socket() for hio in host_ios],
+            sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
+        all_entries = []
+        for hio in host_ios:
+            all_entries.extend(hio._build_programs())
+        all_entries.extend(exit_socket_interface.build_programs())
+        all_entries.extend(entry_socket_interface.build_programs())
+        print(f"Mesh ID {my_mesh_id}: Dispatching {len(all_entries)} programs across {num_channels} devices")
+        _dispatch_merged_programs(all_entries, mesh_device)
+
+        tensor_size_datums = tensor_size_bytes // 4
+        for i in range(num_iterations):
+            torch_input = torch.arange(
+                i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.float32
+            ).reshape(1, tensor_size_datums)
+
+            for ch in range(num_channels):
+                input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                h2d_sockets[ch].write_tensor(input_tensor)
+
+            for ch in range(num_channels):
+                torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.float32)
+                output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                d2h_sockets[ch].read_tensor(output_tensor)
+
+                result_torch = ttnn.to_torch(output_tensor)
+                match = torch.equal(torch_input, result_torch)
+                assert match, (
+                    f"Channel {ch}, iteration {i}: data mismatch!\n" f"Expected: {torch_input}\nGot: {result_torch}"
+                )
+
+        logger.info(f"Data integrity verified for {num_channels} channels x {num_iterations} iterations")
+        ttnn.distributed_context_barrier()
+        for hio in host_ios:
+            hio.terminate(False)
+        entry_socket_interface.terminate(False)
+        exit_socket_interface.terminate(True)
+
+    else:
+        pipeline_block = PipelineBlock(
+            mesh_device,
+            core_entry,
+            fifo_size,
+            fifo_size,
+            tensor_size_bytes,
+            tensor_size_bytes,
+            pipeline_device_coords=device_coords,
+            pipeline_exit_core_coord=core_exit,
+        )
+        pipeline_block.run()
+        pipeline_block.terminate()
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_passthrough_pipeline_block(mesh_device):
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    pipeline_core_coord = ttnn.CoreCoord(0, 0)
+
+    num_procs = int(ttnn.distributed_context_get_size())
+
+    config = create_passthrough_pipeline_configuration(SyntheticWeightProvider(), num_procs)
+    pipeline = config.build_pipeline(mesh_device)
+    try:
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id == 0:
+            from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
+
+            vocab_size = LogicalModelDimensions.VOCAB_SIZE
+            embedding_dim = LogicalModelDimensions.HIDDEN_SIZE
+
+            embedding_dtype = torch.bfloat16
+            torch_embedding = torch.zeros((1, 1, vocab_size, embedding_dim), dtype=embedding_dtype)
+            torch_embedding[
+                0,
+                0,
+                torch.arange(vocab_size, dtype=torch.int64),
+                torch.arange(vocab_size, dtype=torch.int64) % embedding_dim,
+            ] = 1
+
+            token_dtype = torch.uint32
+            token_size_bytes = 64
+            token_size_datums = token_size_bytes // dtype_size(token_dtype)
+
+            for token_id in range(vocab_size):
+                torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
+                torch_input[0, 0] = token_id
+                input_tensor = ttnn.from_torch(
+                    torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                torch_output = torch.zeros(1, embedding_dim, dtype=embedding_dtype)
+                output_tensor = ttnn.from_torch(
+                    torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                pipeline.write_token(input_tensor)
+                pipeline.read_output(output_tensor)
+
+                result_torch = ttnn.to_torch(output_tensor).reshape(-1)
+                expected = torch_embedding[0, 0, token_id, :].reshape(-1)
+                match = torch.equal(expected, result_torch)
+                assert match, (
+                    f"Token {token_id}: D2H output does not match embedding row!\n"
+                    f"Expected: {expected[:8]}...\nGot: {result_torch[:8]}..."
+                )
+            logger.info(f"{vocab_size} token lookups verified successfully over passthrough pipeline configuration")
+
+        pipeline.barrier()
+    finally:
+        pipeline.terminate()
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            # TORUS_X needs X-direction wrap links; mesh graph descriptors for this pipeline only
+            # provide TORUS_Y (or mesh). FabricConfig cannot add links—only restrict routing.
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
+    """
+    4-stage 4x2 single-galaxy pipeline (Embed -> Dense -> MoE -> LMHead), copied from
+    ``test_pipline_block_4stage_galaxy_1_iteration`` but using
+    :func:`create_single_galaxy_deepseek_pipeline_configuration`.
+    No loopback: token is read on the last mesh (LMHead stage). One-shot LMHead (no persistent mode).
+    No numerical golden check (smoke test only).
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    config = create_single_galaxy_deepseek_pipeline_configuration(
+        SyntheticWeightProvider(),
+        lm_head_fp32_dest_acc_en=use_fp32,
+        lm_head_persistent_mode=False,
+    )
+    pipeline = config.build_pipeline(mesh_device)
+    try:
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id == 0:
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token[0, 0] = 0
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pipeline.write_token(token_tensor)
+            pipeline.read_output(output_tensor)
+            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+            logger.info(f"test_single_galaxy_deepseek_pipeline last-mesh output token (no golden check): {got.item()}")
+
+        pipeline.barrier()
+    finally:
+        pipeline.terminate()

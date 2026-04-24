@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,7 +62,8 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         {
             {tt::CBIndex::c_0, Wt},                         // input
             {tt::CBIndex::c_1, 1},                          // mask
-            {tt::CBIndex::c_2, 1},                          // scaler
+            {tt::CBIndex::c_2, 1},                          // max scaler
+            {tt::CBIndex::c_3, 1},                          // sum scaler
             {tt::CBIndex::c_16, Wt},                        // output
             {tt::CBIndex::c_24, Wt, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},   // reduce

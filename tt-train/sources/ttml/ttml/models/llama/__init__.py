@@ -1,26 +1,33 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict
-
-import numpy as np
-import ml_dtypes
+from math import lcm
+from typing import Optional
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, LinearLayer
+from ttml.modules import (
+    AbstractModuleBase,
+    ColumnParallelLinear,
+    Embedding,
+    LinearLayer,
+    ModuleList,
+    VocabParallelEmbedding,
+)
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
-from .embedding import Embedding
-from .transformer import LlamaBlock, RMSNormLayer
+from .autograd_ops import SliceLastDim
+from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
 @dataclass(frozen=True)
 class LlamaRopeScalingConfig:
+    """Llama 3.x RoPE frequency scaling configuration."""
+
     scaling_factor: float = 0.0  # 0.0 means no scaling
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
@@ -29,6 +36,17 @@ class LlamaRopeScalingConfig:
 
 @dataclass(frozen=True)
 class LlamaConfig:
+    """Llama model hyper-parameters.
+
+    When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
+    size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
+    and ``intermediate_size`` — this is validated in ``__post_init__``.  The
+    vocab does *not* need to be TP-divisible: the embedding and LM-head
+    weights are padded internally to ``lcm(32, tp_size)`` and the padded logit
+    columns are sliced away before returning.  The effective pre-slice width
+    is exposed as ``Llama.padded_vocab_size``.
+    """
+
     hidden_size: int = 384
     intermediate_size: Optional[int] = None
     num_hidden_layers: int = 6
@@ -43,6 +61,7 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
+    use_tp: bool = False
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -75,37 +94,79 @@ class LlamaConfig:
                 "Number of attention heads must be divisible by the number of key/value heads. "
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
-
-
-def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
-    for name, tensor in parameters.items():
-        shape = tensor.shape()
-
-        if "weight" in name:
-            # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
-            tensor.assign(new_tensor)
-        elif "bias" in name:
-            # Re-initialize biases with 0
-            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
-            tensor.assign(new_tensor)
+        if self.use_tp:
+            tp_size = ttml.mesh().axis_size("tp")
+            if self.num_attention_heads % tp_size != 0:
+                raise ValueError(
+                    "Number of attention heads must be divisible by TP size. "
+                    f"num_attention_heads={self.num_attention_heads}, tp_size={tp_size}"
+                )
+            if self.num_key_value_heads % tp_size != 0:
+                raise ValueError(
+                    "Number of key/value heads must be divisible by TP size. "
+                    f"num_key_value_heads={self.num_key_value_heads}, tp_size={tp_size}"
+                )
+            intermediate_size = self.intermediate_size
+            if intermediate_size is None:
+                intermediate_size = compute_swiglu_intermediate_size(self.hidden_size)
+            if intermediate_size % tp_size != 0:
+                raise ValueError(
+                    "Intermediate size must be divisible by TP size. "
+                    f"intermediate_size={intermediate_size}, tp_size={tp_size}"
+                )
 
 
 class Llama(AbstractModuleBase):
+    """Llama decoder-only transformer (Python implementation)."""
+
     def __init__(self, config: LlamaConfig) -> None:
         super().__init__()
 
         self.config = config
 
-        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False)
-
-        vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
+        if config.use_tp:
+            # Pad the vocab up so each TP shard is tile-aligned: both the
+            # embedding rows and the LM-head columns need to be divisible by
+            # the TP size (for sharding) and by 32 (for tile layout).  Forward
+            # slices the padded logit columns away before returning, so
+            # ``config.vocab_size`` is free to be arbitrary.
+            tp_size = ttml.mesh().axis_size("tp")
+            align = lcm(32, tp_size)
+            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
+            # Under TP the embedding and LM head share the vocab (dim-2)
+            # sharding, so weight tying reuses a single shard on each device.
+            # gather_output=True: the LM head must produce full-vocab logits
+            # on every device so the loss can be computed without further CCL.
+            self.fc = ColumnParallelLinear(
+                config.hidden_size,
+                self.padded_vocab_size,
+                has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                gather_output=True,
+                axis_name="tp",
+            )
+            self.tok_emb = VocabParallelEmbedding(
+                self.padded_vocab_size,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                axis_name="tp",
+            )
+        else:
+            self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
+            self.fc = LinearLayer(
+                config.hidden_size,
+                self.padded_vocab_size,
+                False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
+            self.tok_emb = Embedding(
+                self.padded_vocab_size,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            self.tok_emb.weight = self.fc.weight
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -135,13 +196,13 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    use_tp=config.use_tp,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size)
-        initialize_parameters(self.parameters())
 
     def forward(
         self,
@@ -150,6 +211,8 @@ class Llama(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         new_tokens: Optional[int] = None,
     ) -> ttml.autograd.Tensor:
+        # Token IDs must be padded to the tile boundary so the embedding lookup
+        # produces a tile-aligned tensor.  The padding is stripped after lookup.
         TILE_SIZE = 32
         input_shape = input.shape()
         actual_seq_len = input_shape[-1]
@@ -187,6 +250,8 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
+        if self.padded_vocab_size != self.config.vocab_size:
+            logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
 

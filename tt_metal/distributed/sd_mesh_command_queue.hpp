@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,8 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) override;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -67,6 +68,7 @@ public:
 
     void enable_asynchronous_slow_dispatch();
     void disable_asynchronous_slow_dispatch();
+    bool is_asynchronous_slow_dispatch_enabled() const { return asynchronous_slow_dispatch_enabled_; }
 
 private:
     void wait_for_cores_idle();
@@ -74,6 +76,10 @@ private:
     std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 
     bool asynchronous_slow_dispatch_enabled_ = false;
+
+    std::shared_ptr<ThreadPool> launch_thread_pool_;
+    void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);
+    std::mutex logical_cores_mutex_;
 };
 
 }  // namespace tt::tt_metal::distributed

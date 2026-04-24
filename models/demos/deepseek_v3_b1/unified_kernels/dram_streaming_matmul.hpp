@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -17,6 +17,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
@@ -129,7 +130,8 @@ struct DRAMStreamingMatmul {
         bool ResetCBIn1 = false,
         uint32_t CBIn1ResetAddr = 0,
         bool PopIndex = false,
-        bool WaitForOutput = false>
+        bool WaitForOutput = false,
+        uint32_t NumBuffers = 3>
     class Op {
     public:
         void operator()() {
@@ -150,7 +152,11 @@ struct DRAMStreamingMatmul {
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
             constexpr uint32_t vc = CTArgs::vc;
 
-            // Expert indexing: compute DRAM offset based on expert index
+            // Expert indexing: compute DRAM offset based on expert index.
+            // Contract: for a given projection (gate/up/down), all expert weight tensors must
+            // be packed contiguously in DRAM starting at in1_tensor_addr (base of expert 0).
+            // expert_offset_bytes = expert_idx * expert_size_bytes; see Python
+            // MoERoutedExpertWeights.validate_contiguous_dram / routed expert load order in weights/prepare.py.
             uint32_t expert_offset_bytes = 0;
             if constexpr (CTArgs::enable_indexing) {
                 // Wait for index tensor to be ready
@@ -187,9 +193,9 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Triple-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3;
-            constexpr uint32_t extra_blocks_in_flight = 1;
+            constexpr uint32_t num_buffers = NumBuffers;
+            static_assert(num_buffers >= 2, "Need at least double buffering");
+            constexpr uint32_t extra_blocks_in_flight = (num_buffers >= 3) ? 1 : 0;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
@@ -202,7 +208,8 @@ struct DRAMStreamingMatmul {
             if constexpr (ResetCBIn1) {
                 cb_in1_base = CBIn1ResetAddr;
             } else {
-                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
+                auto& cb_in1_iface = get_local_cb_interface(CTArgs::cb_in1);
+                cb_in1_base = cb_in1_iface.fifo_limit - cb_in1_iface.fifo_size;
             }
             uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
@@ -272,6 +279,8 @@ struct DRAMStreamingMatmul {
 
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+            } else {
+                pack_block_contiguous_init(CTArgs::cb_out);
             }
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
@@ -351,9 +360,7 @@ struct DRAMStreamingMatmul {
                     tile_regs_commit();
                     tile_regs_wait();
 
-                    for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
-                        pack_tile(w, CTArgs::cb_out, w);
-                    }
+                    pack_block_contiguous(0, CTArgs::cb_out, CTArgs::subblock_w);
                     tile_regs_release();
                 }
 

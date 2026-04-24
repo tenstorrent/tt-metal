@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ void kernel_main() {
     constexpr uint32_t base_idx_crta = 0;
 
     auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
-    auto tensor_accessor = TensorAccessor(args, 0, 1024);
+    auto tensor_accessor = TensorAccessor(args, 0);
     /* Benchmark get_noc_addr for both accessors
      * - get_noc_addr is a good proxy for page lookup logic
      * - Use volatile to prevent compiler from optimizing away the calls

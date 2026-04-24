@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -46,7 +46,8 @@ ttnn::Tensor composite_reduce_scatter(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool use_l1_small_for_semaphores = false);
 
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
@@ -54,7 +55,8 @@ ttnn::Tensor composite_all_gather(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores = false);
 // same as above but for vector of mesh
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,
@@ -62,7 +64,8 @@ std::vector<ttnn::Tensor> composite_all_gather(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores = false);
 
 ttnn::Tensor composite_all_to_all(
     ttnn::Tensor input_tensor,
@@ -70,6 +73,7 @@ ttnn::Tensor composite_all_to_all(
     int32_t out_dim,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace composite_common

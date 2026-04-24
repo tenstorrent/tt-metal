@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,13 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
-    uint32_t row_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     // Circular buffers:
     constexpr uint32_t cb_input = tt::CBIndex::c_0;
@@ -60,13 +61,17 @@ void kernel_main() {
                 reconfig_data_format_srca(cb_input);
                 copy_tile_init(cb_input);
                 negative_tile_init();
+                // Partial chunk (ntiles < row_chunk): the input CB depth matches row_chunk, but only consume ntiles
+                // tiles. Indexed reads plus a bulk pop of ntiles do not advance the CB head during reads, leaving
+                // trailing slots effectively stale; the next pass can index into those offsets and read stale L1 data.
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    copy_tile(cb_input, i, i);
+                    // Read from index 0 and pop_front(1) per tile to keep the CB head in sync and avoid stale data.
+                    copy_tile(cb_input, 0, i);
+                    cb_input_obj.pop_front(1);
                     negative_tile(i);
                 }
 
                 tile_regs_commit();
-                cb_input_obj.pop_front(chunk_end - wt);
                 cb_ineg_obj.reserve_back(ntiles);
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_ineg);
@@ -91,10 +96,10 @@ void kernel_main() {
                         copy_tile(cb_acc, i, i);
                     }
                 }
-                reduce_init(cb_ineg, cb_scaler, cb_acc);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
                 pack_reconfig_data_format(cb_acc);
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    reduce_tile(cb_ineg, cb_scaler, i, 0, i);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, i, 0, i);
                 }
                 reduce_uninit(cb_ineg);
                 tile_regs_commit();

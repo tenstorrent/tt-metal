@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #define DATA_FORMATS_DEFINED
 #endif
 
-#include <algorithm>
 #include <stdint.h>
 #include <tuple>
 #include <utility>
@@ -85,33 +84,6 @@ inline uint8_t get_relative_logical_y() {
     extern uint8_t my_relative_y_;  // Set in FW
     return my_relative_y_;
 }
-
-#ifdef ARCH_QUASAR
-#include "internal/tt-2xx/quasar/kernel_thread_globals.h"
-// clang-format off
-/**
- * Returns the number of threads (processors) in the kernel that this processor belongs to.
- * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
- *
- * Return value: Number of kernel threads (num_processors_per_cluster for this kernel).
- */
-// clang-format on
-inline uint32_t get_num_threads() {
-    return num_sw_threads;
-}
-
-// clang-format off
-/**
- * Returns this processor's thread ID within its kernel (0 to get_num_threads() - 1).
- * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
- *
- * Return value: Thread ID for this processor.
- */
-// clang-format on
-inline uint32_t get_my_thread_id() {
-    return my_thread_id;
-}
-#endif
 
 // clang-format off
 /**
@@ -956,15 +928,10 @@ inline void noc_async_write_multicast(
     uint32_t size,
     uint32_t num_dests,
     bool linked = false,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::WRITE_MULTICAST,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        false,
-        noc);
+        NocEventType::WRITE_MULTICAST, src_local_l1_addr, dst_noc_addr_multicast, size, vc, false, noc);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_multicast_one_packet<false>(
@@ -979,7 +946,7 @@ inline void noc_async_write_multicast(
             src_local_l1_addr,
             dst_noc_addr_multicast,
             size,
-            NOC_MULTICAST_WRITE_VC,
+            vc,
             true /* mcast */,
             linked,
             num_dests,
@@ -1597,19 +1564,20 @@ inline void noc_semaphore_set_multicast(
     uint64_t dst_noc_addr_multicast,
     uint32_t num_dests,
     bool linked = false,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     WAYPOINT("NSNW");
 
     constexpr uint32_t size_bytes = 4;
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size_bytes);
 
-    NOC_TRACE_QUICK_PUSH_IF_LINKED(NOC_MULTICAST_WRITE_VC, linked);
+    NOC_TRACE_QUICK_PUSH_IF_LINKED(vc, linked);
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::SEMAPHORE_SET_MULTICAST,
         src_local_l1_addr,
         dst_noc_addr_multicast,
         size_bytes,
-        NOC_MULTICAST_WRITE_VC,
+        vc,
         /*posted=*/false,
         noc);
     ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -1618,7 +1586,7 @@ inline void noc_semaphore_set_multicast(
         src_local_l1_addr,
         dst_noc_addr_multicast,
         size_bytes,
-        NOC_MULTICAST_WRITE_VC,
+        vc,
         true,
         linked,
         num_dests,
@@ -2315,9 +2283,8 @@ FORCE_INLINE void noc_semaphore_inc(
 // clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
-    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, NOC_MULTICAST_WRITE_VC, posted, noc_id);
+    uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);
@@ -2326,7 +2293,7 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
         noc_id,
         write_at_cmd_buf,
         addr,
-        NOC_MULTICAST_WRITE_VC,
+        vc,
         incr,
         31 /*wrap*/,
         false /*linked*/,

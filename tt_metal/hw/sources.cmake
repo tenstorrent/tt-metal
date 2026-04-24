@@ -5,7 +5,9 @@ set(HW_JIT_API_HEADERS
     inc/api/socket_api.h
     inc/api/dataflow/dataflow_api.h
     inc/api/debug/assert.h
+    inc/api/debug/checkpoint.h
     inc/api/debug/dprint.h
+    inc/api/debug/dump.h
     inc/api/debug/timing_perturbation.h
     inc/api/debug/device_print.h
     inc/api/debug/dprint_pages.h
@@ -25,6 +27,7 @@ set(HW_JIT_API_HEADERS
     inc/api/tensor/page.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
+    inc/api/compute/atan2.h
     inc/api/compute/bcast.h
     inc/api/compute/binary_bitwise_sfpu.h
     inc/api/compute/binary_comp.h
@@ -89,6 +92,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
+    inc/api/compute/eltwise_unary/tanh_derivative.h
     inc/api/compute/eltwise_unary/threshold.h
     inc/api/compute/eltwise_unary/trigonometry.h
     inc/api/compute/eltwise_unary/typecast.h
@@ -111,7 +115,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/reduce.h
     inc/api/compute/reduce_custom.h
     inc/api/compute/reg_api.h
-    inc/api/compute/remainder_int32.h
+    inc/api/compute/binary_remainder.h
     inc/api/compute/reshuffle.h
     inc/api/compute/sentinel/compute_kernel_sentinel.h
     inc/api/compute/sentinel/sentinel_core.h
@@ -129,6 +133,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/noc.h
     inc/experimental/circular_buffer.h
     inc/experimental/dataflow_buffer.h
+    inc/experimental/kernel_args.h
     inc/experimental/noc_semaphore.h
     inc/experimental/endpoints.h
     inc/experimental/core_local_mem.h
@@ -144,8 +149,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/bit_utils.h
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
-    inc/internal/dataflow_buffer_interface.h
-    inc/internal/dataflow_buffer_init.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
     inc/internal/risc_attribs.h
@@ -184,6 +187,12 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/tdma_xmov.h
     inc/internal/tt-1xx/blackhole/tensix.h
     inc/internal/tt-1xx/blackhole/tensix_types.h
+    inc/internal/tt-1xx/dataflow_buffer.inl
+    inc/internal/tt-2xx/dataflow_buffer.inl
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
     inc/internal/tt-2xx/quasar/c_tensix_core.h
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h

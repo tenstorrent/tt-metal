@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -70,6 +70,15 @@ public:
     // Get the path to a firmware binary for loading/linking. Uses pre-compiled path if available.
     std::string get_firmware_binary_path(
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
+
+    // Get the path to a kernel binary for loading/linking from the provided binary root.
+    std::string get_kernel_binary_path(
+        ChipId device_id,
+        uint32_t programmable_core,
+        uint32_t processor_class,
+        int processor_id,
+        const std::string& binary_root,
+        const std::string& kernel_full_name);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.

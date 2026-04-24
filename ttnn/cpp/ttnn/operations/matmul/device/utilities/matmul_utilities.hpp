@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -17,6 +18,24 @@ namespace ttnn::operations::matmul::utilities {
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
+
+/**
+ * @brief True when fused matmul bias add can use the row-broadcast kernel path.
+ *
+ * Broadcast applies when there is no distinct row axis (rank < 2, e.g. vector bias) or the
+ * logical row dimension is 1 (shape[-2] == 1, e.g. [..., 1, N]). Otherwise the bias has multiple
+ * logical rows and the fused kernel must use elementwise add_tiles.
+ */
+inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor>& bias) {
+    if (!bias.has_value()) {
+        return false;
+    }
+    const auto& shape = bias->logical_shape();
+    if (shape.rank() < 2) {
+        return true;
+    }
+    return shape[-2] == 1;
+}
 
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
@@ -54,6 +73,17 @@ bool is_input_batched(const ttnn::Shape& shape);
  */
 ttnn::Shape compute_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
+
+/*
+ * @brief Computes the output shape of a matmul operation with bias given two input shapes
+ *
+ * Determines the output shape based on the broadcasting rules for matrix multiplication with bias:
+ *
+ * @param matmul_shape The shape of the matmul operation
+ * @param bias_shape The shape of the bias tensor
+ * @return Shape of the resulting tensor after matmul with bias
+ */
+ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape);
 
 using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
 std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
@@ -105,6 +135,35 @@ inline uint32_t get_K_dim(const tt::tt_metal::Shape& padded_shape, const std::op
  */
 inline uint32_t get_N_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile) {
     return padded_shape[-1] / (tile.has_value() ? tile.value().get_width() : 1);
+}
+
+struct In0TransposeStrides {
+    uint32_t stride_w;
+    uint32_t stride_h;
+};
+
+/**
+ * @brief Compute in0 tensor strides for the reader kernel, handling transpose_a with fuse_batch.
+ *
+ * When transpose_a is true and batches are not fused (M == M_per_batch), the tile traversal
+ * order must be transposed: stride_w = M_per_batch, stride_h = 1. When batches are fused
+ * (M != M_per_batch) or transpose_a is false, normal strides apply: stride_w = 1, stride_h = K.
+ *
+ * The caller must ensure that transpose_a + fuse_batch + M_per_batch > 1 is not used; this
+ * unsupported combination is validated in MatmulDeviceOperation::validate_on_program_cache_miss.
+ *
+ * @param M Total M dimension in tiles (possibly fused across batches)
+ * @param M_per_batch M dimension in tiles for a single batch
+ * @param transpose_a Whether the A tensor is logically transposed
+ * @param K K dimension in tiles
+ * @return In0TransposeStrides with stride_w and stride_h
+ */
+inline In0TransposeStrides get_in0_transpose_strides(uint32_t M, uint32_t M_per_batch, bool transpose_a, uint32_t K) {
+    const bool batch_fused = (M != M_per_batch);
+    return {
+        .stride_w = (transpose_a && !batch_fused) ? M_per_batch : 1u,
+        .stride_h = (transpose_a && !batch_fused) ? 1u : K,
+    };
 }
 
 /**

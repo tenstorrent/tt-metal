@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    KVB12_PROJ_SingleDeviceOverlapSpec,
-    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
-)
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
@@ -20,18 +17,26 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     record_cb_metadata,
 )
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
+from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import AllGatherConfig
+from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
+from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
 )
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32, get_worker_noc_hop_distance
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    KVB12_PROJ_SingleDeviceOverlapSpec,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
+)
 
 
 def extend_fabric_args(existing_rt_args, fabric_args):
@@ -63,7 +68,7 @@ class AttentionBlock:
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
-        position_ids,
+        metadata,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
@@ -88,10 +93,11 @@ class AttentionBlock:
             matmul_weights_tensor: q_a_proj weights [K, N]
             rmsnorm2_gamma_tensor: q_norm gamma [1, N]
             matmul2_weights_tensor: q_b_proj weights [N, num_qnope_heads*qnope_head_dim + num_qrope_heads*qrope_head_dim]
+                Must be in [ALL_NOPE | ALL_ROPE] column layout (use deinterleave_q_b_proj on HF weights).
             matmul3_weights_tensor: kv_b1_proj weights [num_qnope_heads, qnope_head_dim, nope_dim]
             sin_tensor: RoPE sin table [max_seq_len, qrope_head_dim]
             cos_tensor: RoPE cos table [max_seq_len, qrope_head_dim]
-            position_ids: global decode position [batch]
+            metadata: metadata
             dkv_matmul_weights_tensor: kv_a_proj weights [K, nope_dim + rope_dim]
             dkv_rmsnorm_gamma_tensor: kv_norm gamma [1, nope_dim]
             kv_cache_tensor: KV cache [1, 1, seq_len, nope_dim + rope_dim]
@@ -120,7 +126,8 @@ class AttentionBlock:
             normalized = x * torch.rsqrt(variance + epsilon)
             return normalized * gamma
 
-        position_id = position_ids[0]
+        position_id = metadata.position_id
+        slot_id = metadata.slot_id
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         matmul_result = input_layernorm @ matmul_weights_tensor
@@ -140,6 +147,7 @@ class AttentionBlock:
         # Reshape for RopeSingleCore.golden: [batch, n_heads, seq_len, head_dim] = [1, 64, 1, 64]
         qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)  # [1, 64, 1, 64]
         # position_ids_expanded: [batch, seq_len] = [1, 1]
+        position_ids = torch.tensor([position_id])
         position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
         # Apply RoPE
         qrope_output_reshaped = RopeSingleCore.golden(
@@ -160,11 +168,12 @@ class AttentionBlock:
         k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
 
         # from 0 to position id, the kv cache is valid
-        full_kv = kv_cache_tensor.to(full_q.dtype)
+        # Select the active slot for KV cache operations
+        slot_kv = kv_cache_tensor[slot_id : slot_id + 1].to(full_q.dtype)
         new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
-        full_kv[:, :, position_id, :] = new_kv
+        slot_kv[:, :, position_id, :] = new_kv
 
-        sdpa_output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+        sdpa_output = FlashMLADecode.golden(full_q, slot_kv, position_ids, nope_dim, scale).squeeze()
 
         from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 
@@ -178,13 +187,21 @@ class AttentionBlock:
         return full_q, new_kv, output
 
     @staticmethod
-    def get_num_semaphores():
-        # 14 from pre-SDPA, 4 from post
-        return 18
+    def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
+        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 27
+        # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
+        #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
+        pipeline_num_semaphores = 27
+        allreduce_num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links_allreduce)
+        bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links_bcast)
+        allgather_num_semaphores = 2  # handoff_sem + recv_sem
+        return pipeline_num_semaphores + allreduce_num_semaphores + bcast_num_semaphores + allgather_num_semaphores
 
     @staticmethod
-    def create_semaphores(mesh_device):
-        num_semaphores = AttentionBlock.get_num_semaphores()
+    def create_semaphores(mesh_device, num_links_bcast=1, num_links_allreduce=1):
+        num_semaphores = AttentionBlock.get_num_semaphores(
+            num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+        )
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         available_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
@@ -208,8 +225,8 @@ class AttentionBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
-        scale,
+        metadata_tensor,
+        sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -226,18 +243,20 @@ class AttentionBlock:
         attention_block_output_tensor,
         # Shared semaphores, and some default values
         attention_block_semaphores=None,
-        bcast_cluster_axis=0,
-        bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        sdpa_scale_fp32=1.0,
-        num_links=1,
+        num_links_bcast=1,
+        num_links_allreduce=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         cb_id_context=None,
+        *,
         upstream_socket=None,
+        fabric_config=None,
+        broadcast_topology_override=None,
+        forward_metadata=False,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -252,14 +271,13 @@ class AttentionBlock:
             qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
             qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
             trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
-            position_ids_tensor: Position IDs tensor (sharded tensor for RoPE)
+            metadata_tensor: Metadata tensor (sharded tensor for RoPE)
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
-            semaphores: List of global semaphores [out_ready, barrier, secondary_sync] for CCL
-            bcast_cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
-            bcast_secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
+            semaphores: List of global semaphores for CCL/fused pipeline synchronization
             reduce_cluster_axis: Primary axis for CCL reduce (0=row, 1=col)
-            num_links: Number of fabric links for CCL
+            num_links_bcast: Number of fabric links for broadcast
+            num_links_allreduce: Number of fabric links for all-reduce
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
             skip_ccl: If True, skip CCL broadcast (single-device mode)
@@ -275,10 +293,21 @@ class AttentionBlock:
                 ncrisc_common_runtime_args, trisc_common_runtime_args,
                 unified_compile_time_core_descriptors, per_core_compile_time_descriptors,
                 per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
-                cbs_list, worker_core, fabric_node_id, dst_nodes
+                cbs_list, worker_core
         """
-        sender_row = sender_coord[0]
-        sender_col = sender_coord[1]
+
+        def get_gather_noc_idx_per_core(mesh_device, mesh_coord, sender_grid, target_core):
+            gather_noc_idx_per_core = []
+            for core in ttnn.corerange_to_cores(sender_grid, row_wise=True):
+                noc0_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_0, mesh_coord)
+                noc1_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_1, mesh_coord)
+                if noc0_hop <= noc1_hop:
+                    gather_noc_idx_per_core.append((core, 0))
+                else:
+                    gather_noc_idx_per_core.append((core, 1))
+            return gather_noc_idx_per_core
+
+        sender_mesh_coord = ttnn.MeshCoordinate(int(sender_coord[0]), int(sender_coord[1]))
 
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
@@ -296,7 +325,7 @@ class AttentionBlock:
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
         krope_cos_tensors_per_device = ttnn.get_device_tensors(krope_cos_tensor)
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
-        position_ids_tensors_per_device = ttnn.get_device_tensors(position_ids_tensor)
+        metadata_tensors_per_device = ttnn.get_device_tensors(metadata_tensor)
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
@@ -304,46 +333,24 @@ class AttentionBlock:
         # Post-SDPA parameters
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
         post_sdpa_weights2_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights2_tensor.fused_tensor)
+        attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
 
         # Uncomment to debug local FlashMLA output
         # output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
+        assert attention_block_semaphores is not None and len(
+            attention_block_semaphores
+        ) == AttentionBlock.get_num_semaphores(num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce)
 
-        assert (
-            attention_block_semaphores is not None
-            and len(attention_block_semaphores) == AttentionBlock.get_num_semaphores()
-        )
-
-        # Semaphore addresses (only needed for CCL mode)
-        out_ready_sem_addr = 0
-        barrier_sem_addr = 0
-        secondary_sync_sem_addr = 0
         semaphore_index = 0
+        bcast_semaphores = []
         if not skip_ccl:
-            out_ready_semaphore = attention_block_semaphores[semaphore_index]
-            semaphore_index += 1
-            barrier_semaphore = attention_block_semaphores[semaphore_index]
-            semaphore_index += 1
-            secondary_sync_semaphore = attention_block_semaphores[semaphore_index]
-            semaphore_index += 1
-            out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
-            barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
-            secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
-
-        # Calculate packet size and page info for CCL broadcast
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
+            bcast_semaphores = attention_block_semaphores[semaphore_index : semaphore_index + num_links_bcast]
+            semaphore_index += num_links_bcast
 
         # Get tensor properties (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
-
-        # CCL broadcast page info
-        element_size = 2
-        tile_id_start = 0
-        bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
-        bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-        num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
         # Interpret N 1x32 tiles as full 32x32 or 16x32 tiles
         # eg. [1, 7168] = 7 full 32x32 tiles
@@ -351,18 +358,17 @@ class AttentionBlock:
         # eg. [1, 512] = 1 half 16x32 tile
         FULL_32x32_TILE = ttnn.Tile((32, 32))
         HALF_16x32_TILE = ttnn.Tile((16, 32))
-        is_16x32_tile = (input_shape[1] // FULL_32x32_TILE.tile_shape[1]) % FULL_32x32_TILE.tile_shape[0] != 0
-        interpreted_tile = HALF_16x32_TILE if is_16x32_tile else FULL_32x32_TILE
+        interpreted_tile = FULL_32x32_TILE
         tile_height, tile_width = interpreted_tile.tile_shape
 
         # Calculate single tile size in bytes (bfloat16 = 2 bytes per element)
         tile_size = interpreted_tile.get_tile_size(data_format)
 
         # Calculate num_tiles from tensor shape
-        num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
+        num_tiles = 7
 
         # Get number of elements for RMS calculation
-        numel = input_tensor_sample.logical_volume()
+        numel = num_tiles * tile_height * tile_width
 
         # Get core grid from input tensor's memory config
         input_memory_config = input_tensor_sample.memory_config()
@@ -469,7 +475,6 @@ class AttentionBlock:
             }
         )
 
-        kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
         # Use the merged grids for certain shared CBs between Q rope and K rope
         qkv_grid = qrope_grid.merge(krope_grid)
 
@@ -533,6 +538,7 @@ class AttentionBlock:
 
         TILE_1x32 = ttnn.Tile((1, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
+        tile_32x32_size = FULL_32x32_TILE.get_tile_size(data_format)
         # Mcast setup: sender core (rmsnorm) -> full mcast grid
         # Only matmul cores (is_matmul_core=true) will actually participate in receive
 
@@ -570,16 +576,22 @@ class AttentionBlock:
         # TODO: Subtract the pipeline core
         is_full_mcast_grid_core = ttnn.CoreRangeSet([main_grid]).subtract(rmsnorm_core_grid)
 
-        # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
+        # Active Matmul5 cores: o_proj cores (12x8 + 8x2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
+        matmul5_half_num_cores = num_matmul5_cores // 2  # 56
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.
-        # Needed because o_proj grid is non-rectangular (12×8 + 8×2).
+        # Needed because o_proj grid is non-rectangular (12x8 + 8x2).
         # Row-major (y then x) matches WIDTH_SHARDED shard placement order.
         matmul5_cores = ttnn.corerange_to_cores(matmul5_active_core_grid, row_wise=True)
         gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
+
+        # TP4 outer-dim: each device produces [1, per_device_out_w]
+        num_sp = mesh_shape[0]
+        per_device_out_w = input_shape[1] // num_sp
+        per_device_out_tiles = per_device_out_w // tile_width
 
         # Full grid (union of all cores for semaphore allocation)
         # TODO: Subtract the pipeline core
@@ -684,19 +696,7 @@ class AttentionBlock:
         )  # Header + max payload
         sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
 
-        # SDPA semaphore ID for scatter arrival (new semaphore)
-        scatter_arrival_semaphore_id = 7  # After existing semaphores 0-6
-
-        # SDPA forwarder semaphore IDs (on forwarder cores, signaled by workers)
-        sdpa_fwd_r1_sem_id = 8
-        sdpa_fwd_r2_sem_id = 9
-        sdpa_bwd_r1_sem_id = 10
-        sdpa_bwd_r2_sem_id = 11
-
-        # Convert scale to FP32 bits
-        import struct
-
-        sdpa_scale_fp32_bits = struct.unpack(">I", struct.pack(">f", sdpa_scale_fp32))[0]
+        sdpa_scale_fp32_bits = float_to_uint32(sdpa_scale)
 
         # ========================================================================
         # Matmul4 parameters: [1, 512] x [512, 128] -> [1, 128]
@@ -705,10 +705,16 @@ class AttentionBlock:
         matmul4_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
 
         # ========================================================================
-        # Matmul5 parameters: [1, 8192] x [8192, 64] -> [1, 64]
+        # Matmul5 (KNSlicedMatmul) parameters: [1, 8192] x [4096, 32] -> [1, 32]
+        # TP4 outer-dim: weights packed as (4096, 3584) with K-halves interleaved
+        # 112 cores split into 2 halves of 56; each core: [1, 4096] @ [4096, 32] -> [1, 32]
         # ========================================================================
-        matmul5_k_num_tiles = 256  # 8192 / 32 = 256 tiles
-        matmul5_out_w_per_core = 2  # 64 / 32 = 2 tiles per core
+        matmul5_act_total_tiles = 256  # 8192 / 32 = 256 tiles (full activation)
+        matmul5_k_per_core = matmul5_act_total_tiles // 2  # 128 tiles per half
+        matmul5_out_w_per_core = 1  # 32 / 32 = 1 tile per core
+        matmul5_k_offset_per_core = [
+            (core, 0 if idx < matmul5_half_num_cores else matmul5_k_per_core) for idx, core in enumerate(matmul5_cores)
+        ]
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
@@ -716,8 +722,7 @@ class AttentionBlock:
         gather2_data_size_bytes = matmul4_out_w_per_core * tile_1x32_size
         gather2_src_num_pages = matmul4_out_w_per_core  # 4 pages per sender
         gather2_dst_num_pages = num_matmul4_cores * matmul4_out_w_per_core  # 64 * 4 = 256 pages
-        gather2_noc0_num_senders = num_matmul4_cores
-        gather2_noc1_num_senders = 0
+        # gather2 noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
 
         # ========================================================================
         # Mcast3 parameters: [1, 8192] to 130 cores (13x10 grid)
@@ -727,39 +732,27 @@ class AttentionBlock:
         mcast3_dst_num_pages = gather2_dst_num_pages  # 256 pages per receiver
 
         # ========================================================================
-        # Gather3 parameters: 112 cores -> [1, 7168]
+        # GatherReduce3 parameters: 112 cores (2x56 halves) -> [1, per_device_out_w]
+        # Each sender produces 1 tile of 1x32; halves are reduced on receiver
+        # using 32x32 tile reinterpretation (ceil(56/32) = 2 tiles per half).
         # ========================================================================
-        gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
-        gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
-        gather3_dst_num_pages = num_tiles  # Same as input tensor
-        gather3_noc0_num_senders = num_matmul5_cores
-        gather3_noc1_num_senders = 0
+        gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size  # 1 tile per sender
+        gather3_src_num_pages = matmul5_out_w_per_core  # 1 page per sender
+        gather3_dst_num_tiles = (per_device_out_tiles + 31) // 32  # 2 tiles of 32x32 per half
+        gather3_half_size_bytes = gather3_dst_num_tiles * tile_32x32_size  # padded to 32x32 boundary
 
         # ========================================================================
-        # CCL parameters: [1, 7168] all-reduce
+        # Semaphore addresses (all semaphores are global; addresses are passed as
+        # compile-time args directly to the kernels).
         # ========================================================================
-        # Using 32x32 tiles to match gather3 output format (for tile-compatible reduction)
-        # 7168 elements = 7 tiles of 32x32 (1024 elements each)
-        ccl_num_tiles = gather3_dst_num_pages  # 7 tiles of 32x32
-        ccl_page_size_bytes = tile_size  # 32x32 tile size
-        ccl_num_pages = gather3_dst_num_pages  # 7 pages of 32x32
-        ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 7 * 2048 = 14336 bytes
-        ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
-
-        has_residual = 1
-
-        # ========================================================================
-        # Semaphore IDs
-        # ========================================================================
-        gather2_noc0_receiver_semaphore_id = 0
-        gather2_noc1_receiver_semaphore_id = 1
-        mcast3_data_receiver_semaphore_id = 2
-        gather3_noc0_receiver_semaphore_id = 3
-        gather3_noc1_receiver_semaphore_id = 4
-        gather3_completion_semaphore_id = 5  # Gather3 signals, CCL sender waits
 
         # Semaphore IDs for mcast synchronization
         mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        # TODO: This could potentially be removed and we just use mcast_data_receiver once FlashNorm is implemented
+        mcast_metadata_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
             attention_block_semaphores[semaphore_index]
         )
         semaphore_index += 1
@@ -792,7 +785,8 @@ class AttentionBlock:
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
         nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
         nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
-        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
+        rope_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for MLA
         mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
@@ -816,6 +810,38 @@ class AttentionBlock:
         )
         semaphore_index += 1
 
+        # Post-SDPA fused-op global semaphores (formerly local SemaphoreDescriptors)
+        gather2_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather2_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        mcast3_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather3_noc0_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        gather3_noc1_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
+        scatter_arrival_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_fwd_r1_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_fwd_r2_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_bwd_r1_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+        sdpa_bwd_r2_sem_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
+
         # Post-SDPA semaphores
         sdpa_semaphore1 = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
@@ -823,12 +849,23 @@ class AttentionBlock:
         semaphore_index += 1
         sdpa_semaphore1_addr = ttnn.get_global_semaphore_address(sdpa_semaphore1)
         sdpa_semaphore2_addr = ttnn.get_global_semaphore_address(sdpa_semaphore2)
-        ccl_semaphore = attention_block_semaphores[semaphore_index]
+        ccl_fabric_semaphores = attention_block_semaphores[semaphore_index : semaphore_index + num_links_allreduce]
+        semaphore_index += num_links_allreduce
+        ccl_local_ready_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
-        ccl_semaphore_addr = ttnn.get_global_semaphore_address(ccl_semaphore)
         ccl_sync_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
         ccl_sync_semaphore_addr = ttnn.get_global_semaphore_address(ccl_sync_semaphore)
+        ccl_sync_semaphore2 = attention_block_semaphores[semaphore_index]
+        semaphore_index += 1
+        ccl_sync_semaphore2_addr = ttnn.get_global_semaphore_address(ccl_sync_semaphore2)
+        allgather_handoff_semaphore = attention_block_semaphores[semaphore_index]
+        semaphore_index += 1
+        allgather_recv_semaphore = attention_block_semaphores[semaphore_index]
+        semaphore_index += 1
+        allgather_handoff_sem_addr = ttnn.get_global_semaphore_address(allgather_handoff_semaphore)
+        allgather_recv_sem_addr = ttnn.get_global_semaphore_address(allgather_recv_semaphore)
+        assert semaphore_index == len(attention_block_semaphores), "Unexpected attention_block semaphore consumption"
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -913,7 +950,6 @@ class AttentionBlock:
         qrope_rotated_input_interm_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Rotated input intermediate CB for RoPE
-        qrope_cos_sin_interm_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos/Sin intermediate CB for RoPE
         # KV cache branch
         dkv_matmul_output_cb = matmul_output_cb  # Reuse matmul1 output CB ID (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_input_cb = rmsnorm2_input_cb  # Reuse rmsnorm2 input CB ID (disjoint grids: rows 0-7 vs rows 8-9)
@@ -926,6 +962,7 @@ class AttentionBlock:
 
         kv_cache_output_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Output CB for KV Cache Branch
         kv_cache_intermed_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Intermed CB for KV Cache Branch
+        kv_cache_intermed_sync_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Sync CB overlapping intermed CB
         kv_cache_input_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Input CB for KV Cache Branch
 
         # MLA parameters
@@ -942,6 +979,20 @@ class AttentionBlock:
 
         # CB indices for CCL broadcast (use separate CBs to avoid conflicts)
         bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # Packet buffer for CCL broadcast
+        bcast_config = DeepseekMinimalBroadcast.configure(
+            mesh_device=mesh_device,
+            input_tensor_mesh=input_tensor_mesh,
+            output_tensor=sdpa_kv_cache_buffer,
+            sender_coord=sender_mesh_coord,
+            semaphores=bcast_semaphores,
+            socket=upstream_socket,
+            skip_ccl=skip_ccl,
+            chunk_size_bytes=None,
+            bcast_cb_id=bcast_pkt_cb,
+            num_links=num_links_bcast,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
+        )
 
         # SDPA CB indices
         sdpa_cb_local_l = mla_out_o_cb
@@ -970,18 +1021,53 @@ class AttentionBlock:
         assert (
             post_sdpa_weights2_tensor.get_tile() == matmul_weights_tensor.get_tile()
         ), f"Post SDPA weights2 tensor tile ({post_sdpa_weights2_tensor.get_tile()}) must be equal to matmul weights tensor tile ({matmul_weights_tensor.get_tile()})"
-        matmul5_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Matmul5 output (112 active cores)
-        gather3_dst_cb = cb_id_context.get_cb_id(
-            data_format, TD_INTERP
-        )  # Gather3 output = CCL local data (gather core)
-        ccl_sender_in_cb = cb_id_context.get_cb_id(
-            data_format, TD_INTERP
-        )  # CCL sender reads gather3 output (sender core)
-        ccl_remote_data_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL received remote data (receiver core)
-        ccl_residual_cb = input_cb
-        ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL output (receiver core)
+        matmul5_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # KNSlicedMatmul output (112 active cores)
+        gather3_scratch_cb = cb_id_context.get_cb_id(
+            data_format, TD_32x32
+        )  # GatherReduce scratch CB (2 * gather3_dst_num_tiles of 32x32 on receiver)
+        gather3_out_cb = cb_id_context.get_cb_id(
+            data_format, TD_32x32
+        )  # GatherReduce output = CCL local data (sender core 11,9)
+        ccl_recv_local_data_cb = cb_id_context.get_cb_id(
+            data_format, TD_32x32
+        )  # CCL receiver local data (NOC copy on receiver core 12,9)
+        ccl_remote_data_cb = cb_id_context.get_cb_id(data_format, TD_32x32)  # CCL received remote data (receiver core)
+        ccl_residual_cb = cb_id_context.get_cb_id(data_format, TD_32x32)  # CCL residual (offset slice of input)
+        ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_32x32)  # CCL output (receiver core)
 
-        attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
+        # Configure AllReduceConfig in no-ownership mode:
+        # All CCL CBs are carved from overlapped memory (sdpa_kv_cache_buffer),
+        # not from separate tensors. AllReduceConfig only provides CT/RT args.
+        allreduce_config = DeepseekMinimalAllReduce.configure(
+            mesh_device=mesh_device,
+            intermediate_tensor=None,
+            output_tensor=attention_block_output_tensor,
+            semaphores=ccl_fabric_semaphores + [ccl_local_ready_semaphore],
+            cluster_axis=reduce_cluster_axis,
+            num_links=num_links_allreduce,
+            local_data_cb_id=gather3_out_cb,
+            recv_local_data_cb_id=ccl_recv_local_data_cb,
+            remote_data_cb_id=ccl_remote_data_cb,
+            output_cb_id=ccl_output_cb,
+            residual_cb_id=ccl_residual_cb,
+            skip_local_push=True,
+            skip_ccl=skip_ccl,
+            sender_core=ccl_sender_core,
+            num_tiles_override=gather3_dst_num_tiles,
+            page_size_override=tile_32x32_size,
+        )
+
+        # ========================================================================
+        # AllGather config: gather 4 x [1, per_device_out_w] slices into [1, full_out_w]
+        # Runs along axis=0 (rows) after the all-reduce completes on axis=1 (columns).
+        # Reuses the same two cores: gather core (12,9) and transport core (11,9).
+        # ========================================================================
+        allgather_slice_size_bytes = per_device_out_tiles * tile_1x32_size  # 1792 * 2 = 3584
+        allgather_num_links = 1  # single fabric link per direction
+        allgather_cluster_axis = 0  # gather along rows
+
+        # Scratch: reuse gather3_scratch_cb L1 address on sender/transport core
+        # Need 2 * slice_size_bytes = 7168 bytes; gather3_scratch has 2*ccl_cb_total_size available
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -1053,6 +1139,18 @@ class AttentionBlock:
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
+        ]
+
+        # Mcast metadata sender compile-time args (named args for CRISC)
+        mcast_metadata_sender_named_compile_time_args = [
+            ("rmsnorm_input_cb", input_cb),
+            ("rmsnorm_num_tiles", num_tiles),
+            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
+        ]
+
+        # Mcast metadata receiver compile-time args (named args for NCRISC)
+        mcast_metadata_receiver_named_compile_time_args = [
+            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
         ]
 
         # Calculate matmul1 K-split parameters
@@ -1166,13 +1264,12 @@ class AttentionBlock:
         ]
         # BRISC: no-op (empty args)
         qrope_brisc_named_compile_time_args = []
-        # TRISC: in_cb, cos_sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_sin_interm_cb, out_cb, Wt, Ht
+        # TRISC: in_cb, cos_sin_cb, trans_mat_cb, rotated_in_interm_cb, out_cb, Wt, Ht
         qrope_trisc_named_compile_time_args = [
             ("qrope_in_cb", matmul2_output_cb),
             ("qkv_rope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("qrope_trans_mat_cb", qrope_trans_mat_cb),
             ("qrope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("qrope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
             ("qrope_output_cb", qrope_output_cb),
             ("qrope_Wt", qrope_head_dim_per_core_t),
             ("qrope_Ht", qrope_num_heads_per_core),
@@ -1206,7 +1303,7 @@ class AttentionBlock:
         nope_tiles = 8  # [8, 256] / [8, 32] = 8 tiles per NOPE phase
         rope_tiles = 2  # [8, 64] / [8, 32] = 2 tiles for ROPE phase
 
-        # NCRISC sender compile-time args (QNOPE/QROPE -> SDPA Input) - matching gather pattern: NCRISC sender, BRISC receiver
+        # NCRISC compile-time args: all CreateQHeads data movement (sender + receiver) on NCRISC
         # 3-phase synchronization: senders write to intermediate CB, TRISC tilizes to output
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
         create_q_heads_ncrisc_named_compile_time_args = [
@@ -1232,18 +1329,9 @@ class AttentionBlock:
             ("cqh_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
             ("cqh_qnope_cols", QNOPE_COLS),
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
-        ]
-
-        # BRISC receiver compile-time args (SDPA Input cores) - matching gather pattern: NCRISC sender, BRISC receiver
-        # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
-        # Prefixed with "cqh_" to avoid name collisions with other BRISC args
-        create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
-            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
-            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
+            # Receiver args (also on NCRISC, for sdpa input cores)
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
-            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
             ("cqh_out_cb", create_q_heads_out_cb),  # Output CB (backed by output tensor)
             ("cqh_nope_tiles", nope_tiles),  # 8 tiles per NOPE phase
             ("cqh_rope_tiles", rope_tiles),  # 2 tiles for ROPE phase
@@ -1297,22 +1385,17 @@ class AttentionBlock:
         # Note: matmul_input_page_size == matmul_output_page_size (both are 1x32 tiles)
         gather_reduce_data_size_bytes = matmul_input_page_size
 
-        # Get number of sender cores (matmul grid)
-        gather_reduce_sender_cores_list = ttnn.corerange_to_cores(gather_reduce_sender_grid, row_wise=True)
-        gather_reduce_num_senders = len(gather_reduce_sender_cores_list)
-
-        # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
-        gather_reduce_noc0_num_senders = gather_reduce_num_senders
-        gather_reduce_noc1_num_senders = 0
-        # Gather sender compile-time args (named args for NCRISC on matmul cores)
-        # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
+        # Gather sender compile-time args (named args for NCRISC on matmul cores).
+        # Sender picks one of noc0/noc1 receiver_semaphore_addr at compile-time based on
+        # its per-core gather_reduce_noc_idx; noc0/noc1 sender counts are added per-device.
         # Grid-based destination and sender index are computed in kernel from my_logical_x_/y_.
         gather_reduce_src_num_pages = 1  # Matmul output tiles per core (single 1x32 tile)
         gather_reduce_sender_named_compile_time_args = [
             ("gather_reduce_dest_noc_x", gather_reduce_dest_noc_core.x),
             ("gather_reduce_dest_noc_y", gather_reduce_dest_noc_core.y),
             ("gather_reduce_data_size_bytes", gather_reduce_data_size_bytes),
-            ("gather_reduce_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
+            ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_src_cb", matmul_output_cb),
             ("gather_reduce_src_num_pages", gather_reduce_src_num_pages),
             ("gather_reduce_grid_start_x", matmul_bbox.start.x),
@@ -1325,12 +1408,8 @@ class AttentionBlock:
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
-        # Plus destination CB info for reserve/push
-        # Writes directly to rmsnorm2_input_cb (3 tiles of 16x32 = 3072 bytes)
+        # noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
         gather_reduce_receiver_named_compile_time_args = [
-            ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
-            ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
             ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
             ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
             ("gather_reduce_dst_cb", gather_reduce_scratch_cb),
@@ -1364,6 +1443,7 @@ class AttentionBlock:
         # KV Cache Branch: RMSNorm
         # RMSNorm compute compile-time args (named args for TRISC)
         kv_rmsnorm_num_tiles = kv_numel // (16 * 32)  # 512 / 512 = 1 tile (16x32)
+        kv_rmsnorm_page_size = TILE_16x32.get_tile_size(data_format)
         kv_rmsnorm_brisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
@@ -1388,17 +1468,9 @@ class AttentionBlock:
         # ========================================================================
         dkv_gather_receiver_core = dkv_rmsnorm_gamma_tensor.core_range_set.ranges()[0].start
         dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_grid)
-
+        kv_cache_update_grid = dkv_matmul_weights_core_grid
         # Get NOC coordinates for gather destination (receiver core)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(dkv_gather_receiver_core)
-
-        # Get number of sender cores (matmul grid)
-        dkv_gather_sender_cores_list = ttnn.corerange_to_cores(dkv_gather_sender_grid, row_wise=True)
-        dkv_gather_num_senders = len(dkv_gather_sender_cores_list)
-
-        # All senders use NOC_0 (default for NCRISC), so noc0_num_senders = all, noc1_num_senders = 0
-        dkv_gather_noc0_num_senders = dkv_gather_num_senders
-        dkv_gather_noc1_num_senders = 0
 
         # Get sender grid dimensions for computing per-core offset in kernel
         # Use logical coordinates since kernel uses UnifiedCoreDescriptor with my_logical_x_/y_
@@ -1409,16 +1481,16 @@ class AttentionBlock:
         dkv_gather_sender_grid_end_x = dkv_gather_sender_grid_range.end.x
         dkv_gather_sender_grid_end_y = dkv_gather_sender_grid_range.end.y
 
-        # Gather sender compile-time args (named args for NCRISC on matmul cores)
-        # SenderCTArgs: dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id
-        # Plus grid info for computing per-core offset
+        # Gather sender compile-time args (named args for NCRISC on matmul cores).
+        # Sender and receiver are both on NCRISC (ReceiverOnNCRISC) so both noc0/noc1
+        # receiver semaphore addrs come from dkv_gather_receiver_named_compile_time_args below;
+        # the sender selects at compile-time based on its per-core dkv_gather_noc_idx.
         dkv_gather_src_num_pages = dkv_matmul_out_w  # dkv matmul output tiles per core (must match matmul cb_push_back)
         dkv_gather_data_size_bytes = dkv_gather_src_num_pages * dkv_matmul_input_page_size
         dkv_gather_sender_named_compile_time_args = [
             ("dkv_gather_dest_noc_x", dkv_gather_dest_noc_core.x),
             ("dkv_gather_dest_noc_y", dkv_gather_dest_noc_core.y),
             ("dkv_gather_data_size_bytes", dkv_gather_data_size_bytes),
-            ("dkv_gather_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_src_cb", dkv_matmul_output_cb),  # Source CB for gather (dkv matmul output)
             ("dkv_gather_src_num_pages", dkv_gather_src_num_pages),
             ("dkv_gather_sender_grid_start_x", dkv_gather_sender_grid_start_x),
@@ -1426,16 +1498,11 @@ class AttentionBlock:
             ("dkv_gather_sender_grid_end_x", dkv_gather_sender_grid_end_x),
             ("dkv_gather_sender_grid_end_y", dkv_gather_sender_grid_end_y),
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
-            ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),  # Destination CB: write directly to kv_rmsnorm_input_cb
         ]
 
-        # Gather receiver compile-time args (named args for BRISC on kv rmsnorm core)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
-        # Plus destination CB info for reserve/push
-        # Writes directly to kv_rmsnorm_input_cb
+        # Gather receiver compile-time args (on NCRISC via ReceiverOnNCRISC mode).
+        # noc0/noc1 sender counts are populated per-device from per-core noc_idx assignments.
         dkv_gather_receiver_named_compile_time_args = [
-            ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
-            ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
             ("dkv_gather_noc0_receiver_semaphore_addr", gather_noc0_receiver_semaphore_addr),
             ("dkv_gather_noc1_receiver_semaphore_addr", gather_noc1_receiver_semaphore_addr),
             ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),
@@ -1463,31 +1530,57 @@ class AttentionBlock:
             ("krope_cos_sin_cb", qkv_rope_cos_sin_cb),
             ("krope_trans_mat_cb", qrope_trans_mat_cb),
             ("krope_rotated_in_interm_cb", qrope_rotated_input_interm_cb),
-            ("krope_cos_sin_interm_cb", qrope_cos_sin_interm_cb),
             ("krope_output_cb", krope_output_cb),
             ("krope_Wt", krope_Wt),
             ("krope_Ht", krope_Ht),
         ]
 
-        # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
-        kv_cache_brisc_named_compile_time_args = [
+        # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
+        kv_tile_h, kv_tile_w = kv_cache_tensor.get_tile().tile_shape
+        kv_cache_pages_per_slot = (kv_cache_tensor.padded_shape[-2] // kv_tile_h) * (
+            kv_cache_tensor.padded_shape[-1] // kv_tile_w
+        )
+        # k_chunk_size and num_cores_per_head are shared with MLA args (set in mla_ncrisc section)
+        # mla_sender_noc_x/y args are appended after MLA core group is built (depends on num_s_blocks)
+        knope_grid_range = dkv_gather_sender_grid.ranges()[0]
+        nope_mcast_dest_start_core = device.worker_core_from_logical_core(knope_grid_range.start)
+        nope_mcast_dest_end_core = device.worker_core_from_logical_core(knope_grid_range.end)
+        nope_mcast_num_cores = knope_grid_range.grid_size().x * knope_grid_range.grid_size().y
+        nope_mcast_num_dests = nope_mcast_num_cores - 1
+        nope_mcast_data_size_bytes = kv_rmsnorm_num_tiles * kv_rmsnorm_page_size
+        # Reuse existing global semaphores for nope mcast sender/receiver
+        nope_mcast_sender_semaphore_addr = mcast_data_sender_semaphore_addr
+        nope_mcast_receiver_semaphore_addr = mcast_data_receiver_semaphore_addr
+        kv_cache_ncrisc_named_compile_time_args = [
+            ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("krope_output_cb", krope_output_cb),
-            ("kv_cache_output_cb", kv_cache_output_cb),
-            ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
+            ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
-            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
-            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
-            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
-            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
-            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+            ("nope_mcast_dest_noc_start_x", nope_mcast_dest_start_core.x),
+            ("nope_mcast_dest_noc_start_y", nope_mcast_dest_start_core.y),
+            ("nope_mcast_dest_noc_end_x", nope_mcast_dest_end_core.x),
+            ("nope_mcast_dest_noc_end_y", nope_mcast_dest_end_core.y),
+            ("nope_mcast_sender_semaphore_addr", nope_mcast_sender_semaphore_addr),
+            ("nope_mcast_receiver_semaphore_addr", nope_mcast_receiver_semaphore_addr),
+            ("nope_mcast_data_size_bytes", nope_mcast_data_size_bytes),
+            ("nope_mcast_num_dests", nope_mcast_num_dests),
+            ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
+        ]
+        kv_cache_brisc_named_compile_time_args = [
+            ("kv_cache_input_cb", kv_cache_input_cb),
+            ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
         ]
 
         # Flash MLA named compile-time args
@@ -1554,7 +1647,6 @@ class AttentionBlock:
         assert PNHt == 1, f"PNHt must be 1, got {PNHt}"
         assert num_kv_heads == 1, f"num_kv_heads must be 1, got {num_kv_heads}"
         assert num_heads_per_core == 1, f"num_heads_per_core must be 1, got {num_heads_per_core}"
-        assert Bkv == 1, f"Bkv must be 1, got {Bkv}"
 
         if fp32_dest_acc_en:
             mla_dst_size = 8 if fp32_dest_acc_en else 16
@@ -1603,11 +1695,25 @@ class AttentionBlock:
         # Create core group with the same layout
         mla_core_group = [ttnn.CoreCoord(x, y) for x, y in mla_all_cores]
 
+        # Physical NOC coordinates of mcast sender cores (first batch, one per S block).
+        # Used by kv_cache_update to unicast the cache-ready signal to the specific
+        # MLA reader core that handles the last KV chunk.
+        mla_sender_noc_xs = []
+        mla_sender_noc_ys = []
+        for s_idx in range(num_s_blocks):
+            phys = device.worker_core_from_logical_core(mla_core_group[s_idx])
+            mla_sender_noc_xs.append(phys.x)
+            mla_sender_noc_ys.append(phys.y)
+
+        kv_cache_ncrisc_named_compile_time_args += [
+            (f"mla_sender_noc_x_{i}", mla_sender_noc_xs[i]) for i in range(num_s_blocks)
+        ] + [(f"mla_sender_noc_y_{i}", mla_sender_noc_ys[i]) for i in range(num_s_blocks)]
+
         # Multicast: each S block's first core (Q1) reads KV and multicasts to others in that S block
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
         num_mcast_dests = cores_per_s_block - 1  # 7 receivers per S block
 
-        mla_brisc_named_compile_time_args = [
+        mla_ncrisc_named_compile_time_args = [
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
@@ -1635,8 +1741,9 @@ class AttentionBlock:
             ("mla_ms_in_cb", mla_ms_in_cb),
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
+            ("mla_use_alt_mcast_vc", 1 if is_slow_dispatch() else 0),
         ]
-        mla_ncrisc_named_compile_time_args = [
+        mla_brisc_named_compile_time_args = [
             ("St", St),
             ("DHt", DHt),
             ("Sk_chunk_t", Sk_chunk_t),
@@ -1650,6 +1757,7 @@ class AttentionBlock:
             ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
             ("mla_k_in_cb", mla_k_in_cb),
+            ("mla_num_mcast_dests", num_mcast_dests),
         ]
         mla_trisc_named_compile_time_args = [
             ("St", St),
@@ -1660,7 +1768,7 @@ class AttentionBlock:
             ("k_chunk_size", k_chunk_size),
             ("num_cores_per_head", num_cores_per_head),
             ("q_heads_parallel_factor", B),
-            ("scale_fp32", float_to_uint32(scale)),
+            ("scale_fp32", sdpa_scale_fp32_bits),
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
             ("dst_size", mla_dst_size),
             ("mla_q_in_cb", mla_q_in_cb),
@@ -1690,11 +1798,12 @@ class AttentionBlock:
             ("matmul4_out", matmul4_out_cb),
             ("matmul4_k_num_tiles", matmul4_k_num_tiles),
             ("matmul4_out_w_per_core", matmul4_out_w_per_core),
-            # Gather2 sender
+            # Gather2 sender (picks noc0/noc1 semaphore addr at compile-time per gather2_noc_idx)
             ("gather2_dest_noc_x", gather_dest_noc_core.x),
             ("gather2_dest_noc_y", gather_dest_noc_core.y),
             ("gather2_data_size_bytes", gather2_data_size_bytes),
-            ("gather2_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
+            ("gather2_noc0_receiver_semaphore_addr", gather2_noc0_receiver_semaphore_addr),
+            ("gather2_noc1_receiver_semaphore_addr", gather2_noc1_receiver_semaphore_addr),
             ("gather2_src_cb", matmul4_out_cb),
             ("gather2_src_num_pages", gather2_src_num_pages),
             ("gather2_sender_grid_start_x", 0),
@@ -1703,44 +1812,36 @@ class AttentionBlock:
             ("gather2_sender_grid_end_y", 0),
             ("gather2_row_major", 1),
             # Mcast3 receiver
-            ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+            ("mcast3_data_receiver_semaphore_addr", mcast3_data_receiver_semaphore_addr),
             ("mcast3_dst_cb", matmul5_in0_cb),
             ("mcast3_dst_num_pages", mcast3_dst_num_pages),
-            # Matmul5
+            # Matmul5 (KNSlicedMatmul)
             ("matmul5_in0", matmul5_in0_cb),
             ("matmul5_in1", matmul5_in1_cb),
             ("matmul5_out", matmul5_out_cb),
-            ("matmul5_k_num_tiles", matmul5_k_num_tiles),
             ("matmul5_out_w_per_core", matmul5_out_w_per_core),
-            # Gather3 sender
-            ("gather3_dest_noc_x", gather_dest_noc_core.x),
-            ("gather3_dest_noc_y", gather_dest_noc_core.y),
+            ("matmul5_k_per_core", matmul5_k_per_core),
+            ("matmul5_act_total_tiles", matmul5_act_total_tiles),
+            # GatherReduce3 sender (destination is now sender core 11,9)
+            ("gather3_dest_noc_x", ccl_sender_noc_core.x),
+            ("gather3_dest_noc_y", ccl_sender_noc_core.y),
             ("gather3_data_size_bytes", gather3_data_size_bytes),
-            ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+            ("gather3_noc0_receiver_semaphore_addr", gather3_noc0_receiver_semaphore_addr),
+            ("gather3_noc1_receiver_semaphore_addr", gather3_noc1_receiver_semaphore_addr),
             ("gather3_src_cb", matmul5_out_cb),
             ("gather3_src_num_pages", gather3_src_num_pages),
-            ("gather3_sender_grid_start_x", 0),
-            ("gather3_sender_grid_start_y", 0),
-            ("gather3_sender_grid_end_x", 0),
-            ("gather3_sender_grid_end_y", 0),
-            ("gather3_row_major", 1),
-            # CCL sender (NCRISC reads from gather core)
-            ("ccl_sender_cb0_id", ccl_sender_in_cb),
-            ("ccl_sender_num_tiles", ccl_num_pages),
-            ("ccl_sender_tensor_page_size", ccl_page_size_bytes),
-            ("ccl_sender_data_noc_x", ccl_receiver_noc_core.x),
-            ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
-            ("ccl_sender_gather3_completion_semaphore_id", gather3_completion_semaphore_id),
-            # CCL receiver (NCRISC waits for remote data)
-            ("ccl_receiver_cb_in1", ccl_remote_data_cb),
-            ("ccl_receiver_cb_in2", gather3_dst_cb),  # Local data from gather3
-            ("ccl_receiver_remote_sender_noc_x", ccl_sender_noc_core.x),
-            ("ccl_receiver_remote_sender_noc_y", ccl_sender_noc_core.y),
-            ("ccl_receiver_num_standard_tiles", ccl_num_tiles),
-            ("ccl_receiver_cb_residual", ccl_residual_cb),
-            ("ccl_receiver_has_residual", has_residual),
-            ("ccl_receiver_skip_local_push", 1),  # Skip local push since gather3 already pushed to CB7
+            # Grid args unused when UsePerCoreSenderIdx=true, but required for struct init
+            ("gather3_grid_start_x", 0),
+            ("gather3_grid_start_y", 0),
+            ("gather3_grid_end_x", 0),
+            ("gather3_grid_end_y", 0),
+            ("gather3_half_num_cores", matmul5_half_num_cores),
+            ("gather3_dst_cb_id", gather3_scratch_cb),
+            ("gather3_half_size_bytes", gather3_half_size_bytes),
         ]
+
+        # Append AllReduceConfig NCRISC CT args (writer on sender core + reader on receiver core)
+        post_sdpa_ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_named_ct_args(sender_mesh_coord))
 
         # Add SDPA NCRISC compile-time args when enabled
         post_sdpa_ncrisc_named_compile_time_args.extend(
@@ -1762,13 +1863,17 @@ class AttentionBlock:
                 ("sdpa_fwd_slots_per_round", sdpa_fwd_slots_per_round),
                 ("sdpa_fwd_slot_size", sdpa_fwd_slot_size),
                 ("sdpa_fwd_r2_buffer_offset", sdpa_fwd_r2_buffer_offset),
+                ("sdpa_fwd_num_cores", num_sdpa_forwarder_cores),
                 # Scatter arrival semaphore
-                ("scatter_arrival_semaphore_id", scatter_arrival_semaphore_id),
+                ("scatter_arrival_semaphore_addr", scatter_arrival_semaphore_addr),
                 # Input NOC coord
                 ("input_noc_coord_x", input_noc_coord.x),
                 ("input_noc_coord_y", input_noc_coord.y),
+                ("ccl_sender_noc_x", ccl_sender_noc_core.x),
+                ("ccl_sender_noc_y", ccl_sender_noc_core.y),
                 # CCL sync semaphore
                 ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
+                ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
             ]
         )
 
@@ -1779,49 +1884,36 @@ class AttentionBlock:
             # Matmul4/2 (no-op)
             ("matmul4_out", matmul4_out_cb),
             ("matmul5_out", matmul5_out_cb),
-            # Gather2 receiver
-            ("gather2_noc0_num_senders", gather2_noc0_num_senders),
-            ("gather2_noc1_num_senders", gather2_noc1_num_senders),
-            ("gather2_noc0_receiver_semaphore_id", gather2_noc0_receiver_semaphore_id),
-            ("gather2_noc1_receiver_semaphore_id", gather2_noc1_receiver_semaphore_id),
+            # Gather2 receiver (noc0/noc1 sender counts added per-device)
+            ("gather2_noc0_receiver_semaphore_addr", gather2_noc0_receiver_semaphore_addr),
+            ("gather2_noc1_receiver_semaphore_addr", gather2_noc1_receiver_semaphore_addr),
             ("gather2_dst_cb", gather2_dst_cb),
             ("gather2_dst_num_pages", gather2_dst_num_pages),
             # Mcast3 sender
-            ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
+            ("mcast3_data_receiver_semaphore_addr", mcast3_data_receiver_semaphore_addr),
             ("mcast3_data_size_bytes", mcast3_data_size_bytes),
             ("mcast3_src_cb", gather2_dst_cb),
             ("mcast3_src_num_pages", mcast3_src_num_pages),
             ("mcast3_dst_cb", matmul5_in0_cb),
-            # Gather3 receiver
-            ("gather3_noc0_num_senders", gather3_noc0_num_senders),
-            ("gather3_noc1_num_senders", gather3_noc1_num_senders),
-            ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
-            ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
-            ("gather3_dst_cb", gather3_dst_cb),
-            ("gather3_dst_num_pages", gather3_dst_num_pages),
-            # Gather3 completion signal for CCL sender synchronization
-            ("gather3_completion_semaphore_id", gather3_completion_semaphore_id),
-            ("ccl_sender_noc_x", ccl_sender_noc_core.x),
-            ("ccl_sender_noc_y", ccl_sender_noc_core.y),
-            # CCL sender (BRISC sends via fabric)
-            ("ccl_sender_packet_cb_id", ccl_sender_in_cb),
-            ("ccl_sender_input_num_tiles", ccl_num_pages),
-            ("ccl_sender_page_size_bytes", ccl_page_size_bytes),
-            ("ccl_sender_payload_size_bytes", ccl_payload_size_bytes),
-            ("ccl_sender_data_noc_x", ccl_receiver_noc_core.x),
-            ("ccl_sender_data_noc_y", ccl_receiver_noc_core.y),
-            ("ccl_sender_remote_receiver_noc_x", ccl_receiver_noc_core.x),
-            ("ccl_sender_remote_receiver_noc_y", ccl_receiver_noc_core.y),
-            ("ccl_sender_dst_num_hops", 1),
-            ("ccl_sender_num_connections", 1),
-            ("ccl_sender_num_cores", num_ccl_sender_cores),
+            # GatherReduce3 receiver (now on sender core 11,9)
+            ("gather3_noc0_receiver_semaphore_addr", gather3_noc0_receiver_semaphore_addr),
+            ("gather3_noc1_receiver_semaphore_addr", gather3_noc1_receiver_semaphore_addr),
+            ("gather3_dst_cb", gather3_scratch_cb),
+            ("gather3_dst_num_tiles", gather3_dst_num_tiles),
             ("sdpa_fwd_num_cores", num_sdpa_forwarder_cores),
+            ("num_ccl_sender_cores", 1),
             # Input NOC coord
             ("input_noc_coord_x", input_noc_coord.x),
             ("input_noc_coord_y", input_noc_coord.y),
+            ("ccl_sender_noc_x", ccl_sender_noc_core.x),
+            ("ccl_sender_noc_y", ccl_sender_noc_core.y),
             # CCL sync semaphore
             ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
+            ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
         ]
+
+        # Append AllReduceConfig BRISC CT args (writer on sender core)
+        post_sdpa_brisc_named_compile_time_args.extend(allreduce_config.get_brisc_named_ct_args(sender_mesh_coord))
 
         # Add SDPA BRISC compile-time args when enabled
         post_sdpa_brisc_named_compile_time_args.extend(
@@ -1847,7 +1939,7 @@ class AttentionBlock:
                 ("sdpa_scatter_face_size", sdpa_scatter_face_size),
                 ("sdpa_scatter_row_face_size", sdpa_scatter_row_face_size),
                 ("sdpa_scatter_num_rows", sdpa_scatter_num_rows),
-                ("scatter_arrival_semaphore_id", scatter_arrival_semaphore_id),
+                ("scatter_arrival_semaphore_addr", scatter_arrival_semaphore_addr),
                 # SDPA forwarder params
                 ("sdpa_fwd_slots_per_round", sdpa_fwd_slots_per_round),
                 ("sdpa_fwd_slot_size", sdpa_fwd_slot_size),
@@ -1865,20 +1957,24 @@ class AttentionBlock:
             ("matmul4_out", matmul4_out_cb),
             ("matmul4_k_num_tiles", matmul4_k_num_tiles),
             ("matmul4_out_w_per_core", matmul4_out_w_per_core),
-            # Matmul5
+            # Matmul5 (KNSlicedMatmul)
             ("matmul5_in0", matmul5_in0_cb),
             ("matmul5_in1", matmul5_in1_cb),
             ("matmul5_out", matmul5_out_cb),
-            ("matmul5_k_num_tiles", matmul5_k_num_tiles),
             ("matmul5_out_w_per_core", matmul5_out_w_per_core),
-            # CCL receiver compute (reduction)
-            ("ccl_receiver_cb_in0", ccl_remote_data_cb),
-            ("ccl_receiver_cb_in1", gather3_dst_cb),  # Local data
-            ("ccl_receiver_cb_out0", ccl_output_cb),
-            ("ccl_receiver_cb_residual", ccl_residual_cb),
-            ("ccl_receiver_has_residual", has_residual),
-            ("ccl_receiver_num_tiles", ccl_num_tiles),
+            ("matmul5_k_per_core", matmul5_k_per_core),
+            ("matmul5_act_total_tiles", matmul5_act_total_tiles),
+            # GatherReduce3 compute
+            ("gather3_scratch_cb", gather3_scratch_cb),
+            ("gather3_out_cb", gather3_out_cb),
+            ("gather3_dst_num_tiles", gather3_dst_num_tiles),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
+            ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
         ]
+
+        # Append AllReduceConfig TRISC CT args (compute on receiver core)
+        post_sdpa_trisc_named_compile_time_args.extend(allreduce_config.get_trisc_named_ct_args(sender_mesh_coord))
 
         # Add SDPA TRISC compile-time args when enabled
         post_sdpa_trisc_named_compile_time_args.extend(
@@ -1917,12 +2013,19 @@ class AttentionBlock:
         ref_sdpa_intermediate_recv = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[0]
         ref_sdpa_forwarder_scratch = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
 
-        # Get worker core from input tensor shard grid (same for all devices)
+        # Get worker core from input tensor shard grid (legacy/reference path)
         device_input_shard_grid = ref_input_tensor.memory_config().shard_spec.grid
         device_shard_grid_start = device_input_shard_grid.bounding_box().start
-        broadcast_worker_core = ttnn.CoreCoord(device_shard_grid_start.x, device_shard_grid_start.y)
-        broadcast_worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(broadcast_worker_core, broadcast_worker_core)])
+        reference_broadcast_worker_core = ttnn.CoreCoord(device_shard_grid_start.x, device_shard_grid_start.y)
+        broadcast_worker_core = bcast_config.get_worker_core(sender_mesh_coord)
+        broadcast_worker_core_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(reference_broadcast_worker_core, reference_broadcast_worker_core)]
+        )
         assert rmsnorm_core_grid == broadcast_worker_core_set, "RMSNorm core grid does not match broadcast worker core"
+        assert (
+            broadcast_worker_core.x == reference_broadcast_worker_core.x
+            and broadcast_worker_core.y == reference_broadcast_worker_core.y
+        ), "Broadcast worker core mismatch between bcast_config and reference tensor shard grid"
 
         # Get physical core for NOC addressing
         data_core_physical = device.worker_core_from_logical_core(broadcast_worker_core)
@@ -1940,32 +2043,37 @@ class AttentionBlock:
         sdpa_kv_cache_running_offset_mcast_core = 0
 
         sdpa_forwarder_scratch_running_offset = 0
+        sdpa_intermediate_recv_running_offset = 0
+        input_running_offset = 0
+        attn_block_output_running_offset = 0
 
         # Create circular buffer descriptors
         # CB: Input (created from sharded tensor)
-        broadcast_address = 0
-        if skip_ccl:
-            in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                input_cb, ref_input_tensor, core_ranges=full_device_grid
+        # When forward_metadata is enabled, the socket writes activation + metadata
+        # contiguously. We pad the backing buffer to fit metadata after the activation
+        # data, but the CB format (what RMSNorm reads) remains activation-only.
+        activation_size = num_tiles * cb_page_size
+
+        in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            input_cb, ref_input_tensor, core_ranges=full_device_grid
+        )
+        in_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=input_cb,
+                data_format=data_format,
+                page_size=cb_page_size,
+                tile=tile_descriptor,
             )
-        else:
-            in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                input_cb,
-                ref_sdpa_kv_cache_buffer,
-                address_offset=sdpa_kv_cache_running_offset_mcast_core,
-                total_size=num_tiles * cb_page_size,
-                core_ranges=full_device_grid,
-            )
-            broadcast_address = ttnn.get_cb_address(in_cb_descriptor)
-            in_cb_descriptor.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=input_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-            ]
-            sdpa_kv_cache_running_offset_mcast_core += in_cb_descriptor.total_size
+        ]
+        in_cb_descriptor.total_size = activation_size
+
+        # Keep broadcast writer backing address explicit for this fused path.
+        input_cb_l1_addr = ttnn.get_cb_address(in_cb_descriptor)
+        bcast_config.set_writer_tensor_address_override(input_cb_l1_addr)
+
+        # When forwarding metadata, the socket writes activation + metadata contiguously.
+        # The metadata sits right after the activation data in the input CB's backing buffer.
+        forwarded_metadata_l1_addr = input_cb_l1_addr + activation_size if forward_metadata else None
 
         # CB: Gamma (backed by fused overlapped tensor)
         gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(gamma_cb, gamma_tensor, ref_gamma_fused_tensor)
@@ -1979,10 +2087,10 @@ class AttentionBlock:
         rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
         rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
-        # CB: CCL broadcast packet buffer
-        bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            bcast_pkt_cb, ref_input_tensor, core_ranges=full_device_grid
-        )
+        # CB: CCL broadcast packet buffer.
+        # This op builds device-invariant descriptor templates from reference tensors;
+        # use sender device metadata as the canonical broadcast descriptor reference.
+        bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(sender_mesh_coord)
 
         # CB: RMSNorm output buffer
         rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2018,8 +2126,8 @@ class AttentionBlock:
         matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         matmul_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul_input_cb,
-            ref_sdpa_out_interm_buffer,
-            address_offset=sdpa_out_interm_running_offset,  # 0 B
+            ref_input_tensor,
+            address_offset=input_running_offset,  # 0 B
             total_size=matmul_input_total_size,
             core_ranges=full_device_grid,
         )
@@ -2031,7 +2139,7 @@ class AttentionBlock:
                 tile=matmul_input_tile_descriptor,
             )
         ]
-        sdpa_out_interm_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
+        # input_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
 
         # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
         # at offset 0 B. This CB is consumed before SDPA runs.
@@ -2246,25 +2354,6 @@ class AttentionBlock:
         ]
         sdpa_out_interm_running_offset_qrope += qrope_rotated_input_interm_cb_descriptor.total_size  # +128 B
 
-        # CB 21: Cos/Sin intermediate CB — overlap with sdpa_out_interm L1 buffer
-        # at offset 14016 B. This CB is consumed before SDPA runs.
-        qrope_cos_sin_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            qrope_cos_sin_interm_cb,
-            ref_sdpa_out_interm_buffer,
-            address_offset=sdpa_out_interm_running_offset_qrope,  # 28352 B
-            total_size=qrope_interm_tile_size * 2,
-            core_ranges=full_device_grid,
-        )
-        qrope_cos_sin_interm_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=qrope_cos_sin_interm_cb,
-                data_format=data_format,
-                page_size=TILE_1x32.get_tile_size(data_format),
-                tile=ttnn.TileDescriptor(TILE_1x32),
-            )
-        ]
-        sdpa_out_interm_running_offset_qrope += qrope_cos_sin_interm_cb_descriptor.total_size
-
         sdpa_out_interm_running_offset = max(sdpa_out_interm_running_offset, sdpa_out_interm_running_offset_qrope)
 
         # CB 31: CreateQHeads intermediate buffer (row-major data before tilization)
@@ -2302,8 +2391,8 @@ class AttentionBlock:
         create_q_heads_out_total_size = create_q_heads_out_page_size * q_tiles
         create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             create_q_heads_out_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_attention_block_output_tensor,  # Overlap with output tensor (free before final o_proj writes)
+            address_offset=attn_block_output_running_offset,
             total_size=create_q_heads_out_total_size,
             core_ranges=full_device_grid,
         )
@@ -2315,7 +2404,7 @@ class AttentionBlock:
                 tile=create_q_heads_out_tile_descriptor,
             )
         ]
-        sdpa_forwarder_scratch_running_offset += create_q_heads_out_cb_descriptor.total_size
+        attn_block_output_running_offset += create_q_heads_out_cb_descriptor.total_size
 
         # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
         # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
@@ -2324,8 +2413,8 @@ class AttentionBlock:
         dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         dkv_matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             dkv_matmul_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 37824 B
+            ref_attention_block_output_tensor,
+            address_offset=attn_block_output_running_offset,
             total_size=dkv_matmul_output_page_size,
             core_ranges=dkv_matmul_weights_core_grid,
         )
@@ -2337,7 +2426,10 @@ class AttentionBlock:
                 tile=dkv_matmul_output_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset += dkv_matmul_output_cb_descriptor.total_size  # +64 B
+        attn_block_output_running_offset += dkv_matmul_output_cb_descriptor.total_size
+
+        attn_block_output_kv_cache_update_rope_running_offset = attn_block_output_running_offset
+        attn_block_output_kv_cache_update_nope_running_offset = attn_block_output_running_offset
 
         # CB 25: KV RMSNorm input buffer — overlap with sdpa_kv_cache L1 buffer
         # at offset 37888 B. This CB is consumed before SDPA runs.
@@ -2350,8 +2442,8 @@ class AttentionBlock:
         kv_rmsnorm_page_size = TILE_16x32.get_tile_size(input_tensor_sample.dtype)
         kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_input_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 37888 B
+            ref_attention_block_output_tensor,
+            address_offset=attn_block_output_kv_cache_update_nope_running_offset,
             total_size=1 * kv_rmsnorm_page_size,
             core_ranges=dkv_gather_sender_grid.merge(dkv_gather_receiver_core_grid),
         )
@@ -2363,17 +2455,18 @@ class AttentionBlock:
                 tile=kv_rmsnorm_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
+        # In-place the rmsnorm output, so it uses the same offset as the input
+        # attn_block_output_kv_cache_update_nope_running_offset += kv_rmsnorm_input_cb_descriptor.total_size
 
         # CB 27: KV RMSNorm output buffer — overlap with sdpa_kv_cache L1 buffer
         # at offset 38912 B. This CB is consumed before SDPA runs.
         # Shares CB ID with rmsnorm2_output_cb (disjoint grids: rows 0-7 vs rows 8-9)
         kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 38912 B
+            ref_attention_block_output_tensor,
+            address_offset=attn_block_output_kv_cache_update_nope_running_offset,
             total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
-            core_ranges=dkv_gather_receiver_core_grid,  # Only the nope core (BRISC) reads kv_rmsnorm_output_cb
+            core_ranges=dkv_rmsnorm_grid.merge(dkv_gather_sender_grid),
         )
         kv_rmsnorm_output_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2383,7 +2476,7 @@ class AttentionBlock:
                 tile=kv_rmsnorm_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset += kv_rmsnorm_output_cb_descriptor.total_size  # +1024 B
+        attn_block_output_kv_cache_update_nope_running_offset += kv_rmsnorm_output_cb_descriptor.total_size
         # CB 29: Cos (DRAM, read by NCRISC)
         krope_rope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         krope_cos_sin_cb_format = ttnn.CBFormatDescriptor(
@@ -2394,13 +2487,13 @@ class AttentionBlock:
         )
         krope_cos_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             qkv_rope_cos_sin_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
+            ref_attention_block_output_tensor,
+            address_offset=attn_block_output_kv_cache_update_rope_running_offset,
             total_size=krope_Wt * krope_rope_tile_size * 2,
             core_ranges=krope_grid,
         )
         krope_cos_sin_cb_descriptor.format_descriptors = [krope_cos_sin_cb_format]
-        sdpa_kv_cache_running_offset += krope_cos_sin_cb_descriptor.total_size
+        attn_block_output_kv_cache_update_rope_running_offset += krope_cos_sin_cb_descriptor.total_size
 
         # CB 28: KRoPE output — overlap with sdpa_kv_cache L1 buffer
         # at offset 39936 B. This CB is consumed before SDPA runs.
@@ -2408,8 +2501,8 @@ class AttentionBlock:
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             krope_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,  # 39936 B
+            ref_attention_block_output_tensor,
+            address_offset=attn_block_output_kv_cache_update_rope_running_offset,
             total_size=1 * krope_tile_size,
             core_ranges=krope_grid,
         )
@@ -2421,57 +2514,62 @@ class AttentionBlock:
                 tile=ttnn.TileDescriptor(TILE_1x32),
             )
         ]
-        sdpa_kv_cache_running_offset += krope_output_cb_descriptor.total_size  # +64 B
+        attn_block_output_kv_cache_update_rope_running_offset += krope_output_cb_descriptor.total_size
+
+        attn_block_output_running_offset = max(
+            attn_block_output_kv_cache_update_rope_running_offset,
+            attn_block_output_kv_cache_update_nope_running_offset,
+        )
 
         TILE_32x32 = ttnn.Tile((32, 32))
         kv_cache_page_size = TILE_32x32.get_tile_size(k_df)
-        kv_cache_num_tiles = 16
+        kv_cache_num_tiles = 1
         kv_cache_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_cache_input_cb,
             data_format=k_df,
             page_size=kv_cache_page_size,
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        kv_cache_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            kv_cache_input_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
-            total_size=kv_cache_num_tiles * kv_cache_page_size,
-            core_ranges=full_device_grid,
-        )
-        kv_cache_input_cb_descriptor.format_descriptors = [kv_cache_input_cb_format]
-        sdpa_kv_cache_running_offset += kv_cache_input_cb_descriptor.total_size
         kv_cache_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_cache_output_cb,
             data_format=k_df,
             page_size=kv_cache_page_size,
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        kv_cache_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            kv_cache_output_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
+        kv_cache_input_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            kv_cache_input_cb,
+            ref_sdpa_intermediate_recv,
+            address_offset=sdpa_intermediate_recv_running_offset,
             total_size=kv_cache_num_tiles * kv_cache_page_size,
             core_ranges=full_device_grid,
         )
-        kv_cache_output_cb_descriptor.format_descriptors = [kv_cache_output_cb_format]
-        sdpa_kv_cache_running_offset += kv_cache_output_cb_descriptor.total_size
+        # Overlap the input and output CBs
+        kv_cache_input_output_cb_descriptor.format_descriptors = [kv_cache_input_cb_format, kv_cache_output_cb_format]
+        sdpa_intermediate_recv_running_offset += kv_cache_input_output_cb_descriptor.total_size
         kv_cache_intermed_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_cache_intermed_cb,
             data_format=untilize_df,
             page_size=TILE_32x32.get_tile_size(untilize_df),
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        # One extra tile for syncing, can optimize to remove
+        kv_cache_intermed_sync_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=kv_cache_intermed_sync_cb,
+            data_format=untilize_df,
+            page_size=TILE_32x32.get_tile_size(untilize_df),
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
         kv_cache_intermed_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_cache_intermed_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset,
-            total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(untilize_df),
+            ref_sdpa_forwarder_scratch,
+            address_offset=sdpa_forwarder_scratch_running_offset,
+            total_size=kv_cache_num_tiles * TILE_32x32.get_tile_size(untilize_df),
             core_ranges=full_device_grid,
         )
-        kv_cache_intermed_cb_descriptor.format_descriptors = [kv_cache_intermed_cb_format]
-        sdpa_kv_cache_running_offset += kv_cache_intermed_cb_descriptor.total_size
+        kv_cache_intermed_cb_descriptor.format_descriptors = [
+            kv_cache_intermed_cb_format,
+            kv_cache_intermed_sync_cb_format,
+        ]
+        sdpa_forwarder_scratch_running_offset += kv_cache_intermed_cb_descriptor.total_size
         # Flash MLA cb descriptors
         mla_cb_descriptors = []
 
@@ -2565,8 +2663,8 @@ class AttentionBlock:
         # mla_out_o_cb/mla_interm_out_cb: output O (tiny tile)
         mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_out_o_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=out0_t * stats_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2574,7 +2672,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_out_o_cb, stats_df, stats_tile_size, stats_tile_descriptor),
             ttnn.CBFormatDescriptor(mla_interm_out_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
-        sdpa_forwarder_scratch_running_offset += mla_out_o_cb_descriptor.total_size
+        input_running_offset += mla_out_o_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_o_cb_descriptor)
         # Uncomment to debug local FlashMLA output
         # mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
@@ -2588,8 +2686,8 @@ class AttentionBlock:
         # cb_out_ms/cb_interm_ms: output m/s stats (tiny tile, shared for both m and s)
         mla_out_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             mla_out_ms_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=statistics_tiles * stats_tile_size,
             core_ranges=full_device_grid,
         )
@@ -2597,7 +2695,7 @@ class AttentionBlock:
             ttnn.CBFormatDescriptor(mla_out_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
             ttnn.CBFormatDescriptor(mla_interm_ms_cb, stats_df, stats_tile_size, stats_tile_descriptor),
         ]
-        sdpa_forwarder_scratch_running_offset += mla_out_ms_cb_descriptor.total_size
+        input_running_offset += mla_out_ms_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_ms_cb_descriptor)
 
         # Post SDPA
@@ -2606,6 +2704,17 @@ class AttentionBlock:
         # ========================================================================
         sdpa_kv_cache_running_offset_post_sdpa = 0
         sdpa_out_interm_running_offset_post_sdpa = 0
+
+        sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+            batch_size=SDPA_L_HEIGHT,
+            l_width=sdpa_l_per_worker,
+            num_cores=NUM_SDPA_WORKERS,
+        )
+
+        # This is used to overlap the sdpa forwarder scratch buffer with the kv cache buffer
+        # TODO: We can better overlap this if necessary
+        forwarder_buffer_base = ref_sdpa_kv_cache_buffer.buffer_address() + sdpa_kv_cache_running_offset_post_sdpa
+        sdpa_kv_cache_running_offset_post_sdpa += sdpa_fwd_buffer_bytes
 
         # CB 0: Matmul4 input (from sharded tensor, kv_b2 grid)
         matmul4_in0_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -2617,13 +2726,14 @@ class AttentionBlock:
         )
         matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul4_in0_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
+            ref_attention_block_output_tensor,
+            address_offset=attn_block_output_running_offset,
             total_size=matmul4_k_num_tiles * tile_1x32_size,
             core_ranges=full_device_grid,
         )
         matmul4_in0_cb_descriptor.format_descriptors = [matmul4_in0_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += matmul4_in0_cb_descriptor.total_size
+        attn_block_output_running_offset += matmul4_in0_cb_descriptor.total_size
+        scatter_dest_l1_addr = ttnn.get_cb_address(matmul4_in0_cb_descriptor)
 
         # CB 2: Matmul4 output (4 tiles of 1x32 per core, kv_b2 grid)
         # When kv_cache buffer is available, overlap into it. Otherwise standalone.
@@ -2635,15 +2745,17 @@ class AttentionBlock:
             tile=matmul4_out_tile_descriptor,
         )
 
+        # Overlapping matmul4 output with input tensor, but it's likely safe to have this overlap with kv cache buffer
+        # Only matmul4 input is unsafe to overlap with kv cache buffer
         matmul4_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul4_out_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=matmul4_out_w_per_core * tile_1x32_size,
             core_ranges=full_device_grid,
         )
         matmul4_out_cb_descriptor.format_descriptors = [matmul4_out_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += matmul4_out_cb_descriptor.total_size
+        input_running_offset += matmul4_out_cb_descriptor.total_size
 
         # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
         gather2_dst_cb_format = ttnn.CBFormatDescriptor(
@@ -2698,25 +2810,118 @@ class AttentionBlock:
         matmul5_out_cb_descriptor.format_descriptors = [matmul5_out_cb_format]
         sdpa_kv_cache_running_offset_post_sdpa += matmul5_out_cb_descriptor.total_size
 
-        # CB 7: Gather3 output = CCL local data (backed by tensor on gather core)
-        # CCL sender reads from this tensor via NOC, not from local CB
-        gather3_dst_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=gather3_dst_cb,
-            data_format=data_format,
-            page_size=tile_size,
-            tile=tile_descriptor,
-        )
-        gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            gather3_dst_cb,
+        ccl_cb_total_size = gather3_dst_num_tiles * tile_32x32_size
+
+        # CB: GatherReduce3 scratch (2x for both halves; TRISC reduces into gather3_out_cb)
+        gather3_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            gather3_scratch_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset_mcast_core,
-            total_size=num_tiles * tile_size,
+            total_size=2 * ccl_cb_total_size,
             core_ranges=full_device_grid,
         )
-        gather3_dst_cb_descriptor.format_descriptors = [gather3_dst_cb_format]
-        sdpa_kv_cache_running_offset_mcast_core += gather3_dst_cb_descriptor.total_size
+        gather3_scratch_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=gather3_scratch_cb, data_format=data_format, page_size=tile_32x32_size, tile=TD_32x32
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += gather3_scratch_cb_descriptor.total_size
 
-        gather3_receiver_data_addr = ttnn.get_cb_address(gather3_dst_cb_descriptor)
+        # AllGather config (no-ownership mode) — scratch lives in gather3_scratch_cb,
+        # output in attention_block_output_tensor.  Addresses are uniform across devices
+        # (same L1 layout / same mesh tensor allocation).
+        allgather_config = AllGatherConfig(
+            mesh_device=mesh_device,
+            cluster_axis=allgather_cluster_axis,
+            num_links=allgather_num_links,
+            slice_size_bytes=allgather_slice_size_bytes,
+            scratch_base_addr=ttnn.get_cb_address(gather3_scratch_cb_descriptor),
+            output_addr=ref_attention_block_output_tensor.buffer_address(),
+            handoff_sem_addr=allgather_handoff_sem_addr,
+            recv_sem_addr=allgather_recv_sem_addr,
+            gather_noc_core=gather_dest_noc_core,
+            transport_noc_core=ccl_sender_noc_core,
+            output_cb_id=ccl_output_cb,
+            output_num_tiles=gather3_dst_num_tiles,
+        )
+
+        # CB: GatherReduce3 output = CCL local data
+        gather3_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            gather3_out_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=ccl_cb_total_size,
+            core_ranges=full_device_grid,
+        )
+        gather3_out_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=gather3_out_cb, data_format=data_format, page_size=tile_32x32_size, tile=TD_32x32
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += gather3_out_cb_descriptor.total_size
+        gather3_receiver_data_addr = ttnn.get_cb_address(gather3_out_cb_descriptor)
+        allreduce_config.set_local_data_addr(gather3_receiver_data_addr)
+
+        # CB: CCL recv local data
+        ccl_recv_local_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            ccl_recv_local_data_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=ccl_cb_total_size,
+            core_ranges=full_device_grid,
+        )
+        ccl_recv_local_data_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=ccl_recv_local_data_cb, data_format=data_format, page_size=tile_32x32_size, tile=TD_32x32
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += ccl_recv_local_data_cb_descriptor.total_size
+
+        # CB: CCL remote data
+        ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            ccl_remote_data_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=ccl_cb_total_size,
+            core_ranges=full_device_grid,
+        )
+        ccl_remote_data_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=ccl_remote_data_cb, data_format=data_format, page_size=tile_32x32_size, tile=TD_32x32
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += ccl_remote_data_cb_descriptor.total_size
+        allreduce_config.set_remote_data_addr(ttnn.get_cb_address(ccl_remote_data_cb_descriptor))
+
+        # CB: CCL residual (per-device [1, per_device_out_w] slice of the full residual)
+        ccl_residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            ccl_residual_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=ccl_cb_total_size,
+            core_ranges=full_device_grid,
+        )
+        ccl_residual_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=ccl_residual_cb, data_format=data_format, page_size=tile_32x32_size, tile=TD_32x32
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += ccl_residual_cb_descriptor.total_size
+
+        # CB: CCL output (AllReduce writes here; NCRISC copies to output tensor)
+        ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            ccl_output_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=ccl_cb_total_size,
+            core_ranges=full_device_grid,
+        )
+        ccl_output_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=ccl_output_cb, data_format=data_format, page_size=tile_32x32_size, tile=TD_32x32
+            )
+        ]
+        sdpa_kv_cache_running_offset_mcast_core += ccl_output_cb_descriptor.total_size
 
         post_sdpa_cb_list = [
             matmul4_in0_cb_descriptor,
@@ -2724,55 +2929,13 @@ class AttentionBlock:
             gather2_dst_cb_descriptor,
             matmul5_in0_cb_descriptor,
             matmul5_out_cb_descriptor,
-            gather3_dst_cb_descriptor,
+            gather3_scratch_cb_descriptor,
+            gather3_out_cb_descriptor,
+            ccl_recv_local_data_cb_descriptor,
+            ccl_remote_data_cb_descriptor,
+            ccl_residual_cb_descriptor,
+            ccl_output_cb_descriptor,
         ]
-
-        # CCL CBs (8-13): only when CCL is enabled
-        # CB 8: CCL sender input (reads from gather3 output via NOC)
-        ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=ccl_sender_in_cb,
-            data_format=data_format,
-            page_size=tile_size,
-            tile=tile_descriptor,
-        )
-        ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ccl_sender_in_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
-            total_size=ccl_num_pages * tile_size,
-            core_ranges=full_device_grid,
-        )
-        ccl_sender_in_cb_descriptor.format_descriptors = [ccl_sender_in_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += ccl_sender_in_cb_descriptor.total_size
-        post_sdpa_cb_list.append(ccl_sender_in_cb_descriptor)
-
-        # CB 9: CCL remote data (backed by intermediate tensor with 32x32 tiles)
-        ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ccl_remote_data_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_mcast_core,
-            total_size=ccl_num_pages * tile_size,
-            core_ranges=full_device_grid,
-        )
-        ccl_remote_data_cb_descriptor.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=ccl_remote_data_cb,
-                data_format=data_format,
-                page_size=tile_size,
-                tile=tile_descriptor,
-            )
-        ]
-        sdpa_kv_cache_running_offset_mcast_core += ccl_remote_data_cb_descriptor.total_size
-        post_sdpa_cb_list.append(ccl_remote_data_cb_descriptor)
-        ccl_send_addr = ttnn.get_cb_address(ccl_remote_data_cb_descriptor)
-
-        # CB 12: CCL output (from sharded tensor)
-        attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            attention_block_output_cb, ref_attention_block_output_tensor
-        )
-        attention_block_output_cb_descriptor.core_ranges = full_device_grid
-        attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
-        attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
         # CB 16: SDPA neighbor L (aliased to intermediate recv buffer)
         # The recv buffer holds both L and MS data, but this CB should only
@@ -2847,85 +3010,18 @@ class AttentionBlock:
         sdpa_out_interm_running_offset_post_sdpa += sdpa_l_out_cb_descriptor.total_size
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
+        assert (
+            input_running_offset <= activation_size
+        ), f"input_running_offset: {input_running_offset}, activation_size: {activation_size}"
+
         # ========================================================================
         # Semaphore descriptors
         # ========================================================================
-        gather2_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather2_noc0_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        gather2_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather2_noc1_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        mcast3_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=mcast3_data_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        gather3_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather3_noc0_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        gather3_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather3_noc1_receiver_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        semaphore_list = [
-            gather2_noc0_semaphore_descriptor,
-            gather2_noc1_semaphore_descriptor,
-            mcast3_receiver_semaphore_descriptor,
-            gather3_noc0_semaphore_descriptor,
-            gather3_noc1_semaphore_descriptor,
-        ]
-        gather3_completion_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather3_completion_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        semaphore_list.append(gather3_completion_semaphore_descriptor)
-
-        # SDPA scatter arrival semaphore (for matmul4 cores to wait for scatter data)
-        scatter_arrival_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=scatter_arrival_semaphore_id,
-            core_ranges=full_grid,
-            initial_value=0,
-        )
-        semaphore_list.append(scatter_arrival_semaphore_descriptor)
-
-        # SDPA forwarder semaphores (workers signal these to forwarders)
-        sdpa_fwd_r1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_fwd_r1_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        sdpa_fwd_r2_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_fwd_r2_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        sdpa_bwd_r1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_bwd_r1_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        sdpa_bwd_r2_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=sdpa_bwd_r2_sem_id,
-            core_ranges=sdpa_forwarder_grid,
-            initial_value=0,
-        )
-        semaphore_list.extend(
-            [
-                sdpa_fwd_r1_semaphore_descriptor,
-                sdpa_fwd_r2_semaphore_descriptor,
-                sdpa_bwd_r1_semaphore_descriptor,
-                sdpa_bwd_r2_semaphore_descriptor,
-            ]
-        )
+        # All semaphores (including post-SDPA / scatter / SDPA forwarder sems) are
+        # global semaphores allocated via AttentionBlock.create_semaphores. Their
+        # addresses are passed as compile-time args directly to the kernels, so no
+        # per-program local SemaphoreDescriptors are needed here.
+        semaphore_list = []
 
         kv_cache_tensor_accessor_args = ttnn.TensorAccessorArgs(ref_kv_cache_tensor)
         brisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
@@ -2989,8 +3085,8 @@ class AttentionBlock:
             output_core_noc_x = output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
             output_core_noc_y = output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
 
-            # NCRISC per-core runtime args (common args: k_addr, pos_addr)
-            mla_ncrisc_per_core_args.append(
+            # BRISC per-core runtime args (common args: k_addr, pos_addr)
+            mla_brisc_per_core_args.append(
                 (
                     core,
                     [
@@ -2999,6 +3095,8 @@ class AttentionBlock:
                         is_mcast_sender,
                         mcast_start_x,
                         mcast_start_y,
+                        mcast_end_x,
+                        mcast_end_y,
                         vc,
                     ],
                 )
@@ -3007,8 +3105,8 @@ class AttentionBlock:
             # Tree reduction partner coordinates
             tree_reduction_info = optimized_mla_grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
-            # BRISC per-core runtime args (common args: pos_addr)
-            mla_brisc_args = [
+            # NCRISC per-core runtime args (common args: pos_addr)
+            mla_ncrisc_args = [
                 cur_batch,
                 core_num_in_reduce,
                 is_output_core,
@@ -3021,8 +3119,8 @@ class AttentionBlock:
                 mcast_end_y,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                mla_brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
-            mla_brisc_per_core_args.append((core, mla_brisc_args))
+                mla_ncrisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+            mla_ncrisc_per_core_args.append((core, mla_ncrisc_args))
 
             is_sender_after_reduce = (
                 1 if (do_reduce and optimized_mla_grid.is_tree_reduction_sender(s_block_idx)) else 0
@@ -3053,6 +3151,7 @@ class AttentionBlock:
         # ========================================================================
         ncrisc_named_compile_time_args_base = (
             rmsnorm_reader_named_compile_time_args
+            + mcast_metadata_receiver_named_compile_time_args
             + mcast_receiver_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
             + gather_reduce_sender_named_compile_time_args
@@ -3065,21 +3164,22 @@ class AttentionBlock:
             + dkv_matmul_ncrisc_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
+            + dkv_gather_receiver_named_compile_time_args
             + krope_ncrisc_named_compile_time_args
+            + kv_cache_ncrisc_named_compile_time_args
             + mla_ncrisc_named_compile_time_args
             + post_sdpa_ncrisc_named_compile_time_args
         )
 
         brisc_named_compile_time_args_base = (
-            mcast_sender_named_compile_time_args
+            mcast_metadata_sender_named_compile_time_args
+            + mcast_sender_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_reduce_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
             + qrope_brisc_named_compile_time_args
-            + create_q_heads_brisc_named_compile_time_args
-            + dkv_gather_receiver_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
             + kv_cache_brisc_named_compile_time_args
             + mla_brisc_named_compile_time_args
@@ -3210,20 +3310,33 @@ class AttentionBlock:
                 other_value=0,
             ),
             UnifiedCompileTimeCoreDescriptor(
-                named_compile_time_arg="is_ccl_sender_core",
+                named_compile_time_arg="is_allreduce_sender_core",
                 core_range=ccl_sender_core_grid,
                 value=1,
                 other_value=0,
             ),
             UnifiedCompileTimeCoreDescriptor(
-                named_compile_time_arg="is_ccl_receiver_core",
-                core_range=gather_core_grid,  # CCL receiver = gather core
+                named_compile_time_arg="is_allreduce_receiver_core",
+                core_range=gather_core_grid,  # CCL receiver = gather core (12,9)
                 value=1,
                 other_value=0,
             ),
         ]
 
+        knope_grid_width = knope_grid_range.grid_size().x
         per_core_compile_time_descriptors = [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="knope_core_index",
+                core_values=[
+                    (
+                        ttnn.CoreCoord(x, y),
+                        (y - knope_grid_range.start.y) * knope_grid_width + (x - knope_grid_range.start.x),
+                    )
+                    for y in range(knope_grid_range.start.y, knope_grid_range.end.y + 1)
+                    for x in range(knope_grid_range.start.x, knope_grid_range.end.x + 1)
+                ],
+                other_value=0,
+            ),
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="qrope_start_tile_offset",
                 core_values=qrope_start_tile_offset_core_values,
@@ -3242,6 +3355,11 @@ class AttentionBlock:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="gather3_sender_idx",
                 core_values=gather3_sender_idx_per_core,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="matmul5_k_offset",
+                core_values=matmul5_k_offset_per_core,
                 other_value=0,
             ),
         ]
@@ -3270,16 +3388,14 @@ class AttentionBlock:
             create_q_heads_out_cb_descriptor,
             qkv_rope_cos_sin_cb_descriptor,
             qrope_rotated_input_interm_cb_descriptor,
-            qrope_cos_sin_interm_cb_descriptor,
             dkv_matmul_output_cb_descriptor,
             kv_rmsnorm_input_cb_descriptor,
             kv_rmsnorm_output_cb_descriptor,
             krope_output_cb_descriptor,
             krope_cos_sin_cb_descriptor,
             create_q_heads_interm_cb_descriptor,
-            kv_cache_output_cb_descriptor,
+            kv_cache_input_output_cb_descriptor,
             kv_cache_intermed_cb_descriptor,
-            kv_cache_input_cb_descriptor,
             *mla_cb_descriptors,
             *post_sdpa_cb_list,
         ]
@@ -3289,8 +3405,6 @@ class AttentionBlock:
         # ========================================================================
         # Pre-compute device-invariant SDPA addresses
         # ========================================================================
-        scatter_dest_l1_addr = ref_sdpa_kv_cache_buffer.buffer_address() + matmul4_in0_cb_descriptor.address_offset
-        forwarder_buffer_base = ref_sdpa_forwarder_scratch.buffer_address()
         ncrisc_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size * 2  # After BRISC R1+R2
         r1_recv_buffer_addr = ref_sdpa_intermediate_recv.buffer_address()
         r2_recv_buffer_addr = r1_recv_buffer_addr + (sdpa_l_tiles_per_worker + 1) * sdpa_l_tile_size
@@ -3304,19 +3418,7 @@ class AttentionBlock:
                 neighbor_col = (col + direction) % mesh_shape[1]
                 return row, neighbor_col
 
-        # ========================================================================
-        # Pre-compute CCL runtime args (device-invariant parts)
-        # ========================================================================
-        ccl_sender_ncrisc_common_rt_args = [
-            gather3_receiver_data_addr,
-        ]
-        ccl_sender_brisc_common_rt_args = [
-            ccl_send_addr,
-            ccl_semaphore_addr,
-        ]
-        ccl_receiver_ncrisc_common_rt_args = [
-            ccl_semaphore_addr,
-        ]
+        # CCL RT args are now generated by AllReduceConfig per-device (see ccl_ctx below)
 
         per_device_contexts = []
 
@@ -3329,102 +3431,29 @@ class AttentionBlock:
                 mesh_coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
-                # CCL role calculation (only matters if not skipping CCL)
-                if skip_ccl:
-                    is_sender = False
-                    is_secondary_sender = False
-                    is_receiver = False
-                else:
-                    is_sender = (row == sender_row) and (col == sender_col)
-                    is_secondary_sender = (
-                        bcast_secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
-                    )
-                    is_receiver = not is_sender and not is_secondary_sender
-
-                # Ring index along the cluster axis
-                ring_index = row if reduce_cluster_axis == 0 else col
-                is_first_chip = ring_index == 0
-
-                # Determine CCL neighbor and semaphores based on position (only when CCL is enabled)
-                ccl_sender_link = 0 if is_first_chip else 1
-                ccl_receiver_link = 1 if is_first_chip else 0
-                ccl_sender_semaphore_addr = ccl_semaphore_addr
-                ccl_receiver_semaphore_addr = ccl_semaphore_addr
-
-                # Calculate neighbor coordinate
-                if is_first_chip:
-                    neighbor_row = row + 1 if reduce_cluster_axis == 0 else row
-                    neighbor_col = col if reduce_cluster_axis == 0 else col + 1
-                else:
-                    neighbor_row = row - 1 if reduce_cluster_axis == 0 else row
-                    neighbor_col = col if reduce_cluster_axis == 0 else col - 1
-
                 # Get per-device tensors needed for runtime args
                 qrope_cos_tensor_device = qrope_cos_tensors_per_device[device_idx]
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
-                position_ids_tensor_device = position_ids_tensors_per_device[device_idx]
+                metadata_tensor_device = metadata_tensors_per_device[device_idx]
                 kv_cache_tensor_device = kv_cache_tensors_per_device[device_idx]
-
-                # Calculate ring index and targets for primary axis (column)
-                ring_size = mesh_rows
-                ring_index = row
-
-                # For Linear topology, calculate forward and backward targets
-                num_targets_forward = ring_size - ring_index - 1
-                num_targets_backward = ring_index
-
-                # Determine if this device has secondary axis connections
-                has_secondary_target = is_sender and (mesh_cols > 1) and (bcast_secondary_cluster_axis is not None)
-
-                # Calculate mcast distances
-                start_distance_forward = 1 if num_targets_forward > 0 else 0
-                range_hops_forward = num_targets_forward
-                start_distance_backward = 1 if num_targets_backward > 0 else 0
-                range_hops_backward = num_targets_backward
-                bcast_num_pages_to_read = bcast_num_pages
 
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
                 # bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
                 # bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if upstream_socket is not None else []
+                device_kernel_defines = list(bcast_config.get_kernel_defines(mesh_coord))
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_use_socket", 1 if upstream_socket is not None else 0),
-                    (
-                        "bcast_socket_config_addr",
-                        upstream_socket.get_config_buffer_address() if upstream_socket is not None else 0,
-                    ),
-                    (
-                        "bcast_socket_page_size",
-                        input_shape[0] * input_shape[1] * element_size if upstream_socket is not None else 0,
-                    ),
-                    ("bcast_socket_num_pages", 1 if upstream_socket is not None else 0),
                 ]
+                bcast_brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(mesh_coord))
 
                 bcast_ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
-                    ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
-                    ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("bcast_has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
-                    ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
-                    ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
                 ]
+                bcast_ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(mesh_coord))
 
                 bcast_trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
@@ -3434,74 +3463,45 @@ class AttentionBlock:
                 # CCL Broadcast common runtime args (computed before UnifiedKernelDescriptor)
                 # These are common to all cores since only one core participates in CCL
                 # ================================================================
-                if skip_ccl:
-                    # Single-device mode: empty broadcast args
-                    ncrisc_bcast_common_args = [0] * 13
-                    dst_nodes = []
-                    fabric_node_id = None
-                else:
-                    # Multi-device mode: CCL broadcast runtime args
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    # Build dst_nodes first to compute num_connections = len(dst_nodes)
-                    fabric_node_id = mesh_device.get_fabric_node_id(mesh_coord)
-                    dst_nodes = []
-
-                    # Primary axis connections (forward and backward in column)
-                    if num_targets_forward > 0:
-                        forward_coord = ttnn.MeshCoordinate(row + 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
-
-                    if num_targets_backward > 0:
-                        backward_coord = ttnn.MeshCoordinate(row - 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
-
-                    # Secondary axis connection (for sender to secondary sender)
-                    if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1 - col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    num_connections = len(dst_nodes)
-
-                    ncrisc_bcast_common_args = [
-                        int(broadcast_address),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        int(wait_output_semaphore),
-                        int(reset_global_semaphore),
-                        core_noc_x,  # out_ready_sem_noc0_x
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,
-                        int(barrier_sem_addr),
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,
-                        int(secondary_sync_sem_addr),
-                        num_connections,
-                    ]
+                ncrisc_bcast_common_args = list(bcast_config.get_ncrisc_common_rt_args(mesh_coord))
 
                 # RoPE DRAM address args (per-device)
                 qrope_cos_tensor_address = qrope_cos_tensor_device.buffer_address()
                 qrope_sin_tensor_address = qrope_sin_tensor_device.buffer_address()
                 krope_cos_tensor_address = krope_cos_tensor_device.buffer_address()
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
-                position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
+                metadata_addr = (
+                    forwarded_metadata_l1_addr
+                    if forwarded_metadata_l1_addr is not None
+                    else metadata_tensor_device.buffer_address()
+                )
 
-                # Compute address overrides for each matmul's weights within the fused buffer
-                fused_weights_base_addr = ref_fused_weights_tensor.buffer_address()
+                # Compute address overrides for each matmul's weights within the fused buffer.
+                # Some fused buffers (e.g. from fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a)
+                # are per-core allocated; buffer_address() is not defined for them and we must
+                # query a specific core via experimental_per_core_buffer_address. Per-core
+                # addresses are uniform across the shard grid (asserted by
+                # assert_uniform_per_core_addresses), so any core returns the same base.
+                def _fused_base_addr(t):
+                    if t.is_per_core_allocated():
+                        core = t.memory_config().shard_spec.grid.bounding_box().start
+                        return t.experimental_per_core_buffer_address(core)
+                    return t.buffer_address()
+
+                fused_weights_base_addr = _fused_base_addr(ref_fused_weights_tensor)
+                gamma_base_addr = _fused_base_addr(ref_gamma_fused_tensor)
                 matmul_weights_addr = fused_weights_base_addr + matmul_weights_tensor.byte_offset
                 matmul2_weights_addr = fused_weights_base_addr + matmul2_weights_tensor.byte_offset
                 dkv_matmul_weights_addr = fused_weights_base_addr + dkv_matmul_weights_tensor.byte_offset
-                gamma_addr = ref_gamma_fused_tensor.buffer_address() + gamma_tensor.byte_offset
-                rmsnorm2_gamma_addr = ref_gamma_fused_tensor.buffer_address() + rmsnorm2_gamma_tensor.byte_offset
-                kv_rmsnorm_gamma_addr = ref_gamma_fused_tensor.buffer_address() + dkv_rmsnorm_gamma_tensor.byte_offset
-                matmul3_weights_addr = ref_kv_b12_fused_tensor.buffer_address() + matmul3_weights_tensor.byte_offset
+                gamma_addr = gamma_base_addr + gamma_tensor.byte_offset
+                rmsnorm2_gamma_addr = gamma_base_addr + rmsnorm2_gamma_tensor.byte_offset
+                kv_rmsnorm_gamma_addr = gamma_base_addr + dkv_rmsnorm_gamma_tensor.byte_offset
+                matmul3_weights_addr = _fused_base_addr(ref_kv_b12_fused_tensor) + matmul3_weights_tensor.byte_offset
                 matmul4_weights_addr = (
-                    ref_post_sdpa_weights1_fused_tensor.buffer_address() + post_sdpa_weights1_tensor.byte_offset
+                    _fused_base_addr(ref_post_sdpa_weights1_fused_tensor) + post_sdpa_weights1_tensor.byte_offset
                 )
                 matmul5_weights_addr = (
-                    ref_post_sdpa_weights2_fused_tensor.buffer_address() + post_sdpa_weights2_tensor.byte_offset
+                    _fused_base_addr(ref_post_sdpa_weights2_fused_tensor) + post_sdpa_weights2_tensor.byte_offset
                 )
                 qrope_trans_mat_addr = ref_trans_mat_tensor.buffer_address()
 
@@ -3514,28 +3514,27 @@ class AttentionBlock:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    position_ids_tensor_addr,  # idx 7
-                    matmul_weights_addr,  # idx 8
-                    matmul2_weights_addr,  # idx 9
-                    dkv_matmul_weights_addr,  # idx 10
-                    matmul3_weights_addr,  # idx 11
-                    matmul4_weights_addr,  # idx 12
-                    matmul5_weights_addr,  # idx 13
-                    qrope_trans_mat_addr,  # idx 14
-                    gamma_addr,  # idx 15
-                    rmsnorm2_gamma_addr,  # idx 16
-                    kv_rmsnorm_gamma_addr,  # idx 17
+                    kv_cache_intermed_sync_cb,  # idx 7
+                    metadata_addr,  # idx 8
+                    matmul_weights_addr,  # idx 9
+                    matmul2_weights_addr,  # idx 10
+                    dkv_matmul_weights_addr,  # idx 11
+                    matmul3_weights_addr,  # idx 12
+                    matmul4_weights_addr,  # idx 13
+                    matmul5_weights_addr,  # idx 14
+                    qrope_trans_mat_addr,  # idx 15
+                    gamma_addr,  # idx 16
+                    rmsnorm2_gamma_addr,  # idx 17
+                    kv_rmsnorm_gamma_addr,  # idx 18
                 ]
 
                 qrope_ncrisc_addr_args = [
                     ("qrope_cos_tensor_address", qrope_cos_tensor_address),
                     ("qrope_sin_tensor_address", qrope_sin_tensor_address),
-                    ("qrope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
                 krope_ncrisc_addr_args = [
                     ("krope_cos_tensor_address", krope_cos_tensor_address),
                     ("krope_sin_tensor_address", krope_sin_tensor_address),
-                    ("krope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
 
                 kv_cache_sp_named_compile_time_args = [
@@ -3544,48 +3543,68 @@ class AttentionBlock:
                     ("kv_cache_num_sp_devices", mesh_rows),
                 ]
 
-                # Assemble full compile-time arg lists from base + per-device parts
+                # TP4 outer-dim residual copy params (receiver core NOC-reads input slice)
+                residual_byte_offset = row * per_device_out_tiles * tile_1x32_size
+                residual_copy_size = per_device_out_tiles * tile_1x32_size
+                residual_copy_named_compile_time_args = [
+                    ("residual_byte_offset", residual_byte_offset),
+                    ("residual_copy_size", residual_copy_size),
+                    ("residual_cb_id", ccl_residual_cb),
+                    ("residual_num_tiles", gather3_dst_num_tiles),
+                ]
+
+                # Assemble full compile-time arg lists from base + per-device parts.
+                # AllGather CT args (schema + named) come from allgather_config.
                 ncrisc_named_compile_time_args = (
                     bcast_ncrisc_named_compile_time_args
                     + ncrisc_named_compile_time_args_base
                     + qrope_ncrisc_addr_args
                     + krope_ncrisc_addr_args
                     + kv_cache_sp_named_compile_time_args
+                    + residual_copy_named_compile_time_args
+                    + allgather_config.get_fused_ncrisc_named_ct_args(mesh_coord)
                 )
                 ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
                     kv_cache_tensor_device.buffer_address(),
-                    position_ids_tensor_addr,
+                    metadata_addr,
                     gather2_receiver_data_addr,
                     gather3_receiver_data_addr,
+                    ttnn.get_cb_address(
+                        in_cb_descriptor
+                    ),  # input CB L1 addr for residual copy (backed by sdpa_kv_cache)
+                    ref_attention_block_output_tensor.buffer_address(),  # output tensor L1 addr (all-gather destination)
                 ]
 
                 brisc_named_compile_time_args = (
                     bcast_brisc_named_compile_time_args
                     + brisc_named_compile_time_args_base
                     + kv_cache_sp_named_compile_time_args
+                    + allgather_config.get_fused_brisc_named_ct_args(mesh_coord)
                 )
-                brisc_common_runtime_args = [kv_cache_tensor_device.buffer_address(), position_ids_tensor_addr]
+                brisc_common_runtime_args = [
+                    kv_cache_tensor_device.buffer_address(),
+                    metadata_addr,
+                ] + list(bcast_config.get_brisc_common_rt_args(mesh_coord))
 
                 trisc_named_compile_time_args = (
                     bcast_trisc_named_compile_time_args
                     + trisc_named_compile_time_args_base
                     + kv_cache_sp_named_compile_time_args
+                    + allgather_config.get_fused_trisc_named_ct_args(mesh_coord)
                 )
 
                 # ========================================================================
-                # CCL context (per-device)
+                # CCL context (per-device) — config classes handle all RT arg generation
                 # ========================================================================
-                fabric_node_id = mesh_device.get_fabric_node_id(mesh_coord)
-                neighbor_coord_obj = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
-                neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord_obj)
                 ccl_ctx = {
-                    "sender_ncrisc_common_rt_args": ccl_sender_ncrisc_common_rt_args,
-                    "sender_brisc_common_rt_args": ccl_sender_brisc_common_rt_args,
-                    "receiver_ncrisc_common_rt_args": ccl_receiver_ncrisc_common_rt_args,
-                    "sender_link": ccl_sender_link,
-                    "receiver_link": ccl_receiver_link,
-                    "fabric_node_id": fabric_node_id,
-                    "neighbor_fabric_node_id": neighbor_fabric_node_id,
+                    "allreduce_config": allreduce_config,
+                    "allgather_config": allgather_config,
+                    "mesh_coord": mesh_coord,
+                    "sender_ncrisc_common_rt_args": list(allreduce_config.get_sender_ncrisc_common_rt_args(mesh_coord)),
+                    "sender_brisc_common_rt_args": list(allreduce_config.get_sender_brisc_common_rt_args(mesh_coord)),
+                    "receiver_ncrisc_common_rt_args": list(
+                        allreduce_config.get_receiver_ncrisc_common_rt_args(mesh_coord)
+                    ),
                 }
 
                 # ========================================================================
@@ -3606,9 +3625,6 @@ class AttentionBlock:
                 sdpa_fwd_ring_idx = fwd_row if sdpa_cluster_axis == 0 else fwd_col
                 sdpa_bwd_ring_idx = bwd_row if sdpa_cluster_axis == 0 else bwd_col
                 sdpa_num_ring_devices = mesh_shape[0] if sdpa_cluster_axis == 0 else mesh_shape[1]
-
-                # Position tensor address (0 if position disabled)
-                sdpa_pos_addr = position_ids_tensor_addr
 
                 # SDPA worker runtime args (per-core)
                 sdpa_worker_ncrisc_rt_args = ttnn.RuntimeArgs()
@@ -3670,14 +3686,14 @@ class AttentionBlock:
                     if is_type_a:
                         # R1 config: FWD forwarder (BRISC buffer region) → forward neighbor
                         r1_fwd_buffer_base = forwarder_buffer_base
-                        r1_fwd_sem_id = sdpa_fwd_r1_sem_id  # Forward R1 semaphore (ID 8)
+                        r1_fwd_sem_addr = sdpa_fwd_r1_sem_addr  # Forward R1 semaphore (global)
                         r1_slot_idx = fwd_r1_count[link_idx] * sdpa_slots_per_worker
                         fwd_r1_count[link_idx] += 1
                         r1_fwd_slot_addr = r1_fwd_buffer_base + r1_slot_idx * sdpa_fwd_slot_size
                         r1_dst_fabric_node_id = fwd_fabric_node_id  # Type A sends R1 to forward neighbor
                         # R2 config: BWD forwarder (NCRISC buffer region) → backward neighbor
                         r2_fwd_buffer_base = forwarder_buffer_base + ncrisc_buffer_offset
-                        r2_fwd_sem_id = sdpa_bwd_r2_sem_id  # Backward R2 semaphore (ID 11)
+                        r2_fwd_sem_addr = sdpa_bwd_r2_sem_addr  # Backward R2 semaphore (global)
                         r2_slot_idx = bwd_r2_count[link_idx] * sdpa_slots_per_worker
                         bwd_r2_count[link_idx] += 1
                         r2_fwd_slot_addr = (
@@ -3687,14 +3703,14 @@ class AttentionBlock:
                     else:
                         # R1 config: BWD forwarder (NCRISC buffer region) → backward neighbor
                         r1_fwd_buffer_base = forwarder_buffer_base + ncrisc_buffer_offset
-                        r1_fwd_sem_id = sdpa_bwd_r1_sem_id  # Backward R1 semaphore (ID 10)
+                        r1_fwd_sem_addr = sdpa_bwd_r1_sem_addr  # Backward R1 semaphore (global)
                         r1_slot_idx = bwd_r1_count[link_idx] * sdpa_slots_per_worker
                         bwd_r1_count[link_idx] += 1
                         r1_fwd_slot_addr = r1_fwd_buffer_base + r1_slot_idx * sdpa_fwd_slot_size
                         r1_dst_fabric_node_id = bwd_fabric_node_id  # Type B sends R1 to backward neighbor
                         # R2 config: FWD forwarder (BRISC buffer region) → forward neighbor
                         r2_fwd_buffer_base = forwarder_buffer_base
-                        r2_fwd_sem_id = sdpa_fwd_r2_sem_id  # Forward R2 semaphore (ID 9)
+                        r2_fwd_sem_addr = sdpa_fwd_r2_sem_addr  # Forward R2 semaphore (global)
                         r2_slot_idx = fwd_r2_count[link_idx] * sdpa_slots_per_worker
                         fwd_r2_count[link_idx] += 1
                         r2_fwd_slot_addr = (
@@ -3716,10 +3732,10 @@ class AttentionBlock:
                         fwd_core_noc.x,  # fwd_core_x (NOC coordinates)
                         fwd_core_noc.y,  # fwd_core_y (NOC coordinates)
                         r1_fwd_slot_addr,  # r1_fwd_slot_addr
-                        r1_fwd_sem_id,  # r1_fwd_sem_id
+                        r1_fwd_sem_addr,  # r1_fwd_sem_addr (global semaphore)
                         r1_slot_idx,  # r1_base_slot_idx
                         r2_fwd_slot_addr,  # r2_fwd_slot_addr
-                        r2_fwd_sem_id,  # r2_fwd_sem_id
+                        r2_fwd_sem_addr,  # r2_fwd_sem_addr (global semaphore)
                         r2_slot_idx,  # r2_base_slot_idx
                         scatter_dest_l1_addr,  # scatter_dest_l1_addr
                     ]
@@ -3760,7 +3776,6 @@ class AttentionBlock:
 
                     # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                     sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
-                        sdpa_pos_addr,
                         sdpa_ring_idx,
                         pos_r1_neighbor_idx,
                         pos_r2_neighbor_idx,
@@ -3772,7 +3787,6 @@ class AttentionBlock:
                     # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                     sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y].extend(
                         [
-                            sdpa_pos_addr,
                             pos_r1_neighbor_idx,
                             pos_r2_neighbor_idx,
                             pos_r2_neighbor_r1_idx,
@@ -3786,14 +3800,14 @@ class AttentionBlock:
                     sdpa_forwarder_brisc_base_args[(fwd_core.x, fwd_core.y)] = [
                         forwarder_buffer_base,
                         0,
-                        sdpa_fwd_r1_sem_id,
-                        sdpa_fwd_r2_sem_id,
+                        sdpa_fwd_r1_sem_addr,
+                        sdpa_fwd_r2_sem_addr,
                     ]
                     sdpa_forwarder_ncrisc_base_args[(fwd_core.x, fwd_core.y)] = [
                         forwarder_buffer_base,
                         ncrisc_buffer_offset,
-                        sdpa_bwd_r1_sem_id,
-                        sdpa_bwd_r2_sem_id,
+                        sdpa_bwd_r1_sem_addr,
+                        sdpa_bwd_r2_sem_addr,
                     ]
 
                 sdpa_ctx = {
@@ -3806,6 +3820,78 @@ class AttentionBlock:
                     "fwd_fabric_node_id": fwd_fabric_node_id,
                     "bwd_fabric_node_id": bwd_fabric_node_id,
                 }
+                # Sender grids must match the ACTUAL senders for each gather so that the
+                # per-core noc_idx descriptor and the noc0/noc1 sender counts agree with the
+                # set of cores that will actually issue writes/increments.
+                gather_reduce_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, gather_reduce_sender_grid, rmsnorm_core
+                )
+                gather2_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, matmul4_core_grid, rmsnorm_core
+                )
+                gather3_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, matmul5_active_core_grid, ccl_sender_core
+                )
+                dkv_gather_noc_idx_per_core = get_gather_noc_idx_per_core(
+                    mesh_device, mesh_coord, dkv_gather_sender_grid, dkv_gather_receiver_core
+                )
+                additional_per_core_compile_time_descriptors = [
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather_reduce_noc_idx",
+                        core_values=gather_reduce_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather2_noc_idx",
+                        core_values=gather2_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather3_noc_idx",
+                        core_values=gather3_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="dkv_gather_noc_idx",
+                        core_values=dkv_gather_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                ]
+
+                # Derive per-device noc0/noc1 sender counts for each gather from the
+                # per-core noc_idx assignments. The receiver waits on both noc0 and noc1
+                # semaphores using these counts.
+                def _count_noc_senders(noc_idx_per_core):
+                    noc0 = sum(1 for _, idx in noc_idx_per_core if idx == 0)
+                    noc1 = sum(1 for _, idx in noc_idx_per_core if idx == 1)
+                    return noc0, noc1
+
+                gather_reduce_noc0_num_senders, gather_reduce_noc1_num_senders = _count_noc_senders(
+                    gather_reduce_noc_idx_per_core
+                )
+                gather2_noc0_num_senders, gather2_noc1_num_senders = _count_noc_senders(gather2_noc_idx_per_core)
+                gather3_noc0_num_senders, gather3_noc1_num_senders = _count_noc_senders(gather3_noc_idx_per_core)
+                dkv_gather_noc0_num_senders, dkv_gather_noc1_num_senders = _count_noc_senders(
+                    dkv_gather_noc_idx_per_core
+                )
+                gather_noc_sender_counts_named_compile_time_args = [
+                    ("gather_reduce_noc0_num_senders", gather_reduce_noc0_num_senders),
+                    ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
+                    ("gather2_noc0_num_senders", gather2_noc0_num_senders),
+                    ("gather2_noc1_num_senders", gather2_noc1_num_senders),
+                    ("gather3_noc0_num_senders", gather3_noc0_num_senders),
+                    ("gather3_noc1_num_senders", gather3_noc1_num_senders),
+                    ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
+                    ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
+                ]
+                # gather_reduce/gather2/gather3 receivers are on BRISC; dkv_gather receiver is on NCRISC.
+                brisc_named_compile_time_args = brisc_named_compile_time_args + list(
+                    gather_noc_sender_counts_named_compile_time_args
+                )
+                ncrisc_named_compile_time_args = ncrisc_named_compile_time_args + [
+                    ("dkv_gather_noc0_num_senders", dkv_gather_noc0_num_senders),
+                    ("dkv_gather_noc1_num_senders", dkv_gather_noc1_num_senders),
+                ]
 
                 per_device_contexts.append(
                     {
@@ -3820,25 +3906,25 @@ class AttentionBlock:
                         "ncrisc_common_runtime_args": ncrisc_common_runtime_args,
                         "trisc_common_runtime_args": trisc_common_runtime_args,
                         "unified_compile_time_core_descriptors": unified_compile_time_core_descriptors,
-                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors,
+                        "per_core_compile_time_descriptors": per_core_compile_time_descriptors
+                        + additional_per_core_compile_time_descriptors,
                         "per_core_ncrisc_args": per_core_ncrisc_args,
                         "per_core_brisc_args": per_core_brisc_args,
                         "per_core_trisc_args": per_core_trisc_args,
                         "broadcast_worker_core": broadcast_worker_core,
-                        "fabric_node_id": fabric_node_id,
-                        "dst_nodes": dst_nodes,
                         # Post-SDPA context
                         "semaphore_list": semaphore_list,
                         "fp32_dest_acc_en": fp32_dest_acc_en,
                         "ccl_sender_core": ccl_sender_core,
                         "gather_core": gather_core,
                         "sdpa_forwarder_cores": sdpa_forwarder_cores,
+                        "bcast_config": bcast_config,
                         "ccl": ccl_ctx,
                         "sdpa": sdpa_ctx,
                     }
                 )
-        attention_block_cbs = [in_cb_descriptor, *cbs_list, attention_block_output_cb_descriptor]
-        return full_device_grid, attention_block_cbs, per_device_contexts
+        attention_block_cbs = [in_cb_descriptor, *cbs_list]
+        return full_device_grid, metadata_addr, attention_block_cbs, per_device_contexts
 
     @staticmethod
     def op(
@@ -3856,8 +3942,8 @@ class AttentionBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
-        scale,
+        metadata_tensor,
+        sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -3874,22 +3960,28 @@ class AttentionBlock:
         attention_block_output_tensor,
         # Shared semaphores, and some default values
         attention_block_semaphores=None,
-        bcast_cluster_axis=0,
-        bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        sdpa_scale_fp32=1.0,
-        num_links=1,
+        num_links_bcast=1,
+        num_links_allreduce=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
+        *,
         upstream_socket=None,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
-        full_device_grid, attention_block_cbs, attention_block_per_device_contexts = AttentionBlock.get_program_context(
+        (
+            full_device_grid,
+            _,
+            attention_block_cbs,
+            attention_block_per_device_contexts,
+        ) = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
             matmul_weights_tensor,
@@ -3904,8 +3996,8 @@ class AttentionBlock:
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
-            position_ids_tensor,
-            scale,
+            metadata_tensor,
+            sdpa_scale,
             output_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -3922,18 +4014,18 @@ class AttentionBlock:
             attention_block_output_tensor,
             # Shared semaphores, and some default values
             attention_block_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             sdpa_cluster_axis,
-            sdpa_scale_fp32,
-            num_links,
+            num_links_bcast,
+            num_links_allreduce,
             epsilon,
             fp32_dest_acc_en,
             skip_ccl,
             noc_mode,
             cb_id_context,
-            upstream_socket,
+            upstream_socket=upstream_socket,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         io_tensors = []
@@ -3958,7 +4050,7 @@ class AttentionBlock:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            position_ids_tensor,
+            metadata_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -4005,22 +4097,20 @@ class AttentionBlock:
 
             mesh_coord = ctx["mesh_coord"]
             broadcast_worker_core = ctx["broadcast_worker_core"]
-            dst_nodes = ctx["dst_nodes"]
-            if not skip_ccl and len(dst_nodes) > 0:
-                for idx, kernel in enumerate(program.kernels):
-                    if kernel.core_ranges.contains(broadcast_worker_core) and (
-                        isinstance(kernel.config, ttnn.ReaderConfigDescriptor)
-                        or (
-                            isinstance(kernel.config, ttnn.DataMovementConfigDescriptor)
-                            and kernel.config.processor == ttnn.DataMovementProcessor.RISCV_1
-                        )
-                    ):
-                        writer_rt_args_ref = kernel.runtime_args[broadcast_worker_core.x][broadcast_worker_core.y]
-                        fabric_args = ttnn.setup_routing_plane_connection(
-                            ctx["fabric_node_id"], dst_nodes, [0], program, idx, broadcast_worker_core
-                        )
-                        extend_fabric_args(writer_rt_args_ref, fabric_args)
-                        break
+            if not skip_ccl:
+                bcast_cfg = ctx["bcast_config"]
+                bcast_writer_group = kernel_result.get_group_by_arg("is_input_core", 1)
+                if bcast_writer_group is None:
+                    raise RuntimeError("Missing is_input_core kernel group for broadcast fabric append")
+                writer_kernel_idx = bcast_writer_group.ncrisc_kernel_index
+                writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
+                    broadcast_worker_core.y
+                ]
+                bcast_writer_args = bcast_cfg.get_ncrisc_per_core_rt_args(mesh_coord, program, broadcast_worker_core)
+                # Broadcast parser consumes its prefix first; preserve existing per-core payload after it.
+                program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
+                    broadcast_worker_core.y
+                ] = list(bcast_writer_args) + list(writer_rt_args_ref)
 
             # ==================================================================
             # SDPA runtime args and fabric connection setup
@@ -4087,49 +4177,49 @@ class AttentionBlock:
                 ccl = ctx["ccl"]
                 ccl_sender_core = ctx["ccl_sender_core"]
                 gather_core = ctx["gather_core"]
+                allreduce_config = ccl["allreduce_config"]
+                allgather_config = ccl["allgather_config"]
+                coord = ccl["mesh_coord"]
 
-                ccl_sender_group = kernel_result.get_group_by_arg("is_ccl_sender_core", 1)
-                ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
+                sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
+                receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
-                sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-                sender_ncrisc_kernel_idx = ccl_sender_group.ncrisc_kernel_index
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-
-                ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
+                # Sender NCRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
+                ccl_sender_ncrisc_rt = program.kernels[sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
                 ][ccl_sender_core.y]
-                ccl_sender_ncrisc_rt_args_ref.extend(ccl["sender_ncrisc_common_rt_args"])
-                ccl_sender_brisc_rt_args_ref = program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args[
-                    ccl_sender_core.x
-                ][ccl_sender_core.y]
-                ccl_sender_brisc_rt_args_ref.extend(ccl["sender_brisc_common_rt_args"])
-                ccl_receiver_ncrisc_rt_args_ref = program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args[
-                    gather_core.x
-                ][gather_core.y]
-                ccl_receiver_ncrisc_rt_args_ref.extend(ccl["receiver_ncrisc_common_rt_args"])
+                ccl_sender_ncrisc_rt.extend(ccl["sender_ncrisc_common_rt_args"])
+                allreduce_ncrisc_pc_args = list(
+                    allreduce_config.get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+                # Embed allreduce fabric arg count BEFORE fabric args (kernel reads count, then sets per_core_rta_start_idx)
+                ccl_sender_ncrisc_rt.append(len(allreduce_ncrisc_pc_args))
+                ccl_sender_ncrisc_rt.extend(allreduce_ncrisc_pc_args)
+                ccl_sender_ncrisc_rt.extend(
+                    allgather_config.get_transport_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
-                fabric_node_id = ccl["fabric_node_id"]
-                neighbor_fabric_node_id = ccl["neighbor_fabric_node_id"]
-
-                sender_brisc_rt_args_ref = program.kernels[sender_brisc_kernel_idx].runtime_args[ccl_sender_core.x][
+                # Sender BRISC: common RT args + [count] + allreduce fabric args + allgather fabric args
+                ccl_sender_brisc_rt = program.kernels[sender_group.brisc_kernel_index].runtime_args[ccl_sender_core.x][
                     ccl_sender_core.y
                 ]
-                sender_fabric_args = ttnn.setup_routing_plane_connection(
-                    fabric_node_id,
-                    [neighbor_fabric_node_id],
-                    [ccl["sender_link"]],
-                    program,
-                    sender_brisc_kernel_idx,
-                    ccl_sender_core,
+                ccl_sender_brisc_rt.extend(ccl["sender_brisc_common_rt_args"])
+                allreduce_brisc_pc_args = list(
+                    allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
                 )
-                extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
+                # Embed allreduce fabric arg count BEFORE fabric args (kernel reads count, then sets per_core_rta_start_idx)
+                ccl_sender_brisc_rt.append(len(allreduce_brisc_pc_args))
+                ccl_sender_brisc_rt.extend(allreduce_brisc_pc_args)
+                ccl_sender_brisc_rt.extend(
+                    allgather_config.get_transport_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
 
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
-                    gather_core.y
-                ]
+                # Receiver NCRISC: common RT args only (reader uses semaphores, no fabric)
+                ccl_receiver_ncrisc_rt = program.kernels[receiver_group.ncrisc_kernel_index].runtime_args[
+                    gather_core.x
+                ][gather_core.y]
+                ccl_receiver_ncrisc_rt.extend(ccl["receiver_ncrisc_common_rt_args"])
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
-
-        result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
-        return result
+        ttnn.generic_op(io_tensors, mesh_program_descriptor)
+        return attention_block_output_tensor

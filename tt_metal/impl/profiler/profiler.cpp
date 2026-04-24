@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <distributed.hpp>
 #include "llrt/hal.hpp"
 #include "mesh_device.hpp"
-#include "thread_pool.hpp"
+#include "impl/threading/thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
@@ -42,6 +42,7 @@
 #include "tracy/Tracy.hpp"
 #include "profiler_types.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "common/filesystem_utils.hpp"
 #include "context/metal_context.hpp"
 #include "context/context_types.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -244,7 +245,23 @@ void populateZoneSrcLocations(
         std::getline(ss, source_file, ',');
         std::getline(ss, line_num_str, ',');
 
-        tracy::MarkerDetails details(zone_name, source_file, std::stoull(line_num_str));
+        if (line_num_str.empty()) {
+            log_warning(tt::LogMetal, "Skipping malformed zone source location entry: {}", zone_src_location);
+            continue;
+        }
+        uint64_t line_num = 0;
+        try {
+            line_num = std::stoull(line_num_str);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "Skipping zone source location entry '{}' with invalid line number '{}': {}",
+                zone_src_location,
+                line_num_str,
+                e.what());
+            continue;
+        }
+        tracy::MarkerDetails details(zone_name, source_file, line_num);
 
         auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
         if (ret.second && push_new) {
@@ -1032,8 +1049,8 @@ void dumpJsonNocTraces(
     ChipId device_id,
     const std::filesystem::path& output_dir) {
     // create output directory if it does not exist
-    std::filesystem::create_directories(output_dir);
-    if (!std::filesystem::is_directory(output_dir)) {
+    tt::filesystem::safe_create_directories(output_dir);
+    if (!tt::filesystem::safe_is_directory(output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not write profiler noc traces to '{}' because the directory path could not be created!",
@@ -1084,14 +1101,14 @@ void dumpDeviceResultsToCSV(
     int device_core_frequency,
     uint32_t max_compute_cores,
     const std::filesystem::path& log_path) {
-    TT_ASSERT(std::filesystem::exists(log_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(log_path.parent_path()).value_or(false));
     TT_ASSERT(log_path.extension() == ".csv");
 
     // open CSV log file
     std::ofstream log_file_ofs;
 
     // append to existing CSV log file if it already exists
-    if (std::filesystem::exists(log_path)) {
+    if (tt::filesystem::safe_exists(log_path).value_or(false)) {
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
@@ -1513,6 +1530,8 @@ void DeviceProfiler::readRiscProfilerResults(
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
+                // Lets processDeviceMarkerData tolerate orphan ZONE_START markers.
+                this->had_dropped_markers.store(true, std::memory_order_relaxed);
             }
 
             uint32_t riscNumRead = 0;
@@ -1529,6 +1548,14 @@ void DeviceProfiler::readRiscProfilerResults(
 
             std::set<tracy::TTDeviceMarker>& device_markers_for_core_risc = device_markers_for_core[riscType];
 
+            // perf_counter_flush emits pre-sentinel TS_DATA; buffer until a run starts.
+            struct PreSentinelMarker {
+                uint32_t timer_id;
+                uint64_t timestamp;
+                uint64_t data;  // only valid for TS_DATA
+            };
+            std::vector<PreSentinelMarker> pre_sentinel_markers;
+
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
@@ -1536,6 +1563,28 @@ void DeviceProfiler::readRiscProfilerResults(
                     oneStartFound = true;
                     opTime_H = 0;
                     opTime_L = 0;
+                } else if (!oneStartFound) {
+                    // Pre-sentinel data: capture TS_DATA and advance past its 4-slot layout.
+                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
+                    uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                    if (timer_id || time_H) {
+                        kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
+                        if (pre_packet_type == kernel_profiler::TS_DATA) {
+                            uint32_t time_L = data_buffer.at(index + 1);
+                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            // Skip truncated TS_DATA at the end of this risc's region.
+                            if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
+                                uint64_t data_H = data_buffer.at(data_index);
+                                uint64_t data_L = data_buffer.at(data_index + 1);
+                                uint64_t data = (data_H << 32) | data_L;
+                                uint64_t timestamp = (static_cast<uint64_t>(time_H) << 32) | time_L;
+                                pre_sentinel_markers.push_back({timer_id, timestamp, data});
+                            }
+                            // Skip the data payload slot (4 slots total with the loop step).
+                            index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                        }
+                    }
+                    continue;
                 } else if (newRunStart) {
                     newRunStart = false;
 
@@ -1550,6 +1599,22 @@ void DeviceProfiler::readRiscProfilerResults(
                     const uint32_t base_program_id =
                         detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
                     opname = getOpNameIfAvailable(device_id, base_program_id);
+
+                    // Attach pre-sentinel TS_DATA markers to this run.
+                    for (const auto& pre : pre_sentinel_markers) {
+                        readDeviceMarkerData(
+                            device_markers_for_core_risc,
+                            runHostCounterRead,
+                            deviceTraceCounterRead,
+                            opname,
+                            device_id,
+                            phys_coord,
+                            riscType,
+                            pre.data,
+                            pre.timer_id,
+                            pre.timestamp);
+                    }
+                    pre_sentinel_markers.clear();
 
                 } else if (oneStartFound) {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
@@ -1968,19 +2033,33 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
-                TT_FATAL(
-                    !start_marker_stack.empty(),
-                    "End marker found without a corresponding start marker.\nEnd marker: {}",
-                    marker.to_string());
+                if (start_marker_stack.empty()) {
+                    // Orphan ZONE_END from a dropped-marker run; skip instead of fatal.
+                    if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
+                        TT_FATAL(
+                            false,
+                            "End marker found without a corresponding start marker.\nEnd marker: {}",
+                            marker.to_string());
+                    }
+                    device_marker_it = next_device_marker_it;
+                    continue;
+                }
 
                 const auto& start_marker_it = start_marker_stack.top();
 
                 if (!MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
-                    TT_FATAL(
-                        start_marker_it->marker_id == marker.marker_id,
-                        "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
-                        start_marker_it->to_string(),
-                        marker.to_string());
+                    if (start_marker_it->marker_id != marker.marker_id) {
+                        if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
+                            TT_FATAL(
+                                false,
+                                "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
+                                start_marker_it->to_string(),
+                                marker.to_string());
+                        }
+                        // Stack is misaligned due to drops; skip this end without popping.
+                        device_marker_it = next_device_marker_it;
+                        continue;
+                    }
 
                     if (start_marker_it->marker_name != marker.marker_name) {
                         marker.marker_name = start_marker_it->marker_name;
@@ -2065,13 +2144,31 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 // If this is a performance counter, extract fields from data and store in marker meta_data
                 if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    marker.meta_data["counter type"] = enchantum::to_string(PerfCounter(marker.data).counter_type);
-                    marker.meta_data["ref cnt"] = PerfCounter(marker.data).ref_cnt;
-                    marker.meta_data["value"] = PerfCounter(marker.data).counter_value;
+                    const PerfCounter perf_counter(marker.data);
+                    const uint32_t counter_type_raw = perf_counter.counter_type;
+                    // Skip markers with out-of-range counter_type (stale/dropped data).
+                    if (!enchantum::contains<PerfCounterType>(counter_type_raw)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "PerfCounter marker at device {} core {},{} risc {} run {} has "
+                            "out-of-range counter_type={} (raw data 0x{:x}); skipping enrichment.",
+                            marker.chip_id,
+                            marker.core_x,
+                            marker.core_y,
+                            enchantum::to_string(marker.risc),
+                            marker.runtime_host_id,
+                            counter_type_raw,
+                            marker.data);
+                    } else {
+                        marker.meta_data["counter type"] =
+                            enchantum::to_string(static_cast<PerfCounterType>(counter_type_raw));
+                        marker.meta_data["ref cnt"] = perf_counter.ref_cnt;
+                        marker.meta_data["value"] = perf_counter.counter_value;
 
-                    const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
-                    device_marker_it = marker_ret.first;
-                    next_device_marker_it = marker_ret.second;
+                        const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
+                        device_marker_it = marker_ret.first;
+                        next_device_marker_it = marker_ret.second;
+                    }
                 }
             }
         }
@@ -2079,11 +2176,22 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         device_marker_it = next_device_marker_it;
     }
 
-    TT_FATAL(
-        start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
-        start_marker_stack.size(),
-        start_marker_stack.top()->to_string());
+    if (!start_marker_stack.empty()) {
+        if (this->had_dropped_markers.load(std::memory_order_relaxed)) {
+            log_warning(
+                tt::LogMetal,
+                "{} start markers detected without corresponding end markers (some end markers were "
+                "dropped due to DRAM-buffer overflow; report will be partial). Marker at top of stack: {}",
+                start_marker_stack.size(),
+                start_marker_stack.top()->to_string());
+        } else {
+            TT_FATAL(
+                false,
+                "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
+                start_marker_stack.size(),
+                start_marker_stack.top()->to_string());
+        }
+    }
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }
@@ -2131,14 +2239,17 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
     }
 
     this->device_logs_output_dir = std::filesystem::path(get_profiler_logs_dir());
-    std::filesystem::create_directories(this->device_logs_output_dir);
+    TT_FATAL(
+        tt::filesystem::safe_create_directories(this->device_logs_output_dir),
+        "Could not create profiler output directory '{}'",
+        this->device_logs_output_dir);
 
     if (new_logs) {
         std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
-        std::filesystem::remove(log_path);
+        tt::filesystem::safe_remove(log_path);
 
         std::filesystem::path device_perf_report_path = this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
-        std::filesystem::remove(device_perf_report_path);
+        tt::filesystem::safe_remove(device_perf_report_path);
     }
 
     MetalContext::instance(context_id).profiler_state_manager()->device_programs_perf_analyses_map[this->device_id] =
@@ -2239,10 +2350,10 @@ void DeviceProfiler::freshDeviceLog() {
         return;
     }
     std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
-    std::filesystem::remove(log_path);
+    tt::filesystem::safe_remove(log_path);
 
     std::filesystem::path device_perf_report_path = device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
-    std::filesystem::remove(device_perf_report_path);
+    tt::filesystem::safe_remove(device_perf_report_path);
 #endif
 }
 
@@ -2251,7 +2362,10 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
     if (!getDeviceProfilerState(context_id)) {
         return;
     }
-    std::filesystem::create_directories(new_output_dir);
+    TT_FATAL(
+        tt::filesystem::safe_create_directories(new_output_dir),
+        "Could not create profiler output directory '{}'",
+        new_output_dir);
     device_logs_output_dir = new_output_dir;
 #endif
 }
@@ -2330,8 +2444,8 @@ void DeviceProfiler::processResults(
 }
 
 void DeviceProfiler::dumpRoutingInfo() const {
-    std::filesystem::create_directories(noc_trace_data_output_dir);
-    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not dump topology to '{}' because the directory path could not be created!",
@@ -2343,8 +2457,8 @@ void DeviceProfiler::dumpRoutingInfo() const {
 }
 
 void DeviceProfiler::dumpClusterCoordinates() const {
-    std::filesystem::create_directories(noc_trace_data_output_dir);
-    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not dump cluster coordinates to '{}' because the directory path could not be created!",
@@ -2512,8 +2626,19 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     const CoreCoord worker_core = device_core.second;
 
     if (!core_sync_info.contains(worker_core)) {
-        const std::string tracyTTCtxName =
-            fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+        const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
+        // disable linting here; slicing is __intended__
+        // NOLINTBEGIN
+        const CoreCoord logical_core =
+            soc_desc.translate_coord_to(worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
+        // NOLINTEND
+        const std::string tracyTTCtxName = fmt::format(
+            "Device: {}, Logical ({},{}) Physical ({},{})",
+            device_id,
+            logical_core.x,
+            logical_core.y,
+            worker_core.x,
+            worker_core.y);
 
         double cpu_time = device_sync_info.cpu_time;
         double device_time = device_sync_info.device_time;

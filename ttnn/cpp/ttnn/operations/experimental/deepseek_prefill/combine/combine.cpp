@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,8 @@ ttnn::Tensor combine(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
-    bool init_zeros) {
+    bool init_zeros,
+    bool use_l1_small_for_semaphores) {
     // Get device and subdevice info
     auto* mesh_device = dispatched_buffer.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -37,8 +38,8 @@ ttnn::Tensor combine(
         "cluster_axis must be 0 (current value: {}). Other values are not tested.",
         cluster_axis.value_or(0));
     TT_FATAL(
-        num_links.value_or(1) == 1,
-        "num_links must be 1 (current value: {}). Other values are not tested.",
+        num_links.value_or(1) >= 1 && num_links.value_or(1) <= 4,
+        "num_links must be between 1 and 4 (current value: {}).",
         num_links.value_or(1));
     auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     TT_FATAL(
@@ -67,7 +68,8 @@ ttnn::Tensor combine(
         usable_topology,
         memory_config_,
         subdevice_core_range_set,
-        init_zeros);
+        init_zeros,
+        use_l1_small_for_semaphores);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

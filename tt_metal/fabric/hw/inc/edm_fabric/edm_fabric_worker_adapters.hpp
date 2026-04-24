@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,19 +24,22 @@
 
 namespace tt::tt_fabric {
 
-template <
-    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
-    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
 
-// Type alias preserving the current name for all existing callers.
-// Stream ID 22 (sender_channel_0 free slots) is the default for VC0/VC1 worker connections.
+// VC0/VC1: connection info read from L1 conn table populated by device-init.
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 using WorkerToFabricEdmSenderImpl =
     WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>;
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
+
+// VC2: infrastructure connection — addresses passed as runtime args, stream ID 30.
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+using WorkerToFabricEdmSenderVC2Impl =
+    WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS, 2>;
+
+using WorkerToFabricEdmSenderVC2 = WorkerToFabricEdmSenderVC2Impl<false, 0>;
 
 namespace fabric_detail{
     template <bool STATEFUL_NOC>
@@ -60,12 +63,13 @@ namespace fabric_detail{
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-template <
-    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS,
-    uint32_t STREAM_ID>
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS, uint8_t VC_ID>
 struct WorkerToFabricEdmSenderBase {
-    static_assert(STREAM_ID <= 31, "Stream ID must be in range 0-31");
+    static_assert(VC_ID == 0 || VC_ID == 2, "Only VC_ID 0 and 2 are supported");
+    // VC0 uses stream 22 (sender_channel_0 free slots); VC2 uses stream 30.
+    static constexpr uint32_t STREAM_ID =
+        VC_ID == 2 ? tt::tt_fabric::connection_interface::vc2_sender_free_slots_stream_id
+                   : tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -102,7 +106,9 @@ struct WorkerToFabricEdmSenderBase {
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
-        if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
+        if constexpr (my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0) {
+            // VC0: connection info is populated into the L1 conn table by device-init;
+            // read it by eth channel index.
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
@@ -121,6 +127,7 @@ struct WorkerToFabricEdmSenderBase {
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
             worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
         } else {
+            // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
             direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
@@ -273,9 +280,7 @@ struct WorkerToFabricEdmSenderBase {
             sync_noc_cmd_buf);
     }
 
-    // templatized num_slots to let callers implement bubble flow control without runtime overheads.
-    template <size_t num_slots = 1>
-    FORCE_INLINE bool edm_has_space_for_packet() const {
+    FORCE_INLINE uint32_t get_num_free_write_slots() const {
         /*
         Without this l1 invalidation `FlowControlAllToAllMeshLowLatency_size_1024_ntype_atomic_inc_ftype_mcast` fabric
         test hangs, while sending packets, waiting for space in the EDM buffer. This is despite disabling the use of the
@@ -284,14 +289,16 @@ struct WorkerToFabricEdmSenderBase {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
-            if constexpr (num_slots == 1) {
-                return used_slots < this->num_buffers_per_channel;
-            } else {
-                return used_slots <= this->num_buffers_per_channel - num_slots;
-            }
+            return used_slots >= this->num_buffers_per_channel ? 0 : this->num_buffers_per_channel - used_slots;
         } else {
-            return get_ptr_val(worker_credits_stream_id) >= num_slots;
+            return get_ptr_val(worker_credits_stream_id);
         }
+    }
+
+    // templatized num_slots to let callers implement bubble flow control without runtime overheads.
+    template <size_t num_slots = 1>
+    FORCE_INLINE bool edm_has_space_for_packet() const {
+        return this->get_num_free_write_slots() >= num_slots;
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
@@ -323,6 +330,40 @@ struct WorkerToFabricEdmSenderBase {
     // Does not wait for CB. Assumes caller handles CB data availability
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+    }
+
+    template <bool posted = false>
+    FORCE_INLINE void setup_stateful_send_cmd_bufs(uint8_t noc = get_fabric_worker_noc()) const {
+        // In DM_DYNAMIC_NOC, write and write_reg traffic on a worker RISC alias to the same physical cmd buf.
+        // Program the state only after generic worker-side NOC setup is complete, and avoid unrelated writes on this
+        // RISC while the stateful send loop is active.
+        const uint64_t edm_core_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, noc);
+        ncrisc_noc_write_set_state</*posted=*/posted, /*one_packet=*/false>(
+            noc, this->data_noc_cmd_buf, edm_core_noc_addr, 0, NOC_UNICAST_WRITE_VC);
+
+        const uint64_t credit_noc_addr =
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
+        const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        // Keep the credit inline write non-posted for now; only the payload/header transport path is toggled by
+        // `posted`.
+        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
+            credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
+    }
+
+    template <bool posted = false>
+    FORCE_INLINE void send_current_slot_stateful_non_blocking(
+        uint32_t payload_source_l1_addr,
+        uint32_t payload_size_bytes,
+        uint32_t header_source_l1_addr,
+        uint8_t noc = get_fabric_worker_noc()) {
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
+
+        const uint32_t slot_l1_addr = this->current_buffer_slot_l1_addr();
+        this->issue_payload_to_current_slot_stateful<posted>(
+            slot_l1_addr, payload_source_l1_addr, payload_size_bytes, noc);
+        this->issue_header_to_current_slot_stateful<posted>(slot_l1_addr, header_source_l1_addr, noc);
+        this->post_send_payload_increment_pointers</*stateful_api=*/true>(noc);
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -593,6 +634,35 @@ private:
         } else {
             return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr, get_fabric_worker_noc());
         }
+    }
+
+    FORCE_INLINE uint32_t current_buffer_slot_l1_addr() const {
+        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            return this->edm_buffer_slot_addrs[this->get_buffer_slot_index()];
+        } else {
+            return this->edm_buffer_addr;
+        }
+    }
+
+    template <bool posted = false>
+    FORCE_INLINE void issue_payload_to_current_slot_stateful(
+        uint32_t slot_l1_addr,
+        uint32_t payload_source_l1_addr,
+        uint32_t payload_size_bytes,
+        uint8_t noc = get_fabric_worker_noc()) const {
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
+            noc,
+            this->data_noc_cmd_buf,
+            payload_source_l1_addr,
+            slot_l1_addr + sizeof(PACKET_HEADER_TYPE),
+            payload_size_bytes);
+    }
+
+    template <bool posted = false>
+    FORCE_INLINE void issue_header_to_current_slot_stateful(
+        uint32_t slot_l1_addr, uint32_t header_source_l1_addr, uint8_t noc = get_fabric_worker_noc()) {
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
+            noc, this->data_noc_cmd_buf, header_source_l1_addr, slot_l1_addr, sizeof(PACKET_HEADER_TYPE));
     }
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,13 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "gelu_bw/device/gelu_bw_device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
+#include "tanh_bw/device/tanh_bw_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/hal.hpp>
 
@@ -290,15 +292,14 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
-    Tensor tanh_res = ttnn::tanh(input, output_mem_config);
-    tanh_res = ttnn::square(tanh_res, output_mem_config);
-    tanh_res = ttnn::rsub(tanh_res, 1.0f, std::nullopt, output_mem_config);
-    ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config, input_grad);
-    grad_tensor.emplace_back(input_grad);
+    DataType output_dtype = input.dtype();
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    auto result_tensor = ttnn::operations::unary_backward::tanh_bw::launch_tanh_bw(
+        grad, input, output_dtype, output_memory_config, input_grad);
+    grad_tensor.emplace_back(result_tensor);
     return grad_tensor;
 }
 
@@ -1363,9 +1364,10 @@ std::vector<ComplexTensor> reciprocal_bw(
     ComplexTensor neg_grad =
         ComplexTensor({ttnn::neg(grad.real(), output_mem_config), ttnn::neg(grad.imag(), output_mem_config)});
     ComplexTensor inp_recip = ttnn::reciprocal(input, output_mem_config);
-    ComplexTensor grad_inp = ttnn::operations::complex_binary::_mul(
+    ComplexTensor grad_inp = ttnn::operations::complex_binary::multiply(
         neg_grad,
-        ttnn::conj(ttnn::operations::complex_binary::_mul(inp_recip, inp_recip, output_mem_config), output_mem_config),
+        ttnn::conj(
+            ttnn::operations::complex_binary::multiply(inp_recip, inp_recip, output_mem_config), output_mem_config),
         output_mem_config);
     neg_grad.deallocate();
     inp_recip.deallocate();
@@ -1608,23 +1610,10 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
             grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config, input_grad);
         result.push_back(input_grad);
     } else {
-        float kAlpha = M_SQRT1_2;
-        float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
-        Tensor cdf = ttnn::multiply(
-            (ttnn::add(
-                ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)),
-                1,
-                std::nullopt,
-                output_memory_config)),
-            0.5);
-        Tensor pdf = ttnn::multiply(
-            ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config),
-            kBeta,
-            std::nullopt,
-            output_memory_config);
-        ttnn::multiply(
-            grad, ttnn::add(cdf, ttnn::multiply(input, pdf)), std::nullopt, output_memory_config, input_grad);
-        result.push_back(input_grad);
+        DataType output_dtype = input.dtype();
+        auto result_tensor = ttnn::operations::unary_backward::gelu_bw::launch_gelu_bw(
+            grad, input, output_dtype, output_memory_config, input_grad);
+        result.push_back(result_tensor);
     }
 
     return result;

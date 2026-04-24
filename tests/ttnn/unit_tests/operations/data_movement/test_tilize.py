@@ -1,20 +1,18 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
 import math
-from functools import partial
 
-from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from models.common.utility_functions import skip_for_slow_dispatch
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -36,11 +34,22 @@ shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
     ),
 )
 def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults):
-    datagen_func = [
-        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-    ]
-    comparison_func = comparison_funcs.comp_equal
-    run_single_pytorch_test("tilize", input_shapes, datagen_func, comparison_func, device, tilize_args)
+    shape = input_shapes[0]
+    torch_input = (torch.rand(shape) * 200 - 100).to(torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=tilize_args["dtype"][0],
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=tilize_args["input_mem_config"][0],
+    )
+    tt_output = ttnn.tilize(
+        tt_input, memory_config=tilize_args["output_mem_config"], use_multicore=tilize_args["use_multicore"]
+    )
+    torch_output = ttnn.to_torch(tt_output)
+
+    assert_equal(torch_input, torch_output)
 
 
 @pytest.mark.parametrize("shape", [(64, 128), (512, 512)])
@@ -253,17 +262,24 @@ def test_run_tilize_large_row_input(device, input_shape):
 
 
 @pytest.mark.parametrize("shape", [(1, 7168, 2304)])
-@pytest.mark.parametrize("shard_shape", [(7168, 192)])
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat4_b])
 @pytest.mark.parametrize("torch_dtype", [torch.float32])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
-    device, shape, shard_shape, ttnn_dtype, torch_dtype, layout
+    device, shape, ttnn_dtype, torch_dtype, layout
 ):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(shape, dtype=torch_dtype)
 
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))])
+    dram_cores = device.dram_grid_size().x
+
+    if shape[2] % dram_cores != 0:
+        pytest.skip(f"Shape width {shape[2]} is not evenly divisible by {dram_cores} DRAM cores")
+
+    # Calculate shard_shape by dividing last dimension by number of DRAM cores
+    shard_shape = (shape[1], shape[2] // dram_cores)
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))])
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
@@ -311,6 +327,7 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
     ],
     indirect=True,
 )
+@skip_for_slow_dispatch()
 def test_deepseek_v3_mla_tilize_trace_mode(
     device,
     batch_size,

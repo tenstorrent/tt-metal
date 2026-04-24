@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -8,16 +8,17 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
-from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN as GENERATOR_MAX_SEQ_LEN
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
+from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, K_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv(
         "DEEPSEEK_V3_HF_MODEL",
-        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
+        "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked",
     )
 )
 CACHE_DIR = Path(
@@ -32,11 +33,56 @@ CACHE_DIR = Path(
 REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
 
 
+def _sanitize_decoded(text: str) -> str:
+    return repr(text)[1:-1]
+
+
+def _assert_no_garbage_tokens(
+    *,
+    first_gen: dict,
+    reference_file: Path,
+    tf_prompt_len: int,
+    tokenizer,
+) -> None:
+    token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
+    tt_preds = [int(tok) for tok in first_gen.get("predicted_tokens", [])]
+    expected_checked = token_acc.num_garbage_check_tokens(tt_preds)
+    expected_debug = token_acc.format_garbage_token_details(tokenizer, tt_preds)
+    expected_count = len(expected_debug)
+
+    actual_count = int(first_gen.get("garbage_token_count", 0) or 0)
+    actual_checked = int(first_gen.get("garbage_tokens_checked", 0) or 0)
+    assert actual_checked == expected_checked, (
+        f"garbage_tokens_checked mismatch: demo reported {actual_checked}, "
+        f"expected {expected_checked} from {reference_file}"
+    )
+    assert actual_count == expected_count, (
+        f"garbage_token_count mismatch: demo reported {actual_count}, "
+        f"expected {expected_count} from {reference_file}"
+    )
+    if expected_count > 0:
+        pytest.fail(
+            f"Garbage tokens detected: {expected_count}/{expected_checked} checked tokens are outside the "
+            f"teacher top-{token_acc.topk_candidate_k}.\n" + "\n".join(expected_debug)
+        )
+
+
+def _tile_align(length: int) -> int:
+    k_chunk_size = K_CHUNK_SIZE
+    aligned_size = max(int(ttnn.TILE_SIZE), k_chunk_size)
+    return ((int(length) + aligned_size - 1) // aligned_size) * aligned_size
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("reference_file", [REFERENCE_FILE])
 @pytest.mark.parametrize("max_new_tokens", [128, 2048, 8192], ids=["128", "2048", "8192"])
+@pytest.mark.parametrize("max_users_per_row", [8, 32], ids=["8", "32"])
 def test_demo_teacher_forcing_accuracy(
-    reference_file: Path, max_new_tokens: int, is_ci_env: bool, force_recalculate_weight_config: bool
+    reference_file: Path,
+    max_new_tokens: int,
+    is_ci_env: bool,
+    force_recalculate_weight_config: bool,
+    max_users_per_row: int,
 ):
     """
     Test DeepSeek v3 demo with teacher forcing to verify accuracy.
@@ -88,20 +134,11 @@ def test_demo_teacher_forcing_accuracy(
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
-    max_supported_new_tokens = GENERATOR_MAX_SEQ_LEN - tf_prompt_len
-    if max_supported_new_tokens <= 0:
-        pytest.skip(f"Prompt length {tf_prompt_len} exceeds max_seq_len {GENERATOR_MAX_SEQ_LEN}.")
-    if max_new_tokens > max_supported_new_tokens:
-        pytest.skip(
-            f"Requested max_new_tokens={max_new_tokens} exceeds generator capacity: "
-            f"max_seq_len={GENERATOR_MAX_SEQ_LEN}, prompt_len={tf_prompt_len} -> max_new_tokens<={max_supported_new_tokens}."
-        )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, TG, or T3K.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
-    num_users = USERS_PER_ROW * mesh_shape[0]
+    num_users = max_users_per_row * mesh_shape[0]
     prompt_text_for_users = payload.get("prompt", "")
 
     # Print token ID metadata if available
@@ -146,10 +183,20 @@ def test_demo_teacher_forcing_accuracy(
             f"in {reference_file}. Regenerate the reference with a larger max_new_tokens."
         )
 
+    # Teacher forcing only needs enough configured context for the prompt plus the
+    # number of forced decode steps under test.
+    configured_max_seq_len = _tile_align(tf_prompt_len + max_new_tokens)
+    if configured_max_seq_len > DEFAULT_MAX_SEQ_LEN:
+        pytest.skip(
+            f"Requested teacher-forced context requires max_seq_len={configured_max_seq_len}, "
+            f"which exceeds the default demo max_seq_len {DEFAULT_MAX_SEQ_LEN}."
+        )
+
     logger.info("=== Phase 2: Run teacher forcing ===")
     logger.info("Loaded reference from: {}", reference_file)
     logger.info("Total reference tokens: {}, prompt length: {}", total_ref_tokens, tf_prompt_len)
     logger.info("Using max_new_tokens={}", max_new_tokens)
+    logger.info("Using configured max_seq_len={}", configured_max_seq_len)
 
     # Run the demo with teacher forcing
     results = run_demo(
@@ -158,6 +205,7 @@ def test_demo_teacher_forcing_accuracy(
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=max_new_tokens,
+        max_seq_len=configured_max_seq_len,
         repeat_batches=1,
         token_accuracy=True,
         reference_file=reference_file,
@@ -171,7 +219,7 @@ def test_demo_teacher_forcing_accuracy(
     # Check results
     assert "generations" in results
     assert len(results["generations"]) == num_users, (
-        f"Expected {num_users} generations (USERS_PER_ROW={USERS_PER_ROW}, rows={mesh_shape[0]}), "
+        f"Expected {num_users} generations (USERS_PER_ROW={max_users_per_row}, rows={mesh_shape[0]}), "
         f"got {len(results['generations'])}"
     )
 
@@ -191,6 +239,8 @@ def test_demo_teacher_forcing_accuracy(
     # check accuracy is present
     assert "accuracy_top1" in first_gen, "Top-1 accuracy should be present in results"
     assert "accuracy_top5" in first_gen, "Top-5 accuracy should be present in results"
+    assert "garbage_token_count" in first_gen, "garbage_token_count should be present in teacher-forcing results"
+    assert "garbage_tokens_checked" in first_gen, "garbage_tokens_checked should be present in teacher-forcing results"
 
     # Verify tokens were generated
     assert "tokens" in first_gen
@@ -243,8 +293,6 @@ def test_demo_teacher_forcing_accuracy(
     top5_correct = []
     errors = []
 
-    sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
-
     for i in range(total_compared):
         pos = tf_prompt_len + i
         tt_pred = int(tt_preds[i])
@@ -277,10 +325,10 @@ def test_demo_teacher_forcing_accuracy(
                 }
             )
 
-        true_text = sanitize(tokenizer.decode([true_token], skip_special_tokens=False))
-        tt_text = sanitize(tokenizer.decode([tt_pred], skip_special_tokens=False))
+        true_text = _sanitize_decoded(tokenizer.decode([true_token], skip_special_tokens=False))
+        tt_text = _sanitize_decoded(tokenizer.decode([tt_pred], skip_special_tokens=False))
         ref_top5_text = [tokenizer.decode([t], skip_special_tokens=False) for t in hf_top5]
-        ref_top5_str = " ".join(f"{sanitize(t):<14}" for t in ref_top5_text)
+        ref_top5_str = " ".join(f"{_sanitize_decoded(t):<14}" for t in ref_top5_text)
 
         progress_str = f"{i+1}/{total_compared}"
         correct = "x" if top1_match else ("-" if top5_match else ("!" if true_match else " "))
@@ -311,10 +359,10 @@ def test_demo_teacher_forcing_accuracy(
     logger.info("-" * 120)
     for error in errors:
         if error["expected_ids"][0] == error["true_id"]:
-            context = sanitize(error["context"])
-            incorrect = sanitize(error["incorrect"])
-            expected = " | ".join(sanitize(t) for t in error["expected"])
-            true_word = sanitize(tokenizer.decode([error["true_id"]], skip_special_tokens=False))
+            context = _sanitize_decoded(error["context"])
+            incorrect = _sanitize_decoded(error["incorrect"])
+            expected = " | ".join(_sanitize_decoded(t) for t in error["expected"])
+            true_word = _sanitize_decoded(tokenizer.decode([error["true_id"]], skip_special_tokens=False))
             logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
     # Sanity-check token_accuracy's computed values vs our computed totals
@@ -334,6 +382,13 @@ def test_demo_teacher_forcing_accuracy(
             )
 
     logger.info(f"Top-1: {100 * total_top1:.0f}% | Top-5: {100 * total_top5:.0f}%")
+
+    _assert_no_garbage_tokens(
+        first_gen=first_gen,
+        reference_file=reference_file,
+        tf_prompt_len=tf_prompt_len,
+        tokenizer=tokenizer,
+    )
 
     min_expected_top1 = 0.90
     min_expected_top5 = 0.99

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,10 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_reduce_api.h"
 #include "llk_math_matmul_api.h"
+#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"
@@ -24,14 +26,15 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Param Type | Name   | Description                                   | Type     | Valid Range | Required |
- * |----------- |--------|-----------------------------------------------|----------|-------------|----------|
- * | Function   | icb    | Input circular buffer identifier              | uint32_t | 0 to 31     | True     |
- * | Function   | block  | Size of tile block to work on                 | uint32_t | > 0         | True     |
- * | Function   | ocb    | Output circular buffer identifier             | uint32_t | 0 to 31     | True     |
+ * | Param Type | Name   | Description                              | Type     | Valid Range | Required |
+ * |----------- |--------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb    | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | block  | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
@@ -41,10 +44,18 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           false /*is_int_en*/,
           true /*tilize en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb, 1, icb)));
+#endif
+#else
+    // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
+    // block_ct_dim against full_ct_dim would need a compute-API-level workaround since BH/WH operate
+    // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
+    UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
 #endif
 }
 
+#ifndef ARCH_QUASAR
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
 
 // clang-format off
@@ -75,7 +86,7 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t face_r_dim = 16,
     uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1_scaler, ocb, call_line);
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler, face_r_dim, num_faces)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
@@ -117,9 +128,10 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb, 1, new_icb)));
 #endif
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -145,17 +157,22 @@ ALWI void tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
+#ifndef ARCH_QUASAR
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             0 /*dst index*/)));
         PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
-
+#else
+        MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
+        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+#endif
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Unpacks and tilizes a block from two input CBs.
@@ -185,7 +202,6 @@ ALWI void unpack_tilizeA_B_block(
     uint32_t icb0,
     uint32_t icb1,
     uint32_t block,
-
     uint32_t tile_idx_b,
     uint32_t num_faces = 4,
     uint32_t srca_face_r_dim = 16) {
@@ -208,6 +224,7 @@ ALWI void unpack_tilizeA_B_block(
  * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #ifdef ARCH_BLACKHOLE
@@ -371,5 +388,7 @@ ALWI void fast_tilize_block(
  */
 // clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
+
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

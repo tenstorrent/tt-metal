@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
@@ -34,6 +33,7 @@ struct AllGatherDeviceOperation {
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<CoreRangeSet> sub_core_grid;
+        const bool use_l1_small_for_semaphores = false;
     };
 
     struct tensor_args_t {
@@ -100,5 +100,6 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<CoreRangeSet>& sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool use_l1_small_for_semaphores = false);
 }  // namespace ttnn::prim

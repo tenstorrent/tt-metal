@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,10 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include "allocator/allocator.hpp"
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
+#include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -1127,7 +1129,8 @@ bool write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
+    const CoreRangeSet* logical_core_filter) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
@@ -1285,8 +1288,13 @@ bool write_to_device_buffer(
             remote_chip);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
 
+        bool any_core_written = false;
         //  Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
+            if (logical_core_filter != nullptr && !logical_core_filter->contains(cores[core_id])) {
+                continue;
+            }
+            any_core_written = true;
             for (const BufferCorePageMapping& core_page_mapping :
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
                 write_sharded_buffer_to_core(
@@ -1301,34 +1309,42 @@ bool write_to_device_buffer(
                     dispatch_core_type);
             }
         }
-    } else {
-        auto root_buffer = buffer.root_buffer();
-        auto region = buffer.root_buffer_region();
-        InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
-            initialize_interleaved_buf_dispatch_params(
-                *root_buffer,
-                cq_id,
-                expected_num_workers_completed,
-                region,
-                sub_device_ids,
-                pinned_src_noc_xy,
-                pinned_src_addr,
-                use_pinned_transfer,
-                remote_chip);
-
-        InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
-            ttsl::overloaded{
-                [](std::derived_from<InterleavedBufferWriteDispatchParams> auto& val)
-                    -> InterleavedBufferWriteDispatchParams* { return &val; },
-                [](std::monostate) -> InterleavedBufferWriteDispatchParams* { return nullptr; },
-            },
-            dispatch_params_variant);
-        TT_ASSERT(dispatch_params != nullptr);
-
-        write_interleaved_buffer_to_device(
-            src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
-        return use_pinned_transfer;
+        // If the filter excluded every core, no DMA was issued, so callers must not treat the
+        // pinned transfer as in-flight (which would add spurious barrier events).
+        return use_pinned_transfer && any_core_written;
     }
+    if (logical_core_filter != nullptr) {
+        TT_FATAL(
+            logical_core_filter->empty(),
+            "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+            "per-core filtering)");
+        // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
+        return false;
+    }
+    auto root_buffer = buffer.root_buffer();
+    auto region = buffer.root_buffer_region();
+    InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant = initialize_interleaved_buf_dispatch_params(
+        *root_buffer,
+        cq_id,
+        expected_num_workers_completed,
+        region,
+        sub_device_ids,
+        pinned_src_noc_xy,
+        pinned_src_addr,
+        use_pinned_transfer,
+        remote_chip);
+
+    InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
+        ttsl::overloaded{
+            [](std::derived_from<InterleavedBufferWriteDispatchParams> auto& val)
+                -> InterleavedBufferWriteDispatchParams* { return &val; },
+            [](std::monostate) -> InterleavedBufferWriteDispatchParams* { return nullptr; },
+        },
+        dispatch_params_variant);
+    TT_ASSERT(dispatch_params != nullptr);
+
+    write_interleaved_buffer_to_device(
+        src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
     return use_pinned_transfer;
 }
 
@@ -1391,9 +1407,8 @@ void issue_read_buffer_dispatch_command_sequence(
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
 
-    // Mock devices don't have real hardware to read from, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't have real hardware to read from, skip actual dispatch
+    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1577,6 +1592,30 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
         dispatch_params.total_pages_read);
 }
 
+void read_completion_queue(
+    void* dst,
+    uint32_t size_bytes,
+    ChipId device_id,
+    uint16_t channel,
+    uint32_t completion_q_read_ptr,
+    uint32_t completion_q_data_offset,
+    const SystemMemoryManager& sysmem_manager) {
+    if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+                                          .device_manager()
+                                          ->get_active_device(device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
+        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+            .get_cluster()
+            .read_dram_vec(dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
+    } else {
+        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+            .get_cluster()
+            .read_sysmem(dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
+    }
+}
+
 void copy_completion_queue_data_into_user_space(
     const ReadBufferDescriptor& read_buffer_descriptor,
     ChipId mmio_device_id,
@@ -1635,14 +1674,14 @@ void copy_completion_queue_data_into_user_space(
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-                    .get_cluster()
-                    .read_sysmem(
-                        contiguous_dst,
-                        data_bytes_xfered,
-                        completion_q_read_ptr + offset_in_completion_q_data,
-                        mmio_device_id,
-                        channel);
+                read_completion_queue(
+                    contiguous_dst,
+                    data_bytes_xfered,
+                    mmio_device_id,
+                    channel,
+                    completion_q_read_ptr,
+                    offset_in_completion_q_data,
+                    sysmem_manager);
                 contig_dst_offset += data_bytes_xfered;
                 offset_in_completion_q_data = 0;
             } else {
@@ -1686,14 +1725,14 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy = page_size;
                     }
 
-                    tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-                        .get_cluster()
-                        .read_sysmem(
-                            (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
-                            num_bytes_to_copy,
-                            completion_q_read_ptr + src_offset_bytes,
-                            mmio_device_id,
-                            channel);
+                    read_completion_queue(
+                        (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
+                        num_bytes_to_copy,
+                        mmio_device_id,
+                        channel,
+                        completion_q_read_ptr,
+                        src_offset_bytes,
+                        sysmem_manager);
 
                     src_offset_bytes += src_offset_increment;
                     dst_offset_bytes += num_bytes_to_copy;
@@ -1761,14 +1800,14 @@ void copy_completion_queue_data_into_user_space(
                     }
                 }
 
-                tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-                    .get_cluster()
-                    .read_sysmem(
-                        (char*)(uint64_t(dst) + dst_offset_bytes),
-                        num_bytes_to_copy,
-                        completion_q_read_ptr + src_offset_bytes,
-                        mmio_device_id,
-                        channel);
+                read_completion_queue(
+                    (char*)(uint64_t(dst) + dst_offset_bytes),
+                    num_bytes_to_copy,
+                    mmio_device_id,
+                    channel,
+                    completion_q_read_ptr,
+                    src_offset_bytes,
+                    sysmem_manager);
 
                 src_offset_bytes += src_offset_increment;
             }

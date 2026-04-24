@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,16 +10,15 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
-// DEBUG
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/debug/dprint_pages.h"
-
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
 #endif
+
+namespace detail {
 
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
@@ -30,42 +29,46 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+template <MoEActivationFunction activation>
+inline void pack_init_activation() {};
 
+template <>
+inline void pack_init_activation<MoEActivationFunction::SWIGLU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+};
+
+template <>
+inline void pack_init_activation<MoEActivationFunction::SILU>() {
+    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+};
+
+template <MoEActivationFunction activation>
+inline void pack_compute_activation() {};
+
+template <>
+inline void pack_compute_activation<MoEActivationFunction::SILU>() {
+    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+};
+
+template <>
+inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
+};
+
+}  // namespace detail
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr auto activation_type =
+        detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
     // For synchronization with tilize cores
-    constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
 
     // Run-time arguments
@@ -81,17 +84,17 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_3;  // cb_r2c_w0
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_5;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
-    constexpr auto cb_c2s_out = tt::CBIndex::c_14;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
 
     // CB Aliases
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -162,20 +165,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
 
-    // Precompute NUM_CHUNKS_PER_EXPERT
-    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+    // Read per-expert token counts from CB
+    volatile tt_l1_ptr uint32_t* num_tokens_per_expert_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
-    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
 
-    uint32_t num_active_tokens[2];
-
-    constexpr uint32_t BITS_PER_EXPERT = 10;
-    constexpr uint32_t EXPERT_MASK = 0x3FFu;
+    // Precompute NUM_CHUNKS_PER_EXPERT
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-        num_active_tokens[expert_id] = num_tokens;
     }
 
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
@@ -194,8 +192,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Initialize SFPU for SILU and eltwise multiply
-            PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+            detail::pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
             mm_block_init(
@@ -204,16 +201,9 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            noc_semaphore_wait_min(
+            detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
-
-            // for (uint32_t i = 0; i < 224; ++i) {
-            //                 if (i % 2 == 0) {
-            //                     const uint32_t idx = (use_second_half_buffer)? num_w0_w1_tiles_h+i:i;
-            //                     PACK((print_tile_rows(cb_s2c_in, idx, true, 0, num_active_tokens[expert_id])));
-            //                 }
-            //             }
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -253,13 +243,9 @@ void kernel_main() {
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                 //---------------------------------------------------------------------
-                // Apply SILU activation and then eltwise multiply
+                // Apply activation
                 //---------------------------------------------------------------------
-                PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-                PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-                PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-                PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+                detail::pack_compute_activation<activation_type>();
 
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 

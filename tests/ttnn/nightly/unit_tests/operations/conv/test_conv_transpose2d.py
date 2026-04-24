@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -658,3 +658,207 @@ def test_convt2d_dram_deallocate_activation_regression(device):
     )
 
     logger.info("Regression test: DRAM input tensor correctly remained allocated after conv_transpose2d")
+
+
+def run_conv_transpose2d_replicate_pad(
+    device,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    padding,
+    out_pad_h=0,
+    out_pad_w=0,
+    has_bias=True,
+    weights_dtype=ttnn.bfloat16,
+    output_dtype=ttnn.bfloat16,
+    groups=1,
+    dilation_h=1,
+    dilation_w=1,
+):
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_weight_shape = [input_channels, output_channels // groups, filter_height, filter_width]
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+
+    # Set edge values to large numbers so replicate padding has a measurable effect on output.
+    # Without this, random values near 0 make replicate vs zero padding hard to distinguish via PCC.
+    torch_input_tensor_nchw[:, :, 0, :] = 10.0  # top edge
+    torch_input_tensor_nchw[:, :, -1, :] = -10.0  # bottom edge
+    torch_input_tensor_nchw[:, :, :, 0] = 8.0  # left edge
+    torch_input_tensor_nchw[:, :, :, -1] = -8.0  # right edge
+
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_bias_tensor = torch.randn([output_channels], dtype=torch.bfloat16).float() if has_bias else None
+
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = pad_bottom = padding[0]
+            pad_left = pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top, pad_bottom, pad_left, pad_right = padding
+        else:
+            raise ValueError("Padding should be 2 or 4 elements")
+    else:
+        pad_top = pad_bottom = pad_left = pad_right = padding
+
+    # Golden: simulate "solid replicate halo" semantics by stride-expanding the input,
+    # F.pad with mode='replicate' for the halo, then F.conv2d with flipped/transposed weights.
+    # We cannot call F.conv_transpose2d directly because PyTorch's conv_transpose2d does not
+    # accept padding_mode='replicate' (it only supports zero padding on the input halo), so we
+    # reconstruct the operation manually from its conv2d-equivalent form.
+    N, Cin, H, W = torch_input_tensor_nchw.shape
+    strided = torch.zeros(
+        (N, Cin, (H - 1) * stride_h + 1, (W - 1) * stride_w + 1),
+        dtype=torch_input_tensor_nchw.dtype,
+    )
+    strided[:, :, ::stride_h, ::stride_w] = torch_input_tensor_nchw
+
+    # Halo amounts match get_transposed_real_padding (plus output_padding on bottom/right).
+    in_pad_t = dilation_h * (filter_height - 1) - pad_top
+    in_pad_b = dilation_h * (filter_height - 1) - pad_bottom + out_pad_h
+    in_pad_l = dilation_w * (filter_width - 1) - pad_left
+    in_pad_r = dilation_w * (filter_width - 1) - pad_right + out_pad_w
+
+    padded = torch.nn.functional.pad(strided, (in_pad_l, in_pad_r, in_pad_t, in_pad_b), mode="replicate")
+
+    # conv_transpose2d weight (Cin, Cout/g, kH, kW) → conv2d weight (Cout, Cin/g, kH, kW), spatial-flipped
+    w_eq = torch_weight_tensor.view(groups, Cin // groups, output_channels // groups, filter_height, filter_width)
+    w_eq = w_eq.transpose(1, 2).contiguous().view(output_channels, Cin // groups, filter_height, filter_width)
+    w_eq = w_eq.flip(-1).flip(-2)
+
+    torch_out_golden = torch.nn.functional.conv2d(
+        padded,
+        w_eq,
+        bias=torch_bias_tensor,
+        stride=1,
+        padding=0,
+        dilation=(dilation_h, dilation_w),
+        groups=groups,
+    )
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    )
+    tt_bias_tensor = None
+    if has_bias:
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor.reshape(1, 1, 1, -1), weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=True,
+        padding_mode=ttnn.PaddingMode.Replicate,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
+
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv_transpose2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=padding,
+        output_padding=(out_pad_h, out_pad_w),
+        dilation=(dilation_h, dilation_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=groups,
+        dtype=output_dtype,
+        return_output_dim=True,
+        return_weights_and_bias=False,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    pcc = 0.99
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden, pcc=pcc)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, "
+    "filter_height, filter_width, stride_h, stride_w, padding, out_pad_h, out_pad_w, groups",
+    (
+        (1, 64, 32, 16, 16, 3, 3, 2, 2, (1, 1), 0, 0, 1),
+        (1, 64, 32, 16, 16, 5, 5, 2, 2, (2, 2), 0, 0, 1),
+        (1, 64, 32, 16, 16, 3, 3, 1, 1, (1, 1), 0, 0, 1),
+        (1, 64, 32, 16, 16, 3, 3, 1, 1, (1, 2, 1, 2), 0, 0, 1),
+        (2, 64, 32, 16, 16, 3, 3, 2, 2, (1, 1), 1, 1, 1),
+        (1, 32, 32, 16, 16, 3, 3, 2, 2, (1, 1), 0, 0, 32),
+    ),
+)
+def test_conv_transpose2d_replicate_pad(
+    device,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    padding,
+    out_pad_h,
+    out_pad_w,
+    groups,
+):
+    run_conv_transpose2d_replicate_pad(
+        device,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=padding,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        groups=groups,
+    )
+
+
+# bfloat8_b weights coverage.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_transpose2d_replicate_pad_bfloat8b_weights(device):
+    run_conv_transpose2d_replicate_pad(
+        device,
+        batch_size=1,
+        output_channels=64,
+        input_channels=32,
+        input_height=16,
+        input_width=16,
+        filter_height=3,
+        filter_width=3,
+        stride_h=2,
+        stride_w=2,
+        padding=(1, 1),
+        weights_dtype=ttnn.bfloat8_b,
+    )

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -61,9 +61,9 @@ class MTP2D(AbstractModule):
         assert len(state_dicts) == 1 and state_dicts[0] is not None
         (state_dict,) = state_dicts
 
-        eh_proj_weight = state_dict["eh_proj.weight"].permute(1, 0)
-        assert eh_proj_weight.shape[0] == 2 * hf_config.hidden_size
-        assert eh_proj_weight.shape[1] == hf_config.hidden_size
+        eh_proj_weight = state_dict["eh_proj.weight"].unsqueeze(0).unsqueeze(0).contiguous()
+        assert eh_proj_weight.shape[2] == hf_config.hidden_size
+        assert eh_proj_weight.shape[3] == 2 * hf_config.hidden_size
 
         embedding_weight_cfg = (
             reuse_embedding_weight_cfg
@@ -106,7 +106,7 @@ class MTP2D(AbstractModule):
                         output_path / "eh_proj.linear.input_tensor_b",
                         eh_proj_weight,
                         # Shard output features across mesh columns to match decoder decode sharding.
-                        shard_dims=(None, -1),
+                        shard_dims=(None, -2),
                         mesh_device=mesh_device,
                         dtype=cls.WEIGHT_DTYPE,
                         layout=ttnn.TILE_LAYOUT,
@@ -132,12 +132,18 @@ class MTP2D(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         hidden_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         token_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
-        decoder_block_cfg = MoEDecoderBlock2D.prefill_model_config(hf_config, mesh_device, fabric_config)
+        decoder_block_cfg = MoEDecoderBlock2D.prefill_model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            batch_size_per_row=batch_size_per_row,
+        )
         head_norm_cfg = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
-        head_cfg = LMHead1D.prefill_model_config(mesh_device)
+        head_cfg = LMHead1D.prefill_model_config(hf_config, mesh_device)
         return {
             "embedding": Embedding2D.prefill_model_config(hf_config, mesh_device),
             "hidden_norm_reshard": ReshardConfig(memory_config=hidden_norm_cfg["input_memory_config"]),
@@ -154,6 +160,7 @@ class MTP2D(AbstractModule):
             "eh_proj": {
                 "linear": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    transpose_b=True,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
                 ),
@@ -179,12 +186,21 @@ class MTP2D(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
-        hidden_norm_cfg = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
-        token_norm_cfg = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
-        decoder_block_cfg = MoEDecoderBlock2D.decode_model_config(hf_config, mesh_device, fabric_config)
-        head_norm_cfg = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
-        head_cfg = LMHead1D.decode_model_config(mesh_device)
+        hidden_norm_cfg = DistributedRMSNorm.decode_model_config(
+            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+        )
+        token_norm_cfg = DistributedRMSNorm.decode_model_config(
+            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+        )
+        decoder_block_cfg = MoEDecoderBlock2D.decode_model_config(
+            hf_config, mesh_device, fabric_config, batch_size_per_row=batch_size_per_row
+        )
+        head_norm_cfg = DistributedRMSNorm.decode_model_config(
+            hf_config, mesh_device, batch_size_per_row=batch_size_per_row
+        )
+        head_cfg = LMHead1D.decode_model_config(hf_config, mesh_device)
         # Decode is single-token, so keep the MTP-specific intermediate tensors in L1.
         decode_memory_config = ttnn.L1_MEMORY_CONFIG
         return {
@@ -203,6 +219,7 @@ class MTP2D(AbstractModule):
             "eh_proj": {
                 "linear": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    transpose_b=True,
                     memory_config=decode_memory_config,
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
                 ),

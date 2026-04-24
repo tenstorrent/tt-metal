@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -32,10 +32,18 @@ _TILE_SIZES_SHIFTED = [68, 36, 20, 0]  # tile_bytes >> 4 (cb_addr_shift)
 _IMPL_RUNTIME = 0
 _IMPL_CONSTEXPR_COMPACT = 1
 _IMPL_CONSTEXPR_UNROLL = 2
+_IMPL_RUNTIME_BARRIER = 3
+_IMPL_CONSTEXPR_COMPACT_BARRIER = 4
+_IMPL_CONSTEXPR_UNROLL_BARRIER = 5
+_IMPL_NEW = 6
 _IMPL_TO_DEFINE = {
     "runtime": _IMPL_RUNTIME,
     "constexpr_compact": _IMPL_CONSTEXPR_COMPACT,
     "constexpr_unroll": _IMPL_CONSTEXPR_UNROLL,
+    "runtime barrier": _IMPL_RUNTIME_BARRIER,
+    "constexpr_compact barrier": _IMPL_CONSTEXPR_COMPACT_BARRIER,
+    "constexpr_unroll barrier": _IMPL_CONSTEXPR_UNROLL_BARRIER,
+    "new": _IMPL_NEW,
 }
 
 
@@ -46,7 +54,9 @@ _MEM_ZEROS_BASE = 12992
 _ZEROS_ADDR_SHIFTED = _MEM_ZEROS_BASE >> _CB_ADDR_SHIFT  # 812
 
 
-def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list[int]:
+def pack_tile_pairs(
+    assignment_flat: np.ndarray, base_addr_shifted: int, zero_tile_addr: int = _ZEROS_ADDR_SHIFTED
+) -> list[int]:
     """Pack per-pair metadata as two uint32s: lo=[addr0:24|fmt0:8], hi=[addr1:24|fmt1:8].
 
     Kernel loads both uint32s per pair (adjacent in memory). Each uint32 has the
@@ -55,6 +65,8 @@ def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list
     Args:
         assignment_flat: 1D array of format indices (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
         base_addr_shifted: THCON-shifted base address of the weight shard (buffer_address >> 4).
+        zero_tile_addr: Address to use for zero tiles (bfp0). Defaults to _ZEROS_ADDR_SHIFTED.
+            Use 0xFFFFFF for relative-address mode (DRAM streaming).
 
     Returns:
         List of uint32, two per pair (interleaved: info0, info1, info0, info1, ...).
@@ -66,7 +78,7 @@ def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list
         a = int(assignment_flat[i])
         if a == 3:  # bfp0 / zero tile
             fmt = _DATA_FORMATS[2]  # bfp2 format for zero-tile decode
-            addr = _ZEROS_ADDR_SHIFTED
+            addr = zero_tile_addr
         else:
             fmt = _DATA_FORMATS[a]
             addr = base_addr_shifted + cum_offset_shifted
@@ -101,6 +113,36 @@ def pack_formats_as_ctas(assignment_flat: np.ndarray) -> list[int]:
     return result
 
 
+def gen_metadata_for_core(assignment_flat: np.ndarray, num_tiles_k: int, out_w: int) -> list[int]:
+    REMAP = [3, 2, 1, 0]  # remap from assignment format index to actual format (bfp8->3, bfp4->2, bfp2->1, bfp0->0)
+    assert (
+        len(assignment_flat) == num_tiles_k * out_w
+    ), f"assignment length {len(assignment_flat)} must equal num_tiles_k * out_w ({num_tiles_k * out_w})"
+    tile_coords = [(i // out_w, i % out_w) for i in range(len(assignment_flat))]
+    assert len(assignment_flat) == len(tile_coords)
+    assignment_flat = list(zip(tile_coords, assignment_flat))
+    assert len(assignment_flat) == len(tile_coords)
+    chunks = [assignment_flat[i : i + 10] for i in range(0, len(assignment_flat), 10)]
+    chunks = [[((0, 0), 3)]] + chunks
+
+    result = []
+
+    for i in range(1, len(chunks)):
+        last = chunks[i - 1][-1]
+        res = REMAP[last[1]]
+        for j in range(len(chunks[i])):
+            coord, fmt = chunks[i][j]
+            # print(f"coord: {coord}, fmt: {fmt}")
+            k, w = coord
+            fmt = REMAP[fmt]
+            should_unpack_b = w == 0
+            tres = fmt << 1 | should_unpack_b
+            res = res | (tres << ((j * 3) + 2))
+        result.append(res)
+
+    return result
+
+
 class MatmulCustomCompressed:
     @staticmethod
     def op(
@@ -117,6 +159,9 @@ class MatmulCustomCompressed:
                 - "runtime": read packed pair metadata from L1 tensor at runtime.
                 - "constexpr_compact": constexpr formats with compact run-detection.
                 - "constexpr_unroll": fully template-unrolled constexpr formats.
+                - "runtime barrier": read packed pair metadata from L1 tensor at runtime with barrier synchronization.
+                - "constexpr_compact barrier": constexpr formats with compact run-detection and barrier synchronization.
+                - "constexpr_unroll barrier": fully template-unrolled constexpr formats with barrier synchronization.
         """
         core_grid = a_tensor.memory_config().shard_spec.grid
         data_tensor = ct.get_data_tensor()
@@ -177,7 +222,7 @@ class MatmulCustomCompressed:
         impl_define = _IMPL_TO_DEFINE[impl]
         defines.append(("COMPRESSED_MM_IMPL", str(impl_define)))
 
-        if impl in ("constexpr_compact", "constexpr_unroll"):
+        if impl in ("constexpr_compact", "constexpr_unroll", "constexpr_compact barrier", "constexpr_unroll barrier"):
             named_compile_time_args.append(("fmt_cta_base", 0))
 
             all_cores = ttnn.corerange_to_cores(core_grid)
@@ -187,7 +232,7 @@ class MatmulCustomCompressed:
                 ctas = pack_formats_as_ctas(shard_assignment)
                 core_values.append((core_coord, ctas))
             per_core_pos_cta = PerCorePositionalCTADescriptor(trisc_core_values=core_values)
-        else:
+        if impl in ("runtime", "runtime barrier"):
             # Runtime path: create per-tile metadata tensor in L1
             # Each tile gets one uint32: [abs_addr:24 | fmt:8], precomputed with absolute addresses.
             all_cores = ttnn.corerange_to_cores(core_grid)
@@ -208,6 +253,35 @@ class MatmulCustomCompressed:
             )
             fmt_tensor = ttnn.from_torch(
                 fmt_torch.view(torch.uint8).reshape(num_cores, num_tiles * 4),
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=a_tensor.device(),
+                memory_config=fmt_mem_config,
+            )
+            fmt_l1_addr = fmt_tensor.buffer_address()
+            named_compile_time_args.append(("fmt_l1_addr", fmt_l1_addr))
+        elif impl == "new":
+            all_cores = ttnn.corerange_to_cores(core_grid)
+
+            shard_data = []
+            meta_len = []
+            for core_coord in all_cores:
+                shard_assignment = ct.get_assignment_per_shard(core_coord)
+                tiles = gen_metadata_for_core(shard_assignment, num_tiles_k, out_w)
+                meta_len.append(len(tiles))
+                shard_data.extend(tiles)
+
+            assert all(ml == meta_len[0] for ml in meta_len), f"All metadata lengths must be equal, got {meta_len}"
+            meta_len = meta_len[0]
+
+            num_cores = len(all_cores)
+            fmt_torch = torch.tensor(shard_data, dtype=torch.uint32).reshape(num_cores, meta_len)
+            fmt_shard_spec = ttnn.ShardSpec(core_grid, [1, meta_len * 4], ttnn.ShardOrientation.ROW_MAJOR)
+            fmt_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec
+            )
+            fmt_tensor = ttnn.from_torch(
+                fmt_torch.view(torch.uint8).reshape(num_cores, meta_len * 4),
                 dtype=ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=a_tensor.device(),

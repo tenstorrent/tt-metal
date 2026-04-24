@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,8 @@
 #include <tuple>
 #include <vector>
 
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -49,9 +51,19 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
+    // Transitional constructor: use Tensor(HostTensor) instead.
+    //
+    // Accepts a pre-transition HostStorage (constructed without TensorSpec and
+    // TensorTopology) and assigns them during Tensor construction.
+    // Overrides any existing spec/topology in the HostStorage.
+    //
+    // TODO(#40348): Remove this.
     [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
-    [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+
+    [[nodiscard]] explicit Tensor(DeviceStorage storage);
+
+    [[nodiscard]] explicit Tensor(HostTensor tensor);
+    [[nodiscard]] explicit Tensor(MeshTensor tensor);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -183,18 +195,10 @@ public:
     [[nodiscard]] Tensor reshape(
         const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const;
 
-    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
+    void update_tensor_topology(const TensorTopology& tensor_topology);
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-private:
-    // TODO(river):
-    // This will be removed as part of Metal Tensor split lowering (#37692).
-    // The function is removed publicly as the underlying storage of Tensor will be changed as part of the refactoring
-    // effort.
-    const Storage& storage() const;
-
-public:
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
@@ -228,16 +232,26 @@ public:
     // Returns device `Storage`.
     // Throws if the tensor is not on device.
     const DeviceStorage& device_storage() const&;
+    DeviceStorage& device_storage() &;
     const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns host `Storage`.
     // Throws if the tensor is not on host.
     const HostStorage& host_storage() const&;
+    HostStorage& host_storage() &;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns the associated HostTensor.
+    const HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns the associated MeshTensor.
+    const MeshTensor& mesh_tensor() const&;
+    const MeshTensor& mesh_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
@@ -249,7 +263,7 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
+    auto attribute_values() const { return std::forward_as_tuple(tensor_attributes->get_storage(), tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 
@@ -266,35 +280,6 @@ private:
 
     void deallocate_impl(bool force);
 };
-
-// The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
-    distributed::MeshCommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const void* src,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_host")]] void memcpy(
-    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
-
-[[deprecated("Usage of tt::tt_metal::memcpy deprecated. Use tt::tt_metal::copy_to_device")]] void memcpy(
-    Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
-
-[[deprecated("Use tt::tt_metal::(copy_to_device  or  copy_to_host)")]] void memcpy(
-    Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

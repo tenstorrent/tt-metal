@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,22 @@ from __future__ import annotations
 
 from typing import Optional
 
-import numpy as np
-import ml_dtypes
-
-import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer
+from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
+
+
+def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
+    """Compute the default MLP intermediate size for Llama.
+
+    Meta's Llama uses SwiGLU which has 3 matrices (w1, w2, w3) instead of 2 in a
+    standard MLP. To match the parameter count of a conventional 4x MLP, the
+    intermediate size is scaled to 2/3 of 4*hidden = 8/3*hidden, then rounded up
+    to ``multiple_of`` for hardware alignment.
+    """
+    unrounded = (4 * hidden_size * 2) // 3
+    return ((unrounded + multiple_of - 1) // multiple_of) * multiple_of
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -31,11 +39,7 @@ class RMSNormLayer(AbstractModuleBase):
         self.use_composite = use_composite
 
         gamma_shape = (1, 1, 1, features)
-        gamma_np = np.ones(gamma_shape, dtype=ml_dtypes.bfloat16)
-        gamma_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_np, layout=ttnn.Layout.TILE
-        )
-        self.gamma = Parameter(gamma_tensor)
+        self.gamma = Parameter(ttml.init.ones()(gamma_shape))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of RMSNorm.
@@ -63,30 +67,63 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
+        use_tp: bool = False,
     ) -> None:
-        """Initialize Llama MLP layer.
-
-        Args:
-            embedding_size: Dimension of embeddings
-            intermediate_size: Intermediate dimension
-            dropout: Dropout probability
-        """
         super().__init__()
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
 
-        multiple_of = 256
-
         if intermediate_size is None:
-            unrounded_size = (4 * embedding_size * 2) // 3
-            intermediate_size = (
-                (unrounded_size + multiple_of - 1) // multiple_of
-            ) * multiple_of
+            intermediate_size = compute_swiglu_intermediate_size(embedding_size)
 
-        self.w1 = LinearLayer(embedding_size, intermediate_size, False)
-        self.w3 = LinearLayer(embedding_size, intermediate_size, False)
-        self.w2 = LinearLayer(intermediate_size, embedding_size, False)
+        if use_tp:
+            # Gate (w1) and up (w3) projections are column-parallel (output sharded);
+            # down projection (w2) is row-parallel (input sharded).  The pair
+            # eliminates a gather/scatter round-trip between w1/w3 and w2.
+            self.w1 = ColumnParallelLinear(
+                embedding_size,
+                intermediate_size,
+                has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.w3 = ColumnParallelLinear(
+                embedding_size,
+                intermediate_size,
+                has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                gather_output=False,
+                axis_name="tp",
+            )
+            self.w2 = RowParallelLinear(
+                intermediate_size,
+                embedding_size,
+                has_bias=False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                input_is_parallel=True,
+                axis_name="tp",
+            )
+        else:
+            self.w1 = LinearLayer(
+                embedding_size,
+                intermediate_size,
+                False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
+            self.w3 = LinearLayer(
+                embedding_size,
+                intermediate_size,
+                False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
+            self.w2 = LinearLayer(
+                intermediate_size,
+                embedding_size,
+                False,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of MLP.
@@ -109,6 +146,8 @@ class LlamaMLP(AbstractModuleBase):
 
 
 class LlamaBlock(AbstractModuleBase):
+    """Pre-norm residual transformer block (attention + MLP)."""
+
     def __init__(
         self,
         hidden_size: int,
@@ -119,10 +158,16 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
+        use_tp: bool = False,
     ) -> None:
         super().__init__()
 
-        self.mlp = LlamaMLP(hidden_size, intermediate_size, mlp_dropout)
+        self.mlp = LlamaMLP(
+            hidden_size,
+            intermediate_size,
+            mlp_dropout,
+            use_tp=use_tp,
+        )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
         self.attention = GroupedQueryAttention(
@@ -132,6 +177,7 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
+            use_tp=use_tp,
         )
 
     def forward(

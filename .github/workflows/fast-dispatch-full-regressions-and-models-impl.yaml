@@ -30,9 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       stable_matrix:   ${{ steps.ctm.outputs.stable_matrix }}
-      unstable_matrix: ${{ steps.ctm.outputs.unstable_matrix }}
       stable_count:    ${{ steps.ctm.outputs.stable_count }}
-      unstable_count:  ${{ steps.ctm.outputs.unstable_count }}
       stable_ci_v2_matrix: ${{ steps.ctm.outputs.stable_ci_v2_matrix }}
       stable_ci_v2_count: ${{ steps.ctm.outputs.stable_ci_v2_count }}
       stable_bh_ci_v2_matrix: ${{ steps.ctm.outputs.stable_bh_ci_v2_matrix }}
@@ -47,12 +45,9 @@ jobs:
           # Stable set (default path; optional per-model timeout)
           # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
+            {"model":"bge_m3"},
             {"model":"common_models"},
-            {"model":"functional_unet"},
-            {"model":"ttt-llama3.2-1B"},
-            {"model":"qwen25_vl-3B"},
             {"model":"resnet50"},
-            {"model":"whisper"},
             {"model":"openpdn_mnist"},
             {"model":"vit"},
             {"model":"sentence_bert"},
@@ -70,30 +65,18 @@ jobs:
             {"model":"yunet"},
             {"model":"retinanet"},
             {"model":"ufld_v2"},
-            {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout": 100},
+            {"model":"stable_diffusion_xl_base","timeout": 120},
             {"model":"stable_diffusion","timeout":45}
           ]'
 
           # Stable set (CIv2)
           STABLE_CIv2='[
-            {"model":"vadv2"},
-            {"model":"gemma-3-4b-it"}
+            {"model":"vadv2"}
           ]'
 
           # Stable set for Blackhole (CIv2)
           STABLE_BH_CIv2='[
             {"model":"stable_diffusion_xl_base","timeout":120}
-          ]'
-
-          # Unstable set (explicit commands)
-          UNSTABLE='[
-            {"model":"mamba 1","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 1"},
-            {"model":"mamba 2","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 2"},
-            {"model":"mamba 3","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 3"},
-            {"model":"mamba 4","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 4"},
-            {"model":"mamba 5","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 5"},
-            {"model":"mamba 6","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 6"}
           ]'
 
           SEL='${{ inputs.models-to-run }}'
@@ -123,15 +106,8 @@ jobs:
 
             STABLE_BH_CIv2_OUT="${STABLE_BH_CIv2}"
 
-            # Skipping due to issue 15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
-            UNSTABLE_OUT='[
-              {"model":"mamba 5","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 5"}
-            ]'
-
           else
             STABLE_OUT=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.model | IN($sel[]))]' <<< "$STABLE")
-
-            UNSTABLE_OUT=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.model | IN($sel[]))]' <<< "$UNSTABLE")
 
             STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select(.model | IN($sel[]))]' <<< "${STABLE_CIv2}")"
 
@@ -142,16 +118,12 @@ jobs:
           STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
           STABLE_CIv2_COUNT="$(jq 'length' <<< "${STABLE_CIv2_OUT}")"
           STABLE_BH_CIv2_COUNT="$(jq 'length' <<< "${STABLE_BH_CIv2_OUT}")"
-          UNSTABLE_COUNT="$(jq 'length' <<< "${UNSTABLE_OUT}")"
-
 
           echo "stable_matrix=$(echo $STABLE_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
-          echo "unstable_matrix=$(echo $UNSTABLE_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
           echo "stable_ci_v2_matrix=$(echo $STABLE_CIv2_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
           echo "stable_bh_ci_v2_matrix=$(echo $STABLE_BH_CIv2_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
           echo "stable_count=${STABLE_COUNT}"     >> "$GITHUB_OUTPUT"
-          echo "unstable_count=${UNSTABLE_COUNT}" >> "$GITHUB_OUTPUT"
           echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
           echo "stable_bh_ci_v2_count=${STABLE_BH_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
 
@@ -176,14 +148,14 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
@@ -204,14 +176,15 @@ jobs:
             -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
-          # TT-Transformer models have a single ci-dispatch test that contains all tests.
-          # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |
             PYTEST_CMD="${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}"
-            if [[ "${{ matrix.test-config.model }}" == *"ttt"* ]]; then
-              $PYTEST_CMD tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
-            elif [[ "${{ matrix.test-config.model }}" == *"qwen25_vl"* ]]; then
-              $PYTEST_CMD tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
+            if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
+              # Split into separate pytest invocations to avoid host OOM from accumulated memory
+              # across 311 tests in a single process (LoRA tests load ~15GB per test case).
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
             else
               $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
@@ -229,59 +202,6 @@ jobs:
         with:
           path: ${{ github.workspace }}/generated/profiler/reports
           prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          path: generated/test_reports/
-          prefix: "test_reports_"
-  nightly-wh-unstable-models:
-    needs: create-test-matrix
-    if: ${{ needs.create-test-matrix.outputs.unstable_count != '0' }}
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.unstable_matrix) }}
-        card: [N150, N300]
-    name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
-    defaults:
-      run:
-        shell: bash
-    runs-on: ["cloud-virtual-machine", "${{ inputs.extra-tag }}", "${{ matrix.card }}"]
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar --zstd -xvf ttm_any.tar.zst
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Run frequent reg tests scripts
-        timeout-minutes: 60
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: ${{ matrix.test-config.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -333,11 +253,7 @@ jobs:
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
         run: |
-          if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-            $PYTEST_CMD tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
-          else
-            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
-          fi
+          $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: ./docker-job/.github/actions/prepare-tracy-reports
@@ -401,9 +317,16 @@ jobs:
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
-          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '7,7' || '' }}
         run: |
-          $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+          if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
+            # Split into separate pytest invocations to avoid host OOM from accumulated memory
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+          else
+            $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+          fi
       - name: Prepare Tracy reports
         if: ${{ !cancelled() && inputs.enable-ops-recording }}
         uses: ./docker-job/.github/actions/prepare-tracy-reports
@@ -437,7 +360,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Download all Tracy profiler reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: tracy_ops_*
           path: all_tracy_reports
@@ -450,7 +373,7 @@ jobs:
           output-path: aggregated_ops
 
       - name: Upload aggregated operations report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: aggregated-device-operations
           path: aggregated_ops/

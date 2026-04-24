@@ -1,0 +1,975 @@
+name: "ttnn run model trace"
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: >-
+          JSON array of models to trace (GitHub collapses multiline input, so use inline JSON).
+          Example: [{"test_path":"models/tt_transformers/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
+          Keys: test_path (required), HF_MODEL (optional), extra_args (optional).
+          All models share runner-label and are homogenized into one trace_run_id.
+        required: true
+        type: string
+      runner-label:
+        description: "CI runner / hardware target (shared by every model in the batch)"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
+      load-to-db:
+        description: "Homogenize, load into DB, and open a single manifest PR"
+        required: false
+        type: boolean
+        default: false
+      run-validation:
+        description: "Run the sweep validation pipeline against the newly uploaded trace (requires load-to-db)"
+        required: false
+        type: boolean
+        default: false
+      timeout-minutes:
+        description: "Timeout per tracing leg (minutes)"
+        required: false
+        type: number
+        default: 120
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-inputs:
+    name: Validate inputs & derive arch
+    runs-on: ubuntu-latest
+    outputs:
+      arch: ${{ steps.derive.outputs.arch }}
+      platform: ${{ steps.derive.outputs.platform }}
+      ci-version: ${{ steps.derive.outputs.ci_version }}
+      matrix: ${{ steps.parse.outputs.matrix }}
+      model-count: ${{ steps.parse.outputs.model_count }}
+    steps:
+      - name: Verify tenstorrent org membership
+        env:
+          GH_TOKEN: ${{ secrets.TENSTORRENT_ORG_READ_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "::error::Missing secret TENSTORRENT_ORG_READ_TOKEN (PAT with read:org)"
+            exit 1
+          fi
+
+          if ! gh api "orgs/tenstorrent/members/${ACTOR}" --silent 2>/dev/null; then
+            echo "::error::GitHub user ${ACTOR} is not recognized as a tenstorrent organization member"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          submodules: recursive
+
+      - name: Install parser dependency
+        run: pip3 install PyYAML
+
+      - name: Parse models input and build matrix
+        id: parse
+        env:
+          MODELS_INPUT: ${{ inputs.models }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          raw = os.environ["MODELS_INPUT"]
+          try:
+              entries = yaml.safe_load(raw)
+          except yaml.YAMLError as exc:
+              print(f"::error::models input is not valid YAML/JSON: {exc}")
+              sys.exit(1)
+
+          if not isinstance(entries, list) or not entries:
+              print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?} entries")
+              sys.exit(1)
+
+          def make_slug(test_path):
+              # Basename without extension, replace '::' with '_', keep only safe chars.
+              base = Path(test_path.split("::", 1)[0]).stem
+              suffix = test_path.split("::", 1)[1] if "::" in test_path else ""
+              raw_slug = f"{base}_{suffix}" if suffix else base
+              return re.sub(r"[^A-Za-z0-9._-]+", "-", raw_slug).strip("-") or "trace"
+
+          include = []
+          slug_counts = {}
+          errors = []
+          for idx, entry in enumerate(entries):
+              if not isinstance(entry, dict):
+                  errors.append(f"entry #{idx}: must be a mapping, got {type(entry).__name__}")
+                  continue
+              test_path = entry.get("test_path")
+              if not isinstance(test_path, str) or not test_path:
+                  errors.append(f"entry #{idx}: missing required 'test_path'")
+                  continue
+
+              test_file = test_path.split("::", 1)[0]
+              if not Path(test_file).is_file():
+                  errors.append(f"entry #{idx}: test_path file not found: {test_file}")
+                  continue
+
+              base_slug = make_slug(test_path)
+              n = slug_counts.get(base_slug, 0)
+              slug_counts[base_slug] = n + 1
+              slug = base_slug if n == 0 else f"{base_slug}-{n}"
+
+              include.append(
+                  {
+                      "index": idx,
+                      "slug": slug,
+                      "test_path": test_path,
+                      "hf_model": entry.get("HF_MODEL", "") or "",
+                      "extra_args": entry.get("extra_args", "") or "",
+                  }
+              )
+
+          if errors:
+              for e in errors:
+                  print(f"::error::{e}")
+              sys.exit(1)
+
+          matrix = {"include": include}
+          gh_out = os.environ["GITHUB_OUTPUT"]
+          with open(gh_out, "a") as f:
+              f.write(f"matrix={json.dumps(matrix)}\n")
+              f.write(f"model_count={len(include)}\n")
+
+          print(f"Resolved {len(include)} models into matrix:")
+          for item in include:
+              tag = f" [HF_MODEL:{item['hf_model']}]" if item["hf_model"] else ""
+              print(f"  - {item['slug']}: {item['test_path']}{tag}")
+          PY
+
+      - name: Derive arch from runner label
+        id: derive
+        env:
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+        run: |
+          RUNNER="$RUNNER_LABEL"
+          case "$RUNNER" in
+            P100a|P150b|BH-LLMBox|BH-DeskBox|BH-LoudBox)
+              ARCH="blackhole"
+              ;;
+            *)
+              ARCH="wormhole_b0"
+              ;;
+          esac
+          # CIv2 pool (tt-ubuntu-2204-<label>-viommu-stable) resolves HF weights
+          # via the in-cluster large file cache. Bare-metal labels run on CIv1
+          # with /mnt/MLPerf (Weka) instead.
+          case "$RUNNER" in
+            N150|N300|P100a|P150b)
+              CI_VERSION="civ2"
+              ;;
+            *)
+              CI_VERSION="civ1"
+              ;;
+          esac
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          echo "platform=Ubuntu 22.04" >> $GITHUB_OUTPUT
+          echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
+          echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
+
+  build-artifact:
+    name: Build
+    needs: [validate-inputs]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      platform: ${{ needs.validate-inputs.outputs.platform }}
+
+  trace-model:
+    name: "Trace: ${{ matrix.slug }}"
+    needs: [validate-inputs, build-artifact]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.validate-inputs.outputs.matrix).include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ needs.validate-inputs.outputs.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TRACY_NO_INVARIANT_CHECK: 1
+        # CIv1 points HF at the Weka-backed cache; CIv2 resolves through TT_GH_CI_INFRA
+        # + LFC so HF_HOME is left unset (falls back to the container default).
+        HF_HOME: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
+        ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Display trace configuration
+        env:
+          TEST_PATH: ${{ matrix.test_path }}
+          SLUG: ${{ matrix.slug }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          ARCH: ${{ needs.validate-inputs.outputs.arch }}
+          CI_VERSION: ${{ needs.validate-inputs.outputs.ci-version }}
+          HF_MODEL: ${{ matrix.hf_model }}
+          EXTRA_ARGS: ${{ matrix.extra_args }}
+          LOAD_DB: ${{ inputs.load-to-db }}
+          RUN_VALIDATION: ${{ inputs.run-validation }}
+          TIMEOUT: ${{ inputs.timeout-minutes }}
+          TT_METAL_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$CI_VERSION" == "civ2" ]]; then
+            HF_SOURCE="LFC via TT_GH_CI_INFRA=1"
+          else
+            HF_SOURCE="/mnt/MLPerf (HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home)"
+          fi
+          echo "::group::Trace Configuration (leg: $SLUG)"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    Model Trace Configuration                │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Leg slug:             $SLUG"
+          echo "│ Test Path:            $TEST_PATH"
+          echo "│ Runner:               $RUNNER_LABEL"
+          echo "│ Architecture:         $ARCH"
+          echo "│ CI version:           $CI_VERSION"
+          echo "│ HF_MODEL:             ${HF_MODEL:-(not set)}"
+          echo "│ HF weights source:    $HF_SOURCE"
+          echo "│ Load to DB:           $LOAD_DB"
+          echo "│ Run Validation:       $RUN_VALIDATION"
+          echo "│ Extra Args:           ${EXTRA_ARGS:-(none)}"
+          echo "│ Timeout:              $TIMEOUT minutes"
+          echo "│ tt-metal SHA:         $TT_METAL_SHA"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+      - name: Probe LFC for HF_MODEL (CIv2)
+        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ2' && matrix.hf_model != '' }}
+        env:
+          INPUT_HF_MODEL: ${{ matrix.hf_model }}
+        run: |
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          URL="${LFC_BASE}/${INPUT_HF_MODEL}/config.json"
+          echo "Probing LFC: $URL"
+          STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
+          echo "HTTP status: $STATUS"
+          if [[ "$STATUS" != "200" ]]; then
+            echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
+            echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
+            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LLMBox, BH-DeskBox, BH-LoudBox)"
+            echo "::error::where /mnt/MLPerf provides the weights."
+            exit 1
+          fi
+          echo "LFC has ${INPUT_HF_MODEL}"
+
+      - name: Verify CIv1 weights (MLPerf)
+        if: ${{ needs.validate-inputs.outputs.ci-version == 'civ1' && matrix.hf_model != '' }}
+        env:
+          INPUT_HF_MODEL: ${{ matrix.hf_model }}
+        run: |
+          if ! mountpoint -q /mnt/MLPerf; then
+            echo "::error::/mnt/MLPerf is not mounted on this CIv1 runner."
+            exit 1
+          fi
+          EXPECTED="/mnt/MLPerf/tt_dnn-models/${INPUT_HF_MODEL}"
+          if [[ -d "$EXPECTED" ]]; then
+            echo "Found CIv1 weights at $EXPECTED"
+          else
+            echo "::warning::No CIv1 weights under $EXPECTED; HF loader will try HF_HOME cache and may fail if unpopulated."
+          fi
+
+      - name: Run model trace
+        id: trace
+        timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+        env:
+          HF_MODEL: ${{ matrix.hf_model }}
+          TEST_PATH: ${{ matrix.test_path }}
+          EXTRA_ARGS: ${{ matrix.extra_args }}
+        run: |
+          TRACER_OUTPUT_DIR="model_tracer/traced_operations"
+
+          # Reject extra_args that override output directory
+          if [[ "$EXTRA_ARGS" =~ (^|[[:space:]])(--output-dir|-o)(=|[[:space:]]|$) ]]; then
+            echo "::error::extra_args must not override tracer output directory"
+            exit 1
+          fi
+
+          cmd=(python3 model_tracer/generic_ops_tracer.py "$TEST_PATH" --output-dir "$TRACER_OUTPUT_DIR")
+
+          if [[ -n "$EXTRA_ARGS" ]]; then
+            mapfile -d '' -t extra < <(
+              python3 -c 'import os, shlex, sys; [sys.stdout.write(a + "\0") for a in shlex.split(os.environ["EXTRA_ARGS"])]'
+            )
+            cmd+=("${extra[@]}")
+          fi
+
+          "${cmd[@]}"
+
+          MASTER_JSON="$TRACER_OUTPUT_DIR/ttnn_operations_master.json"
+          echo "master_json_path=$MASTER_JSON" >> $GITHUB_OUTPUT
+
+          # Extract trace_uid from the persisted master JSON; the per-trace
+          # metadata file is deleted by generic_ops_tracer.py after the run.
+          if [[ -f "$MASTER_JSON" ]]; then
+            TRACE_UID=$(MASTER_JSON="$MASTER_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          for op_data in data.get("operations", {}).values():
+              for cfg in op_data.get("configurations", []):
+                  for execution in cfg.get("executions", []):
+                      trace_uid = execution.get("trace_uid")
+                      if trace_uid:
+                          print(trace_uid)
+                          raise SystemExit(0)
+          PY
+            )
+          fi
+
+          if [[ -n "$TRACE_UID" ]]; then
+            echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Write pytest results to job summary
+        if: always()
+        env:
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+        run: |
+          RESULTS_FILE="model_tracer/traced_operations/_test_results.json"
+          if [[ ! -f "$RESULTS_FILE" ]]; then
+            echo "### Pytest Results — \`$SLUG\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> No test results file found (test may not have started)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open("model_tracer/traced_operations/_test_results.json") as f:
+              r = json.load(f)
+
+          passed = r.get("passed", 0)
+          failed = r.get("failed", 0)
+          total = r.get("total", 0)
+          exit_code = r.get("exit_code", "?")
+          slug = os.environ["SLUG"]
+          test_path = r.get("test_path", os.environ.get("TEST_PATH", ""))
+
+          if failed > 0:
+              status_icon = ":x:"
+              verdict = "FAILED"
+          elif passed > 0:
+              status_icon = ":white_check_mark:"
+              verdict = "PASSED"
+          else:
+              status_icon = ":warning:"
+              verdict = "UNKNOWN"
+
+          summary = f"""### {status_icon} Pytest Results — `{slug}`
+
+          | Metric | Value |
+          |---|---|
+          | Test Path | `{test_path}` |
+          | Passed | {passed} |
+          | Failed | {failed} |
+          | Total | {total} |
+          | Exit Code | {exit_code} |
+          | Verdict | **{verdict}** |
+          """
+
+          import textwrap
+          summary = textwrap.dedent(summary)
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          PY
+
+      - name: Write leg status sidecar
+        if: always()
+        env:
+          SLUG: ${{ matrix.slug }}
+          TEST_PATH: ${{ matrix.test_path }}
+          HF_MODEL: ${{ matrix.hf_model }}
+          EXTRA_ARGS: ${{ matrix.extra_args }}
+          TRACE_OUTCOME: ${{ steps.trace.outcome }}
+          TRACE_UID: ${{ steps.trace.outputs.trace_uid }}
+          MASTER_JSON: ${{ steps.trace.outputs.master_json_path }}
+        run: |
+          mkdir -p /work/leg-status
+          python3 - <<'PY'
+          import json
+          import os
+
+          master_json = os.environ.get("MASTER_JSON") or ""
+          stats = {"unique_operations": None, "total_configurations": None}
+          if master_json and os.path.isfile(master_json):
+              try:
+                  with open(master_json) as f:
+                      data = json.load(f)
+                  ops = data.get("operations", {})
+                  stats["unique_operations"] = len(ops)
+                  stats["total_configurations"] = sum(
+                      len(op.get("configurations", [])) for op in ops.values()
+                  )
+              except Exception as exc:
+                  stats["parse_error"] = str(exc)
+
+          test_stats = {"passed": None, "failed": None, "total": None}
+          results_file = "model_tracer/traced_operations/_test_results.json"
+          if os.path.isfile(results_file):
+              try:
+                  with open(results_file) as f:
+                      tr = json.load(f)
+                  test_stats["passed"] = tr.get("passed", 0)
+                  test_stats["failed"] = tr.get("failed", 0)
+                  test_stats["total"] = tr.get("total", 0)
+              except Exception:
+                  pass
+
+          record = {
+              "slug": os.environ["SLUG"],
+              "test_path": os.environ["TEST_PATH"],
+              "hf_model": os.environ.get("HF_MODEL", "") or None,
+              "extra_args": os.environ.get("EXTRA_ARGS", "") or None,
+              "outcome": os.environ.get("TRACE_OUTCOME") or "skipped",
+              "trace_uid": os.environ.get("TRACE_UID") or None,
+              "stats": stats,
+              "test_stats": test_stats,
+          }
+          out_path = f"/work/leg-status/{record['slug']}.json"
+          with open(out_path, "w") as f:
+              json.dump(record, f, indent=2)
+          print(f"Wrote {out_path}")
+          PY
+
+      - name: Write per-leg job summary
+        if: always() && steps.trace.outcome == 'success'
+        env:
+          MASTER_JSON: ${{ steps.trace.outputs.master_json_path }}
+          TEST_PATH: ${{ matrix.test_path }}
+          SLUG: ${{ matrix.slug }}
+          TRACE_UID: ${{ steps.trace.outputs.trace_uid }}
+          TT_METAL_SHA: ${{ github.sha }}
+        run: |
+          if [[ ! -f "$MASTER_JSON" ]]; then
+            echo "::warning::Master JSON not found at $MASTER_JSON"
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import textwrap
+
+          master_json = os.environ["MASTER_JSON"]
+          test_path = os.environ["TEST_PATH"]
+          slug = os.environ["SLUG"]
+          trace_uid = os.environ.get("TRACE_UID", "unknown")
+          tt_metal_sha = os.environ["TT_METAL_SHA"]
+
+          with open(master_json) as f:
+              data = json.load(f)
+
+          ops = data.get("operations", {})
+          unique_ops = len(ops)
+          total_configs = sum(len(op.get("configurations", [])) for op in ops.values())
+
+          machine_info = {}
+          for op_data in ops.values():
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      if exc.get("machine_info"):
+                          mi = exc["machine_info"]
+                          if isinstance(mi, list):
+                              mi = mi[0]
+                          machine_info = mi
+                          break
+                  if machine_info:
+                      break
+              if machine_info:
+                  break
+
+          board = machine_info.get("board_type", "unknown")
+          series = machine_info.get("device_series", "unknown")
+          cards = machine_info.get("card_count", "?")
+          mesh = machine_info.get("mesh_device_shape", [])
+
+          summary = textwrap.dedent(f"""
+          ## Model Trace Results — `{slug}`
+
+          | Field | Value |
+          |---|---|
+          | Test Path | `{test_path}` |
+          | Hardware | {board} / {series} (x{cards}) |
+          | Mesh Shape | {mesh} |
+          | Unique Operations | {unique_ops} |
+          | Total Configurations | {total_configs} |
+          | Leg Trace UID | `{trace_uid}` |
+          | tt-metal SHA | `{tt_metal_sha}` |
+          """).lstrip()
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          PY
+
+      - name: Upload leg master JSON
+        if: always() && steps.trace.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-trace-leg-${{ matrix.slug }}
+          path: /work/model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+      - name: Upload leg status sidecar
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-trace-status-${{ matrix.slug }}
+          path: /work/leg-status/${{ matrix.slug }}.json
+          retention-days: 1
+
+  homogenize-and-load:
+    name: Homogenize & load
+    needs: [validate-inputs, trace-model]
+    if: ${{ inputs.load-to-db && always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    outputs:
+      trace-run-id: ${{ steps.load.outputs.trace_run_id }}
+      trace-uid: ${{ steps.homogenize.outputs.trace_uid }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary pyyaml tqdm
+
+      - name: Download leg master JSONs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: model-trace-leg-*
+          path: downloaded_legs
+          merge-multiple: false
+
+      - name: Flatten leg artifacts
+        id: flatten
+        run: |
+          mkdir -p legs
+          LEG_COUNT=0
+
+          echo "::group::downloaded_legs contents"
+          find downloaded_legs -maxdepth 6 -print 2>/dev/null || echo "(downloaded_legs does not exist)"
+          echo "::endgroup::"
+
+          # download-artifact's directory structure depends on how many artifacts
+          # matched the pattern: with a single match and merge-multiple:false it may
+          # extract straight into `path/`; with multiple it creates `path/<name>/`.
+          # upload-artifact also preserves the workspace-relative path, so the JSON
+          # can live several levels deep. Walk the whole tree instead of guessing.
+          if [[ -d downloaded_legs ]]; then
+            while IFS= read -r src; do
+              rel="${src#downloaded_legs/}"
+              slug=$(echo "$rel" | grep -oE 'model-trace-leg-[^/]+' | head -1 | sed 's/^model-trace-leg-//' || true)
+              if [[ -z "$slug" ]]; then
+                slug="leg-$((LEG_COUNT + 1))"
+              fi
+              # Disambiguate if two JSONs resolve to the same slug.
+              dest="legs/${slug}.json"
+              n=1
+              while [[ -e "$dest" ]]; do
+                dest="legs/${slug}-${n}.json"
+                n=$((n + 1))
+              done
+              cp "$src" "$dest"
+              LEG_COUNT=$((LEG_COUNT + 1))
+            done < <(find downloaded_legs -type f -name 'ttnn_operations_master.json' 2>/dev/null)
+          fi
+
+          echo "leg_count=$LEG_COUNT" >> $GITHUB_OUTPUT
+          if [[ "$LEG_COUNT" -eq 0 ]]; then
+            echo "::warning::No successful leg master JSONs to homogenize; skipping load."
+          else
+            echo "Found $LEG_COUNT leg master JSON(s) to homogenize:"
+            ls -1 legs/
+          fi
+
+      - name: Homogenize master JSONs
+        id: homogenize
+        if: steps.flatten.outputs.leg_count != '0'
+        run: |
+          mkdir -p model_tracer/traced_operations
+          python3 model_tracer/homogenize_master_json.py \
+            --input legs \
+            --output model_tracer/traced_operations/ttnn_operations_master.json
+
+          TRACE_UID=$(python3 -c "import json; print(json.load(open('model_tracer/traced_operations/ttnn_operations_master.json'))['metadata']['trace_uid'])")
+          echo "trace_uid=$TRACE_UID" >> $GITHUB_OUTPUT
+          echo "Homogenized trace_uid: $TRACE_UID"
+
+      - name: Upload homogenized master JSON
+        if: steps.homogenize.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: model-trace-master-json-homogenized
+          path: model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+      - name: Load into database
+        id: load
+        if: steps.homogenize.outcome == 'success'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          TT_METAL_SHA: ${{ github.sha }}
+        run: |
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
+            model_tracer/traced_operations/ttnn_operations_master.json \
+            "$TT_METAL_SHA" \
+            --emit-id-file /tmp/trace_run_id.txt
+
+          if [[ -f /tmp/trace_run_id.txt ]]; then
+            TRACE_RUN_ID=$(head -n1 /tmp/trace_run_id.txt)
+            echo "trace_run_id=$TRACE_RUN_ID" >> $GITHUB_OUTPUT
+            echo "Loaded trace_run_id=$TRACE_RUN_ID"
+          else
+            echo "::warning::Loader did not emit a trace_run_id (likely a duplicate trace_uid)."
+          fi
+
+      - name: Download leg status sidecars
+        if: steps.load.outcome == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: model-trace-status-*
+          path: leg_status
+          merge-multiple: true
+
+      - name: Create manifest PR
+        if: steps.load.outcome == 'success' && steps.load.outputs.trace_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          TRACE_UID: ${{ steps.homogenize.outputs.trace_uid }}
+          TRACE_RUN_ID: ${{ steps.load.outputs.trace_run_id }}
+          RUN_ID: ${{ github.run_id }}
+          # Branch off main so the manifest-PR branch tip contains no .github/workflows
+          # changes relative to main. Otherwise GitHub's workflow-scope check rejects
+          # the push since CODEOWNERS_GROUP_ANALYSIS_PAT lacks the 'workflows' scope.
+          BASE_REF: main
+          TT_METAL_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MASTER_JSON: model_tracer/traced_operations/ttnn_operations_master.json
+          LEG_STATUS_DIR: leg_status
+        run: |
+          if ! git diff --quiet model_tracer/trace_selection_registry.yaml 2>/dev/null; then
+            # Snapshot the loader-updated registry before we change branches.
+            cp model_tracer/trace_selection_registry.yaml /tmp/registry_updated.yaml
+
+            # Fetch the target base (main) and branch from it so the push only
+            # contains the registry delta, not the feature branch's workflow edits.
+            git fetch --depth=1 origin "$BASE_REF"
+            BRANCH_NAME="trace/auto-manifest-${RUN_ID}"
+            git checkout -B "$BRANCH_NAME" "origin/$BASE_REF"
+
+            # Reapply the loader's registry update on top of main.
+            cp /tmp/registry_updated.yaml model_tracer/trace_selection_registry.yaml
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add model_tracer/trace_selection_registry.yaml
+
+            if git diff --cached --quiet; then
+              echo "::notice::Registry on main already matches loader output; skipping PR."
+              exit 0
+            fi
+
+            MODEL_COUNT=$(python3 -c "import json; print(len(json.load(open('$MASTER_JSON'))['metadata'].get('models', [])))")
+            git commit -m "Add draft trace entry for ${MODEL_COUNT} model(s) (trace_run_id=${TRACE_RUN_ID})"
+            git push origin "$BRANCH_NAME"
+
+            # Compile PR body stats from the homogenized JSON + per-leg sidecars.
+            PR_BODY=$(MASTER_JSON="$MASTER_JSON" LEG_STATUS_DIR="$LEG_STATUS_DIR" \
+              TRACE_UID="$TRACE_UID" TRACE_RUN_ID="$TRACE_RUN_ID" \
+              TT_METAL_SHA="$TT_METAL_SHA" RUN_URL="$RUN_URL" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+          ops = data.get("operations", {})
+          meta = data.get("metadata", {})
+          config_count = sum(len(op.get("configurations", [])) for op in ops.values())
+          models = meta.get("models", [])
+
+          machine_info = {}
+          for op_data in ops.values():
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      mi = exc.get("machine_info", {})
+                      if isinstance(mi, list):
+                          mi = mi[0]
+                      if mi:
+                          machine_info = mi
+                          break
+                  if machine_info:
+                      break
+              if machine_info:
+                  break
+          hw = (
+              f"{machine_info.get('board_type', '?')} / "
+              f"{machine_info.get('device_series', '?')} "
+              f"(x{machine_info.get('card_count', '?')})"
+          )
+
+          leg_rows = []
+          status_dir = Path(os.environ["LEG_STATUS_DIR"])
+          if status_dir.is_dir():
+              for p in sorted(status_dir.glob("*.json")):
+                  try:
+                      rec = json.loads(p.read_text())
+                  except Exception:
+                      continue
+                  icon = "✅" if rec.get("outcome") == "success" else "❌"
+                  hf = rec.get("hf_model") or ""
+                  leg_rows.append(
+                      f"| {icon} | `{rec.get('slug')}` | `{rec.get('test_path')}` | "
+                      f"`{hf}` | {rec.get('stats', {}).get('unique_operations') or '-'} | "
+                      f"{rec.get('stats', {}).get('total_configurations') or '-'} |"
+                  )
+
+          lines = [
+              "## New Trace Entry (homogenized batch)",
+              "",
+              "| Field | Value |",
+              "|---|---|",
+              f"| trace_run_id | `{os.environ['TRACE_RUN_ID']}` |",
+              f"| Trace UID | `{os.environ['TRACE_UID']}` |",
+              f"| Hardware | {hw} |",
+              f"| Models in batch | {len(models)} |",
+              f"| Total configurations | {config_count} |",
+              f"| tt-metal SHA | `{os.environ['TT_METAL_SHA']}` |",
+              f"| Workflow run | {os.environ['RUN_URL']} |",
+              "",
+              "### Per-leg outcomes",
+              "",
+              "| Status | Slug | test_path | HF_MODEL | Unique ops | Total configs |",
+              "|---|---|---|---|---|---|",
+          ]
+          lines.extend(leg_rows or ["| — | (no leg sidecars found) | | | | |"])
+          lines.extend([
+              "",
+              "## Promotion checklist",
+              "- [ ] Review trace stats above and in the workflow job summary",
+              "- [ ] Change registry status from `draft` to `active`",
+              "- [ ] Add the batch's `model_name`s to the appropriate `targets` group",
+          ])
+          print("\n".join(lines))
+          PY
+            )
+
+            MACHINE_INFO=$(python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["MASTER_JSON"]) as f:
+              data = json.load(f)
+
+          for op_data in data.get("operations", {}).values():
+              for cfg in op_data.get("configurations", []):
+                  for exc in cfg.get("executions", []):
+                      mi = exc.get("machine_info", {})
+                      if isinstance(mi, list):
+                          mi = mi[0]
+                      if mi:
+                          print(
+                              f"{mi.get('board_type', '?')} / {mi.get('device_series', '?')} "
+                              f"(x{mi.get('card_count', '?')})"
+                          )
+                          raise SystemExit(0)
+          print("unknown")
+          PY
+            )
+
+            gh pr create \
+              --base "$BASE_REF" \
+              --head "$BRANCH_NAME" \
+              --title "Add trace: ${MODEL_COUNT} models on ${MACHINE_INFO} (trace_run_id=${TRACE_RUN_ID})" \
+              --body "$PR_BODY"
+
+            echo "::notice::Manifest PR created on branch $BRANCH_NAME"
+          else
+            echo "::notice::No changes to trace_selection_registry.yaml — skipping PR"
+          fi
+
+  trigger-validation:
+    name: Trigger validation
+    needs: [homogenize-and-load]
+    # Validation needs a concrete trace_run_id (produced only when load-to-db
+    # successfully uploaded). run-validation is the user's explicit opt-in.
+    if: ${{ inputs.run-validation && inputs.load-to-db && needs.homogenize-and-load.outputs.trace-run-id != '' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
+    secrets: inherit
+    with:
+      pinned-trace-id: ${{ needs.homogenize-and-load.outputs.trace-run-id }}
+      allow-partial-hash-changes: true
+      caller-id: ${{ format('ttnn-run-model-trace/run-{0}/attempt-{1}', github.run_id, github.run_attempt) }}
+
+  summarize-batch:
+    name: Summarize batch
+    needs: [validate-inputs, trace-model, homogenize-and-load]
+    if: ${{ always() && needs.trace-model.result != 'cancelled' && needs.trace-model.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all leg status sidecars
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: model-trace-status-*
+          path: leg_status
+          merge-multiple: true
+
+      - name: Write aggregate step summary
+        env:
+          MODEL_COUNT: ${{ needs.validate-inputs.outputs.model-count }}
+          TRACE_RUN_ID: ${{ needs.homogenize-and-load.outputs.trace-run-id }}
+          HOMOGENIZED_TRACE_UID: ${{ needs.homogenize-and-load.outputs.trace-uid }}
+          LOAD_TO_DB: ${{ inputs.load-to-db }}
+          RUN_VALIDATION: ${{ inputs.run-validation }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          rows = []
+          success = 0
+          failed = 0
+          total_tests_passed = 0
+          total_tests_failed = 0
+          status_dir = Path("leg_status")
+          if status_dir.is_dir():
+              for p in sorted(status_dir.glob("*.json")):
+                  try:
+                      rec = json.loads(p.read_text())
+                  except Exception:
+                      continue
+                  ok = rec.get("outcome") == "success"
+                  icon = "✅" if ok else "❌"
+                  success += int(ok)
+                  failed += int(not ok)
+                  hf = rec.get("hf_model") or ""
+                  ts = rec.get("test_stats", {}) or {}
+                  tp = ts.get("passed")
+                  tf = ts.get("failed")
+                  total_tests_passed += tp or 0
+                  total_tests_failed += tf or 0
+                  test_col = f"{tp or 0} passed, {tf or 0} failed" if tp is not None else "-"
+                  rows.append(
+                      f"| {icon} | `{rec.get('slug')}` | `{rec.get('test_path')}` | "
+                      f"`{hf}` | {test_col} | "
+                      f"{rec.get('stats', {}).get('unique_operations') or '-'} | "
+                      f"{rec.get('stats', {}).get('total_configurations') or '-'} | "
+                      f"`{rec.get('trace_uid') or '-'}` |"
+                  )
+
+          lines = [
+              "## Model trace batch summary",
+              "",
+              f"- Models requested: **{os.environ.get('MODEL_COUNT', '?')}**",
+              f"- Succeeded: **{success}** / Failed: **{failed}**",
+              f"- Pytest totals: **{total_tests_passed} passed**, **{total_tests_failed} failed**",
+              f"- Load to DB: **{os.environ.get('LOAD_TO_DB', 'false')}**",
+              f"- Run Validation: **{os.environ.get('RUN_VALIDATION', 'false')}**",
+          ]
+          trace_run_id = os.environ.get("TRACE_RUN_ID")
+          trace_uid = os.environ.get("HOMOGENIZED_TRACE_UID")
+          if trace_run_id:
+              lines.append(f"- Homogenized `trace_run_id`: **`{trace_run_id}`**")
+          if trace_uid:
+              lines.append(f"- Homogenized `trace_uid`: **`{trace_uid}`**")
+          lines.extend([
+              "",
+              "| Status | Slug | test_path | HF_MODEL | Pytest Results | Unique ops | Total configs | Leg trace_uid |",
+              "|---|---|---|---|---|---|---|---|",
+          ])
+          lines.extend(rows or ["| — | (no leg sidecars found) | | | | | | |"])
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a") as f:
+                  f.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY

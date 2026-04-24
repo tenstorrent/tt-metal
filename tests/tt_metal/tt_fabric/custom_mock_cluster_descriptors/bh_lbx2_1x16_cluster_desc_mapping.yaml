@@ -1,0 +1,3 @@
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lbx2_1x16_cluster_desc/bh_lbx2_1x16_cluster_desc_bh-lb-02_slot_0.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lbx2_1x16_cluster_desc/bh_lbx2_1x16_cluster_desc_bh-lb-03_slot_0.yaml"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -438,6 +438,11 @@ def test_subalpha_fp32(alpha, device):
     "op_name",
     [
         "eq",
+        "ne",
+        "lt",
+        "le",
+        "gt",
+        "ge",
     ],
 )
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -190,7 +190,7 @@ class TestCppPostProc:
 matmul_test_perf_counters = {
     "name": "Matmul_perf_counters",
     "command": "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul[tile_count=1375-side=width]",
-    "capture_perf_counters_groups": ["fpu"],
+    "capture_perf_counters_groups": ["all"],
 }
 
 
@@ -217,6 +217,62 @@ class TestPerfCountersSingleOp:
             "MATH Util Median (%)": 0.0,
             "MATH Util Max (%)": 0.0,
             "Avg Math util on full grid (%)": 0.0,
+            "Unpacker0 Write Efficiency Min (%)": 0.0,
+            "Unpacker0 Write Efficiency Median (%)": 0.0,
+            "Unpacker0 Write Efficiency Max (%)": 0.0,
+            "Unpacker0 Write Efficiency Avg (%)": 0.0,
+            "Unpacker1 Write Efficiency Min (%)": 0.0,
+            "Unpacker1 Write Efficiency Median (%)": 0.0,
+            "Unpacker1 Write Efficiency Max (%)": 0.0,
+            "Unpacker1 Write Efficiency Avg (%)": 0.0,
+            "Unpacker Write Efficiency Min (%)": 0.0,
+            "Unpacker Write Efficiency Median (%)": 0.0,
+            "Unpacker Write Efficiency Max (%)": 0.0,
+            "Unpacker Write Efficiency Avg (%)": 0.0,
+            "Packer Efficiency Min (%)": 0.0,
+            "Packer Efficiency Median (%)": 0.0,
+            "Packer Efficiency Max (%)": 0.0,
+            "Packer Efficiency Avg (%)": 0.0,
+            "FPU Execution Efficiency Min (%)": 0.0,
+            "FPU Execution Efficiency Median (%)": 0.0,
+            "FPU Execution Efficiency Max (%)": 0.0,
+            "FPU Execution Efficiency Avg (%)": 0.0,
+            "Math Pipeline Utilization Min (%)": 0.0,
+            "Math Pipeline Utilization Median (%)": 0.0,
+            "Math Pipeline Utilization Max (%)": 0.0,
+            "Math Pipeline Utilization Avg (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Min (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Median (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Max (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Avg (%)": 0.0,
+            "Unpacker-to-Math Data Flow Min (%)": 0.0,
+            "Unpacker-to-Math Data Flow Median (%)": 0.0,
+            "Unpacker-to-Math Data Flow Max (%)": 0.0,
+            "Unpacker-to-Math Data Flow Avg (%)": 0.0,
+            # INSTRN_THREAD thread stall rates
+            "Thread 0 Stall Rate Min (%)": 0.0,
+            "Thread 0 Stall Rate Avg (%)": 0.0,
+            "Thread 1 Stall Rate Min (%)": 0.0,
+            "Thread 1 Stall Rate Avg (%)": 0.0,
+            "Thread 2 Stall Rate Min (%)": 0.0,
+            "Thread 2 Stall Rate Avg (%)": 0.0,
+            # INSTRN_THREAD pipeline waits
+            "SrcA Valid Wait Min (%)": 0.0,
+            "SrcB Valid Wait Min (%)": 0.0,
+            "Math Idle Wait T1 Min (%)": 0.0,
+            "Pack Idle Wait T2 Min (%)": 0.0,
+            "Unpack Idle Wait T0 Min (%)": 0.0,
+            # INSTRN_THREAD semaphore waits
+            "Semaphore Zero Wait T0 Min (%)": 0.0,
+            "Semaphore Zero Wait T1 Min (%)": 0.0,
+            "Semaphore Zero Wait T2 Min (%)": 0.0,
+            # TDMA_UNPACK data hazard stalls
+            "Data Hazard Stall Rate Min (%)": 0.0,
+            # L1 Bank 0 metrics
+            "L1 Unpacker Port Util Min (%)": 0.0,
+            "L1 TDMA Bundle Util Min (%)": 0.0,
+            "NOC Ring 0 Outgoing Util Min (%)": 0.0,
+            "NOC Ring 0 Incoming Util Min (%)": 0.0,
         }
         # Just check presence of float columns
         verify_columns(received_columns, expected_columns, verify_float)

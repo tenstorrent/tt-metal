@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -108,7 +108,9 @@ ConcatS2SRMProgramFactory::cached_program_t ConcatS2SRMProgramFactory::create(
         0,
         0,
         0,
-        groups};
+        groups,
+        cb_ids[0],
+        cb_ids[1]};
 
     std::vector<uint32_t> compile_time_args_1 = {
         cb_dst_id,
@@ -122,7 +124,9 @@ ConcatS2SRMProgramFactory::cached_program_t ConcatS2SRMProgramFactory::create(
         num_pages_per_risc * output_stick_size,
         num_pages_per_risc * input_0_stick_size,
         num_pages_per_risc * input_1_stick_size,
-        groups};
+        groups,
+        cb_ids[0],
+        cb_ids[1]};
 
     std::vector<uint32_t> compile_time_args_0_last = {
         cb_dst_id,
@@ -136,7 +140,9 @@ ConcatS2SRMProgramFactory::cached_program_t ConcatS2SRMProgramFactory::create(
         0,
         0,
         0,
-        groups};
+        groups,
+        cb_ids[0],
+        cb_ids[1]};
 
     std::vector<uint32_t> compile_time_args_1_last = {
         cb_dst_id,
@@ -150,7 +156,9 @@ ConcatS2SRMProgramFactory::cached_program_t ConcatS2SRMProgramFactory::create(
         num_pages_per_risc_last * output_stick_size,
         num_pages_per_risc_last * input_0_stick_size,
         num_pages_per_risc_last * input_1_stick_size,
-        groups};
+        groups,
+        cb_ids[0],
+        cb_ids[1]};
 
     if (num_output_rows_per_core_last > 0) {
         const bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;

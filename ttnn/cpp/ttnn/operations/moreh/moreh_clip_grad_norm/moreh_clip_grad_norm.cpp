@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,11 @@ inline uint32_t get_num_device_cores(IDevice* device) {
     return num_cores_x * num_cores_y;
 }
 
-Tensor MorehClipGradNorm::invoke(
+}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
+
+namespace ttnn {
+
+Tensor moreh_clip_grad_norm(
     const std::vector<Tensor>& inputs,
     float max_norm,
     float norm_type,
@@ -61,10 +65,10 @@ Tensor MorehClipGradNorm::invoke(
     }
     auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     // Loop variable
-    const auto max_num_inputs = get_num_device_cores(device);
+    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(device);
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
@@ -105,7 +109,7 @@ Tensor MorehClipGradNorm::invoke(
         norm_type,
         total_norm,
         memory_config,
-        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, MathFidelity::HiFi4));
+        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4));
 
     if (error_if_nonfinite) {
         const auto fp32_total_norm =
@@ -150,4 +154,4 @@ Tensor MorehClipGradNorm::invoke(
     return output_total_norm;
 }
 
-}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
+}  // namespace ttnn

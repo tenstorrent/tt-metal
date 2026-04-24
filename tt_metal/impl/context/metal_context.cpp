@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -166,8 +166,17 @@ void MetalContext::initialize(
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
+
+    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with DEFAULT_CONTEXT_ID
+    // which will cause implicit initialization of a MetalContext if one doesn't exist yet.
+    // Workaround that by setting the dispatch core axis here and storing a resolved config.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    DispatchCoreConfig resolved_config = dispatch_core_config;
+    resolved_config.set_dispatch_core_axis(
+        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
+
     if (initialized_) {
-        if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
+        if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
@@ -188,17 +197,8 @@ void MetalContext::initialize(
 
     initialized_ = true;
 
-    // Resolve the dispatch core axis for this context's architecture.
-    // The default DispatchCoreConfig leaves axis_ unset, causing get_dispatch_core_axis()
-    // to call get_default_axis() which only checks the DEFAULT context. For non-default
-    // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here,
-    // but only when the caller hasn't explicitly set an axis.
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-    dispatch_core_config_ = dispatch_core_config;
-    DispatchCoreAxis axis =
-        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config());
-    dispatch_core_config_.set_dispatch_core_axis(axis);
-
+    // Store the resolved config
+    dispatch_core_config_ = resolved_config;
     num_hw_cqs_ = num_hw_cqs;
     worker_l1_size_ = worker_l1_size;
     l1_bank_remap_ = l1_bank_remap;
@@ -211,7 +211,12 @@ void MetalContext::initialize(
 
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
-        inspector_data_ = Inspector::initialize();
+        std::optional<int> rank;
+        const auto& distributed_context = global_distributed_context();
+        if (*(distributed_context.size()) > 1) {
+            rank = *distributed_context.rank();
+        }
+        inspector_data_ = Inspector::initialize(rank);
         // Set fw_compile_hash for Inspector RPC build environment info
         Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
     }
@@ -224,14 +229,25 @@ void MetalContext::initialize(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster);
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
+        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
+        CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions().get_dram_backed_cq());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+        if (!rtoptions().get_use_device_print()) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT is deprecated and will be removed in a future release. "
+                "Please migrate to DEVICE_PRINT by:\n"
+                "  1. Replace #include \"api/debug/dprint.h\" with #include \"api/debug/device_print.h\" in your "
+                "kernels\n"
+                "  2. Replace DPRINT << ... << ENDL() with DEVICE_PRINT(\"...\\n\", args)\n"
+                "  3. Set TT_METAL_DEVICE_PRINT=1 to enable the new DEVICE_PRINT system\n"
+                "For more information, see the DEVICE_PRINT documentation.");
+        }
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(*this->env_, num_hw_cqs, dispatch_core_config_);
@@ -272,7 +288,7 @@ void MetalContext::initialize(
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
-        get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        !get_cluster().is_mock_or_emulated()) {
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
@@ -319,14 +335,14 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (!get_cluster().is_mock_or_emulated()) {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
         rtoptions().set_disable_dma_ops(false);
     }
 
-    if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!get_cluster().is_mock_or_emulated()) {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,8 +31,9 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(20);
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<23>();
+    constexpr auto q_args = TensorAccessorArgs<24>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -52,6 +53,7 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_per_core = global_q_end - global_q_start;
 
     const uint32_t is_chain_participant = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
@@ -131,14 +133,14 @@ void kernel_main() {
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
     constexpr uint32_t q_heads_per_k = NH / NHK;
 
-    const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto local_k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
-    const auto local_v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
-    const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr, k_tile_bytes);
-    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr, v_tile_bytes);
-    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr, q_tile_bytes);
-    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr, k_tile_bytes);
-    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto local_k_reader = TensorAccessor(k_args, k_addr);
+    const auto local_v_reader = TensorAccessor(v_args, v_addr);
+    const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
+    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
+    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
+    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
     const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
     const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);
@@ -155,6 +157,10 @@ void kernel_main() {
     const auto joint_q_generator = PaddedAddrGenerator(joint_q_reader, joint_input_tile_logical);
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
+
+    // Tracks whether Q has been pushed for q_per_core == 1 optimization.
+    // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
+    bool q_pushed = false;
 
     /**
      * Iterate over ring indices.
@@ -199,9 +205,17 @@ void kernel_main() {
         // Indexes are updated accordingly; compute is skipped
         if (is_causal && is_balanced && ring_index > ring_id) {
             iter_num_kv_chunks /= 2;
+            // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
+            // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
+            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+            if constexpr (Straddle::has_straddle) {
+                iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
+            }
         }
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+        for (uint32_t q_iter = 0; global_q_start + q_iter < global_q_end; ++q_iter) {
+            uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -227,10 +241,14 @@ void kernel_main() {
             }
 
             // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
-            const uint32_t q_iter_local = global_q_chunk - global_q_start;
+            const uint32_t q_iter_local = q_iter;
             const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
                                         (q_iter_local < next_core_q_chunks);
             const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+
+            // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
+            // fronted in the CB, so we only need to read it once on the first active ring iteration.
+            const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
@@ -279,29 +297,27 @@ void kernel_main() {
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from previous core
+                // K: get data into CB buffer
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (should_receive) {
-                    // Receive forwarded K chunk from previous core
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_k_in, k_chunk_tiles);
                 } else {
-                    read_block(
+                    fetch_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
                         k_slice,
                         end_seq_tile,
-                        cb_k_in,
+                        cb_k_start_address,
                         k_tile_bytes,
                         true /*transpose*/
                     );
                 }
 
-                // Forward K chunk to next core(s): initiate async write (NOC write channel)
-                // For mcast: send linked data + companion semaphore back-to-back.
+                // Forward K to next core(s) before push_back — prevents compute from
+                // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
                     noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
@@ -318,16 +334,21 @@ void kernel_main() {
                         uint64_t k_unicast_data_addr =
                             get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
                         noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                        noc_async_writes_flushed();
+                    }
+                    noc_async_writes_flushed();
+                    if constexpr (!mcast_enabled) {
                         noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                     }
                 }
+
+                // Make K available to compute
+                cb_push_back(cb_k_in, k_chunk_tiles);
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0) {
+                if (k_chunk == 0 && need_q_read) {
                     if constexpr (use_q_subblock_push) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
@@ -352,30 +373,30 @@ void kernel_main() {
                             false /*transpose*/
                         );
                     }
+                    q_pushed = true;
                 }
 
-                // V: either read locally (injector or not participant) or receive from previous core
+                // V: get data into CB buffer
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                 if (should_receive) {
-                    // Receive forwarded V chunk from previous core
                     noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_v_in, v_chunk_tiles);
                 } else {
-                    read_block(
+                    fetch_block(
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
                         v_slice,
                         end_seq_tile,
-                        cb_v_in,
+                        cb_v_start_address,
                         v_tile_bytes,
                         false /*transpose*/
                     );
                 }
 
-                // Forward V chunk to next core(s) if applicable
+                // Forward V to next core(s) before push_back — prevents compute from
+                // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
                     noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
@@ -392,10 +413,15 @@ void kernel_main() {
                         uint64_t v_unicast_data_addr =
                             get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
                         noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
-                        noc_async_writes_flushed();
+                    }
+                    noc_async_writes_flushed();
+                    if constexpr (!mcast_enabled) {
                         noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                     }
                 }
+
+                // Make V available to compute
+                cb_push_back(cb_v_in, v_chunk_tiles);
             }
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {

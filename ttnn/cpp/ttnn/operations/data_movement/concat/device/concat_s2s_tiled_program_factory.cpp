@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -111,11 +111,12 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     const uint32_t tile_size = tt::tile_size(data_format);
 
     const uint32_t num_input_tensors = input_tensors.size();
-    std::vector<CBHandle> cb_inputs(num_input_tensors);
+    std::vector<CBHandle> cb_inputs;
+    cb_inputs.reserve(num_input_tensors);
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const Tensor& input_tensor = input_tensors.at(idx);
         const uint32_t total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
-        cb_inputs[idx] = create_cb_from_tensor(idx, input_tensor, total_num_tiles);
+        cb_inputs.push_back(create_cb_from_tensor(idx, input_tensor, total_num_tiles));
     }
 
     const uint32_t cb_output_id = cb_inputs.size();
@@ -151,6 +152,16 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
     const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
 
+    // Calculate stride sizes to determine if we can use single-packet NOC reads
+    // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
+    const uint32_t stride_tile_size = is_bf8 ? cb_tile_size : tile_size;
+    const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
+    const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
+
+    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384
+    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384 : 8192;
+    const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
+
     std::vector<uint32_t> compile_time_args_0 = {
         0,
         1,
@@ -171,6 +182,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     if (is_bf8) {
         reader_defines["BF8"] = "1";
     }
+    if (use_single_packet_read) {
+        reader_defines["USE_SINGLE_PACKET_READ"] = "1";
+    }
     CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -190,8 +204,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         "height_sharded_width_concat_two_tensors.cpp",
         all_cores,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
+                                data_format == tt::DataFormat::UInt32,
             .math_approx_mode = false,
             .compile_args = compile_time_args_0});
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -35,12 +35,7 @@ from models.demos.gpt_oss.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    copy_host_to_device,
-    get_padded_prefill_len,
-    preprocess_inputs_prefill,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -347,6 +342,29 @@ def prepare_gpt_oss_generator_args(
             True,  # stop_at_eos
             True,  # run_in_ci
         ),
+        # Batch 128 with logprobs (top-5)
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            128,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {
+                "temperature": 0,
+                "top_p": 0.08,
+                "enable_log_probs": True,
+                "num_logprobs": 5,
+            },  # sampling_params with logprobs
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            True,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
@@ -394,6 +412,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_64k",
         "prefill_128k",
         "batch128",
+        "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
     ],
@@ -423,10 +442,13 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
-    if batch_size > 1 and mesh_shape[0] == 1:
-        pytest.skip(
-            f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
-        )
+    if mesh_shape[0] == 1:
+        if batch_size > 1:
+            pytest.skip(
+                f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
+            )
+        elif max_seq_len > 64 * 1024:
+            pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
     if os.environ.get("CI", None) and not run_in_ci:
@@ -507,10 +529,14 @@ def test_gpt_oss_demo(
     # Create on-device sampling params
     SAMPLING_BATCH_SIZE = 32
     greedy = sampling_params["temperature"] == 0
+    enable_log_probs = sampling_params.get("enable_log_probs", False)
+    num_logprobs = sampling_params.get("num_logprobs", 0)
     device_sampling_params = SamplingParams(
         temperature=[sampling_params["temperature"]] * SAMPLING_BATCH_SIZE,
         top_k=[1] * SAMPLING_BATCH_SIZE if greedy else [40] * SAMPLING_BATCH_SIZE,
         top_p=[1.0] * SAMPLING_BATCH_SIZE if greedy else [sampling_params["top_p"]] * SAMPLING_BATCH_SIZE,
+        enable_log_probs=[enable_log_probs] * SAMPLING_BATCH_SIZE,
+        num_logprobs=[num_logprobs] * SAMPLING_BATCH_SIZE,
     )
 
     # Prepare input prompts
@@ -660,301 +686,44 @@ def test_gpt_oss_demo(
 
             logger.info(f"Prefill finished for {num_real_users} real users")
         elif users_row_sharded:
-            # Row-parallel batched prefill: process 4 users at once (one per mesh row)
-            # This gives ~4x speedup over sequential per-user prefill
-            num_rows = mesh_device.shape[0]
-            users_per_row_prefill = global_batch_size // num_rows
-            users_per_row_per_iter = 1  # Users each mesh row processes per prefill iteration
-            # Increasing above 1 requires model changes:
-            #   - attention/prefill.py: relax batch_size!=1 check, loop paged_fill_cache
-            #   - model.py:process_output_prefill_batched: extract multiple logits per row
-            assert users_per_row_prefill % users_per_row_per_iter == 0
-            num_prefill_iters = users_per_row_prefill // users_per_row_per_iter
-            model_id = 0  # data_parallel=1, single model
+            # Row-parallel batched prefill through generator infrastructure
+            logger.info("Starting row-parallel batched prefill through generator...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=warmup_prefill,
+                sampling_params=device_sampling_params,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Row-parallel prefill compilation done")
 
-            prefilled_token = torch.zeros(global_batch_size, dtype=torch.long)
+            # Clear KV caches before timed run
+            for i in range(len(model)):
+                for layer_obj in model[i].layers:
+                    k_cache, v_cache = layer_obj.self_attn.layer_past
+                    ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                    ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-            if enable_prefill_trace:
-                # === TRACED BATCHED PREFILL ===
-                # Trace captures device program once, then replays with input buffer updates.
-                # Eliminates per-iteration host dispatch overhead.
-
-                # Uniform padded_len for all users (required for tracing: fixed tensor shapes)
-                max_padded_len = max(get_padded_prefill_len(int(decoding_pos[uid])) for uid in range(global_batch_size))
-                block_size = page_params["page_block_size"]
-                max_num_blocks = (max_padded_len + block_size - 1) // block_size
-
-                # Compute fixed get_last_token for trace (all users must be in same 32-token tile)
-                all_last_idxs = [int(decoding_pos[uid]) - 1 for uid in range(global_batch_size)]
-                fixed_get_last_token = (min(all_last_idxs) // 32) * 32
-                max_tile_start = (max(all_last_idxs) // 32) * 32
-                if fixed_get_last_token != max_tile_start:
-                    logger.warning(
-                        f"Users span multiple 32-token tiles ({fixed_get_last_token} vs {max_tile_start}), "
-                        f"using get_last_token=-1 (slower)"
-                    )
-                    fixed_get_last_token = -1
-
-                def _prepare_batch_host(user_indices):
-                    """Prepare host-side tokens + page_table for a batch of users."""
-                    tokens_list, pt_list, last_idxs = [], [], []
-                    for uid in user_indices:
-                        plen = int(decoding_pos[uid])
-                        toks = torch.cat(
-                            [
-                                input_tokens_prefill_pt[uid : uid + 1, :plen],
-                                torch.zeros(1, max_padded_len - plen, dtype=torch.long),
-                            ],
-                            dim=-1,
-                        )
-                        tokens_list.append(toks)
-                        pt_list.append(page_table[uid : uid + 1, :max_num_blocks])
-                        last_idxs.append(plen - 1)
-                    return (torch.cat(tokens_list, dim=0), torch.cat(pt_list, dim=0), last_idxs)
-
-                # --- Warmup (compilation) ---
-                logger.info("Starting traced row-parallel prefill warmup (compilation)...")
-                warmup_indices = [
-                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
-                ]
-                tokens_w, pt_w, last_w = _prepare_batch_host(warmup_indices)
-                tokens_w = tokens_w.reshape(num_rows, -1)  # [num_rows, N*S] for batch>1 concat
-
-                host_out = model[model_id].prepare_inputs_prefill(
-                    tokens_w, page_table=pt_w, trace_enabled=True, batched_prefill=True
-                )
-                rot_global = host_out[1]  # device-resident, fixed across iterations
-                rot_local = host_out[2]  # None
-                host_inputs = (host_out[0], host_out[3], host_out[4])  # tokens, pt, cpt
-
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-                dev_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-                transformed = model[model_id].transform_and_embed_prefill_inputs_device(*dev_inputs)
-                tt_logits = model[model_id].ttnn_prefill_forward(
-                    transformed[0],
-                    rot_mats_global=rot_global,
-                    rot_mats_local=rot_local,
-                    user_id=0,
-                    page_table=transformed[1],
-                    get_last_token=fixed_get_last_token,
-                    kv_cache=tt_kv_cache[model_id],
-                    batch_size=users_per_row_per_iter,
-                )
-
-                if fixed_get_last_token == -1:
-                    warmup_results = model[model_id].process_output_prefill_batched(
-                        tt_logits,
-                        last_w,
-                        users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=max_padded_len,
-                    )
-                else:
-                    warmup_results = model[model_id].process_output_prefill_batched(
-                        tt_logits,
-                        [idx % 32 for idx in last_w],
-                        users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=32,
-                    )
-                for row, uid in enumerate(warmup_indices):
-                    prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-                logger.info("Finished traced row-parallel prefill warmup")
-
-                # Clear KV caches (warmup wrote to them)
-                for i in range(len(model)):
-                    for layer_obj in model[i].layers:
-                        k_cache, v_cache = layer_obj.self_attn.layer_past
-                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
-
-                # --- Trace capture ---
-                logger.info("Capturing prefill trace...")
-                iter0_indices = [
-                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
-                ]
-                tokens_0, pt_0, last_0 = _prepare_batch_host(iter0_indices)
-                tokens_0 = tokens_0.reshape(num_rows, -1)
-                host_out = model[model_id].prepare_inputs_prefill(
-                    tokens_0, page_table=pt_0, trace_enabled=True, batched_prefill=True
-                )
-                host_inputs = (host_out[0], host_out[3], host_out[4])
-
-                trace_dev_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                # Embed tokens on-device inside the trace (without deallocating input buffer,
-                # since we need to update it between trace executions)
-                tokens_embd = ttnn.embedding(
-                    trace_dev_inputs[0],
-                    model[model_id].embedding_weight,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                )
-                if len(tokens_embd.shape) == 3:
-                    tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-                tt_out_trace = model[model_id].ttnn_prefill_forward(
-                    tokens_embd,
-                    rot_mats_global=rot_global,
-                    rot_mats_local=rot_local,
-                    user_id=0,
-                    page_table=trace_dev_inputs[1],
-                    get_last_token=fixed_get_last_token,
-                    kv_cache=tt_kv_cache[model_id],
-                    batch_size=users_per_row_per_iter,
-                )
-                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-                logger.info("Prefill trace captured")
-
-                # --- Execute trace for all iterations ---
-                logger.info(
-                    f"Starting traced row-parallel prefill ({num_prefill_iters} iters, "
-                    f"{users_per_row_per_iter} user/row/iter, {global_batch_size} users)..."
-                )
-                profiler.start(f"inference_prefill", iteration=batch_idx)
-                for iter_idx in range(num_prefill_iters):
-                    user_indices = [
-                        row * users_per_row_prefill + iter_idx * users_per_row_per_iter + u
-                        for row in range(num_rows)
-                        for u in range(users_per_row_per_iter)
-                    ]
-                    tokens_i, pt_i, last_i = _prepare_batch_host(user_indices)
-                    tokens_i = tokens_i.reshape(num_rows, -1)
-                    host_out = model[model_id].prepare_inputs_prefill(
-                        tokens_i, page_table=pt_i, trace_enabled=True, batched_prefill=True
-                    )
-                    host_inputs = (host_out[0], host_out[3], host_out[4])
-                    copy_host_to_device(host_inputs, device_tensors=trace_dev_inputs, mesh_device=mesh_device)
-                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-
-                    if fixed_get_last_token == -1:
-                        row_results = model[model_id].process_output_prefill_batched(
-                            tt_out_trace,
-                            last_i,
-                            users_per_row=users_per_row_per_iter,
-                            seq_len_per_user=max_padded_len,
-                        )
-                    else:
-                        row_results = model[model_id].process_output_prefill_batched(
-                            tt_out_trace,
-                            [idx % 32 for idx in last_i],
-                            users_per_row=users_per_row_per_iter,
-                            seq_len_per_user=32,
-                        )
-                    for row, uid in enumerate(user_indices):
-                        prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
-                    if iter_idx % 8 == 0:
-                        logger.info(f"  Traced prefill batch {iter_idx+1}/{num_prefill_iters}")
-                profiler.end(f"inference_prefill", iteration=batch_idx)
-
-                ttnn.release_trace(mesh_device, trace_id)
-                logger.info(f"Traced row-parallel prefill finished ({num_prefill_iters} iterations)")
-
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            prefill_result = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=enable_prefill_trace,
+                warmup_prefill=False,
+                sampling_params=device_sampling_params,
+            )
+            if isinstance(prefill_result, tuple):
+                prefilled_token = prefill_result[0].squeeze(-1)
             else:
-                # === NON-TRACED BATCHED PREFILL ===
-
-                # Helper to run one batched prefill iteration
-                def _run_batched_prefill_iter(iter_idx, user_indices):
-                    batch_tokens_list = []
-                    batch_page_tables = []
-                    batch_last_token_idxs = []
-
-                    for uid in user_indices:
-                        prefill_len = int(decoding_pos[uid])
-                        padded_len = get_padded_prefill_len(prefill_len)
-                        user_tokens = torch.cat(
-                            [
-                                input_tokens_prefill_pt[uid : uid + 1, :prefill_len],
-                                torch.zeros(1, padded_len - prefill_len, dtype=torch.long),
-                            ],
-                            dim=-1,
-                        )
-                        batch_tokens_list.append(user_tokens)
-                        block_size = page_params["page_block_size"]
-                        num_blocks_needed = (padded_len + block_size - 1) // block_size
-                        batch_page_tables.append(page_table[uid : uid + 1, :num_blocks_needed])
-                        batch_last_token_idxs.append(prefill_len - 1)
-
-                    tokens_stacked = torch.cat(batch_tokens_list, dim=0)  # [total_users, padded_len]
-                    page_table_stacked = torch.cat(batch_page_tables, dim=0)  # [total_users, num_blocks]
-                    padded_len = tokens_stacked.shape[1]
-
-                    # Reshape tokens for batch>1: concatenate per-row users along seq dim
-                    tokens_for_model = tokens_stacked.reshape(num_rows, -1)  # [num_rows, N*padded_len]
-
-                    (tokens_embd, rot_mats_global, rot_mats_local, page_table_tt, _) = model[
-                        model_id
-                    ].prepare_inputs_prefill(
-                        tokens_for_model,
-                        page_table=page_table_stacked,
-                        batched_prefill=True,
-                    )
-
-                    # Use get_last_token if all users' last tokens fall in the same 32-token tile
-                    min_tile = (min(batch_last_token_idxs) // 32) * 32
-                    max_tile = (max(batch_last_token_idxs) // 32) * 32
-                    get_last_token_val = min_tile if min_tile == max_tile else -1
-                    tt_logits = model[model_id].ttnn_prefill_forward(
-                        tokens_embd,
-                        rot_mats_global=rot_mats_global,
-                        rot_mats_local=rot_mats_local,
-                        user_id=0,  # Must be 0: each device sees page_table[0] after row-sharding
-                        page_table=page_table_tt,
-                        get_last_token=get_last_token_val,
-                        kv_cache=tt_kv_cache[model_id],
-                        batch_size=users_per_row_per_iter,
-                    )
-
-                    if get_last_token_val == -1:
-                        adjusted_last_idxs = batch_last_token_idxs
-                        seq_len_for_output = padded_len
-                    else:
-                        adjusted_last_idxs = [idx % 32 for idx in batch_last_token_idxs]
-                        seq_len_for_output = 32
-                    row_results = model[model_id].process_output_prefill_batched(
-                        tt_logits,
-                        adjusted_last_idxs,
-                        users_per_row=users_per_row_per_iter,
-                        seq_len_per_user=seq_len_for_output,
-                    )
-                    return row_results
-
-                # Warmup: compile with first batch
-                logger.info("Starting row-parallel prefill warmup...")
-                profiler.start(f"compile_prefill", iteration=batch_idx)
-                warmup_user_indices = [
-                    row * users_per_row_prefill + u for row in range(num_rows) for u in range(users_per_row_per_iter)
-                ]
-                warmup_results = _run_batched_prefill_iter(0, warmup_user_indices)
-                for row, uid in enumerate(warmup_user_indices):
-                    prefilled_token[uid] = torch.argmax(warmup_results[row].view(-1)).item()
-                profiler.end(f"compile_prefill", iteration=batch_idx)
-                logger.info("Finished row-parallel prefill warmup")
-
-                # Clear KV caches before real prefill (warmup wrote to them)
-                for i in range(len(model)):
-                    for layer_obj in model[i].layers:
-                        k_cache, v_cache = layer_obj.self_attn.layer_past
-                        ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                        ttnn.mul(v_cache, 0, output_tensor=v_cache)
-
-                # Real prefill
-                logger.info(
-                    f"Starting row-parallel batched prefill ({num_prefill_iters} iters, "
-                    f"{users_per_row_per_iter} user/row/iter, {global_batch_size} users)..."
-                )
-                profiler.start(f"inference_prefill", iteration=batch_idx)
-                for iter_idx in range(num_prefill_iters):
-                    user_indices = [
-                        row * users_per_row_prefill + iter_idx * users_per_row_per_iter + u
-                        for row in range(num_rows)
-                        for u in range(users_per_row_per_iter)
-                    ]
-                    row_results = _run_batched_prefill_iter(iter_idx, user_indices)
-                    for row, uid in enumerate(user_indices):
-                        prefilled_token[uid] = torch.argmax(row_results[row].view(-1)).item()
-                    if iter_idx % 8 == 0:
-                        logger.info(f"  Prefilled batch {iter_idx+1}/{num_prefill_iters}")
-                profiler.end(f"inference_prefill", iteration=batch_idx)
-                logger.info(f"Row-parallel batched prefill finished ({num_prefill_iters} iterations)")
+                prefilled_token = torch.argmax(prefill_result, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info("Row-parallel batched prefill finished")
 
         else:
             # Standard sequential prefill (batch_size < num_rows)

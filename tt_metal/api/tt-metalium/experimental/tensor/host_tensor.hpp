@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,6 @@
 //
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
-
-// This will be brought in at #37692
-class HostStorage;
 
 // Implementation details for HostTensor
 class HostTensorImpl;
@@ -66,17 +63,27 @@ public:
     /**
      * Constructs a host tensor in the default constructed state, acting like a nullptr.
      */
-    HostTensor() = default;
+    HostTensor();
 
-    // TODO(#38376), TODO(#38689):
-    // These constructors should be hidden or go away.
-    // External user should not be able to construct a HostTensor directly and opt to use the from_xxx static methods
-    // instead, as the constructor does not perform invariant checks.
-    explicit HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    /**
+     * Constructs a host tensor from a distributed host buffer.
+     */
+    explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
+    /**
+     * Constructs a host tensor from a single device host storage.
+     * The buffer is occupies the 0x0 shard of the distributed host buffer.
+     */
     explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
-    ~HostTensor() = default;
+    /**
+     * Move constructor with new spec and topology.
+     * Moves the buffer from other and uses the provided spec/topology.
+     * This is meant for transition as TTNN-Tensor current has a two-step construction for HostTensor.
+     */
+    HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology);
+
+    ~HostTensor();
 
     /**
      * Copy constructor.
@@ -124,7 +131,7 @@ public:
      * The data in the buffer is copied into a tensor with host storage.
      */
     template <typename T>
-    static HostTensor from_span(std::span<T> buffer, const TensorSpec& spec, T pad_value = 0);
+    static HostTensor from_span(std::span<const T> buffer, const TensorSpec& spec, T pad_value = 0);
 
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -173,16 +180,17 @@ public:
      */
     const TensorTopology& tensor_topology() const;
 
-    // DeviceStorage is meant to bridge ttnn::Tensor and HostTensor,
-    // this should go away as part of refactoring, see: #38376
-    const HostStorage& get_legacy_host_storage() const;
-
     /**
      * Returns the DistributedHostBuffer of the HostTensor.
      *
      * pre-condition: The HostTensor must be engaged.
      */
-    const DistributedHostBuffer& get_distributed_host_buffer() const;
+    const DistributedHostBuffer& buffer() const;
+
+    // TODO(#40348): This should be removed.
+    // We need to maintain invariant of this buffer.
+    // Giving out mutable reference allows user to assign into it.
+    DistributedHostBuffer& buffer();
 
     // Derivables:
 
@@ -210,6 +218,10 @@ public:
 
     // Questionables:
 
+    // Applies a transformation function to each host buffer across devices in parallel, returning a new HostTensor.
+    HostTensor transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
+
+    // Updates the topology of the HostTensor post construction.
     void update_tensor_topology(TensorTopology tensor_topology);
 
 private:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,7 +106,7 @@ ttnn::Tensor slice_write(
                                       tt::div_up(padded_output_shape[2], input.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
-                log_info(tt::LogOp, "In-place unpad optimization via copy");
+                log_debug(tt::LogOp, "In-place unpad optimization via copy");
                 ttnn::copy(input_tensor, output_tensor);
                 return output_tensor;
             }

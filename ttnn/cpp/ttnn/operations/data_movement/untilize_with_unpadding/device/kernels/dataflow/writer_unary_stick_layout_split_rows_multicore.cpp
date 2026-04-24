@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ void kernel_main() {
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -38,7 +38,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, num_tiles_per_row * has_rows);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t dst_noc_addr = get_noc_addr(base_stick_id + k, s);
+            uint64_t dst_noc_addr = s.get_noc_addr(base_stick_id + k);
 
             // Write out tmp buffer
             noc_async_write(l1_read_addr, dst_noc_addr, unpadded_X_size);

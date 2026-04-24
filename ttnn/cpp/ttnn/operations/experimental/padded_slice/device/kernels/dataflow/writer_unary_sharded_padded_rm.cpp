@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 void kernel_main() {
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t num_elements_per_row = get_arg_val<uint32_t>(1);
@@ -13,8 +14,12 @@ void kernel_main() {
     constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(1);
     constexpr uint32_t output_elem_size = get_compile_time_arg_val(2);
 
-    const uint32_t pad_addr = get_read_ptr(cb_temp_pad);
-    const uint32_t out_addr = get_read_ptr(cb_id_out);
+    experimental::Noc noc;
+    experimental::CB cb_out_obj(cb_id_out);
+    experimental::CB cb_temp_pad_obj(cb_temp_pad);
+
+    const uint32_t pad_addr = cb_temp_pad_obj.get_read_ptr();
+    const uint32_t out_addr = cb_out_obj.get_read_ptr();
     if (pad_size_bytes == 0) {
         return;  // No padding needed, exit early
     }
@@ -22,8 +27,18 @@ void kernel_main() {
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
            << ", unpadded_row_size_bytes: " << unpadded_row_size_bytes
            << ", padded_row_size_bytes: " << padded_row_size_bytes << ", pad_size_bytes: " << pad_size_bytes << ENDL();
+    DEVICE_PRINT(
+        "num_units: {}, num_elements_per_row: {}, unpadded_row_size_bytes: {}, padded_row_size_bytes: {}, "
+        "pad_size_bytes: {}\n",
+        num_units,
+        num_elements_per_row,
+        unpadded_row_size_bytes,
+        padded_row_size_bytes,
+        pad_size_bytes);
     DPRINT << "CB Temp Pad " << cb_temp_pad << "pad_addr: " << pad_addr << ", out_addr: " << out_addr << ENDL();
+    DEVICE_PRINT("CB Temp Pad {}, pad_addr: {}, out_addr: {}\n", cb_temp_pad, pad_addr, out_addr);
     DPRINT << "Output Elem Size " << output_elem_size << ENDL();
+    DEVICE_PRINT("Output Elem Size {}\n", output_elem_size);
 #endif
 
     if constexpr (output_elem_size == 2) {
@@ -38,14 +53,14 @@ void kernel_main() {
         }
     }
 
-    uint32_t write_addr = out_addr + unpadded_row_size_bytes;
-    uint64_t pad_noc_addr = get_noc_addr(pad_addr + unpadded_row_size_bytes);
+    // pad_size_bytes is runtime; issue each read as a single-packet UnicastEndpoint NOC transfer
+    experimental::UnicastEndpoint self_ep;
+    const auto pad_src = experimental::local_addr(pad_addr + unpadded_row_size_bytes, noc.get_noc_id());
 
-    noc_async_read_one_packet_set_state(pad_noc_addr, pad_size_bytes);
-
+    uint32_t write_offset = unpadded_row_size_bytes;
     for (uint32_t i = 0; i < num_units; ++i) {
-        noc_async_read_one_packet_with_state<true>(pad_noc_addr, write_addr);
-        write_addr += padded_row_size_bytes;
+        noc.async_read(self_ep, cb_out_obj, pad_size_bytes, pad_src, {.offset_bytes = write_offset});
+        write_offset += padded_row_size_bytes;
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }

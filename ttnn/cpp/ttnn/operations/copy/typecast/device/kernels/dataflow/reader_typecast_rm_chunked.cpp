@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,17 +10,15 @@ void kernel_main() {
     const uint32_t start_row_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(2);
-    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(4);  // 0 or 1
-    constexpr uint32_t row_page_size_bytes = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(1);
+    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(2);  // 0 or 1
+    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     constexpr uint32_t onepage = 1;
 
-    // Create TensorAccessor with row page size (buffer's actual layout)
-    const auto s = TensorAccessor(src_args, src_addr, row_page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     const uint32_t end_row_id = start_row_id + num_rows;
 
