@@ -40,6 +40,11 @@ from models.demos.deepseek_v4_flash.ttnn_expert_group import (
     route_weights_by_expert,
     unique_route_expert_ids,
 )
+from models.demos.deepseek_v4_flash.ttnn_model import (
+    TtDeepSeekV4FlashTinyModel,
+    embed_input_ids_host,
+    load_model_embedding_head_weights,
+)
 from models.demos.deepseek_v4_flash.ttnn_moe_block import TtMoEFeedForwardBlock
 from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import load_attention_sink
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import load_prefill_compressor_weights
@@ -344,6 +349,56 @@ def test_t3k_decoder_layer_scaffold_attention_moe_residuals_match_torch(
     assert torch_output.shape == expected.shape
     passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.98)
     assert passing, f"Decoder layer output PCC below 0.98: {pcc_message}"
+
+
+def test_t3k_tiny_model_scaffold_embedding_decoder_logits_match_torch(
+    tiny_three_layer_tt_preprocessed_checkpoint: Path,
+    t3k_mesh,
+) -> None:
+    """Tiny model-level scaffold: host embedding, one decoder layer, TTNN LM head."""
+
+    manifest = load_tt_manifest(tiny_three_layer_tt_preprocessed_checkpoint)
+    layer = 2
+    seq_len = 32
+    vocab_size = int(manifest["config"]["vocab_size"])
+    input_ids = torch.zeros(1, seq_len, dtype=torch.int64)
+
+    expected = _tiny_model_reference_logits(
+        tiny_three_layer_tt_preprocessed_checkpoint,
+        manifest,
+        layer=layer,
+        input_ids=input_ids,
+    )
+
+    module = TtDeepSeekV4FlashTinyModel.from_preprocessed(
+        tiny_three_layer_tt_preprocessed_checkpoint,
+        mesh_device=t3k_mesh,
+        layer=layer,
+    )
+    torch_output = module(input_ids)
+
+    assert torch_output.shape == (1, seq_len, vocab_size)
+    passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.98)
+    assert passing, f"Tiny model logits PCC below 0.98: {pcc_message}"
+
+
+def _tiny_model_reference_logits(
+    preprocessed_path: Path,
+    manifest: dict,
+    *,
+    layer: int,
+    input_ids: torch.Tensor,
+) -> torch.Tensor:
+    weights = load_model_embedding_head_weights(preprocessed_path, manifest=manifest)
+    hidden_states = embed_input_ids_host(input_ids, weights.embed_weight).unsqueeze(1)
+    decoded = _decoder_layer_reference(
+        preprocessed_path,
+        manifest,
+        layer=layer,
+        hidden_states=hidden_states,
+        input_ids=input_ids,
+    )
+    return F.linear(decoded[:, 0].float(), weights.head_weight.float())
 
 
 def _decoder_layer_reference(
