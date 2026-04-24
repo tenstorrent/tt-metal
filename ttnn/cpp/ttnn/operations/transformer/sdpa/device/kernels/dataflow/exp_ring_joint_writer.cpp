@@ -21,7 +21,9 @@ using namespace tt::tt_fabric::linear::experimental;
 
 // Row-by-row drain of cb_out to DRAM; writes overlap with compute's next row-group push.
 // Flush-before-pop: required for a shrunk cb_out so compute can't overwrite a slot the
-// NoC is still sourcing. A non-divisible tail is drained as a smaller final group.
+// NoC is still sourcing. Non-divisible tail drained as a smaller final group — sbh here
+// is the host-side subblock, which the kernel may bump internally, so a remainder is
+// possible.
 template <typename ReaderType>
 void write_out_row_by_row(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
