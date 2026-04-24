@@ -278,17 +278,23 @@ E2E inference (median of 9 post-edit / 6 baseline runs at seq=1024): **0.368s �
      `DEST_REGISTER_FULL_SIZE=64*16` as host-side copies of constants that live in the
      arch-specific `tensix_types.h`. All three currently-supported arches (WH-b0, BH, Quasar)
      happen to agree on these values, so today's tree is numerically correct, but a future arch
-     could silently break the host-side tuner. Attempted to replace the `#define`s with
-     `#include "tensix_types.h"` directly; fails because `hw/inc/internal/tt-1xx/${ARCH}` isn't
-     on `ttnn_op_core`'s include path, and `hostdevcommon/dprint_common.h`'s transitive include
-     is gated behind `!defined(KERNEL_BUILD) && !defined(FW_BUILD)`. Proper fix is adding a
-     host-side HAL API (e.g. `hal.get_dest_reg_count(compute_kernel_config, tile_shape)`) mirroring
-     the existing `hal.get_arch_num_circular_buffers()` pattern, so host-side tuning can query
-     per-arch constants at runtime instead of relying on the `#define` coincidence. Scope: ~1 day.
+     could silently break the host-side tuner. Ways to fix the duplication have tradeoffs:
+     `#include "tensix_types.h"` directly doesn't work because `hw/inc/internal/tt-1xx/${ARCH}`
+     isn't on `ttnn_op_core`'s include path and `hostdevcommon/dprint_common.h`'s transitive
+     include is gated behind `!defined(KERNEL_BUILD) && !defined(FW_BUILD)`. Adding a HAL
+     accessor (mirroring `hal.get_arch_num_circular_buffers()`) would also work but touches
+     `tt_metal/llrt/hal.hpp`, which is a hot surface being actively reworked elsewhere — not
+     a change to introduce right before a big rebase. The minimum-risk holding pattern is to
+     keep the `#define`s with a clearer inline comment pointing to the tensix_types.h source
+     of truth and a `static_assert` when a future arch needs divergence. Revisit after the
+     rebase when it's clearer which pattern tt_metal/hal layering prefers for host-queryable
+     arch constants.
   2. `matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:151` still has
      `uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;` — hardcoded legacy pre-auto-tuner
-     logic that assumes half-sync and bypasses `get_dest_reg_count`. Thread the full
-     `compute_kernel_config` through the function signature and route through the query.
+     logic that assumes half-sync and bypasses `get_dest_reg_count`. Fix would thread the
+     full `compute_kernel_config` through the function signature (~30 LOC change across
+     2-3 callers) and route through the query. No measured regression today since the
+     hardcode happens to agree with current callers' half-sync defaults.
 
   Concrete trigger for why this matters: BGE-large's qkv / ff2 configs use
   `fp32_dest_acc_en=True` → effective DST=4. The abstract tuner handles this correctly today,
