@@ -168,48 +168,56 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
     assert device.cache_entries_counter.total == expected_cache_entries
 
 
-def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type):
+def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
-
-    n_unpadded = n
-    c_unpadded = c + padding[0][1] + padding[0][0]
-    h_unpadded = h + padding[1][1] + padding[1][0]
-
-    # core grid: compute cores for L1, DRAM banks for DRAM
-    if buffer_type == ttnn.types.BufferType.DRAM:
-        dram_grid = device.dram_grid_size()
-        num_cores_x = dram_grid.x
-        num_cores_y = dram_grid.y
-    else:
-        compute_grid = device.compute_with_storage_grid_size()
-        num_cores_x = min(8, compute_grid.x)
-        num_cores_y = min(8, compute_grid.y)
-
-    # shard config
-    num_cores = num_cores_x * num_cores_y
-    shard_h = ttnn.core.divup(n * c * h, num_cores)
-    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
-    sharded_mem_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
-
-    # output shard config
-    shard_h = ttnn.core.divup(n_unpadded * c_unpadded * h_unpadded, num_cores)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
-    output_mem_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=sharded_mem_config,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+
+    n_unpadded = n
+    c_unpadded = c + padding[0][1] + padding[0][0]
+    h_unpadded = h + padding[1][1] + padding[1][0]
+
+    # shard config
+    num_cores_x = 8
+    num_cores_y = 8
+    if num_cores_y > device.core_grid.y:
+        num_cores_y = device.core_grid.y
+    shard_h = (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    # output shard config
+    num_cores_x = 8
+    num_cores_y = 8
+    if num_cores_y > device.core_grid.y:
+        num_cores_y = device.core_grid.y
+    shard_h = (n_unpadded * c_unpadded * h_unpadded + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
     tt_output_tensor = ttnn.pad(tt_input_tensor, padding=padding, value=value, memory_config=output_mem_config)
+
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
@@ -341,10 +349,11 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint16])
-@pytest.mark.parametrize("buffer_type", [ttnn.types.BufferType.L1, ttnn.types.BufferType.DRAM])
-def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type):
+def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
+    if device.core_grid.y < 8:
+        pytest.skip("n300 does not have 8x8 grid")
     for _ in range(2):
-        run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type)
+        run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)

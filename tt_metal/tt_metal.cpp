@@ -546,8 +546,7 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(
-    Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -568,9 +567,6 @@ void WriteToDeviceSharded(
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
-        if (logical_core_filter != nullptr && !logical_core_filter->contains(core)) {
-            continue;
-        }
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
@@ -663,19 +659,12 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
-        if (logical_core_filter != nullptr) {
-            TT_FATAL(
-                logical_core_filter->empty(),
-                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
-                "per-core filtering)");
-            return;
-        }
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
+        WriteToDeviceSharded(buffer, host_buffer);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -686,7 +675,7 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer, /*logical_core_filter=*/nullptr);
+            WriteToDevice(buffer, host_buffer);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -1139,24 +1128,6 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 }
 
 }  // namespace detail
-
-namespace experimental::core_subset_write {
-
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
-    switch (buffer.buffer_type()) {
-        case BufferType::DRAM:  // fallthrough
-        case BufferType::L1:    // fallthrough
-        case BufferType::L1_SMALL: {
-            detail::WriteToDevice(buffer, host_buffer, &logical_core_filter);
-        } break;
-        case BufferType::SYSTEM_MEMORY: {
-            TT_THROW("Writing to host memory is unsupported!");
-        } break;
-        default: TT_THROW("Unsupported buffer type!");
-    }
-}
-
-}  // namespace experimental::core_subset_write
 
 size_t GetNumAvailableDevices() { return MetalContext::instance().get_cluster().number_of_user_devices(); }
 

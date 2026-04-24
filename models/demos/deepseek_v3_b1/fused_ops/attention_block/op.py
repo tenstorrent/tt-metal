@@ -8,7 +8,6 @@ import math
 import torch
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
@@ -1741,7 +1740,6 @@ class AttentionBlock:
             ("mla_ms_in_cb", mla_ms_in_cb),
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
-            ("mla_use_alt_mcast_vc", 1 if is_slow_dispatch() else 0),
         ]
         mla_brisc_named_compile_time_args = [
             ("St", St),

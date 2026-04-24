@@ -31,8 +31,7 @@ bool DummyMeshCommandQueue::write_shard_to_device(
     const void* /*src*/,
     const std::optional<BufferRegion>& /*region*/,
     tt::stl::Span<const SubDeviceId> /*sub_device_ids*/,
-    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/,
-    const tt::tt_metal::CoreRangeSet* /*logical_core_filter*/) {
+    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/) {
     // No-op for inactive rank; no pinned memory used
     return false;
 }
