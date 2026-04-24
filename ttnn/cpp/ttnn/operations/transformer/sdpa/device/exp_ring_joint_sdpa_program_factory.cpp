@@ -340,7 +340,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
-    uint32_t out0_t = Sq_chunk_t * DHt;
+    uint32_t out0_t = Sq_chunk_t * DHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
@@ -349,8 +349,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
-    log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
     log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
@@ -384,6 +382,19 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+
+    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp). Safe here
+    // because max_q_per_core == 1 is TT_FATAL-enforced above, so Phase-2's save_to_staging
+    // branch (pack at offset qktv_h*vDHt into a 2*qktv_h*vDHt buffer) never fires.
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
+    log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
