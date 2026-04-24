@@ -68,6 +68,8 @@ void kernel_main() {
             copy_tile(tt::CBIndex::c_2, 1, 1);
             mul_binary_tile_init();
             mul_binary_tile(reduce_dst_idx, 1, reduce_dst_idx);
+            // Prepare for the next row's reduce_tile calls.
+            reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 #endif
             cb3.reserve_back(onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_3);

@@ -55,6 +55,11 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
+    // REDUCE_MINMAX_TWO_TILE_SCALER stages the post-mul scaler into dst[ntiles] in `reduce_h*.cpp`.
+    // Reserve one dst reg so ntiles < dest_reg_count, preventing an out-of-bounds write (dst[dest_reg_count]).
+    if (min_max_scaler_cb && !use_width_sharding) {
+        chunk_size = std::max<uint32_t>(1u, chunk_size - 1u);
+    }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
