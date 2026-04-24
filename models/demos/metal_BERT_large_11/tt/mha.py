@@ -234,7 +234,7 @@ class TtMultiHeadAttentionModel:
             else:
                 qkv_bias_torch = torch.cat((qb, kb, vb), -1)
 
-            qkv_bias_torch = pad_weight(qkv_bias_torch)
+            qkv_bias_torch = qkv_bias_torch.reshape(1, 1, 1, -1)
 
             return ttnn.from_torch(
                 qkv_bias_torch,

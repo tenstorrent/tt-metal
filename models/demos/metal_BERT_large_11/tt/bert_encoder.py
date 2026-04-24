@@ -74,7 +74,7 @@ class TtBertEncoder:
             )
 
         def compute_attention_output_bias():
-            bias_torch = pad_weight(state_dict[f"{attn_layer_name}.dense.bias"])
+            bias_torch = state_dict[f"{attn_layer_name}.dense.bias"].reshape(1, 1, 1, -1)
             return ttnn.from_torch(
                 bias_torch,
                 model_config["OP7_SELFOUT_BIAS_DTYPE"],
