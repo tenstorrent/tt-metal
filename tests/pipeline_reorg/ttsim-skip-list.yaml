@@ -18,6 +18,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # Numeric mismatches, likely caused by issue #41163
@@ -59,6 +60,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_chunked_vs_not.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # MOVD2B failures
