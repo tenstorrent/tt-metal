@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc.h"
+#include "experimental/tensor.h"
 #include "tensix_types.h"
 
 // #include "api/debug/dprint.h"
@@ -32,27 +35,29 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in(cb_id_in0);
     const auto s = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_readers>();
     uint32_t barrier_count = 0;
     uint32_t curr_tile_id = start_id;
-    cb_reserve_back(cb_id_in0, block_num_tiles);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+    uint32_t l1_offset = 0;
+    cb_in.reserve_back(block_num_tiles);
     for (uint32_t h = 0; h < block_height_tiles; h++) {
         uint32_t tile_id = curr_tile_id;
         for (uint32_t w = 0; w < block_width_tiles; w++) {
-            noc_async_read_tile(tile_id, s, l1_write_addr);
+            noc.async_read(s, cb_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = l1_offset});
             tile_id++;
-            l1_write_addr += tile_bytes;
+            l1_offset += tile_bytes;
             if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 barrier_count = 0;
             }
         }
-        l1_write_addr += padded_offset_bytes;
+        l1_offset += padded_offset_bytes;
         curr_tile_id += input_width_offset_tiles;
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in0, block_num_tiles);
+    noc.async_read_barrier();
+    cb_in.push_back(block_num_tiles);
 }

@@ -6,6 +6,8 @@
 
 #include "mesh_command_queue.hpp"
 
+#include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
 
@@ -28,7 +30,8 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) = 0;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) = 0;
     virtual void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -58,9 +61,23 @@ private:
         bool blocking);
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        MeshBuffer& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
-        bool blocking);
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
+
+    void enqueue_write_with_core_filter(
+        MeshBuffer& mesh_buffer,
+        const DistributedHostBuffer& host_buffer,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter);
+
+    friend void tt::tt_metal::experimental::core_subset_write::enqueue_write(
+        tt::tt_metal::distributed::MeshCommandQueue& cq,
+        tt::tt_metal::distributed::MeshBuffer& mesh_buffer,
+        const tt::tt_metal::DistributedHostBuffer& host_buffer,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet& logical_core_filter);
 
 public:
     MeshCommandQueueBase(
