@@ -105,14 +105,20 @@ Kernel::Kernel(
     const std::vector<uint32_t>& compile_args,
     const std::map<std::string, std::string>& defines,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
-    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles) :
+    bool is_metal2_kernel,
+    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
+    const std::vector<std::string>& named_runtime_args,
+    const std::vector<std::string>& named_common_runtime_args) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
+    is_metal2_kernel_(is_metal2_kernel),
     dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
+    named_runtime_args_(named_runtime_args),
+    named_common_runtime_args_(named_common_runtime_args),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -426,7 +432,7 @@ std::string ComputeKernel::config_hash() const {
 }
 
 uint64_t Kernel::compute_hash() const {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     for (const auto& [define, value] : this->defines_) {
         hasher.update(define);
         hasher.update(value);
@@ -449,6 +455,17 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->dataflow_buffer_local_accessor_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
+    }
+    // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
+    // Named RTA and CRTA counts also need to be hashed!
+    // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
+    hasher.update(static_cast<uint64_t>(this->named_runtime_args_.size()));
+    for (const auto& name : this->named_runtime_args_) {
+        hasher.update(name);
+    }
+    hasher.update(static_cast<uint64_t>(this->named_common_runtime_args_.size()));
+    for (const auto& name : this->named_common_runtime_args_) {
+        hasher.update(name);
     }
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
