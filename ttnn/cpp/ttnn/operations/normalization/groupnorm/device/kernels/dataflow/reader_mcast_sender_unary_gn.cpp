@@ -75,6 +75,14 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
     constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
+    // Per-core slots in cb_ex_external are hardcoded to a 16-byte pitch (see the
+    // `l1_write_addr_external += 16` increments below).  Each NOC read writes
+    // datum_size_bytes into its slot, so datum_size_bytes > 16 would overflow
+    // into the next core's slot and silently corrupt the reduction.  Zero-fill
+    // does not fix this; the slot pitch itself would need to grow.
+    static_assert(datum_size_bytes <= 16,
+                  "cb_ex_external slot pitch is hardcoded to 16 bytes; "
+                  "datum_size_bytes must be <= 16 or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
 
@@ -247,6 +255,20 @@ void kernel_main() {
         cb_ex_external_tiles_required++;
     }
 
+    // Whether the cb_ex_external buffer needs to be zero-filled before each
+    // pass. Two independent sources of stale CB contents:
+    //   (A) intra-slot gap: each per-core slot is 16 bytes wide but the NOC
+    //       read writes only the first datum_size_bytes; bytes
+    //       [datum_size_bytes, 16) of every used slot need to be zero.
+    //       Required iff datum_size_bytes < 16 (compile-time check).
+    //   (B) trailing tile gap: when the meaningful data does not fill the last
+    //       tile exactly, the tail bytes need to be zero.
+    bool needs_cb_ex_external_zero_fill = true;
+    if constexpr (datum_size_bytes >= 16) {
+        needs_cb_ex_external_zero_fill = (num_out_blocks_padded * num_mcast_cores * 16) <
+                                         cb_ex_external_tiles_required * single_tile_size_bytes;
+    }
+
         index_b_offset = 0;
         for (uint32_t b = 0; b < num_batches; ++b) {
             index_g_offset = 0;
@@ -261,8 +283,31 @@ void kernel_main() {
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
-                    uint32_t cb_ex_external_bytes_written = 0;
                     cb_ex_external.reserve_back(cb_ex_external_tiles_required);
+
+                    // Zero-fill the reserved cb_ex_external region so that bytes not written
+                    // by the per-core NOC reads do not corrupt the downstream reduce_tile sum.
+                    // cur_read_iteration == 2 does not write to cb_ex_external (no matching
+                    // push_back below) so skip the zero-fill there.
+                    if (needs_cb_ex_external_zero_fill && (cur_read_iteration == 0 || cur_read_iteration == 1)) {
+                        experimental::UnicastEndpoint zeros_ep;
+                        uint32_t zero_dst_addr = l1_write_addr_external;
+                        uint32_t bytes_remaining = cb_ex_external_tiles_required * single_tile_size_bytes;
+                        while (bytes_remaining > 0) {
+                            const uint32_t chunk =
+                                bytes_remaining > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_remaining;
+                            noc.async_read(
+                                zeros_ep,
+                                experimental::CoreLocalMem<uint32_t>(zero_dst_addr),
+                                chunk,
+                                {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = MEM_ZEROS_BASE},
+                                {});
+                            zero_dst_addr += chunk;
+                            bytes_remaining -= chunk;
+                        }
+                        noc.async_read_barrier();
+                    }
+
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual, out_block_hw_actual;
                         if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -301,17 +346,15 @@ void kernel_main() {
                                 cb_ex2_partial.wait_front(1);
                             }
 
-                            // read self Ex partial - on the first iteration, read a full tile for overwriting
-                            // garbage in L1, on subsequent just treat it as another core
+                            // read self Ex partial - cb_ex_external is zero-initialised at the
+                            // start of this cur_read_iteration, so this slot is treated the same
+                            // as every other core's slot (datum_size_bytes wide; remaining bytes
+                            // already zero).
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? cb_ex_partial.get_read_ptr() : cb_ex2_partial.get_read_ptr();
                             experimental::UnicastEndpoint remote_ep;
-                            uint32_t read_size = (cb_ex_external_bytes_written % single_tile_size_bytes > 0)
-                                                     ? num_bytes_read
-                                                     : single_tile_size_bytes;
-                            noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), read_size, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
+                            noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
                             l1_write_addr_external += 16;
-                            cb_ex_external_bytes_written += 16;
                             noc.async_read_barrier();
 
                             if constexpr (num_mcast_cores > 1) {
@@ -321,19 +364,9 @@ void kernel_main() {
 
                                 // read data from other cores
                                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                                    // When crossing a tile boundary, clear the new tile by
-                                    // reading a full tile from the partial buffer (mostly
-                                    // zeros).  Without this, stale L1 data in the un-written
-                                    // positions corrupts the reduce_tile sum.
-                                    if (cb_ex_external_bytes_written % single_tile_size_bytes == 0) {
-                                        experimental::UnicastEndpoint clear_ep;
-                                        noc.async_read(clear_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), single_tile_size_bytes, {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par}, {});
-                                        noc.async_read_barrier();
-                                    }
                                     experimental::UnicastEndpoint remote_ep;
                                     noc.async_read(remote_ep, experimental::CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += 16;
-                                    cb_ex_external_bytes_written += 16;
                                     noc.async_read_barrier();
                                 }
                             }
