@@ -388,9 +388,11 @@ void kernel_main() {
                         // KV sequence (k_num_chunks-1), not just this core's last chunk
                         // (k_chunk_end-1). This ensures only the core owning the partial
                         // last page applies the mask; other cores' valid pages are unaffected.
+                        // Use <true> to pop cb_mask_in after applying so the CB is drained
+                        // for the next trace replay.
                         if (k_chunk == k_num_chunks - 1) {
                             reconfig_data_format(cb_qk_im, cb_mask_in);
-                            add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
                     } else {
                         if constexpr (use_attention_mask) {
@@ -403,6 +405,17 @@ void kernel_main() {
                     if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
+                    }
+                }
+
+                // Worker CB drain: the writer always pushes cb_mask_in for every active core.
+                // A worker that doesn't own k_num_chunks-1 never enters the apply path above
+                // and would leave cb_mask_in unconsumed, causing a CB-full stall on the next
+                // trace replay. Drain it at the worker's own last k_chunk without applying.
+                if constexpr (is_causal) {
+                    if (k_chunk == k_chunk_end - 1 && k_chunk_end <= k_num_chunks - 1) {
+                        cb_wait_front(cb_mask_in, qk_chunk_tiles_dynamic);
+                        cb_pop_front(cb_mask_in, qk_chunk_tiles_dynamic);
                     }
                 }
 
