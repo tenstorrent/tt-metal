@@ -211,6 +211,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
 def test_ttnn_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
@@ -221,6 +226,7 @@ def test_ttnn_dispatch_combine(
     num_links,
     topology,
     use_predictable_data,
+    dispatched_buffer_layout,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
     torch.manual_seed(42)
@@ -433,6 +439,8 @@ def test_ttnn_dispatch_combine(
         init_zeros=True,
     )
 
+    tt_dispatched_buffer = ttnn.to_layout(tt_dispatched_buffer, layout=dispatched_buffer_layout)
+
     # Run TTNN combine
     logger.debug("Running TTNN combine...")
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
@@ -514,10 +522,16 @@ def test_ttnn_dispatch_combine(
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
 def test_ttnn_dispatch_combine_overflow(
     mesh_device,
     num_links,
     topology,
+    dispatched_buffer_layout,
 ):
     """Test that dispatch/combine hangs (or corrupts) when token count exceeds max_dispatched_tokens_per_expert.
 
@@ -638,6 +652,8 @@ def test_ttnn_dispatch_combine_overflow(
     )
 
     logger.info("[overflow test] Running combine with overflow data...")
+
+    tt_dispatched_buffer = ttnn.to_layout(tt_dispatched_buffer, layout=dispatched_buffer_layout)
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
     ttnn.synchronize_device(mesh_device)
     logger.info("[overflow test] Combine completed (did not hang)")
@@ -660,7 +676,12 @@ def test_ttnn_dispatch_combine_overflow(
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology):
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched_buffer_layout):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
     test_ttnn_dispatch_combine(
         mesh_device=mesh_device,
@@ -672,4 +693,5 @@ def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology):
         num_links=num_links,
         topology=topology,
         use_predictable_data=True,
+        dispatched_buffer_layout=dispatched_buffer_layout,
     )
