@@ -281,6 +281,7 @@ public:
     // restart across submeshes. Not part of the public API.
     void drain_cqs_for_quiesce();
     void restart_fabric_workers_for_quiesce();
+    void wait_for_fabric_workers_ready_for_quiesce();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);

@@ -160,7 +160,12 @@ public:
         const std::unordered_set<uint32_t>& skip_soft_reset_channels = {});
     // Terminate fabric MUX tensix worker cores and re-launch them fresh.
     // Called during quiesce to ensure MUX channel state is reset between iterations.
+    // Phase 1: quiesce_and_restart_fabric_workers() — terminate + reconfigure + relaunch all cores.
+    // Phase 2: wait_for_fabric_workers_ready() — poll for handshake completion + health check.
+    // The mesh-level caller MUST run Phase 1 on ALL devices before running Phase 2 on any
+    // device, so that sender and receiver ERISCs are both running before the handshake poll.
     void quiesce_and_restart_fabric_workers();
+    void wait_for_fabric_workers_ready();
     // Puts device into reset
     bool close() override;
 

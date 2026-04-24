@@ -1468,11 +1468,33 @@ void MeshDeviceImpl::restart_fabric_workers_for_quiesce() {
             submesh_ptr->restart_fabric_workers_for_quiesce();
         }
     }
-    // Restart fabric workers for devices in this mesh.
+    // Phase 1 per-device: terminate + reconfigure + relaunch all cores.
+    // Does NOT wait for handshake completion — that is deferred to
+    // wait_for_fabric_workers_ready_for_quiesce() so that all devices
+    // have their sender and receiver ERISCs running before any handshake poll.
     for (auto* idev : get_devices()) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             dev->quiesce_and_restart_fabric_workers();
+        }
+    }
+}
+
+void MeshDeviceImpl::wait_for_fabric_workers_ready_for_quiesce() {
+    // Recursively wait for submeshes first (depth-first).
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->wait_for_fabric_workers_ready_for_quiesce();
+        }
+    }
+    // Phase 2 per-device: poll for ERISC handshake completion + Tensix MUX readiness.
+    // By this point, ALL devices across ALL meshes have completed Phase 1 (relaunch).
+    // Both sender and receiver ERISCs are running, so the natural sender-receiver
+    // handshake will complete without host MAGIC injection.
+    for (auto* idev : get_devices()) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->wait_for_fabric_workers_ready();
         }
     }
 }
@@ -1501,8 +1523,11 @@ void MeshDeviceImpl::quiesce_internal() {
     }
 
     // Phase 2: All CQs are drained; now safely restart fabric workers.
-    // Reset fabric MUX worker cores so stale router state from the previous
-    // iteration doesn't cause data-mismatch / NOC hangs on the next dispatch.
+    // Two-pass approach: first relaunch all cores on all devices, then wait for
+    // handshake completion on all devices.  This ensures sender and receiver ERISCs
+    // are both running before any handshake poll — fixing the FIX P regression where
+    // per-device sequential processing caused Device 4's receiver to complete the
+    // handshake before Device 0's sender was even launched.
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
             submesh_ptr->restart_fabric_workers_for_quiesce();
@@ -1512,6 +1537,19 @@ void MeshDeviceImpl::quiesce_internal() {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev) {
             dev->quiesce_and_restart_fabric_workers();
+        }
+    }
+
+    // Phase 3: All devices have relaunched; now wait for handshake completion.
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->wait_for_fabric_workers_ready_for_quiesce();
+        }
+    }
+    for (auto* idev : get_devices()) {
+        auto* dev = dynamic_cast<Device*>(idev);
+        if (dev) {
+            dev->wait_for_fabric_workers_ready();
         }
     }
 }
@@ -1772,6 +1810,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
 void MeshDevice::drain_cqs_for_quiesce() { pimpl_->drain_cqs_for_quiesce(); }
 void MeshDevice::restart_fabric_workers_for_quiesce() { pimpl_->restart_fabric_workers_for_quiesce(); }
+void MeshDevice::wait_for_fabric_workers_ready_for_quiesce() { pimpl_->wait_for_fabric_workers_ready_for_quiesce(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
     return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);
