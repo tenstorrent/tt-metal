@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -10,6 +11,132 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
+
+
+# ---------------------------------------------------------------------------
+# DeepseekMetadata binary layout (see models/demos/deepseek_v3_b1/metadata/metadata.hpp):
+#   bytes 0..63   : 13 scalar fields + 3 uint32 padding words (64B header)
+#   bytes 64..191 : p_indices[32] (uint32)   -> 128B
+#   bytes 192..255: p_scores[32]  (uint16)   ->  64B packed bfloat16
+# ---------------------------------------------------------------------------
+_METADATA_BYTES = 256
+_METADATA_U32_WORDS = _METADATA_BYTES // 4  # 64
+_METADATA_P_INDICES_OFFSET = 64
+_METADATA_P_SCORES_OFFSET = 192
+
+
+def _decode_p_metadata(ttnn_metadata, k: int, device_idx: int | None = None):
+    """
+    Extract (p_indices[:k], p_scores[:k]) from the device-side metadata tensor.
+
+    For a single-device tensor pass device_idx=None.  For a mesh tensor, pass
+    the index of the final (producing) device, which selects the right shard.
+    The returned `p_scores` is torch.bfloat16 and `p_indices` is torch.int64.
+    """
+    if device_idx is None:
+        meta_torch = ttnn.to_torch(ttnn_metadata)
+    else:
+        shards = ttnn.get_device_tensors(ttnn_metadata)
+        meta_torch = ttnn.to_torch(shards[device_idx])
+
+    meta_bytes = meta_torch.cpu().reshape(-1).numpy().astype(np.uint32).tobytes()
+    assert len(meta_bytes) == _METADATA_BYTES, (
+        f"metadata tensor must be exactly {_METADATA_BYTES}B; got {len(meta_bytes)}"
+    )
+
+    p_indices_np = np.frombuffer(
+        meta_bytes[_METADATA_P_INDICES_OFFSET : _METADATA_P_INDICES_OFFSET + 4 * k],
+        dtype=np.uint32,
+    ).copy()
+    p_scores_u16 = np.frombuffer(
+        meta_bytes[_METADATA_P_SCORES_OFFSET : _METADATA_P_SCORES_OFFSET + 2 * k],
+        dtype=np.uint16,
+    ).copy()
+
+    # Reinterpret bf16 bit-pattern as fp32 by promoting to the high 16 bits.
+    p_scores_f32 = (p_scores_u16.astype(np.uint32) << 16).view(np.float32).copy()
+
+    return (
+        torch.from_numpy(p_indices_np.astype(np.int64)),
+        torch.from_numpy(p_scores_f32).to(torch.bfloat16),
+    )
+
+
+def _assert_p_metadata_matches_golden(
+    ttnn_metadata,
+    *,
+    k: int,
+    torch_scores: torch.Tensor,
+    torch_indices: torch.Tensor,
+    p: float,
+    temperature: float,
+    rand_value: float,
+    device_idx: int | None = None,
+):
+    """Compare kernel-written p_scores/p_indices against the PyTorch golden."""
+    _, _, p_scores_golden, p_indices_golden = SamplingOp.golden(
+        torch_scores,
+        torch_indices,
+        k=k,
+        p=p,
+        temperature=temperature,
+        rand_value=rand_value,
+        return_p_metadata=True,
+    )
+
+    p_indices_kernel, p_scores_kernel = _decode_p_metadata(ttnn_metadata, k=k, device_idx=device_idx)
+
+    logger.info(f"Kernel p_indices[:{k}]: {p_indices_kernel.tolist()}")
+    logger.info(f"Golden p_indices[:{k}]: {p_indices_golden.tolist()}")
+    logger.info(f"Kernel p_scores[:{k}]: {p_scores_kernel.float().tolist()}")
+    logger.info(f"Golden p_scores[:{k}]: {p_scores_golden.float().tolist()}")
+
+    assert p_indices_kernel.tolist() == p_indices_golden.tolist(), (
+        f"p_indices mismatch:\n  kernel: {p_indices_kernel.tolist()}\n"
+        f"  golden: {p_indices_golden.tolist()}"
+    )
+
+    # p_scores comes out of TRISC's bf16 softmax + reciprocal LLK, which has a
+    # known relative-error floor (~2-3%) on top of bf16 round-off. Two distinct
+    # precision artifacts can show up here, and we want both of them to be
+    # tolerated *for the right reason* (so a real bug still surfaces clearly):
+    #
+    #   1. Kept-tokens boundary disagreement. The kernel and golden may decide
+    #      to keep `kept_tokens` differing by 1 because their cumsum crosses
+    #      `p` at slightly different indices. The disputed entry is always at
+    #      the top-P cutoff and is therefore necessarily small (< ~`p_scores_boundary`).
+    #      We accept positions where one side is exactly 0 and the other side
+    #      is below `p_scores_boundary`.
+    #
+    #   2. Tail / dominant-logit relative error. When one logit dominates, the
+    #      LLK reciprocal error shows up as ~3% on the dominant value and can
+    #      compound down the tail. A mixed (rtol, atol) tolerance handles
+    #      both endpoints: rtol for big values, atol for small.
+    p_scores_rtol = 5e-2
+    p_scores_atol = 1e-2
+    p_scores_boundary = 2e-2
+
+    kernel_f32 = p_scores_kernel.float()
+    golden_f32 = p_scores_golden.float()
+    diff = (kernel_f32 - golden_f32).abs()
+    bound = p_scores_atol + p_scores_rtol * golden_f32.abs()
+
+    fails_strict = diff > bound
+    boundary_ok = (
+        ((kernel_f32 == 0) & (golden_f32.abs() < p_scores_boundary))
+        | ((golden_f32 == 0) & (kernel_f32.abs() < p_scores_boundary))
+    )
+    real_failures = fails_strict & ~boundary_ok
+
+    if real_failures.any():
+        worst = (diff - bound).max().item()
+        raise AssertionError(
+            f"p_scores not allclose at rtol={p_scores_rtol}, atol={p_scores_atol}, "
+            f"boundary={p_scores_boundary} "
+            f"(max abs diff = {diff.max().item()}, worst over-bound = {worst}):\n"
+            f"  kernel: {kernel_f32.tolist()}\n"
+            f"  golden: {golden_f32.tolist()}"
+        )
 
 
 def _mesh_shape(mesh_device):
@@ -329,18 +456,24 @@ def _build_metadata_tensor(device, final_core, k: int, p: float, temperature: fl
     Build a single-core L1 tensor matching the `DeepseekMetadata` struct layout
     (see models/demos/deepseek_v3_b1/metadata/metadata.hpp).
 
-    The struct has 10 leading uint32 fields, followed by `float temperature`,
-    `uint32_t k`, `float probability_mass_threshold`. We pack everything into a
-    1x16 uint32 tensor (64B, rounded up from sizeof=52B) with the sampling-
-    relevant fields at indices 10/11/12 and zeros elsewhere.
+    The struct is 256B total:
+      - 13 leading scalar fields (52B) + 3 uint32 padding (12B) = 64B header
+      - p_indices[32] uint32 (128B)
+      - p_scores[32]  uint16 (64B, packed bfloat16)
+
+    We pack everything into a 1x64 uint32 tensor (256B) with the sampling-
+    relevant fields at indices 10/11/12. Remaining words are zeroed so the
+    test can predict what the kernel will overwrite.
     """
-    metadata_words = torch.zeros((1, 16), dtype=torch.uint32)
+    metadata_words = torch.zeros((1, _METADATA_U32_WORDS), dtype=torch.uint32)
     metadata_words[0, 10] = float_to_uint32(temperature)
     metadata_words[0, 11] = int(k)
     metadata_words[0, 12] = float_to_uint32(p)
 
     final_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(final_core, final_core)})
-    metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    metadata_shard_spec = ttnn.ShardSpec(
+        final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR
+    )
     metadata_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -364,6 +497,7 @@ def _run_sampling_topk_single_device(
     final_core_idx: int,
     num_internal_iterations: int,
     from_metadata: bool = False,
+    copy_probabilities: bool = False,
 ):
     """
     Run the top-K sampling kernel (k>1 path) on a single device with rigged
@@ -469,7 +603,9 @@ def _run_sampling_topk_single_device(
     )
 
     ttnn_metadata = None
-    if from_metadata:
+    # copy_probabilities requires the metadata tensor, so build one automatically
+    # if the caller asked for probability copy-out but not explicit metadata input.
+    if from_metadata or copy_probabilities:
         ttnn_metadata = _build_metadata_tensor(device, final_core, k=k, p=p, temperature=temperature)
         logger.info(
             f"Metadata tensor populated: k={k}, p={p}, temperature={temperature}, "
@@ -489,6 +625,7 @@ def _run_sampling_topk_single_device(
         final_mesh_coord=None,
         num_internal_iterations=num_internal_iterations,
         metadata_output_tensor=ttnn_metadata,
+        copy_probabilities=copy_probabilities,
     )
 
     output_torch = ttnn.to_torch(ttnn_result)
@@ -512,6 +649,17 @@ def _run_sampling_topk_single_device(
         f"Kernel selected {result_idx} but golden selected {golden_selected} " f"(rand_value={rand_value})"
     )
 
+    if copy_probabilities:
+        _assert_p_metadata_matches_golden(
+            ttnn_metadata,
+            k=k,
+            torch_scores=torch_scores,
+            torch_indices=torch_indices,
+            p=p,
+            temperature=temperature,
+            rand_value=rand_value,
+        )
+
     logger.info(
         f"Sampling top-K test passed. seed={seed}, k={k}, "
         f"final_core_idx={final_core_idx}, selected={result_idx}, rand={rand_value}"
@@ -519,20 +667,20 @@ def _run_sampling_topk_single_device(
 
 
 @pytest.mark.parametrize(
-    "seed, final_core_idx, p, temperature, num_internal_iterations, k, from_metadata",
+    "seed, final_core_idx, p, temperature, num_internal_iterations, k, from_metadata, copy_probabilities",
     [
-        (2005, 100, 0.95, 0.6, 100, 32, True),
-        (17, 0, 0.995, 0.4, 1, 32, True),
-        (1337, 50, 1.0, 0.8, 1, 32, True),
-        (4242, 73, 0.1, 0.6, 1, 32, True),
-        (52098, 100, 0.95, 0.6, 100, 1, True),
-        (52098, 100, 1.0, 10, 1, 16, True),
+        (2005, 100, 0.95, 0.6, 100, 32, True, True),
+        (17, 0, 0.995, 0.4, 1, 32, True, True),
+        (1337, 50, 1.0, 0.8, 1, 32, True, True),
+        (4242, 73, 0.1, 0.6, 1, 32, True, True),
+        (52098, 100, 0.95, 0.6, 100, 1, True, True),
+        (52098, 100, 1.0, 10, 1, 16, True, True),
     ],
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_single_device(
-    device, seed, p, temperature, final_core_idx, num_internal_iterations, k, from_metadata
+    device, seed, p, temperature, final_core_idx, num_internal_iterations, k, from_metadata, copy_probabilities
 ):
     """
     Test k=32 top-K sampling path for a single device and 101 cores.
@@ -550,6 +698,7 @@ def test_sampling_topk_single_device(
         final_core_idx=final_core_idx,
         num_internal_iterations=num_internal_iterations,
         from_metadata=from_metadata,
+        copy_probabilities=copy_probabilities,
     )
 
 
@@ -562,6 +711,7 @@ def _run_sampling_topk_mesh(
     final_core_idx: int,
     final_mesh_coord: tuple,
     from_metadata: bool = False,
+    copy_probabilities: bool = False,
 ):
     """
     Run the top-K sampling kernel on a multi-device mesh with rigged scores.
@@ -714,12 +864,16 @@ def _run_sampling_topk_mesh(
     ttnn.synchronize_device(mesh_device)
 
     ttnn_metadata = None
-    if from_metadata:
-        metadata_words_per_device = torch.zeros((num_devices, 1, 16), dtype=torch.uint32)
+    if from_metadata or copy_probabilities:
+        metadata_words_per_device = torch.zeros(
+            (num_devices, 1, _METADATA_U32_WORDS), dtype=torch.uint32
+        )
         metadata_words_per_device[:, 0, 10] = float_to_uint32(temperature)
         metadata_words_per_device[:, 0, 11] = int(k)
         metadata_words_per_device[:, 0, 12] = float_to_uint32(p)
-        metadata_shard_spec = ttnn.ShardSpec(final_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+        metadata_shard_spec = ttnn.ShardSpec(
+            final_core_grid, (1, _METADATA_U32_WORDS), ttnn.ShardOrientation.ROW_MAJOR
+        )
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -755,6 +909,7 @@ def _run_sampling_topk_mesh(
         indices_scratch_tensor=ttnn_indices_scratch,
         mesh_axis="x",
         metadata_output_tensor=ttnn_metadata,
+        copy_probabilities=copy_probabilities,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -786,6 +941,18 @@ def _run_sampling_topk_mesh(
         f"Kernel selected {result_idx} but golden selected {golden_selected} " f"(rand_value={rand_value})"
     )
 
+    if copy_probabilities:
+        _assert_p_metadata_matches_golden(
+            ttnn_metadata,
+            k=k,
+            torch_scores=torch_scores_all.reshape(1, -1),
+            torch_indices=torch_indices_all.reshape(1, -1),
+            p=p,
+            temperature=temperature,
+            rand_value=rand_value,
+            device_idx=final_device_idx,
+        )
+
     logger.info(f"Sampling top-K mesh test passed. seed={seed}, k={k}, " f"selected={result_idx}, rand={rand_value}")
 
 
@@ -806,22 +973,30 @@ def create_fabric_router_config(max_payload_size):
     indirect=["device_params"],
 )
 @pytest.mark.parametrize(
-    "final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata",
+    "final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata, copy_probabilities",
     [
-        ((1, 1), 2005, 100, 0.95, 0.6, 32, True),
-        ((1, 0), 52098, 0, 0.995, 0.4, 16, False),
-        ((2, 1), 1337, 50, 1.0, 10.0, 32, True),
-        ((2, 0), 4242, 73, 0.1, 0.6, 32, False),
-        ((0, 0), 999, 0, 1.0, 0.05, 32, True),
-        ((0, 1), 996, 97, 0.8, 50.0, 9, False),
-        ((3, 0), 70, 7, 0.9, 22.0, 1, False),
-        ((3, 1), 5, 39, 0.5, 6.0, 1, False),
+        ((1, 1), 2005, 100, 0.95, 0.6, 32, True, True),
+        ((1, 0), 52098, 0, 0.995, 0.4, 16, True, True),
+        ((2, 1), 1337, 50, 1.0, 10.0, 32, True, True),
+        ((2, 0), 4242, 73, 0.1, 0.6, 32, True, True),
+        ((0, 0), 999, 0, 1.0, 0.05, 32, True, True),
+        ((0, 1), 996, 97, 0.8, 50.0, 9, True, True),
+        ((3, 0), 70, 7, 0.9, 22.0, 1, True, True),
+        ((3, 1), 5, 39, 0.5, 6.0, 1, True, True),
     ],
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
 def test_sampling_topk_mesh(
-    bh_2d_mesh_device, final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata
+    bh_2d_mesh_device,
+    final_mesh_coord,
+    seed,
+    final_core_idx,
+    p,
+    temperature,
+    k,
+    from_metadata,
+    copy_probabilities,
 ):
     """
     Mesh extension test for k=32 top-K sampling on a 4x2 mesh.
@@ -849,4 +1024,5 @@ def test_sampling_topk_mesh(
         final_core_idx=final_core_idx,
         final_mesh_coord=final_mesh_coord,
         from_metadata=from_metadata,
+        copy_probabilities=copy_probabilities,
     )

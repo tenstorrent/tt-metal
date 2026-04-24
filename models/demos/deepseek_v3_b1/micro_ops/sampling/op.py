@@ -38,11 +38,12 @@ class SamplingOp:
     def golden(
         scores: torch.Tensor,
         indices: torch.Tensor,
-        k: int = 1,
+        k: int = 32,
         p: float = 1.0,
-        temperature: float = 1.0,
+        temperature: float = 0.6,
         rand_value: float | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return_p_metadata: bool = False,
+    ):
         """
         PyTorch reference for sampling.
 
@@ -109,6 +110,23 @@ class SamplingOp:
                 break
 
         selected_index = kept_indices[selected_pos].to(torch.uint32)
+
+        if return_p_metadata:
+            # Golden layout for DeepseekMetadata.p_scores / p_indices:
+            #   p_scores[0, num_kept) = kept_probs (rescaled, in bf16)
+            #   p_scores[num_kept, actual_k) = 0.0 (zeroed by kernel after top-P cutoff)
+            #   p_scores[actual_k, 32) = undefined (caller should not assert).
+            #   p_indices[0, actual_k) = topk_indices.
+            p_scores_golden = torch.zeros(actual_k, dtype=torch.bfloat16)
+            p_scores_golden[:num_kept] = kept_probs.to(torch.bfloat16)
+            p_indices_golden = topk_indices[:actual_k].to(torch.int64)
+            return (
+                selected_index.reshape(1, 1),
+                topk_indices.reshape(1, -1),
+                p_scores_golden,
+                p_indices_golden,
+            )
+
         return selected_index.reshape(1, 1), topk_indices.reshape(1, -1)
 
     @staticmethod
@@ -117,7 +135,7 @@ class SamplingOp:
         indices_tensor,
         output_index_tensor,
         k: int = 32,
-        p: float = 0.95,
+        p: float = 1.0,
         temperature: float = 0.6,
         seed: int = 520,
         rand_output_tensor=None,

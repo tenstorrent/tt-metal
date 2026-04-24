@@ -1601,30 +1601,78 @@ struct TopKSampling {
                         }
                         DPRINT << ENDL();
 
-                        float cum_prob = 0.0f;
+                        // Top-P filter.
+                        //
+                        // Fast path: p >= 1.0 means "keep every token" (the cum mass of a
+                        // valid distribution can never exceed 1.0).  Skip the loop entirely
+                        // -- and skip the rescale below -- to avoid redundant divides that
+                        // bleed bf16 precision (see the long comment in the rescale block).
+                        //
+                        // General path: clamp the comparison at 1.0 so bf16 accumulation
+                        // noise pushing `cum_prob_acc` slightly above 1.0 cannot trip a
+                        // false-positive break (the `min` is what makes the kernel agree
+                        // with the math when p is close to but below 1.0).
+                        const bool skip_rescale = (p >= 1.0f);
                         uint32_t kept_tokens = K;
-                        for (uint32_t i = 0; i < K; ++i) {
-                            uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                            DPRINT << "Accumulating probability " << BF16(prob) << " sum so far " << cum_prob << ENDL();
-                            cum_prob += bf16_to_float(prob);
-                            DPRINT << "Cumulative probability " << cum_prob << ENDL();
-                            if (cum_prob > p) {
-                                kept_tokens = i + 1;
-                                break;
+                        if (!skip_rescale) {
+                            float cum_prob_acc = 0.0f;
+                            for (uint32_t i = 0; i < K; ++i) {
+                                uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
+                                cum_prob_acc += bf16_to_float(prob);
+                                if (std::min(cum_prob_acc, 1.0f) > p) {
+                                    kept_tokens = i + 1;
+                                    break;
+                                }
                             }
                         }
+                        DPRINT << "Top-P kept=" << kept_tokens << " skip_rescale=" << (uint32_t)skip_rescale << ENDL();
 
-                        DPRINT << "Top-P kept=" << kept_tokens << " cum_prob=" << cum_prob << ENDL();
-
-                        float cum_sum = 0.0f;
-                        uint32_t selected_index = global_indices[0];
-                        for (uint32_t i = 0; i < kept_tokens; ++i) {
-                            uint16_t prob = (i < 16) ? prob_u16[i] : prob_u16[FACE_ELEMS + (i - 16)];
-                            cum_sum += bf16_to_float(prob) / cum_prob;
-                            if (cum_sum > bf16_to_float(rand)) {
-                                selected_index = global_indices[i];
-                                break;
+                        // Compute the rescale denominator from a *clean* second-pass sum
+                        // over exactly the kept tokens.  Don't reuse the filter-loop value
+                        // because (a) it carries the spurious bf16-noise overshoot, and
+                        // (b) for early breaks it is the partial sum at the break point,
+                        // not the sum of the full kept set.  Then convert to a reciprocal
+                        // so the per-element rescale becomes a multiply (one rounding)
+                        // rather than a divide (slower, same precision).
+                        float inv_cum = 1.0f;
+                        if (!skip_rescale) {
+                            float cum_kept = 0.0f;
+                            for (uint32_t i = 0; i < kept_tokens; ++i) {
+                                uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                                cum_kept += bf16_to_float(prob_u16[tile_idx]);
                             }
+                            inv_cum = 1.0f / cum_kept;
+                        }
+
+                        // Rescale (or pass-through for the fast path) and run the
+                        // inverse-CDF selection in the same pass.  Default `selected_index`
+                        // to the last kept token so that, if bf16 noise leaves the running
+                        // `cum_sum` a hair under `rand_f`, we still return a valid winner
+                        // instead of silently falling back to index 0.
+                        float cum_sum = 0.0f;
+                        uint32_t selected_index = global_indices[kept_tokens - 1];
+                        bool selected = false;
+                        float rand_f = bf16_to_float(rand);
+                        for (uint32_t i = 0; i < kept_tokens; ++i) {
+                            uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                            uint16_t prob = prob_u16[tile_idx];
+                            float prob_f = bf16_to_float(prob);
+                            float final_prob = skip_rescale ? prob_f : prob_f * inv_cum;
+                            cum_sum += final_prob;
+                            if (!skip_rescale) {
+                                prob_u16[tile_idx] = float_to_bf16_rne(final_prob);
+                            }
+                            if (!selected && cum_sum > rand_f) {
+                                selected_index = global_indices[i];
+                                selected = true;
+                            }
+                        }
+                        // Zero out any top-K entries that got filtered by the top-P cutoff
+                        // so callers see a clean [rescaled..., 0, 0, ...] distribution in
+                        // p_scores. (No-op for the fast path since kept_tokens == K.)
+                        for (uint32_t i = kept_tokens; i < K; ++i) {
+                            uint32_t tile_idx = (i < 16) ? i : FACE_ELEMS + (i - 16);
+                            prob_u16[tile_idx] = 0;
                         }
 
                         DPRINT << "Selected index=" << selected_index << ENDL();
@@ -1635,6 +1683,47 @@ struct TopKSampling {
                         if constexpr (CTArgs::rand_output_addr != 0) {
                             auto rand_out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::rand_output_addr);
                             rand_out[0] = rand;
+                        }
+
+                        if constexpr (CTArgs::copy_probabilities) {
+                            // Scatter the 32 rescaled top-P probabilities out of the two-face
+                            // tile layout into the contiguous `p_scores[32]` metadata slot,
+                            // and copy the 32 winning indices into `p_indices[32]`. Entries
+                            // beyond `K` are left as whatever is in the tile (garbage, as
+                            // documented in metadata.hpp).
+                            //
+                            // Issue all three packet writes back-to-back so the NOC engine can
+                            // overlap them, then drain with a single barrier:
+                            //   * scores face 0 (tile elems  0..15) -> p_scores[ 0..15]
+                            //   * scores face 1 (tile elems 16..31) -> p_scores[16..31]
+                            //   * winner indices (32 contiguous u32) -> p_indices[ 0..31]
+                            constexpr uint32_t HALF_SCORES_BYTES = 16 * sizeof(uint16_t);
+                            constexpr uint32_t FACE_BYTES_OFFSET = FACE_ELEMS * sizeof(uint16_t);
+
+                            const uint32_t scores_src_face0 = get_read_ptr(CTArgs::softmax_out_cb);
+                            
+                            const uint32_t scores_dst_face0 =
+                                CTArgs::metadata_output_l1_addr +
+                                offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
+                            
+
+                            noc_async_write_one_packet(
+                                scores_src_face0, get_noc_addr(scores_dst_face0), HALF_SCORES_BYTES);
+                            const uint32_t scores_src_face1 = scores_src_face0 + FACE_BYTES_OFFSET;
+                            const uint32_t scores_dst_face1 = scores_dst_face0 + HALF_SCORES_BYTES;
+                            noc_async_write_one_packet(
+                                scores_src_face1, get_noc_addr(scores_dst_face1), HALF_SCORES_BYTES);
+
+
+                            const uint32_t indices_src_l1 =
+                                get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes;
+                            const uint32_t indices_dst_l1 =
+                                CTArgs::metadata_output_l1_addr +
+                                offsetof(deepseek_b1_ops::DeepseekMetadata, p_indices);
+                            noc_async_write_one_packet(
+                                indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(uint32_t));
+
+                            noc_async_write_barrier();
                         }
 
                         cb_pop_front(CTArgs::softmax_out_cb, 1);
