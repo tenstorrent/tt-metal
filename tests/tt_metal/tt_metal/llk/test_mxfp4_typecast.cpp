@@ -4,14 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <iomanip>
-#include <iostream>
 #include <random>
-#include <sstream>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -28,9 +23,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/impl/data_format/mx_common.hpp"
-
 #include "device_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -38,81 +30,6 @@ namespace tt::tt_metal {
 using std::vector;
 
 namespace unit_tests::llk::mxfp4_typecast {
-
-constexpr tt::tt_metal::mx::FormatParams kMxFp4Params = {
-	.block_size = 32,
-	.scale_bias = 0x7F,
-	.elem_exp_bits = 2,
-	.elem_man_bits = 1,
-	.elem_exp_bias = 1,
-	.elem_exp_max_unbiased = 2,
-	.elem_exp_min_unbiased = 0,
-	.elem_exp_subnorm_encoding = 0,
-	.elem_man_max = 0x1,
-	.elem_width_bits = 4,
-	.elem_width_storage_bits = 4,
-	.sat_supported = true,
-	.elem_sat_pos_bits = 0x7,
-	.elem_sat_neg_bits = 0xF,
-	.inf_rep = tt::tt_metal::mx::InfNanRep::NotRepresentable,
-	.nan_rep = tt::tt_metal::mx::InfNanRep::NotRepresentable,
-};
-
-static void dump_mxfp4_tile_exps(const vector<uint32_t>& packed, uint32_t tile_index, const char* label) {
-	if (std::getenv("TT_METAL_SKIP_MXFP4_EXPS") != nullptr) {
-		return;
-	}
-	if (packed.empty()) {
-		log_info(tt::LogTest, "{}: packed data empty", label);
-		return;
-	}
-	constexpr uint32_t kTileHW = 1024;
-	uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
-	auto word_counts = tt::tt_metal::mx::compute_tile_word_counts(kTileHW, l1_alignment, kMxFp4Params);
-	uint32_t words_per_tile = word_counts.exp_words + word_counts.elem_words;
-	size_t word_offset = static_cast<size_t>(tile_index) * words_per_tile;
-	if (packed.size() < word_offset + words_per_tile) {
-		log_info(
-			tt::LogTest,
-			"{}: tile_index {} out of range (packed words={}, words_per_tile={})",
-			label,
-			tile_index,
-			packed.size(),
-			words_per_tile);
-		return;
-	}
-
-	std::vector<uint8_t> exps;
-	tt::tt_metal::mx::unpack_exp_words(
-		tt::stl::make_const_span(packed), word_offset, word_counts.exp_words, word_counts.exp_count, exps);
-
-	const size_t to_print = std::min<size_t>(exps.size(), 32);
-	std::ostringstream oss;
-	for (size_t i = 0; i < to_print; ++i) {
-		if (i != 0) {
-			oss << " ";
-		}
-		oss << static_cast<int>(exps[i]);
-	}
-
-	tt::tt_metal::Tile tile;
-	uint32_t tile_size_api = tt::tile_size(tt::DataFormat::MxFp4);
-	uint32_t tile_size_hw = tile.get_tile_size(tt::DataFormat::MxFp4);
-	std::ostringstream header;
-	header << label << ": tile_index=" << tile_index
-	       << " exp_count=" << word_counts.exp_count
-	       << " exp_bytes=" << word_counts.exp_bytes
-	       << " exp_words=" << word_counts.exp_words
-	       << " elem_words=" << word_counts.elem_words
-	       << " l1_alignment=" << l1_alignment
-	       << " tile_size_api=" << tile_size_api
-	       << " tile_size_hw=" << tile_size_hw;
-	std::ostringstream line;
-	line << label << ": exps[0.." << (to_print > 0 ? to_print - 1 : 0) << "] = " << oss.str();
-	std::cout << header.str() << "\n" << line.str() << std::endl;
-	log_info(tt::LogTest, "{}", header.str());
-	log_info(tt::LogTest, "{}", line.str());
-}
 
 // Run a datacopy kernel with different input/output formats.
 // For Quasar, data is moved via DataflowBuffers (DFBs) and the hardware
@@ -202,7 +119,7 @@ static vector<uint32_t> run_mxfp4_typecast(
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles, src_dram_stride});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles, dst_dram_stride});
 
-    detail::LaunchProgram(dev, program, /*wait_for_completion=*/true);
+    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_buffer, result_vec);
@@ -349,17 +266,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
 	constexpr uint32_t num_tiles = 64;
 	auto src_vec = create_random_vector_of_bfloat16(
 		tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-	auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-		dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-	mxfp4_tc::dump_mxfp4_tile_exps(result_vec, 0, "Float16b->MxFp4 tile0");
-	uint32_t debug_tile_index = num_tiles > 52 ? 52 : 0;
-	if (debug_tile_index != 0) {
-		mxfp4_tc::dump_mxfp4_tile_exps(result_vec, debug_tile_index, "Float16b->MxFp4 tile52");
-	}
-	auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
-	auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
-	EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.5f, /*atol=*/0.5f));
-	EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
+    auto result_vec = mxfp4_tc::run_mxfp4_typecast(
+        dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+    auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
+    auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
+    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.5f, /*atol=*/0.5f));
+    EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
@@ -367,17 +279,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
 	constexpr uint32_t num_tiles = 64;
 	auto src_vec = create_random_vector_of_bfloat16(
 		tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-	auto result_vec = mxfp4_tc::run_mxfp4_typecast(
-		dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-	mxfp4_tc::dump_mxfp4_tile_exps(result_vec, 0, "Float16b->MxFp4Fp32Dest tile0");
-	uint32_t debug_tile_index = num_tiles > 52 ? 52 : 0;
-	if (debug_tile_index != 0) {
-		mxfp4_tc::dump_mxfp4_tile_exps(result_vec, debug_tile_index, "Float16b->MxFp4Fp32Dest tile52");
-	}
-	auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
-	auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
-	EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.5f, /*atol=*/0.5f));
-	EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
+    auto result_vec = mxfp4_tc::run_mxfp4_typecast(
+        dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp4, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+    auto src_floats = mxfp4_tc::bf16_to_floats(src_vec);
+    auto dst_floats = mxfp4_tc::mxfp4_to_floats(result_vec);
+    EXPECT_TRUE(mxfp4_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.5f, /*atol=*/0.5f));
+    EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
 }
 
 // ============================================================================
