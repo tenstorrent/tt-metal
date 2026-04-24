@@ -366,7 +366,7 @@ def block(hidden, block_params: Dict[str, Any], num_heads: int, head_dim: int):
         bias_tensor=block_params["mlp"]["fc1_b"],
         config=_mm_cfg(192, 1280, 5120, dev),
         compute_kernel_config=ckcfg,
-        fused_activation=(ttnn.UnaryOpType.GELU, False),
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
         memory_config=_L1,
     )
     h = ttnn.experimental.minimal_matmul(
