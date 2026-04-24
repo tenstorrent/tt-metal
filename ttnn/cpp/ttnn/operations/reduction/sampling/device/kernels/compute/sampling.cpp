@@ -312,7 +312,7 @@ void top_k() {
         reconfig_data_format_srca(input_transposed_cb_index);
         transpose_wh_init_short(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
-        cb_wait_front(input_transposed_cb_index, Kt);
+        cb_wait_front(input_transposed_cb_index, Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(values_cb_index, 1);
@@ -321,14 +321,13 @@ void top_k() {
             cb_push_back(values_cb_index, 1);
             release_dst();
         }
-        cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_transposed_cb_index, Wt);
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
         transpose_wh_init_short(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
-        cb_wait_front(index_transposed_cb_index, Kt);
+        cb_wait_front(index_transposed_cb_index, Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(output_ind_cb_index, 1);
@@ -337,7 +336,6 @@ void top_k() {
             cb_push_back(output_ind_cb_index, 1);
             release_dst();
         }
-        cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_transposed_cb_index, Wt);
     }
     sfpu::_init_sfpu_config_reg();
