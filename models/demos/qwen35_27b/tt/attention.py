@@ -608,8 +608,11 @@ class Qwen35Attention(LightweightModule):
         """
         assert kv_cache is not None, "forward_prefill_paged requires kv_cache"
         assert page_table is not None, "forward_prefill_paged requires page_table"
-        assert chunk_start_idx is not None, "forward_prefill_paged requires chunk_start_idx"
         assert rot_mats is not None and len(rot_mats) == 2, "forward_prefill_paged requires rot_mats=[cos, sin]"
+        # Non-chunked prefill (short seq, no prefix caching) passes chunk_start_idx=None;
+        # treat the full sequence as a single chunk starting at 0.
+        if chunk_start_idx is None:
+            chunk_start_idx = 0
 
         tw = self.tw
         NH = self.n_local_heads
