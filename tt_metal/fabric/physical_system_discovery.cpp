@@ -51,11 +51,6 @@ TrayID get_tray_id_for_chip(
     if (using_mock_cluster_desc) {
         return TrayID{0};
     }
-
-    if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
-        chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-    }
-
     if (!mobo_to_bus_ids.contains(mobo_name)) {
         auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
         log_warning(
