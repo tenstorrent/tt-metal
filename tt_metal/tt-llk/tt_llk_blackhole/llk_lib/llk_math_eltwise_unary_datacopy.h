@@ -206,7 +206,12 @@ inline void _llk_math_eltwise_unary_datacopy_(
             }
         }
 
-        math::clear_dst_reg_addr();
+        // Full counter reset mirrors the Quasar _llk_math_eltwise_unary_broadcast_
+        // discipline (tt_llk_quasar/llk_lib/llk_math_unary_broadcast.h:211). A
+        // D-only reset via clear_dst_reg_addr() is not enough to prevent stale
+        // A/B/F state from corrupting the next tile's writes when
+        // dst_tile_index != 0 for BroadcastType::ROW. See tt-metal issue #37994.
+        math::reset_counters(p_setrwc::SET_ABD_F);
     }
 }
 

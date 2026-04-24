@@ -74,12 +74,19 @@ supported_formats = [
         BroadcastType.Scalar,
     ],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    # Exercise the dst_tile_index > 0 path by feeding the kernel more than one
+    # tile. The underlying sources/unpack_A_test.cpp loops tile_in_block from 0
+    # to NUM_TILES_IN_BLOCK-1 as the dst_index, so input_dimensions=[32, 64]
+    # (two tiles in one block) hits dst_index=1 — the exact regression guard
+    # for tt-metal issue #37994 on the BF16 Row path.
+    input_dimensions=[[32, 32], [32, 64]],
 )
 def test_unpack_bcast(
     tile_dimensions,
     formats,
     broadcast_type,
     dest_acc,
+    input_dimensions,
 ):
     # --- Skips -----------------------------------------------------------
 
@@ -117,7 +124,7 @@ def test_unpack_bcast(
     # For full tiles ([32,32]):     face_r_dim=16, num_faces=4.
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
-    input_dimensions = list(tile_dimensions)
+    input_dimensions = list(input_dimensions)
 
     # --- Stimuli generation ----------------------------------------------
     # generate_stimuli_w_tile_dimensions produces dense data for any tile size.
