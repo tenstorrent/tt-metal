@@ -784,18 +784,37 @@ class Attention(LightweightModule):
             ttnn.deallocate(k_dram)
             ttnn.deallocate(v_dram)
 
-            turbo_quant_cache.update_cache(k_for_tq, v_for_tq, layer_idx=0, current_pos=current_pos)
+            # Paged TQ cache: forward the shared page_table so the TQ cache writes
+            # land in the same physical blocks the model's standard cache uses.
+            _tq_is_paged = getattr(turbo_quant_cache, "paged_config", None) is not None
+            _tq_page_table = page_table if _tq_is_paged else None
+            turbo_quant_cache.update_cache(
+                k_for_tq, v_for_tq, layer_idx=0, current_pos=current_pos, page_table=_tq_page_table
+            )
             ttnn.deallocate(k_for_tq)
             ttnn.deallocate(v_for_tq)
 
             # Pre-rotate Q for rotated-space SDPA.
             q_heads_1BQD = turbo_quant_cache.pre_rotate_query(q_heads_1BQD)
 
-            # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
-            attn_output_1G4D = turbo_quant_cache.fused_sdpa_decode(
-                q_heads_1BQD, layer_idx=0, current_pos=current_pos, scale=self.scale
-            )
+            # Fused TQ SDPA expects Q shape [B, NQH, 1, DH]. pre_rotate_query returned
+            # DRAM-interleaved [1, B, NQH, DH]; permute directly.
+            q_bqhd = ttnn.permute(q_heads_1BQD, (1, 2, 0, 3))
             ttnn.deallocate(q_heads_1BQD)
+
+            # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
+            attn_out_bqhd = turbo_quant_cache.fused_sdpa_decode(
+                q_bqhd,
+                layer_idx=0,
+                current_pos=current_pos,
+                scale=self.scale,
+                page_table=_tq_page_table,
+            )
+            ttnn.deallocate(q_bqhd)
+
+            # Permute output [B, NQH, 1, DH] → [1, B, NQH, DH] to match downstream.
+            attn_output_1G4D = ttnn.permute(attn_out_bqhd, (2, 0, 1, 3))
+            ttnn.deallocate(attn_out_bqhd)
 
         if not _use_fused_tq_sdpa:
             # Standard scatter + SDPA path (paged or non-paged).

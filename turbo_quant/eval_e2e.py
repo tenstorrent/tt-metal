@@ -40,6 +40,13 @@ def build_parser():
     p.add_argument("--num-layers", type=int, default=None, help="Limit to N layers (default: all 32)")
     p.add_argument("--no-turbo-quant", action="store_true", help="Baseline: skip TurboQuant, use standard BFP8 cache")
     p.add_argument("--bfp4-cache", action="store_true", help="Use BFP4 paged cache (0.5 bytes/elem) instead of BF16")
+    p.add_argument(
+        "--tq-full-dequant",
+        action="store_true",
+        help="Use TQ Full Dequant path: paged BFP4 indices + BF16 norms cache + fused SDPA "
+        "(centroid gather × norm on-the-fly inside SDPA kernel). "
+        "Expected to preserve accuracy (>95%% top-1) while keeping 2x memory savings vs baseline.",
+    )
     p.add_argument("--batch-size", type=int, default=1, help="Batch size (number of parallel sequences)")
     p.add_argument("--no-trace", action="store_true", help="Disable TTNN trace (slower, useful for debugging)")
     return p
@@ -174,6 +181,39 @@ def main():
 
     if args.no_turbo_quant:
         print("  (--no-turbo-quant: using standard BFP8 paged_update_cache path)")
+    elif args.tq_full_dequant:
+        # Full Dequant: TQ cache stores paged BFP4 indices + BF16 norms separately.
+        # Fused SDPA decode reads both, reconstructs centroid×norm on-the-fly inside
+        # the kernel, and feeds into chunked online softmax.
+        # Free the model's BFP8 layer_past to reclaim DRAM (fused path doesn't use it).
+        print(
+            f"  Full Dequant path: allocating paged TQ cache "
+            f"(blocks={paged_attention_config.max_num_blocks}, block_size={paged_attention_config.block_size})"
+        )
+        print("  Freeing model's BFP8 layer_past (fused path owns the KV cache)...")
+        for layer in tt_model.layers:
+            attn = layer.attention
+            if hasattr(attn, "layer_past") and attn.layer_past is not None:
+                for t in attn.layer_past:
+                    ttnn.deallocate(t)
+                attn.layer_past = None
+
+        for layer in tt_model.layers:
+            attn = layer.attention
+            tq = TTNNTurboQuantCache(
+                mesh_device,
+                num_layers=1,
+                num_kv_heads=n_local_kv_heads,
+                head_dim=model_args.head_dim,
+                max_seq_len=model_args.max_seq_len,
+                bits=args.bits,
+                memory_efficient=True,  # paged BFP4 indices + BF16 norms
+                paged_config=paged_attention_config,
+                max_batch_size=args.batch_size,
+            )
+            if absorb_rotation:
+                tq.rotation_absorbed = True
+            attn.tq_cache = tq
     elif args.bfp4_cache:
         # KV_CACHE already allocated as BFP4 at model init (via make_optimizations override).
         print("  Using BFP4 paged cache (allocated at model init via optimization override)")
