@@ -355,6 +355,37 @@ void D2HSocket::pop_bytes(uint32_t num_bytes) {
     }
 }
 
+uint32_t D2HSocket::discard_pending_pages() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before discarding pages.");
+    uint32_t bytes_sent_value;
+    if (using_hugepage_) {
+        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        _mm_lfence();
+        bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
+    } else {
+        tt_driver_atomics::mfence();
+        bytes_sent_value = bytes_sent_ptr_[0];
+    }
+    bytes_sent_ = bytes_sent_value;
+    uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
+    uint32_t pages = bytes_recv / page_size_;
+    if (pages == 0) {
+        return 0;
+    }
+    // Rebase: ack everything currently visible without touching the data
+    // region.  Advance read_ptr_ to mirror what a real read() would do, so
+    // subsequent reads/page_size changes stay consistent.
+    uint32_t bytes_to_discard = pages * page_size_;
+    uint32_t cursor = read_ptr_ + bytes_to_discard;
+    if (fifo_curr_size_ > 0) {
+        cursor %= fifo_curr_size_;
+    }
+    read_ptr_ = cursor;
+    bytes_acked_ += bytes_to_discard;
+    notify_sender();
+    return pages;
+}
+
 void D2HSocket::notify_sender() {
     uint32_t bytes_acked_addr = config_buffer_address_ + bytes_acked_device_offset_;
     pcie_writer_(&bytes_acked_, sizeof(bytes_acked_), bytes_acked_addr);

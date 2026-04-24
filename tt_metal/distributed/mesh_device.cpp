@@ -1577,19 +1577,22 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
     };
     std::vector<SyncSample> samples;
 
-    // Drain any pre-existing pages from the socket before entering sync mode.
-    // The kernel may have sent regular profiler data pages during startup that
-    // would be misinterpreted as (invalid) sync responses.
+    // Discard any pre-existing pages from the socket before entering sync mode
+    // WITHOUT touching the data region.  The data region is mapped via PCIe and
+    // may contain undefined values on the very first sync of a freshly-
+    // constructed MeshDevice (the kernel may not have written valid data yet,
+    // or the shmem region may have been recycled by Linux from a prior
+    // process).  Reading it as a "stale page" and interpreting the contents as
+    // a sync response can corrupt the marker check downstream.
+    // discard_pending_pages() rebases bytes_acked -> bytes_sent and notifies
+    // the device, achieving the same flow-control effect without relying on
+    // the data region's contents.
     constexpr uint32_t kSyncPageWords = 64 / sizeof(uint32_t);
-    uint32_t stale_pages = dev_state.socket->pages_available();
+    uint32_t stale_pages = dev_state.socket->discard_pending_pages();
     if (stale_pages > 0) {
-        std::vector<uint32_t> discard_buf(kSyncPageWords);
-        for (uint32_t p = 0; p < stale_pages; p++) {
-            dev_state.socket->read(discard_buf.data(), 1);
-        }
         log_info(
             tt::LogMetal,
-            "[Real-time profiler] Device {} drained {} stale pages before sync",
+            "[Real-time profiler] Device {} discarded {} stale pages before sync",
             dev_state.chip_id,
             stale_pages);
     }

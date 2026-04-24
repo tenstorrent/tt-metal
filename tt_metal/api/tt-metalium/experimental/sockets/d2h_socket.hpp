@@ -224,6 +224,25 @@ public:
      */
     uint32_t pages_available();
 
+    /**
+     * @brief Discards any currently-available pages WITHOUT reading the data
+     *        region.  Rebases the host's bytes_acked counter to the current
+     *        bytes_sent value (and notifies the device), which is the correct
+     *        operation when the host wants to ignore any pending bytes — e.g.
+     *        before initiating a sync handshake.
+     *
+     * Unlike a sequence of `read()` calls, this does NOT touch the data
+     * region (which on Wormhole/Blackhole is mapped through PCIe and may
+     * contain undefined values from a prior device run or stale shmem
+     * counters).
+     *
+     * @return The number of pages that were discarded (0 if there was nothing
+     *         pending).
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    uint32_t discard_pending_pages();
+
     std::vector<MeshCoreCoord> get_active_cores() const;
 
     MeshDevice* get_mesh_device() const;
