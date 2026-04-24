@@ -1,0 +1,65 @@
+# testing.txt — SDPA partial-mask fix regression suite
+# Issue: https://github.com/tenstorrent/tt-metal/issues/42917
+# Branch: gpt-oss-hang-debug
+#
+# Run all tests below before every commit.
+# On Galaxy (g10glx02), from inside the Docker container:
+#
+#   cd /home/models-team/divanovic/tt-metal
+#   source /opt/venv/bin/activate
+#   export TT_METAL_HOME=/home/models-team/divanovic/tt-metal
+#   export ARCH_NAME=wormhole_b0
+#   export HF_HUB_OFFLINE=1
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP 1 – SDPA partial-mask regression tests (issue #42917 specific)
+# Expected: ALL PASS on fixed kernel, TIMEOUT/FAIL on unfixed kernel
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 1a. Core regression: PCC check with random padding (partial last page)
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_paged_partial_mask_regression.py::test_sdpa_decode_paged_partial_mask_worker_node_regression -v --timeout=120
+
+# 1b. Parametric: 4 cur_pos values including exact production hang position (643)
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_paged_partial_mask_regression.py -k "parametric" -v --timeout=120
+
+# 1c. Deterministic hang repro (B=32, production config, BFP8 overflow K=57000)
+#     UNFIXED: TIMEOUT after 60 s (TRISC2 t6_semaphore_get<0>() deadlock)
+#     FIXED:   PASS in ~2 s
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_hang_repro.py -v --timeout=60
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP 2 – Theory / trace correctness smoke tests
+# Expected: ALL PASS on both kernels (trace correctness, not hang detection)
+# ─────────────────────────────────────────────────────────────────────────────
+
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_partial_mask_theories.py -v --timeout=120
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_trace_stale_detection.py -v --timeout=120
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP 3 – MLA decode (broken by Fix 2, fixed by Fix 3 — must stay passing)
+# Expected: PASS on fixed kernel
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 3a. The exact CI failure case
+python -m pytest "tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode.py::test_flash_mla_decode[reuse_k=True-block_size=32-use_paged_attention=True-q_mem_config=None-q_dtype=DataType.BFLOAT16-dtype=DataType.BFLOAT8_B-batch=4-seq_len=1024-nh=128-nkv=1-kv_lora_rank=512-d_rope=64-q_num_cores=64]" -v --timeout=120
+
+# 3b. Full MLA decode suite
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode.py -v --timeout=300
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP 4 – Existing SDPA decode tests (must not regress)
+# Expected: ALL PASS on fixed kernel
+# ─────────────────────────────────────────────────────────────────────────────
+
+python -m pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode.py -v --timeout=300
+
+# ─────────────────────────────────────────────────────────────────────────────
+# QUICK SMOKE — run before every push (~30 s total)
+# Covers the fix core invariants without the slow MLA/full suite.
+# ─────────────────────────────────────────────────────────────────────────────
+
+python -m pytest \
+  tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_decode_paged_partial_mask_regression.py::test_sdpa_decode_paged_partial_mask_worker_node_regression \
+  tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_hang_repro.py \
+  "tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode.py::test_flash_mla_decode[reuse_k=True-block_size=32-use_paged_attention=True-q_mem_config=None-q_dtype=DataType.BFLOAT16-dtype=DataType.BFLOAT8_B-batch=4-seq_len=1024-nh=128-nkv=1-kv_lora_rank=512-d_rope=64-q_num_cores=64]" \
+  -v --timeout=120
