@@ -53,8 +53,8 @@ def build_inputs(device):
 
     a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    bias_padded = torch_bias.expand(1, 1, 32, n_size).contiguous()
-    bias = ttnn.from_torch(bias_padded, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Logical shape [1, 1, 1, n]; ttnn pads internally. See note on main's PR #42430.
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
