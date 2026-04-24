@@ -5,14 +5,12 @@
 // erisc_cmac_simple (budabackend) from reset.
 //
 // The erisc_cmac_simple firmware reads a 256-byte (64-word) block from
-// L1 address 0x1000 immediately after reset.  It uses the fields to
-// configure AICLK-based timing, RS-FEC, and TX rate before bringing
-// the CMAC/PCS link up toward an external FPGA.
+// L1 address 0x1000 immediately after reset.  Field layout matches
+// boot_params_t in:
+//   budabackend/src/firmware/riscv/targets/erisc_cmac_simple/src/api/eth_cmac_init.h
 //
-// Field assignments are based on the budabackend erisc_cmac_simple
-// interface (not available in this tree).  Indices that have not been
-// confirmed by firmware source are zero-initialised and commented as
-// "reserved / unused".
+// Only the three fields relevant to external-link bringup are written;
+// all others are zero-initialised (safe / no-op for the firmware).
 
 #pragma once
 
@@ -31,16 +29,12 @@ struct CmacBootParams {
     static constexpr size_t kSizeWords = kSizeBytes / sizeof(uint32_t);  // 64
 
     // Build a zero-initialised boot-parameter word array and fill the
-    // known fields.
-    //
-    // Parameters:
-    //   aiclk_ps        – AI-clock period in picoseconds
-    //                     (e.g. ~833 for 1200 MHz, ~714 for 1400 MHz).
-    //                     Used by the firmware to derive timing windows.
-    //   rs_fec_enabled  – Enable Reed-Solomon FEC on the CMAC MAC/PCS.
-    //                     true = RS-FEC on (default), false = off.
-    //   tx_rate_cycles  – Minimum inter-packet gap in AI-clock cycles.
-    //                     0 = full line rate (default).
+    // three fields relevant to external-link bringup:
+    //   aiclk_ps        – word[18] — AI-clock period in picoseconds
+    //                     (~833 @ 1200 MHz, ~714 @ 1400 MHz).
+    //   rs_fec_enabled  – word[3]  — 1 = RS-FEC on, 0 = off.
+    //   tx_rate_cycles  – word[61] — inter-burst gap in AI-clock cycles;
+    //                     0 = full line rate.
     static std::array<uint32_t, kSizeWords> build(uint32_t aiclk_ps, bool rs_fec_enabled, uint32_t tx_rate_cycles);
 };
 
