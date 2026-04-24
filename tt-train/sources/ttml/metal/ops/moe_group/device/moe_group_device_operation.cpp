@@ -5,6 +5,7 @@
 #include "moe_group_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "moe_group_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -108,11 +109,14 @@ ttml::metal::ops::moe_group::device::MoeGroupDeviceOperation::tensor_return_valu
 
     const auto& ds = dispatched.logical_shape();
     uint32_t d = ds[0], b = ds[1], s = ds[2], h = ds[3];
-    // Upper bound includes per-core padding (3 slots per core per expert for 16B alignment)
-    // plus 32-row tail padding per expert. Use grid size to compute num_total_cores.
+    // Upper bound includes per-core padding ((align_u32-1) slots per core per
+    // expert to keep per-core plan write addresses L1-aligned — arch-specific,
+    // 16B/4-uint32 on WH and Blackhole today) plus 32-row tile padding per
+    // expert. Use grid size to compute num_total_cores.
     auto grid = dispatched.device()->compute_with_storage_grid_size();
     uint32_t num_total_cores = grid.x * grid.y;
-    uint32_t t_cap = std::min(e_local, k) * d * b * s + e_local * (32U + 3U * num_total_cores);
+    uint32_t l1_align_u32 = tt::tt_metal::hal::get_l1_alignment() / sizeof(uint32_t);
+    uint32_t t_cap = std::min(e_local, k) * d * b * s + e_local * (32U + (l1_align_u32 - 1U) * num_total_cores);
 
     auto attrs = Op::operation_attributes_t{
         .e_local = e_local,

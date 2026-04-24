@@ -24,32 +24,31 @@
 //   7: e_local
 //   8: t_cap
 //   9: num_total_cores    (number of cores running this kernel)
-//   10+: TensorAccessorArgs for plan, dispatched, metadata, counts, offsets, leids
+//   10: shared_slot_u32   (per-core shared-table slot size in uint32s;
+//                          host picks round_up(e_local, L1_ALIGN_U32))
+//   11: l1_align_u32           (arch NOC L1 write alignment in uint32s)
+//   12,13: lead_core_x, lead_core_y
+//   14,15,16: scan_phase{1,2,3}_sem_id
+//   17: plan_ready_sem_id
+//   18: shared_tables_offset   (offset within lead's cb_scan to shared tables)
+//   19-23: mcast rectangle     (sx, sy, ex, ey, num_dests_incl_self) used for
+//                              phase2/plan_ready broadcast via
+//                              mcast_sender_signal_receivers_loopback
+//   24+: TensorAccessorArgs for plan, dispatched, metadata, counts, offsets, leids
 //
-// Runtime args:
-//   0: plan_addr
-//   1: dispatched_addr
-//   2: my_worker_start
-//   3: worker_stride
-//   4: my_worker_count
-//   5: plan_ready_sem_id
-//   6: metadata_addr
-//   7: counts_addr
-//   8: offsets_addr
-//   9: leids_addr
-//  10: my_core_idx
-//  11: my_slice_start
-//  12: my_slice_end
-//  13: lead_core_x       (NOC virtual XY of core 0)
-//  14: lead_core_y
-//  15: scan_phase1_sem_id
-//  16: scan_phase2_sem_id
-//  17: scan_phase3_sem_id
-//  18: shared_tables_l1_addr  (offset within lead core's cb_scan to shared tables)
-//  19+: per-other-core NOC XY pairs (for lead to broadcast phase 2 + plan_ready)
+// Runtime args (13 total, same layout on every core — all globally-constant
+// values moved to CT):
+//   0: plan_addr             1: dispatched_addr
+//   2: my_worker_start       3: my_worker_count
+//   4: metadata_addr         5: counts_addr
+//   6: offsets_addr          7: leids_addr
+//   8: my_core_idx           9: my_slice_start      10: my_slice_end
+//   11: next_core_x         12: next_core_y  (tail-flush chain NOC XY;
+//                                              (0,0) for the last core)
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr uint32_t cb_src0 = tt::CBIndex::c_0;
 constexpr uint32_t cb_plan = tt::CBIndex::c_4;
@@ -65,12 +64,31 @@ constexpr uint32_t k = get_compile_time_arg_val(6);
 constexpr uint32_t e_local = get_compile_time_arg_val(7);
 constexpr uint32_t t_cap = get_compile_time_arg_val(8);
 constexpr uint32_t num_total_cores = get_compile_time_arg_val(9);
-// Per-core shared-table slot size in uint32s: host picks ceil(e_local/4)*4
-// so each slot is a multiple of 16B (NOC L1 write alignment) and holds
-// exactly e_local uint32s with minimum padding.
+// Per-core shared-table slot size in uint32s: host picks
+// round_up_to_align(e_local) so each slot is a multiple of the arch's L1
+// alignment and holds exactly e_local uint32s with minimum padding.
 constexpr uint32_t SHARED_SLOT_U32 = get_compile_time_arg_val(10);
+// Arch-specific NOC L1 write alignment expressed in uint32s
+// (= tt::tt_metal::hal::get_l1_alignment() / 4). 4 on WH/BH today, 2 or 8
+// on other parts. Used for per-core plan write padding so boundaries land
+// on L1-aligned addresses.
+constexpr uint32_t L1_ALIGN_U32 = get_compile_time_arg_val(11);
+constexpr uint32_t L1_ALIGN_U32_MASK = L1_ALIGN_U32 - 1U;
+// Globally-constant values previously passed as RT args, now baked in as CT.
+constexpr uint32_t lead_core_x = get_compile_time_arg_val(12);
+constexpr uint32_t lead_core_y = get_compile_time_arg_val(13);
+constexpr uint32_t scan_phase1_sem_id = get_compile_time_arg_val(14);
+constexpr uint32_t scan_phase2_sem_id = get_compile_time_arg_val(15);
+constexpr uint32_t scan_phase3_sem_id = get_compile_time_arg_val(16);
+constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(17);
+constexpr uint32_t shared_tables_offset = get_compile_time_arg_val(18);
+constexpr uint32_t mcast_sx = get_compile_time_arg_val(19);
+constexpr uint32_t mcast_sy = get_compile_time_arg_val(20);
+constexpr uint32_t mcast_ex = get_compile_time_arg_val(21);
+constexpr uint32_t mcast_ey = get_compile_time_arg_val(22);
+constexpr uint32_t mcast_num_dests_incl_self = get_compile_time_arg_val(23);
 
-constexpr auto plan_args = TensorAccessorArgs<11>();
+constexpr auto plan_args = TensorAccessorArgs<24>();
 constexpr auto dispatched_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto metadata_args = TensorAccessorArgs<dispatched_args.next_compile_time_args_offset()>();
 constexpr auto counts_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
@@ -95,31 +113,24 @@ inline uint32_t round_up_32(uint32_t x) {
 }
 
 void kernel_main() {
-    // ---- Runtime args ----
+    // ---- Runtime args (only per-core + buffer addrs; everything globally
+    //      constant has been moved to CT args above) ----
     const uint32_t plan_addr = get_arg_val<uint32_t>(0);
     const uint32_t dispatched_addr = get_arg_val<uint32_t>(1);
     const uint32_t my_worker_start = get_arg_val<uint32_t>(2);
-    const uint32_t worker_stride = get_arg_val<uint32_t>(3);
-    const uint32_t my_worker_count = get_arg_val<uint32_t>(4);
-    const uint32_t plan_ready_sem_id = get_arg_val<uint32_t>(5);
-    const uint32_t metadata_addr = get_arg_val<uint32_t>(6);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(7);
-    const uint32_t offsets_addr = get_arg_val<uint32_t>(8);
-    const uint32_t leids_addr = get_arg_val<uint32_t>(9);
-    const uint32_t my_core_idx = get_arg_val<uint32_t>(10);
-    const uint32_t my_slice_start = get_arg_val<uint32_t>(11);
-    const uint32_t my_slice_end = get_arg_val<uint32_t>(12);
-    const uint32_t lead_core_x = get_arg_val<uint32_t>(13);
-    const uint32_t lead_core_y = get_arg_val<uint32_t>(14);
-    const uint32_t scan_phase1_sem_id = get_arg_val<uint32_t>(15);
-    const uint32_t scan_phase2_sem_id = get_arg_val<uint32_t>(16);
-    const uint32_t scan_phase3_sem_id = get_arg_val<uint32_t>(17);
-    const uint32_t shared_tables_offset = get_arg_val<uint32_t>(18);
+    const uint32_t my_worker_count = get_arg_val<uint32_t>(3);
+    const uint32_t metadata_addr = get_arg_val<uint32_t>(4);
+    const uint32_t counts_addr = get_arg_val<uint32_t>(5);
+    const uint32_t offsets_addr = get_arg_val<uint32_t>(6);
+    const uint32_t leids_addr = get_arg_val<uint32_t>(7);
+    const uint32_t my_core_idx = get_arg_val<uint32_t>(8);
+    const uint32_t my_slice_start = get_arg_val<uint32_t>(9);
+    const uint32_t my_slice_end = get_arg_val<uint32_t>(10);
     // Chain args (every core): next core's NOC XY for sequencing tail flushes.
     // For last core (my_core_idx == num_total_cores-1) these are 0,0 (unused).
-    const uint32_t next_core_x = get_arg_val<uint32_t>(19);
-    const uint32_t next_core_y = get_arg_val<uint32_t>(20);
-    // arg 21+ (lead only): per-other-core NOC XY pairs for phase 2 + plan_ready broadcast.
+    const uint32_t next_core_x = get_arg_val<uint32_t>(11);
+    const uint32_t next_core_y = get_arg_val<uint32_t>(12);
+    constexpr uint32_t worker_stride = num_total_cores;  // was RT arg, always == num_total_cores
 
     // ---- Address generators ----
     const auto plan_addrgen = TensorAccessor(plan_args, plan_addr);
@@ -237,16 +248,18 @@ void kernel_main() {
             counts[e] = total;
         }
 
-        // per_core_start[c][e] = offsets[e] + sum_{c' < c} round_up_4(local_counts[c'][e])
-        // Padding local_counts to multiple of 4 uint32 ensures each core's cursor
-        // is 4-aligned → byte offset (cursor*4) is 16-aligned → satisfies DRAM write
-        // alignment (16B on WH). Also compute padded expert total for offsets.
+        // per_core_start[c][e] = offsets[e] + sum_{c' < c} round_up(local_counts[c'][e], L1_ALIGN_U32)
+        // Padding local_counts up to an L1_ALIGN_U32-multiple ensures each
+        // core's cursor is aligned → byte offset (cursor*4) lands on the
+        // arch's L1 write-alignment boundary (16 B / 4 uint32s on WH/BH).
+        // Also compute padded expert total for offsets.
         offsets[0] = 0;
         for (uint32_t e = 0; e < e_local; ++e) {
             uint32_t running = offsets[e];
             for (uint32_t c = 0; c < num_total_cores; ++c) {
                 shared_per_core_start[c * SHARED_SLOT_U32 + e] = running;
-                uint32_t padded = (shared_local_counts[c * SHARED_SLOT_U32 + e] + 3U) & ~3U;
+                uint32_t padded =
+                    (shared_local_counts[c * SHARED_SLOT_U32 + e] + L1_ALIGN_U32_MASK) & ~L1_ALIGN_U32_MASK;
                 running += padded;
             }
             // offsets[e+1] rounded up to 32-row (tile alignment for grouped)
@@ -268,14 +281,14 @@ void kernel_main() {
         noc_async_write((uint32_t)stage, get_noc_addr(0, off_addrgen), off_page_bytes);
         noc_async_write_barrier();
 
-        // Signal phase 2 done on all other cores.
-        // Other cores' NOC XYs are RT args 19, 20, 21, 22, ... pairs.
-        for (uint32_t c = 1; c < num_total_cores; ++c) {
-            uint32_t other_x = get_arg_val<uint32_t>(21U + 2U * (c - 1U));
-            uint32_t other_y = get_arg_val<uint32_t>(21U + 2U * (c - 1U) + 1U);
-            uint64_t sem_noc = get_noc_addr(other_x, other_y, get_semaphore(scan_phase2_sem_id));
-            noc_semaphore_inc(sem_noc, 1U);
-        }
+        // Signal phase 2 done on every core (incl. lead) via ONE NOC multicast
+        // over the full worker grid. mcast_{sx,sy,ex,ey,num_dests_incl_self}
+        // are CT constants (see ttml::mcast_sender_signal_receivers_loopback
+        // in metal/common/dataflow_utils.hpp).
+        uint32_t phase2_sem_addr = get_semaphore(scan_phase2_sem_id);
+        volatile tt_l1_ptr uint32_t* phase2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(phase2_sem_addr);
+        mcast_sender_signal_receivers_loopback(
+            phase2_sem_ptr, phase2_sem_addr, mcast_sx, mcast_sy, mcast_ex, mcast_ey, mcast_num_dests_incl_self);
     } else {
         // Non-lead cores wait for phase 2 signal.
         volatile tt_l1_ptr uint32_t* phase2_sem =
@@ -355,8 +368,9 @@ void kernel_main() {
     for (uint32_t e = 0; e < e_local; ++e) {
         if (fill[e] > 0) {
             uint32_t n = fill[e];
-            // Round up to 4 uint32 = 16B (min DRAM write size on WH).
-            uint32_t n_aligned = (n + 3U) & ~3U;
+            // Round up to L1_ALIGN_U32 uint32s — arch-specific NOC L1 write
+            // alignment (16 B / 4 uint32s on WH/BH).
+            uint32_t n_aligned = (n + L1_ALIGN_U32_MASK) & ~L1_ALIGN_U32_MASK;
             for (uint32_t i = n; i < n_aligned; ++i) plan_stage[e * PLAN_CHUNK + i] = SENTINEL;
             noc_async_write(
                 (uint32_t)(plan_stage + e * PLAN_CHUNK),
@@ -389,16 +403,12 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase3_sem_id));
             noc_semaphore_wait(phase3_sem, 1U);
         }
-        // Signal plan_ready_sem on every core (including self).
+        // Signal plan_ready_sem on every core (incl. lead) via ONE multicast.
         uint32_t plan_ready_l1_addr = get_semaphore(plan_ready_sem_id);
-        for (uint32_t c = 1; c < num_total_cores; ++c) {
-            uint32_t other_x = get_arg_val<uint32_t>(21U + 2U * (c - 1U));
-            uint32_t other_y = get_arg_val<uint32_t>(21U + 2U * (c - 1U) + 1U);
-            uint64_t sem_noc = get_noc_addr(other_x, other_y, plan_ready_l1_addr);
-            noc_semaphore_inc(sem_noc, 1U);
-        }
-        volatile tt_l1_ptr uint32_t* my_plan_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_ready_l1_addr);
-        noc_semaphore_set(my_plan_ready, *my_plan_ready + 1U);
+        volatile tt_l1_ptr uint32_t* plan_ready_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_ready_l1_addr);
+        mcast_sender_signal_receivers_loopback(
+            plan_ready_ptr, plan_ready_l1_addr, mcast_sx, mcast_sy, mcast_ex, mcast_ey, mcast_num_dests_incl_self);
     }
 
     // ===========================================================

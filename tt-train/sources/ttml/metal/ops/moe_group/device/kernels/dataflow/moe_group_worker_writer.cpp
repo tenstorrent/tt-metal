@@ -13,17 +13,17 @@
 //   1: tiles_per_chunk
 //   2: Wt
 //   3: e_local
-//   4: last_chunk_tiles  (tiles in final chunk; <= tiles_per_chunk)
-//   5+: TensorAccessorArgs for grouped
+//   4: last_chunk_tiles   (tiles in final chunk; <= tiles_per_chunk)
+//   5: stride             (= num_workers; interleaved tile_row step)
+//   6: plan_ready_sem_id
+//   7+: TensorAccessorArgs for grouped
 //   next+: TensorAccessorArgs for offsets
 //
 // Runtime args:
 //   0: grouped_addr
-//   1: my_start     — first tile_row this core processes
-//   2: stride       — tile_row step = num_workers (interleaved assignment)
-//   3: my_count     — number of tile_rows
-//   4: offsets_addr
-//   5: plan_ready_sem_id — wait on this semaphore before reading offsets
+//   1: my_start      — first tile_row this core processes
+//   2: my_count      — number of tile_rows
+//   3: offsets_addr
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -34,7 +34,9 @@ constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 constexpr uint32_t e_local = get_compile_time_arg_val(3);
 constexpr uint32_t last_chunk_tiles = get_compile_time_arg_val(4);
-constexpr auto grouped_args = TensorAccessorArgs<5>();
+constexpr uint32_t stride = get_compile_time_arg_val(5);
+constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
+constexpr auto grouped_args = TensorAccessorArgs<7>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_H = 32U;
@@ -42,10 +44,8 @@ constexpr uint32_t TILE_H = 32U;
 void kernel_main() {
     const uint32_t grouped_addr = get_arg_val<uint32_t>(0);
     const uint32_t my_start = get_arg_val<uint32_t>(1);
-    const uint32_t stride = get_arg_val<uint32_t>(2);
-    const uint32_t my_count = get_arg_val<uint32_t>(3);
-    const uint32_t offsets_addr = get_arg_val<uint32_t>(4);
-    const uint32_t plan_ready_sem_id = get_arg_val<uint32_t>(5);
+    const uint32_t my_count = get_arg_val<uint32_t>(2);
+    const uint32_t offsets_addr = get_arg_val<uint32_t>(3);
 
     // Wait for scan to finish writing plan/counts/offsets.
     volatile tt_l1_ptr uint32_t* plan_ready_sem =
