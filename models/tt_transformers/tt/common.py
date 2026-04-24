@@ -681,7 +681,11 @@ def cap_seq_lens_to_max_prefill_chunk_size(seq_lens, cap):
 
 
 def get_block_size(kv_cache):
-    return kv_cache[0][0].shape[2]
+    # Hybrid models (e.g. Qwen3.5 with GDN layers) leave non-attention layer slots as None.
+    for layer_cache in kv_cache:
+        if layer_cache is not None:
+            return layer_cache[0].shape[2]
+    raise ValueError("get_block_size: kv_cache contains no layers with a KV cache")
 
 
 def num_blocks_in_seq(seq_len, block_size):
