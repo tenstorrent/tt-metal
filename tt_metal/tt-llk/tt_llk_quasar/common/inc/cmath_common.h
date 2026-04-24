@@ -15,43 +15,7 @@ constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
 
-// SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
-constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
-constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
-
-// Provides array-like access to SFPU SrcS slice base addresses.
-// Stride between slices = ydim (8 for 16-bit, 4 for 32-bit).
-// Usage: SfpuSrcsSlice srcs{PARAM_SRCS_YDIM}; srcs[0] = input0, srcs[1] = input1, srcs[2] = output, etc.
-struct SfpuSrcsSlice
-{
-    const int ydim;
-
-    int operator[](int slice_idx) const
-    {
-        return SFPU_SRCS_BASE_ADDR + slice_idx * ydim;
-    }
-};
-
-// Provides array-like access to SFPU Dest slice base addresses within a single tile.
-// Tile positioning is handled separately by _set_dst_write_addr_ (dest_section_base);
-// this struct only computes the intra-tile slice offset.
-// Stride between slices = ydim (8 for 16-bit, 4 for 32-bit).
-// Usage: SfpuDestSlice dest{PARAM_SRCS_YDIM}; dest[slice] = offset within tile.
-struct SfpuDestSlice
-{
-    const int ydim;
-
-    int operator[](int slice_idx) const
-    {
-        return SFPU_DEST_BASE_ADDR + slice_idx * ydim;
-    }
-};
-
-#if defined(LLK_TRISC_ISOLATE_SFPU)
-constexpr static std::uint32_t TRISC_ID = 3;
-#else
 constexpr static std::uint32_t TRISC_ID = 1;
-#endif
 
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
