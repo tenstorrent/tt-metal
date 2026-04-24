@@ -58,7 +58,7 @@ jobs:
               "runner-label": "pp-shield-testing",
               "mesh-device": "N150",
               "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--max_num_seqs 32 --max-model-len 32768 --async-scheduling",
+              "additional-server-args": "--max_num_seqs 32 --max-model-len 131072 --async-scheduling",
               "multimodal": false
             },
             {
@@ -180,26 +180,6 @@ jobs:
       - name: 📂 Create output directory
         run: |
           mkdir -p output
-
-      - name: 📥 Prefetch HF weights
-        timeout-minutes: 30
-        run: |
-          # tt_transformers' from_pretrained uses local_files_only=True when
-          # $CI is 'true' (see model_config.py:3017). GitHub Actions sets
-          # CI=true automatically, so HF never downloads on demand. Main CI
-          # satisfies this by mounting pre-populated weights at
-          # /mnt/MLPerf/huggingface; the shield runner doesn't have that mount,
-          # so we snapshot-download into HF_HUB_CACHE here before the server
-          # starts. Idempotent — HF skips files already present.
-          python3 -c "
-          import os
-          from huggingface_hub import snapshot_download
-          snapshot_download(
-              repo_id='${{ matrix.test-group.model }}',
-              cache_dir=os.environ['HF_HUB_CACHE'],
-              token=os.environ.get('HF_TOKEN'),
-          )
-          "
 
       - name: 🚀 Run server
         timeout-minutes: 1
@@ -486,9 +466,7 @@ jobs:
           REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
         run: |
           if [ -f "$REPORT_FILE" ]; then
-            echo "::group::AI Run Summary"
             cat "$REPORT_FILE"
-            echo "::endgroup::"
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
