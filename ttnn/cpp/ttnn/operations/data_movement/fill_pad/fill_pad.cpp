@@ -8,6 +8,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -36,10 +37,27 @@ Tensor fill_implicit_tile_padding(
         }
 
         ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
-        auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
+        // skip_padding_fill=true breaks a potential recursion: ttnn::reshape now calls fill_implicit_tile_padding
+        // for tiled outputs, and this helper calls ttnn::reshape. The inner reshapes here should never touch
+        // padding lanes (they are pure rank re-views), so opt out of the fill dispatch explicitly.
+        auto reshaped_tensor = ttnn::reshape(
+            mutable_input_tensor,
+            new_shape,
+            /*memory_config=*/std::nullopt,
+            /*pad_value=*/std::nullopt,
+            ttnn::TileReshapeMapMode::CACHE,
+            /*sub_core_grid=*/std::nullopt,
+            /*skip_padding_fill=*/true);
 
         reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config);
-        return ttnn::reshape(reshaped_tensor, original_shape);
+        return ttnn::reshape(
+            reshaped_tensor,
+            original_shape,
+            /*memory_config=*/std::nullopt,
+            /*pad_value=*/std::nullopt,
+            ttnn::TileReshapeMapMode::CACHE,
+            /*sub_core_grid=*/std::nullopt,
+            /*skip_padding_fill=*/true);
     }
     auto output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {

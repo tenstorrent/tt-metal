@@ -45,8 +45,8 @@ void bind_reshape_view_operation(nb::module_& mod) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
-                * :attr:`reshape_map_mode` (TileReshapeMapMode): Advanced option. Set to RECREATE to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE.
-                * :attr:`sub_core_grid` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+                * :attr:`reshape_tile_mode` (TileReshapeMapMode): Advanced option. Set to RECREATE to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE.
+                * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
                 * :attr:`skip_padding_fill` (bool): If False, ``pad_value`` is applied to tile padding lanes. If True, ``pad_value`` is ignored and tile padding is left as-is. Default is False.
 
 

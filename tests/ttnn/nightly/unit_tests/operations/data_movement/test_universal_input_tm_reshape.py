@@ -473,10 +473,12 @@ def test_reshape_tiled_default_pad_is_zero(device):
 @pytest.mark.parametrize(
     "input_shape,output_shape",
     [
-        # tile-aligned input -> output with inner dim not tile-aligned, forcing tile padding on output
+        # tile-aligned input -> non-aligned output: exercises the fill on a clean input padding region.
         ([128, 128], [128, 4, 32]),
+        # non-aligned input -> non-aligned output: verifies input padding lanes don't bleed into output fill.
+        ([128, 96], [128, 3, 32]),
     ],
-    ids=["sharded_tile_padded_output"],
+    ids=["aligned_in_padded_out", "padded_in_padded_out"],
 )
 @pytest.mark.parametrize(
     "strategy",
@@ -520,6 +522,52 @@ def test_reshape_tiled_pad_value_sharded(device, input_shape, output_shape, stra
         f"Padded region not filled with pad_value={pad_value} (strategy={strategy}): "
         f"expected sum {expected_pad_sum}, observed {observed_pad_sum}"
     )
+
+
+# ---------------------------------------------------------------------------
+# BFLOAT8_B pad_value path: fill runs on the bfloat16 intermediate before the
+# typecast back to BFLOAT8_B; use PCC rather than exact equality.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    [
+        ((32, 32), (32, 16, 2)),
+        ((1, 96), (3, 1, 32)),
+    ],
+    ids=["tile_to_sub_tile", "reshape_1d_to_3d"],
+)
+def test_reshape_tiled_pad_value_bfloat8_b(device, input_shape, output_shape):
+    """BFLOAT8_B interleaved reshape: fill happens on the bf16 intermediate before re-typecast.
+
+    Uses pad_value=0.0 because BF8 is a block-float format (16-element sub-blocks with shared exponent):
+    a small pad_value in a sub-block that also contains large logical values quantizes to ~0, making
+    exact-sum checks unreliable. 0.0 is represented exactly for any block exponent, so the check is clean.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.arange(1, int(torch.tensor(input_shape).prod().item()) + 1, dtype=torch.bfloat16).reshape(
+        input_shape
+    )
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.reshape(tt_input, output_shape, pad_value=0.0)
+
+    # Logical values preserved within BF8 quantization (PCC).
+    actual = ttnn.to_torch(tt_output).reshape(-1).to(torch.float32)
+    expected_logical = torch_input.reshape(-1).to(torch.float32)
+    assert_with_pcc(expected_logical, actual, 0.99)
+
+    # With pad_value=0.0, padded lanes add no contribution: sum(full) ~= sum(logical).
+    full = _read_padded_region(tt_output).to(torch.float32).reshape(-1)
+    pad_count = full.numel() - actual.numel()
+    if pad_count > 0:
+        observed_pad_sum = full.sum().item() - actual.sum().item()
+        # BF8 round-trip tolerance on the logical sum alone, scaled by pad count.
+        tol = max(0.5, 0.01 * abs(actual.sum().item()))
+        assert (
+            abs(observed_pad_sum) < tol
+        ), f"BF8 padded region not zero-filled: observed pad sum {observed_pad_sum} (tol {tol})"
 
 
 # ---------------------------------------------------------------------------
