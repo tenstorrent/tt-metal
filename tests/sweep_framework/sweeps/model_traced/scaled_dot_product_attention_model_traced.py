@@ -163,9 +163,9 @@ def run(
 
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     # Also check kwargs for shapes in case they're passed as extra kwargs
-    if input_b_shape is None:
+    if input_b_shape is None or input_b_shape == "__ABSENT__":
         input_b_shape = kwargs.get("input_b_shape", None)
-    if input_c_shape is None:
+    if input_c_shape is None or input_c_shape == "__ABSENT__":
         input_c_shape = kwargs.get("input_c_shape", None)
 
     if isinstance(input_a_shape, dict):
