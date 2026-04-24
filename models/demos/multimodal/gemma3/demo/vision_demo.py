@@ -476,7 +476,7 @@ def test_multimodal_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name=f"{base_model_name}-vision".lower(),
+            ml_model_name=f"{base_model_name}-vision",
             ml_model_type="vlm",
             device_name=tt_device_name,
             num_layers=model_args[0].n_layers,

@@ -4,6 +4,7 @@
 
 import os
 import pickle
+import re
 from datetime import datetime
 from typing import List
 
@@ -170,6 +171,9 @@ class BenchmarkData:
             if device_name:
                 device_name = UNIFIED_DEVICE_NAME_MAP.get(device_name, device_name)
                 device_info = {"device_name": device_name}
+
+            # Standardize model name - convert lowercase and replace whitespace and underscores with hyphens
+            ml_model_name = re.sub(r"[\s_]+", "-", ml_model_name.lower())
 
             partial_benchmark_run = PartialBenchmarkRun(
                 run_start_ts=run_start_ts,
