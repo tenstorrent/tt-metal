@@ -816,7 +816,23 @@ void Device::quiesce_and_restart_fabric_workers() {
                                               .get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
 
             std::vector<uint32_t> status_buf(1, 0);
-            detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+            try {
+                detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+            } catch (const std::exception& e) {
+                // Non-MMIO relay read failed (e.g. UMD relay ERISC not running relay firmware
+                // after Phase 3 loaded fabric firmware on Device 0's channels).  We cannot
+                // safely send TERMINATE because WriteToDeviceL1 via the relay can hang
+                // indefinitely with no write timeout.  Skip this channel — configure_fabric_cores()
+                // in Phase 3 overwrites L1 regardless of ERISC state.
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "L1 read failed (relay not ready?) — skipping TERMINATE: {}",
+                    this->id(),
+                    eth_chan_id,
+                    e.what());
+                continue;
+            }
 
             if (status_buf[0] == 0 || status_buf[0] == terminated_val) {
                 log_info(
@@ -844,8 +860,19 @@ void Device::quiesce_and_restart_fabric_workers() {
             bool terminated = false;
             int64_t last_term_log_ms = -1;
             while (true) {
-                detail::ReadFromDeviceL1(
-                    this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "polling read failed — treating as timed out: {}",
+                        this->id(),
+                        eth_chan_id,
+                        e.what());
+                    break;
+                }
                 if (status_buf[0] == terminated_val) {
                     terminated = true;
                     break;
@@ -1446,8 +1473,23 @@ void Device::wait_for_fabric_workers_ready() {
             for (size_t idx : pending) {
                 const auto& ch = chans[idx];
                 std::vector<uint32_t> status_buf(1, 0);
-                detail::ReadFromDeviceL1(
-                    this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                try {
+                    detail::ReadFromDeviceL1(
+                        this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    // Non-MMIO relay read timed out — treat this channel as not-ready.
+                    // Without this catch, the exception propagates uncaught through
+                    // quiesce_devices(), causing GTest TearDown to call quiesce again on
+                    // already-degraded hardware, which accumulates 5s timeouts and hangs.
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b: read failed on "
+                        "chan {} — treating as not-READY_FOR_TRAFFIC: {}",
+                        this->id(),
+                        ch.eth_chan_id,
+                        e.what());
+                    status_buf[0] = 0xdeadbeef;
+                }
                 if (status_buf[0] != expected_ready) {
                     still_pending.push_back(idx);
                     still_pending_statuses.push_back({ch.eth_chan_id, status_buf[0]});
@@ -1482,8 +1524,19 @@ void Device::wait_for_fabric_workers_ready() {
                 for (size_t idx : pending) {
                     const auto& ch = chans[idx];
                     std::vector<uint32_t> status_buf(1, 0);
-                    detail::ReadFromDeviceL1(
-                        this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5b: final diagnostic "
+                            "read failed on chan {} — recording as 0xdeadbeef: {}",
+                            this->id(),
+                            ch.eth_chan_id,
+                            e.what());
+                        status_buf[0] = 0xdeadbeef;
+                    }
                     unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
                 }
                 break;
