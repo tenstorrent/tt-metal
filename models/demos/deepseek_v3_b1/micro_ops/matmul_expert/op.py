@@ -624,11 +624,16 @@ def create_dram_expert_tensors_multi_device(
     num_total_experts: int,
     is_dram_flags: list,
     num_in1_buffers: int = 3,
+    allocate_in1_backing: bool = True,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+
+    When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
+    allocated (caller provides their own — e.g. the fused MoE kernel overlays
+    cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
@@ -648,29 +653,36 @@ def create_dram_expert_tensors_multi_device(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores_list]
     )
 
-    logger.info("  Creating in1_backing_tensor (replicated mesh tensor)...")
     num_cores = len(compute_cores_list)
     max_tile_size = _TILE_SIZES[0]
-    in1_cb_tiles = subblock_k * num_in1_buffers
-    in1_backing_shard_shape = (32, in1_cb_tiles * 32)
-    in1_backing_total_width = in1_cb_tiles * 32 * num_cores
-    in1_backing_shard_spec = ttnn.ShardSpec(compute_core_grid, in1_backing_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    in1_backing_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_backing_shard_spec
-    )
-    in1_backing_tensor = ttnn.from_torch(
-        torch.zeros([1, 1, 32, in1_backing_total_width]).bfloat16().float(),
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=in1_backing_mem_config,
-        tile=ttnn.Tile([32, 32]),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cb_in1_base_shifted = (in1_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
-    max_subblock_bytes_shifted = (subblock_k * max_tile_size) >> _CB_ADDR_SHIFT
 
-    logger.info(f"  in1_backing created, addr={in1_backing_tensor.buffer_address()}")
+    if allocate_in1_backing:
+        logger.info("  Creating in1_backing_tensor (replicated mesh tensor)...")
+        in1_cb_tiles = subblock_k * num_in1_buffers
+        in1_backing_shard_shape = (32, in1_cb_tiles * 32)
+        in1_backing_total_width = in1_cb_tiles * 32 * num_cores
+        in1_backing_shard_spec = ttnn.ShardSpec(
+            compute_core_grid, in1_backing_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        in1_backing_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_backing_shard_spec
+        )
+        in1_backing_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 32, in1_backing_total_width]).bfloat16().float(),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=in1_backing_mem_config,
+            tile=ttnn.Tile([32, 32]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cb_in1_base_shifted = (in1_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+        max_subblock_bytes_shifted = (subblock_k * max_tile_size) >> _CB_ADDR_SHIFT
+        logger.info(f"  in1_backing created, addr={in1_backing_tensor.buffer_address()}")
+    else:
+        in1_backing_tensor = None
+        cb_in1_base_shifted = 0
+        max_subblock_bytes_shifted = 0
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
     _DRAM_ALIGNMENT = 64

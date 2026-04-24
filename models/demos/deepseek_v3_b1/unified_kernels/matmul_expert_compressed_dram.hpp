@@ -142,7 +142,19 @@ struct MatmulExpertCompressedDRAM {
 
     struct WriterCTArgs {};
 
-    template <typename CTArgs, bool IsActiveCore, bool pop_in0 = true, bool pop_index = true>
+    // ResetCBIn1: When true, uses CBIn1ResetAddr as the fixed cb_in1_base for the
+    //             software write-pointer wrap logic. Required when cb_in1 is shared
+    //             across sequential invocations (e.g. gate_proj → up_proj) because
+    //             GP leaves the HW write_ptr at a non-physical-start position; the
+    //             default `get_write_ptr()`-seeded base would then misalign the
+    //             software wrap boundary with the CB's physical wrap boundary.
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool pop_in0 = true,
+        bool pop_index = true,
+        bool ResetCBIn1 = false,
+        uint32_t CBIn1ResetAddr = 0>
     class Op {
     public:
         void operator()() {
@@ -162,9 +174,14 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t extra_blocks_in_flight = 1;
             constexpr uint32_t max_subblock_bytes = CTArgs::cb_in1_size_bytes / num_buffers;
 
-            // Read index array from L1 (direct address, no CB API needed).
+            // Sync point: wait until the index CB's front slot is populated before
+            // reading indices. In the fused MoE kernel the indices arrive via NOC
+            // mcast into cb_index; in standalone tests they are pre-pushed.  Either
+            // way get_read_ptr(cb_index) yields the correct L1 address after the wait.
+            cb_wait_front(CTArgs::cb_index, 1);
+
             volatile tt_l1_ptr uint16_t* index_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
             const volatile uint32_t* meta_base = reinterpret_cast<const volatile uint32_t*>(CTArgs::meta_l1_addr);
 
             // Pipeline semaphore for cores_per_bank > 1.
@@ -202,7 +219,11 @@ struct MatmulExpertCompressedDRAM {
                 cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
 
                 if (first_dram_expert) {
-                    cb_in1_base = get_write_ptr(CTArgs::cb_in1);
+                    if constexpr (ResetCBIn1) {
+                        cb_in1_base = CBIn1ResetAddr;
+                    } else {
+                        cb_in1_base = get_write_ptr(CTArgs::cb_in1);
+                    }
                     cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
                     first_dram_expert = false;
                 }
@@ -314,6 +335,12 @@ struct MatmulExpertCompressedDRAM {
 
             cb_wait_front(CTArgs::cb_index, 1);
 
+            // Read index from the static CTArgs::index_l1_addr. The caller sets
+            // this to the cb_index CB's L1 allocation (same address the NOC mcast
+            // writes to in the fused MoE kernel). Using the static addr avoids
+            // touching get_local_cb_interface(), whose cb_interface symbol is not
+            // linked on the MATH TRISC thread (cb_interface is extern-declared but
+            // only defined when !UCK_CHLKC_MATH).
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
 
