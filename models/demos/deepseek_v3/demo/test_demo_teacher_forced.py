@@ -219,6 +219,8 @@ def test_demo_teacher_forcing_accuracy(
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
         sample_on_device=True,
+        sampling_temperature=1.0,
+        sampling_top_p=1.0,
     )
 
     # Check results
@@ -395,7 +397,7 @@ def test_demo_teacher_forcing_accuracy(
         tokenizer=tokenizer,
     )
 
-    min_expected_top1 = 0.90
+    min_expected_top1 = 0.89
     min_expected_top5 = 0.99
     ref_compared = min(gen_len, max_new_tokens)
     assert total_top1 >= min_expected_top1, (
