@@ -151,6 +151,11 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
+// Returns all compute mesh ids known to the current mesh graph descriptor, including
+// peer meshes that are not visible via get_user_physical_mesh_ids() (which only
+// returns the local rank's meshes). Intended for inter-mesh topology discovery.
+std::vector<MeshId> get_all_fabric_mesh_ids();
+
 tt::tt_fabric::Topology get_fabric_topology();
 
 struct FabricEriscDatamoverKernelConfig {
