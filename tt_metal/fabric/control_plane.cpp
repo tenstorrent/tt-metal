@@ -174,10 +174,11 @@ uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     for (const auto& [k, v] : cluster_desc->get_chips_with_mmio()) {
         std::cout << "  chip " << k << " -> " << v << "\n";
     }
-    // Debug: dump chip_to_bus_id map
-    std::cout << "[get_bus_id] chip_to_bus_id:\n";
-    for (const auto& [k, v] : cluster_desc->get_chip_to_bus_id()) {
-        std::cout << "  chip " << k << " -> 0x" << std::hex << v << std::dec << "\n";
+    // Debug: dump chip_to_bus_id map via per-chip lookup
+    std::cout << "[get_bus_id] chip_to_bus_id (all chips):\n";
+    for (const ChipId c : cluster_desc->get_all_chips()) {
+        uint16_t bid = cluster_desc->get_bus_id(c);
+        std::cout << "  chip " << c << " -> 0x" << std::hex << bid << std::dec << "\n";
     }
 
     if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
