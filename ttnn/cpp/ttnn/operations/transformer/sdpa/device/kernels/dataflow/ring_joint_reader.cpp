@@ -228,10 +228,12 @@ void kernel_main() {
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
             const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
-            const bool is_last_active = (ring_iter == last_active_ring_iter);
 
-            if (balanced_skip_q && !is_last_active) {
-                continue;  // Full skip on non-last ring iters
+            // Balanced causal skip: this Q chunk is handled by the paired device. Reader sends
+            // nothing (no Q, no K/V) — compute's normalize-only path on the last ring iter does
+            // not read Q (normalize uses only restored sum/out).
+            if (balanced_skip_q) {
+                continue;
             }
 
             Slice q_slice;
@@ -256,39 +258,6 @@ void kernel_main() {
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
-
-            // Balanced causal, last ring iter (v2 only): read Q for normalize-only path, skip K/V.
-            // v1 skips entirely (its LSE-based normalization doesn't need this).
-            if (balanced_skip_q) {
-                if constexpr (!use_streaming_compute) {
-                    continue;  // v1: skip on last ring iter too
-                }
-                if (need_q_read) {
-                    if constexpr (use_q_subblock_push) {
-                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                            read_block(
-                                is_joint_q ? joint_q_generator : q_generator,
-                                q_sub_slice,
-                                q_end_seq_tile,
-                                cb_q_in,
-                                q_tile_bytes,
-                                false /*transpose*/);
-                        }
-                    } else {
-                        read_block(
-                            is_joint_q ? joint_q_generator : q_generator,
-                            q_slice,
-                            q_end_seq_tile,
-                            cb_q_in,
-                            q_tile_bytes,
-                            false /*transpose*/);
-                    }
-                }
-                continue;  // Skip K/V loop — no KV for normalize-only Q chunks
-            }
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**

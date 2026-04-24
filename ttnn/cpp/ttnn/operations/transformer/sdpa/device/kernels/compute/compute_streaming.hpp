@@ -1490,7 +1490,8 @@ void sdpa_ring_v2(
                 q_prev_norm.sum, q_prev_norm.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, Sq_chunk_t);
 
             cb_pop_front(q_prev_norm.max, Sq_chunk_t);
-            cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+            // No cb_q_in pop: reader does not push Q for balanced-skipped chunks (no QKV
+            // needed for the normalize-only path — it consumes only restored sum/out).
 
             // Signal writer AFTER all staging CBs are freed.
             // Invariant: staging CBs are empty when signal fires, so the writer's
