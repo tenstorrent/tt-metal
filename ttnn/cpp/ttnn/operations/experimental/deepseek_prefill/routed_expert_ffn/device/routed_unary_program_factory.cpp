@@ -10,7 +10,7 @@
 
 #include "routed_unary_program_factory.hpp"
 
-#include "ttnn/operations/eltwise/unary_ng/common/unary_ng_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -140,7 +140,7 @@ RoutedUnaryProgramFactory::cached_program_t RoutedUnaryProgramFactory::create(
         "routed_unary: op_chain must contain exactly one op (got {})",
         operation_attributes.op_chain.size());
     auto compute_defines =
-        ttnn::operations::unary_ng::get_block_defines(operation_attributes.op_chain, "0", "0", input.dtype());
+        ttnn::operations::unary::utils::get_block_defines(operation_attributes.op_chain, "0", "0", input.dtype());
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
