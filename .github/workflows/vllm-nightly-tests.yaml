@@ -47,9 +47,30 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      prebuilt-run-id:
+        required: false
+        type: string
+        default: ''
+        description: "Run ID to reuse build artifacts from (empty = fresh build)"
+      prebuilt-docker-image:
+        required: false
+        type: string
+        default: ''
+        description: "Pre-built docker image tag to reuse"
+      prebuilt-wheel-artifact-name:
+        required: false
+        type: string
+        default: ''
+        description: "Pre-built wheel artifact name to reuse"
+      prebuilt-build-artifact-name:
+        required: false
+        type: string
+        default: ''
+        description: "Pre-built build artifact name to reuse"
 
 jobs:
   build-artifact:
+    if: inputs.prebuilt-run-id == ''
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -61,11 +82,13 @@ jobs:
       build-wheel: true
   vllm-tests:
     needs: build-artifact
+    if: always() && !cancelled() && (needs.build-artifact.result == 'success' || needs.build-artifact.result == 'skipped')
     secrets: inherit
     uses: ./.github/workflows/vllm-nightly-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      docker-image: ${{ inputs.prebuilt-docker-image || needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ inputs.prebuilt-wheel-artifact-name || needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ inputs.prebuilt-build-artifact-name || needs.build-artifact.outputs.build-artifact-name }}
+      prebuilt-run-id: ${{ inputs.prebuilt-run-id }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
       model: ${{ inputs.model || 'all' }}

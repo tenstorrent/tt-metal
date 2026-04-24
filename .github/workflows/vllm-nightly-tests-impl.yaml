@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: "all"
+      prebuilt-run-id:
+        description: "Run ID to reuse build/wheel artifacts from (empty = current run)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   generate-matrix:
@@ -147,6 +152,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          prebuilt-run-id: ${{ inputs.prebuilt-run-id }}
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
