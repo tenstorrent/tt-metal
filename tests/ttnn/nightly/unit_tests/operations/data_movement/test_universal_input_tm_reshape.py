@@ -24,33 +24,54 @@ def _divisible_grid_1d(total_dim, max_cores, step):
     return 1
 
 
-def make_sharded_memory_config(device, shape, strategy, layout):
+# Element size (bytes) for each ttnn dtype we exercise in this file.
+# BFP8_B is only valid with TILE layout, so its RM step is irrelevant.
+_DTYPE_ELEM_SIZE = {
+    ttnn.bfloat16: 2,
+    ttnn.float32: 4,
+    ttnn.uint32: 4,
+    ttnn.int32: 4,
+    ttnn.uint16: 2,
+    ttnn.uint8: 1,
+    ttnn.bfloat8_b: 1,
+}
+
+
+def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloat16):
     """Create a valid sharded MemoryConfig for `shape` on `device`.
 
     For TILE layout the shard dims must be tile-aligned (multiples of 32).
-    For ROW_MAJOR, derive the shard-width step from the implementation's
-    current recommended memory alignment. With the current 64-byte
-    recommendation and bfloat16 (2 bytes/element), shard width should be a
-    multiple of 32 elements.
+    For ROW_MAJOR, shard_width * element_size must be a multiple of the
+    recommended L1 alignment (64 bytes today), so the shard-width step is
+    derived from the `dtype` argument.
     """
     grid = device.compute_with_storage_grid_size()
     max_x, max_y = grid.x, grid.y
     tile_h, tile_w = 32, 32
 
-    # Flatten all dims except the last one into a single H for shard purposes.
-    total_h = 1
-    for d in shape[:-1]:
-        total_h *= d
-    total_w = shape[-1]
+    # TILE layout: pad last two dims to tile-multiples before collapsing so
+    # total_h/total_w match the physical layout and create_sharded_memory_config
+    # gets tile-aligned shards.
+    shape_for_memcfg = list(shape)
+    if layout == ttnn.TILE_LAYOUT and len(shape) >= 2:
+        padded_h_dim = ((shape[-2] + tile_h - 1) // tile_h) * tile_h
+        padded_w_dim = ((shape[-1] + tile_w - 1) // tile_w) * tile_w
+        total_h = padded_h_dim
+        for d in shape[:-2]:
+            total_h *= d
+        total_w = padded_w_dim
+        shape_for_memcfg[-2] = padded_h_dim
+        shape_for_memcfg[-1] = padded_w_dim
+    else:
+        total_h = 1
+        for d in shape[:-1]:
+            total_h *= d
+        total_w = shape[-1]
 
     step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
-    # Match the implementation's current recommended ROW_MAJOR alignment.
-    # For bfloat16 (2 bytes/elem), shard_width must be a multiple of
-    # recommended_alignment_bytes / element_size so that
-    # shard_width * element_size is aligned.
     recommended_alignment_bytes = 64
-    element_size = 2  # bfloat16
-    rm_step_w = recommended_alignment_bytes // element_size  # 32 for BF16
+    element_size = _DTYPE_ELEM_SIZE.get(dtype, 2)
+    rm_step_w = max(1, recommended_alignment_bytes // element_size)
     step_w = tile_w if layout == ttnn.TILE_LAYOUT else rm_step_w
 
     if strategy == ttnn.ShardStrategy.HEIGHT:
@@ -65,7 +86,7 @@ def make_sharded_memory_config(device, shape, strategy, layout):
         core_grid = ttnn.CoreGrid(y=ny, x=nx)
 
     return ttnn.create_sharded_memory_config(
-        shape=shape,
+        shape=shape_for_memcfg,
         core_grid=core_grid,
         strategy=strategy,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -79,13 +100,8 @@ def make_sharded_memory_config(device, shape, strategy, layout):
 # ---------------------------------------------------------------------------
 
 RESHAPE_CASES = [
-    # (input_shape, output_shape, test_id)
-    # view-like: one case covers the PerformView fast path (last dim unchanged)
+    # merge_ch: PerformView fast path; rest: distinct s2i→reshape→i2s bugs.
     ([1, 4, 256, 128], [1, 1, 1024, 128], "merge_ch"),
-    # data-movement (last dim changes): each case targets a distinct s2i→reshape→i2s bug
-    #   swap_hw: width shards exceed grid columns
-    #   halve_w_double_h: height shards exceed grid rows
-    #   double_h_halve_w: BLOCK output grid recomputation
     ([1, 4, 256, 128], [1, 4, 128, 256], "swap_hw"),
     ([1, 4, 128, 256], [1, 4, 256, 128], "halve_w_double_h"),
     ([1, 4, 256, 128], [1, 4, 512, 64], "double_h_halve_w"),
@@ -448,11 +464,8 @@ def test_reshape_bfloat8_b(device, input_shape, output_shape, case_id, strategy)
 
 
 # ---------------------------------------------------------------------------
-# INTERLEAVED fallback guard: verify reshape succeeds even when the output
-# shape forces aggressive grid reduction in recompute_shard_spec_for_output.
-# With standard tile-aligned shapes n=1 always satisfies the constraints, so
-# a true INTERLEAVED fallback is unlikely; the guard in reshape.cpp ensures
-# safety if it ever occurs.
+# Grid-reduction path: output shape forces recompute_shard_spec_for_output to
+# shrink the grid; exercises the INTERLEAVED-fallback guard in reshape.cpp.
 # ---------------------------------------------------------------------------
 
 
@@ -491,3 +504,107 @@ def test_reshape_grid_reduction(device, input_shape, output_shape, strategy):
         torch_output.shape
     ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
     assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
+
+
+# ---------------------------------------------------------------------------
+# Irregular (non-tile-aligned) shapes on the TILE path, interleaved I/O.
+# TILE companion to test_reshape_irregular_interleaved (RM).
+# ---------------------------------------------------------------------------
+
+
+IRREGULAR_RESHAPE_CASES = [
+    ([50, 100], [50, 2, 50]),
+    ([50, 100], [100, 50]),
+    ([50, 2, 50], [50, 100]),
+    ([1, 3, 50, 50], [1, 3, 25, 100]),
+    ([1, 2, 96, 50], [1, 2, 50, 96]),
+]
+IRREGULAR_RESHAPE_IDS = [
+    "2d_to_3d",
+    "2d_swap",
+    "3d_to_2d",
+    "4d_halve_h_double_w",
+    "4d_swap_hw",
+]
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    IRREGULAR_RESHAPE_CASES,
+    ids=IRREGULAR_RESHAPE_IDS,
+)
+def test_reshape_irregular_interleaved_tile(device, input_shape, output_shape):
+    """Irregular shapes, TILE layout, DRAM interleaved I/O."""
+    _run_reshape(device, input_shape, output_shape, ttnn.DRAM_MEMORY_CONFIG, ttnn.TILE_LAYOUT)
+
+
+# ---------------------------------------------------------------------------
+# Irregular shapes with sharded TILE input (shard geometry uses padded shape).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
+    IRREGULAR_RESHAPE_CASES,
+    ids=IRREGULAR_RESHAPE_IDS,
+)
+@pytest.mark.parametrize(
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "width", "block"],
+)
+def test_reshape_irregular_sharded_input_tile(device, input_shape, output_shape, strategy):
+    """Irregular (non-tile-aligned) shapes, TILE layout, sharded input."""
+    mem_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.TILE_LAYOUT)
+    _run_reshape(device, input_shape, output_shape, mem_cfg, ttnn.TILE_LAYOUT)
+
+
+# ---------------------------------------------------------------------------
+# Multi-dtype coverage (bf16 / fp32 / bfp8) on top of test_reshape_bfloat8_b.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape,case_id",
+    [
+        ([1, 4, 256, 128], [1, 1, 1024, 128], "merge_ch"),
+        ([1, 4, 256, 128], [1, 4, 128, 256], "swap_hw"),
+    ],
+    ids=["merge_ch", "swap_hw"],
+)
+@pytest.mark.parametrize(
+    "strategy",
+    [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK],
+    ids=["height", "width", "block"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    ids=["bf16", "fp32", "bfp8"],
+)
+def test_reshape_multi_dtype(device, input_shape, output_shape, case_id, strategy, dtype):
+    """Reshape across multiple dtypes with sharded TILE input."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    input_mem_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        device=device,
+        memory_config=input_mem_cfg,
+    )
+
+    tt_output = ttnn.reshape(tt_input, output_shape)
+    actual = ttnn.to_torch(tt_output).to(torch.bfloat16)
+
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    if dtype == ttnn.bfloat8_b:
+        # BFP8 is lossy; use PCC.
+        assert_with_pcc(torch_output, actual, 0.99)
+    else:
+        assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
