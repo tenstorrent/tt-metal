@@ -65,7 +65,7 @@ To run the device performance test:
 pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_device_perf.py
 ```
 
-To run the trace + 2CQ test (peak throughput via trace replay):
+To run the trace-mode test (peak throughput via trace replay):
 
 ```bash
 pytest models/experimental/depth_anything_v2/tests/test_depth_anything_v2_trace_2cq.py
@@ -135,7 +135,8 @@ The following optimizations are planned but **not yet implemented**:
 - **8×8 grid sharding**: Shard the backbone across all 64 cores with 2048-token padding (1 tile per core).
 - **Fused attention**: Replace `ttnn.softmax` with `ttnn.transformer.attention_softmax_` for in-place hardware acceleration.
 - **In-place residual adds**: Use `ttnn.add_` to reduce DRAM traffic.
-- **Trace + 2CQ execution**: Dual command queue with trace capture for pipelined inference.
+- **Trace + 2CQ execution**: Dual command queue with trace capture for pipelined inference
+  (current trace test uses single CQ; 2CQ extension pending hardware validation).
 
 ### Accuracy Verification
 
