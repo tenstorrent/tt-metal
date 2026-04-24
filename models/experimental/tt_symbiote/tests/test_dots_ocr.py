@@ -3,10 +3,11 @@
 
 """Test for dots.ocr model on N300 (1x2 Wormhole mesh) with col-sharded residual flow.
 
-Phase 3+4: Full col-sharded pipeline. Residual stream is sharded [B, S, 768] per device.
+Phase 6: Full col-sharded pipeline with traced execution and performance profiling.
 """
 
 import os
+import time
 
 import pytest
 import torch
@@ -19,6 +20,7 @@ from models.experimental.tt_symbiote.core.run_config import (
     DispatchManager,
     TracedRun,
 )
+from models.experimental.tt_symbiote.models.dots_ocr import TTNNDotsOCRModel
 from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import TTNNDotsOCRDecoderLayer
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.attention import (
@@ -53,7 +55,17 @@ DOTS_OCR_LOCAL_PATH = "/home/salnahari/.cache/huggingface/hub/models--rednote-hi
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
-    head_dim = model_config.hidden_size // model_config.num_attention_heads
+    """Create a paged attention KV cache for dots.ocr.
+
+    Args:
+        model_config: Model configuration
+        device: TTNN device
+        batch_size: Batch size
+
+    Returns:
+        TTNNPagedAttentionKVCache instance
+    """
+    head_dim = getattr(model_config, "head_dim", model_config.hidden_size // model_config.num_attention_heads)
     config = PagedAttentionConfig(
         block_size=64,
         max_num_blocks=32,
@@ -70,7 +82,7 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 200000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"trace_region_size": 300000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -114,6 +126,13 @@ def test_dots_ocr_n300(mesh_device):
     }
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
 
+    # Pass 3: Replace Qwen2Model with model wrapper that uses LayerStack
+    qwen2_model_class = model.model.__class__
+    nn_to_ttnn_model = {
+        qwen2_model_class: TTNNDotsOCRModel,
+    }
+    modules_model = register_module_replacement_dict(model, nn_to_ttnn_model, model_config=None)
+
     type(model).device = property(lambda self: torch.device("cpu"))
 
     messages = [
@@ -132,29 +151,50 @@ def test_dots_ocr_n300(mesh_device):
 
     set_device(model, mesh_device, device_init=DeviceInit)
 
-    all_modules = {**modules, **modules2}
+    all_modules = {**modules, **modules2, **modules_model}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
 
-    print("Running inference with mesh device...")
+    # Create paged KV cache
+    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+
+    print("Running inference with paged attention...")
     model.eval()
     torch.set_grad_enabled(False)
 
-    kv_cache = create_paged_kv_cache(model.config, mesh_device)
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=kv_cache)
+    # Warmup run without trace
+    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
+    paged_cache.reset()
+    # Actual run with trace
+    outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=paged_cache)
+    paged_cache.reset()
 
-    kv_cache = create_paged_kv_cache(model.config, mesh_device)
-    outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=kv_cache)
-
-    kv_cache = create_paged_kv_cache(model.config, mesh_device)
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=kv_cache)
+    start_time = time.time()
+    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=paged_cache)
     ttnn.synchronize_device(mesh_device)
+    end_time = time.time()
 
     decoded = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :])
     print(f"dots.ocr N300 OUTPUT: {decoded}")
+
+    total_time = end_time - start_time
+    num_generated_tokens = outputs.shape[-1] - inputs["input_ids"].shape[-1]
+    prompt_tokens = inputs["input_ids"].shape[-1]
+    tokens_per_second = num_generated_tokens / total_time
+    ms_per_token = total_time / num_generated_tokens * 1000
+
+    print(f"\n{'='*60}")
+    print(f"dots.ocr N300 Performance Summary (TRACED)")
+    print(f"{'='*60}")
+    print(f"Prompt tokens:        {prompt_tokens}")
+    print(f"Generated tokens:     {num_generated_tokens}")
+    print(f"Total time:           {total_time:.3f} s")
+    print(f"Throughput:           {tokens_per_second:.1f} tok/s")
+    print(f"Avg time per token:   {ms_per_token:.1f} ms/tok")
+    print(f"{'='*60}\n")
 
     assert len(decoded.strip()) > 0, "Generated output should not be empty"
 
