@@ -166,6 +166,8 @@ public:
     // device, so that sender and receiver ERISCs are both running before the handshake poll.
     void quiesce_and_restart_fabric_workers();
     void wait_for_fabric_workers_ready();
+    // Called by FabricFirmwareInitializer when this device is placed in mmio_dead_peer_devices_.
+    void set_fabric_is_mmio_dead_peer_device(bool v) { fabric_is_mmio_dead_peer_device_ = v; }
     // Puts device into reset
     bool close() override;
 
@@ -264,6 +266,13 @@ private:
     // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
     // expect them to reach READY_FOR_TRAFFIC.
     std::unordered_set<uint32_t> fabric_pre_dead_channels_;
+    // FIX I2 (#42429): True when this MMIO device's master ETH channel connects to a
+    // dead-relay peer.  Firmware was loaded on this device but the peer will never complete
+    // the handshake (peer ETH relay broken).  wait_for_fabric_workers_ready() must skip
+    // Phase 5 (handshake poll + health check) — same as init-time FIX I skip in
+    // wait_for_fabric_router_sync() and verify_all_fabric_channels_healthy().
+    // Set by FabricFirmwareInitializer::compile_and_configure_fabric().
+    bool fabric_is_mmio_dead_peer_device_ = false;
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;

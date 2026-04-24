@@ -1161,6 +1161,21 @@ void Device::wait_for_fabric_workers_ready() {
         return;
     }
 
+    // FIX I2 (#42429): This MMIO device's master ETH channel connects to a dead-relay peer.
+    // Firmware was loaded on this device but the peer will never complete the handshake —
+    // the peer's ETH relay is broken.  Waiting here would always time out (10s) then throw.
+    // This mirrors the init-time FIX I skip in wait_for_fabric_router_sync() and
+    // verify_all_fabric_channels_healthy().
+    if (fabric_is_mmio_dead_peer_device_) {
+        log_warning(
+            tt::LogMetal,
+            "wait_for_fabric_workers_ready: Device {} is an MMIO dead-peer device — "
+            "skipping Phase 5 handshake poll + health check (master ETH peer is dead-relay, "
+            "firmware loaded but peer handshake will never complete). (#42429 FIX I2)",
+            this->id());
+        return;
+    }
+
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
     const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 

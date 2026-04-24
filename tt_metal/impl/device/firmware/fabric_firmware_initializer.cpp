@@ -1284,6 +1284,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 const ChipId peer_chip_id = std::get<0>(peer_info);
                 if (dead_relay_devices_.count(peer_chip_id) > 0) {
                     mmio_dead_peer_devices_.insert(dev->id());
+                    dev->set_fabric_is_mmio_dead_peer_device(true);
                     log_warning(
                         tt::LogMetal,
                         "compile_and_configure_fabric: Device {} MMIO master router chan={} connects "
@@ -1296,6 +1297,55 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                         master_chan);
                 }
                 break;  // master_chan found; no need to iterate further channels for this device
+            }
+        }
+
+        // FIX I2 (#42429): Transitive closure — if an MMIO device's master channel connects to
+        // another MMIO device that's already in mmio_dead_peer_devices_, it should also be added.
+        // A dead-peer MMIO device can never complete its fabric handshake, so any MMIO device
+        // whose master channel routes through it is also stuck.  Repeat to fixed point.
+        // This mirrors propagate_dead_mmio_peers() in RiscFirmwareInitializer.
+        bool transitive_changed = true;
+        while (transitive_changed) {
+            transitive_changed = false;
+            for (auto* tdev : compiled_devices) {
+                if (!tdev) {
+                    continue;
+                }
+                if (cluster_.get_associated_mmio_device(tdev->id()) != tdev->id()) {
+                    continue;  // not MMIO
+                }
+                if (dead_relay_devices_.count(tdev->id()) > 0) {
+                    continue;  // already dead-relay
+                }
+                if (mmio_dead_peer_devices_.count(tdev->id()) > 0) {
+                    continue;  // already in set
+                }
+                const auto t_master_chan = builder_context.get_fabric_master_router_chan(tdev->id());
+                auto t_conn_it = eth_connections.find(tdev->id());
+                if (t_conn_it == eth_connections.end()) {
+                    continue;
+                }
+                for (const auto& [t_eth_chan, t_peer_info] : t_conn_it->second) {
+                    if (static_cast<int>(t_eth_chan) != static_cast<int>(t_master_chan)) {
+                        continue;
+                    }
+                    const ChipId t_peer_chip_id = std::get<0>(t_peer_info);
+                    if (mmio_dead_peer_devices_.count(t_peer_chip_id) > 0) {
+                        mmio_dead_peer_devices_.insert(tdev->id());
+                        tdev->set_fabric_is_mmio_dead_peer_device(true);
+                        log_warning(
+                            tt::LogMetal,
+                            "compile_and_configure_fabric: Device {} transitively in "
+                            "mmio_dead_peer_devices_ — master chan={} connects to dead-peer "
+                            "Device {}. (#42429 FIX I2 transitive)",
+                            tdev->id(),
+                            t_master_chan,
+                            t_peer_chip_id);
+                        transitive_changed = true;
+                    }
+                    break;  // master_chan found
+                }
             }
         }
     }
