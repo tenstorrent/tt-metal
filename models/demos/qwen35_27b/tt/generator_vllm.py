@@ -54,14 +54,17 @@ class Qwen35ForCausalLM(Generator):
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        # vLLM passes num_layers = number of attention layers, but the model forward
+        # loop indexes kv_cache by total layer index. Build a full-length list with
+        # None for GDN layers so kv_cache[i] works for every i in range(n_layers).
         layer_types = self.model_args[0].layer_types
         mesh = self.model[0].mesh_device
         cache_path = self.cache_path
 
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
-        for layer_idx in tqdm(range(num_layers), desc="Allocating TT kv caches"):
-            if layer_types and layer_types[layer_idx] == "linear_attention":
+        for layer_idx in tqdm(range(len(layer_types)), desc="Allocating TT kv caches"):
+            if layer_types[layer_idx] == "linear_attention":
                 # GDN layers use internal recurrence state, no KV cache needed
                 kv_tt.append(None)
             else:
