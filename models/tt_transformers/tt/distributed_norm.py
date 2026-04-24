@@ -51,7 +51,7 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode: Mode, norm_config=None):
+    def forward(self, x, mode: Mode, norm_config=None, skip_post_all_gather=False):
         """Apply a norm, possibly gathering inputs if required."""
 
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
@@ -110,7 +110,7 @@ class DistributedNorm(LightweightModule):
         )
 
         # Distributed norm requires a gather
-        if self.args.is_distributed_norm(mode) and self.enable_all_gather:
+        if self.args.is_distributed_norm(mode) and self.enable_all_gather and not skip_post_all_gather:
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,

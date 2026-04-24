@@ -269,7 +269,10 @@ class TransformerBlock(LightweightModule):
             hidden_states = attn_out
 
         ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-        hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
+        use_fused_ag_mm = mode == Mode.PREFILL and getattr(self.args, "use_fused_ag_matmul_prefill", False)
+        hidden_states = self.ff_norm(
+            hidden_states, mode, norm_config=ff_norm_config, skip_post_all_gather=use_fused_ag_mm
+        )
 
         if self.pre_ff_norm is not None:
             # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded

@@ -89,6 +89,42 @@ class Qwen35FusedMLP(MLP):
             cache_file_name=cache_name,
         )
 
+        self._use_fused_ag_matmul = getattr(args, "use_fused_ag_matmul_prefill", False)
+        if self._use_fused_ag_matmul:
+            cache_name_il = (
+                None
+                if args.dummy_weights
+                else weight_cache_path / f"{sd_prefix}.w1w3_fused_interleaved{hidden_dim_string}"
+            )
+            self.w1w3_interleaved = ttnn.as_tensor(
+                w1w3_4d,
+                dtype=ff1_3_dtype,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=args.cluster_shape),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name_il,
+            )
+            if not hasattr(args, "_ag_matmul_shared_resources"):
+                compute_grid_size = mesh_device.compute_with_storage_grid_size()
+                ag_cores = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
+                        )
+                    }
+                )
+                args._ag_matmul_shared_resources = {
+                    "compute_config": ttnn.init_device_compute_kernel_config(
+                        mesh_device.arch(),
+                        math_fidelity=ttnn.MathFidelity.HiFi2,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=True,
+                        packer_l1_acc=True,
+                    ),
+                    "semaphores": [ttnn.create_global_semaphore(mesh_device, ag_cores, 0) for _ in range(2)],
+                }
+
         # Free separate weights — fused tensor replaces them
         ttnn.deallocate(self.w1)
         ttnn.deallocate(self.w3)
@@ -101,6 +137,36 @@ class Qwen35FusedMLP(MLP):
             k=args.dim,
             n=2 * self.hidden_dim_tp,
             num_cores=args.mlp_core_grid.num_cores,
+        )
+
+    def _make_ag_matmul_program_config(self, seq_len):
+        """Build MatmulProgramConfig for all_gather_matmul_async (short seqs only)."""
+        return self.args.matmul_config(
+            m=min(seq_len, self.args.prefill_len_cutoff),
+            k=self.args.dim // self.args.cluster_shape[0],
+            n=2 * self.hidden_dim_tp,
+            grid_size=self.args.mlp1_3_grid(seq_len),
+            in0_block_w=5,
+        )
+
+    def _make_ag_minimal_matmul_config(self, seq_len):
+        """Build MinimalMatmulConfig for strided_all_gather_minimal_matmul_async (long seqs)."""
+        grid_x, grid_y = 8, 8
+        M_per_core = max(1, min(seq_len, self.args.prefill_len_cutoff) // 32 // grid_y)
+
+        def _find_divisor(n, candidates):
+            for c in candidates:
+                if c <= n and n % c == 0:
+                    return c
+            return 1
+
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=_find_divisor(M_per_core, [4, 2, 1]),
+            K_block_size=5,
+            N_block_size=17,
+            subblock_h=1,
+            subblock_w=1,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
         )
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
@@ -118,26 +184,95 @@ class Qwen35FusedMLP(MLP):
             x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
 
         # ── Fused W1+W3 matmul ──────────────────────────────────────────
-        if mode == Mode.DECODE:
-            pc = self._fused_decode_pc
-            mem = self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
-        else:
-            pc = self.args.matmul_config(
-                m=min(seq_len, self.args.prefill_len_cutoff),
-                k=self.args.dim // self.args.cluster_shape[0],
-                n=2 * self.hidden_dim_tp,
-                grid_size=self.args.mlp1_3_grid(seq_len),
-            )
-            mem = None
+        use_fused = mode == Mode.PREFILL and self._use_fused_ag_matmul
 
-        w1w3_out = ttnn.linear(
-            x,
-            self.w1w3,
-            dtype=activation_dtype or ttnn.bfloat16,
-            compute_kernel_config=li_ff1_3_compute_cfg,
-            program_config=pc,
-            memory_config=mem,
-        )
+        if use_fused:
+            shared = self.args._ag_matmul_shared_resources
+            actual_seq = min(seq_len, self.args.prefill_len_cutoff)
+            offset = ttnn.CoreCoord(
+                self.args.ag_matmul_core_grid_offset[0],
+                self.args.ag_matmul_core_grid_offset[1],
+            )
+
+            if actual_seq <= 512:
+                ag_mm_pc = self._make_ag_matmul_program_config(seq_len)
+                ag_mm_result = ttnn.experimental.all_gather_matmul_async(
+                    x,
+                    self.w1w3_interleaved,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=shared["semaphores"],
+                    all_gather_core_grid_offset=self.args.ag_matmul_core_grid_offset,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    num_links=self.args.ag_matmul_num_links,
+                    memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Ring,
+                    memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=ag_mm_pc,
+                    compute_kernel_config=shared["compute_config"],
+                    dtype=activation_dtype or ttnn.bfloat16,
+                    chunks_per_sync=4,
+                    num_buffers_per_channel=8,
+                )
+            else:
+                ag_mm_cfg = self._make_ag_minimal_matmul_config(seq_len)
+                # Cache persistent buffer per seq_len on self.args (shared across all 64 layers)
+                cache_attr = f"_strided_ag_buf_{actual_seq}"
+                if not hasattr(self.args, cache_attr):
+                    setattr(
+                        self.args,
+                        cache_attr,
+                        ttnn.from_torch(
+                            torch.zeros(1, 1, actual_seq, self.args.dim, dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=self.mesh_device,
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        ),
+                    )
+                persistent_ag_buf = getattr(self.args, cache_attr)
+                ag_mm_result = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+                    x,
+                    self.w1w3_interleaved,
+                    persistent_ag_buf,
+                    dim=3,
+                    multi_device_global_semaphore=shared["semaphores"],
+                    strided_all_gather_core_grid_offset=offset,
+                    num_links=self.args.ag_matmul_num_links,
+                    memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Ring,
+                    config=ag_mm_cfg,
+                    memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=shared["compute_config"],
+                    num_workers_per_link=4,
+                    num_buffers_per_channel=8,
+                )
+            w1w3_out = ag_mm_result[1]
+            # For AGMM path (<=512), result[0] is a temp tensor we own — deallocate.
+            # For strided path (>512), result[0] IS the cached persistent buffer — keep.
+            if actual_seq <= 512:
+                ttnn.deallocate(ag_mm_result[0])
+        else:
+            if mode == Mode.DECODE:
+                pc = self._fused_decode_pc
+                mem = self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
+            else:
+                pc = self.args.matmul_config(
+                    m=min(seq_len, self.args.prefill_len_cutoff),
+                    k=self.args.dim // self.args.cluster_shape[0],
+                    n=2 * self.hidden_dim_tp,
+                    grid_size=self.args.mlp1_3_grid(seq_len),
+                )
+                mem = None
+            w1w3_out = ttnn.linear(
+                x,
+                self.w1w3,
+                dtype=activation_dtype or ttnn.bfloat16,
+                compute_kernel_config=li_ff1_3_compute_cfg,
+                program_config=pc,
+                memory_config=mem,
+            )
         ttnn.deallocate(x)
 
         # ── Split gate and up projections ────────────────────────────────

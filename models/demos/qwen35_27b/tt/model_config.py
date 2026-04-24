@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.model_config import ModelArgs
 
 # ── GDN Architecture Constants (not in HF config) ──────────────────────────
@@ -43,10 +44,11 @@ ROPE_DIM = 64
 # ATTN_CHUNK_SIZE: tokens per chunk when calling chunked_scaled_dot_product_attention.
 #   Must be a multiple of block_size (64). 4096 = 64 blocks; matches 9B reference.
 # GDN_CHUNK_SIZE: tokens per chunk when GDN layers are processed under paged mode.
-#   Kept small so create_prefill_matmul_program_config produces CBs that fit L1
-#   (at 4096 the QKVZ projection overflows L1 at 2 MB vs 1.5 MB budget).
-ATTN_CHUNK_SIZE = int(os.environ.get("QWEN35_ATTN_CHUNK_SIZE", "4096"))
-GDN_CHUNK_SIZE = int(os.environ.get("QWEN35_GDN_CHUNK_SIZE", "256"))
+#   Default 1024 on BH so chunked prefill matmul M-tiles (32) fully use grid_y=10
+#   (80 cores); smaller values (e.g. 256 → m_tiles=8) fall back to 64 cores.
+#   Max safe ~2048; at 4096 the QKVZ projection overflows L1 (2 MB vs 1.5 MB).
+ATTN_CHUNK_SIZE = int(os.environ.get("QWEN35_ATTN_CHUNK_SIZE", "2048"))
+GDN_CHUNK_SIZE = int(os.environ.get("QWEN35_GDN_CHUNK_SIZE", "2048"))
 
 
 # ── Hardware Constants ──────────────────────────────────────────────────────
@@ -54,6 +56,16 @@ GDN_CHUNK_SIZE = int(os.environ.get("QWEN35_GDN_CHUNK_SIZE", "256"))
 TILE_SIZE = 32
 DRAM_CORES = 8
 DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
+
+
+def _prefill_grid_default():
+    # BH P150: (x=8, y=10) = 80 cores. Matches tt_transformers' validated BH
+    # convention. Helps large-M matmuls (M≥10 tiles); chunked M=256 paths stay
+    # at 64 cores because m_tiles=8 < grid_y=10 — accepted tradeoff. (10, 8)
+    # was tried but produces garbled output because per_core_N*grid_x > n_tiles
+    # for several shapes (e.g. N=2048: 7*10 > 64) and the kernel does not mask
+    # N-axis overflow. WH stays at (x=8, y=8) = 64.
+    return (8, 10) if is_blackhole() else (8, 8)
 
 
 # ── Helper Functions ────────────────────────────────────────────────────────
@@ -153,12 +165,14 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
     return 1
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=(8, 8)):
+def create_prefill_matmul_program_config(m, k, n, grid_size=None):
     """Create a 2D matmul program config for prefill (compute-bound).
 
     Inputs/outputs are DRAM interleaved. M is parallelized over grid_y,
     N over grid_x. Following the tech report pattern (Section 4.3.2.1).
     """
+    if grid_size is None:
+        grid_size = _prefill_grid_default()
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
@@ -328,7 +342,8 @@ class Qwen35ModelArgs(ModelArgs):
 
         # ── 2D matmul program configs (prefill, m=seq_len) ─────────
         # These are factory methods since M varies with seq_len.
-        self._prefill_grid = (8, 8)
+        # BH P150: 80 cores (8x10) vs 64 on WH (8x8) — uses more of the 110 available workers.
+        self._prefill_grid = _prefill_grid_default()
 
         def _prefill_cfg(seq_len, k, n):
             return create_prefill_matmul_program_config(seq_len, k, n, grid_size=self._prefill_grid)
@@ -357,8 +372,40 @@ class Qwen35ModelArgs(ModelArgs):
             "topology": self.ccl_topology() or ttnn.Topology.Linear,
         }
 
+        # Fused AllGather+Matmul for prefill: fuse the AllGather at the end of
+        # DistributedNorm with the first matmul in the consumer module (MLP W1+W3).
+        # Only enabled on TG (Galaxy, 32 devices) — on smaller meshes like P150x4
+        # the AG is already fast (~41us) and the op's host-side overhead
+        # (extra interleaved weights, ~5.7GB across 64 layers) exceeds its benefit.
+        self.use_fused_ag_matmul_prefill = os.environ.get("MESH_DEVICE") == "TG"
+        self.ag_matmul_core_grid_offset = (0, 8)
+        self.ag_matmul_num_links = self.get_num_links_ag_matmul()
+
         # TopK core grid: use 30 cores (3x10) instead of single-core default
         self.sub_core_grid_topk = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9))])
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # The base warmup list always starts at 128 (common.get_all_padded_prefill_lengths).
+        # GDN prefill matmul program configs are tuned for ISLs >= 1K; at 128 tokens
+        # per_core_M collapses to 1 tile and the output projection's CBs exceed L1.
+        to_warmup_seq_lens = super().filter_warmup_seq_lens(to_warmup_seq_lens)
+        return [s for s in to_warmup_seq_lens if s >= 1024]
+
+    def find_prefill_grid(self, row_tiles, col_tiles):
+        # Extend MLP W1/W3/W2 prefill matmul grids to 8x10 (80 cores) on BH —
+        # base class caps at 8x8 (64 cores). dim=5120 → col_tiles=160 divides by 10.
+        if not is_blackhole():
+            return super().find_prefill_grid(row_tiles, col_tiles)
+        max_rows, max_cols = 8, 10
+        cols = next((i for i in range(max_cols, 0, -1) if col_tiles % i == 0), None)
+        rows = next((i for i in range(max_rows, 0, -1) if row_tiles % i == 0), None)
+        assert cols is not None, f"Cannot find a number of columns that evenly divides into {col_tiles}, not even 1(!)."
+        assert rows is not None, f"Cannot find a number of rows that evenly divides into {row_tiles}, not even 1(!)."
+        return rows, cols
+
+    def get_num_links_ag_matmul(self):
+        """Get number of ethernet links for fused AG+MM."""
+        return 1
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         """Map framework module names to Qwen3.5 state dict key prefixes."""
