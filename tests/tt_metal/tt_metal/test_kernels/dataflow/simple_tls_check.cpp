@@ -7,7 +7,7 @@
 
 uint32_t shared_global = 5;
 uint32_t uninitialized_global;
-thread_local uint32_t thread_local_var;
+thread_local uint32_t thread_local_var = 10;
 thread_local uint32_t uninitialized_thread_local_var;
 
 void kernel_main() {
@@ -75,7 +75,7 @@ void kernel_main() {
     result[TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END] = uninitialized_thread_local_end;
 
     uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_dst_address + slot_offset);
-    noc_async_write(l1_result_addr, dram_noc_addr, TLS_CHECK_RESULT_SLOT_BYTES);
+    noc_async_write(base_l1_result_addr, dram_noc_addr, TLS_CHECK_RESULT_SLOT_BYTES);
     noc_async_write_barrier();
 
     *signal_addr = hartid + 1;

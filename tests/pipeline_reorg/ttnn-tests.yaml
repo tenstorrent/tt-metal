@@ -24,7 +24,7 @@
     tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_pc_with_different_shapes_in_sequence
     tests/ttnn/unit_tests/operations/data_movement/test_embedding.py::test_base_case
     tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
-    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_multirow
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_general
     tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
     tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
     tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
@@ -186,8 +186,8 @@
   merge_gate: false
   ttsim: true
 
-- name: "ttnn transformers group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn misc ops group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/deepseek tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
@@ -214,8 +214,8 @@
   merge_gate: false
   ttsim: true
 
-- name: "ttnn reduce and misc ops group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn reduce group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40

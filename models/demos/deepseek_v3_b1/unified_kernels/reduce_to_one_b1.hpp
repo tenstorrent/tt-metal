@@ -86,7 +86,8 @@ struct ReduceToOneB1 {
         uint32_t totalNumWorkers = 0,
         uint32_t aggOutputSizeBytes = 0,
         uint32_t persistentFabricRtArgBase = 0,
-        uint32_t persistentFabricSignalEnable = 0>
+        uint32_t persistentFabricSignalEnable = 0,
+        uint32_t forwardMetadataSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -108,6 +109,7 @@ struct ReduceToOneB1 {
         static constexpr bool enable_downstream_socket = enableDownstreamSocket;
         static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
         static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
+        static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
     };
 
     // Compute (TRISC) compile-time args
@@ -151,6 +153,7 @@ struct ReduceToOneB1 {
         uint32_t output_base_addr;
         uint32_t shard_idx;
         uint32_t socket_config_addr;  // Per-worker downstream socket config address
+        uint32_t metadata_addr;       // L1 address of metadata (only used by last worker when forward_metadata > 0)
         uint32_t agg_sem_l1_addr;     // Persistent-signal sync semaphore L1 address (global sem)
         uint32_t agg_core_noc_x;      // Persistent-signal core physical NOC x
         uint32_t agg_core_noc_y;      // Persistent-signal core physical NOC y
@@ -314,10 +317,10 @@ struct ReduceToOneB1 {
 
                     volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
+                    fabric_sender.wait_for_empty_write_slot();
                     noc_semaphore_wait_min(worker_sem_ptr, 1);
                     unified_kernels::semaphore_dec(worker_sem_ptr);
 
-                    fabric_sender.wait_for_empty_write_slot();
                     fabric_sender.send_payload_without_header_non_blocking_from_address(
                         worker_payload_addr, CTArgs::payload_size_bytes);
                     fabric_sender.send_payload_flush_blocking_from_address(
@@ -344,11 +347,10 @@ struct ReduceToOneB1 {
                     if (args.persistent_enable != 0) {
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        noc_semaphore_set(agg_sem_ptr, 0);
-
                         uint64_t fc_sem = get_noc_addr(
                             args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        noc_semaphore_set(agg_sem_ptr, 0);
                         noc_semaphore_inc(fc_sem, 1);
                         noc_async_atomic_barrier();
                     } else if (args.agg_sem_l1_addr != 0) {
@@ -361,9 +363,14 @@ struct ReduceToOneB1 {
 
                 if constexpr (CTArgs::enable_downstream_socket) {
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
+                    constexpr bool is_last_worker_metadata_forwarder = CTArgs::forward_metadata_size_bytes > 0;
                     if (args.socket_config_addr != 0) {
+                        const bool is_last_worker = args.shard_idx == CTArgs::total_num_workers - 1;
+                        const uint32_t socket_page_size = (is_last_worker_metadata_forwarder && is_last_worker)
+                                                              ? useful_per_shard + CTArgs::forward_metadata_size_bytes
+                                                              : useful_per_shard;
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                        set_sender_socket_page_size(sender_socket, useful_per_shard);
+                        set_sender_socket_page_size(sender_socket, socket_page_size);
                         socket_reserve_pages(sender_socket, 1);
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
@@ -376,6 +383,15 @@ struct ReduceToOneB1 {
                         // Socket barrier means receiver has received and acknowledged the write, so we can use posted
                         // writes here
                         noc_async_write<useful_per_shard, true, /*posted=*/true>(src_addr, fifo_dst, useful_per_shard);
+
+                        if constexpr (is_last_worker_metadata_forwarder) {
+                            if (is_last_worker) {
+                                noc_async_write<CTArgs::forward_metadata_size_bytes, true, /*posted=*/true>(
+                                    args.metadata_addr,
+                                    fifo_dst + useful_per_shard,
+                                    CTArgs::forward_metadata_size_bytes);
+                            }
+                        }
                         noc_async_posted_writes_flushed();
 
                         socket_push_pages(sender_socket, 1);

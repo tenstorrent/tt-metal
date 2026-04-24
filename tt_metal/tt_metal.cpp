@@ -48,6 +48,8 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
+#include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal_profiler.hpp>
@@ -543,7 +545,8 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceSharded(
+    Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -564,6 +567,9 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
+        if (logical_core_filter != nullptr && !logical_core_filter->contains(core)) {
+            continue;
+        }
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
@@ -656,12 +662,19 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
+        if (logical_core_filter != nullptr) {
+            TT_FATAL(
+                logical_core_filter->empty(),
+                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+                "per-core filtering)");
+            return;
+        }
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer);
+        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -672,7 +685,7 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer);
+            WriteToDevice(buffer, host_buffer, /*logical_core_filter=*/nullptr);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -1125,6 +1138,24 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 }
 
 }  // namespace detail
+
+namespace experimental::core_subset_write {
+
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:  // fallthrough
+        case BufferType::L1:    // fallthrough
+        case BufferType::L1_SMALL: {
+            detail::WriteToDevice(buffer, host_buffer, &logical_core_filter);
+        } break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_THROW("Writing to host memory is unsupported!");
+        } break;
+        default: TT_THROW("Unsupported buffer type!");
+    }
+}
+
+}  // namespace experimental::core_subset_write
 
 size_t GetNumAvailableDevices() { return MetalContext::instance().get_cluster().number_of_user_devices(); }
 
@@ -1794,6 +1825,36 @@ void UpdateDynamicCircularBufferAddress(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
+}
+
+PrecompiledKernelNotFoundError::PrecompiledKernelNotFoundError(
+    std::string kernel_name,
+    size_t compile_hash,
+    std::string precompiled_dir,
+    PrecompiledKernelConfig::FallbackPolicy fallback_policy) :
+    std::runtime_error(fmt::format(
+        "Precompiled kernel binary not found. Kernel: \"{}\", compile_hash: {:#x}, searched in: \"{}\". "
+        "Either build/install the offline binaries there, set PrecompiledKernelConfig::fallback_policy to "
+        "JitCompile, or catch PrecompiledKernelNotFoundError for details.",
+        kernel_name,
+        compile_hash,
+        precompiled_dir)),
+    kernel_name_(std::move(kernel_name)),
+    compile_hash_(compile_hash),
+    precompiled_dir_(std::move(precompiled_dir)),
+    fallback_policy_(fallback_policy) {}
+
+KernelHandle CreateKernelFromPrecompiled(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
+    const PrecompiledKernelConfig& precompiled_config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
+
+    KernelHandle kernel_handle = CreateKernel(program, file_name, core_spec, config);
+    program.impl().get_kernel(kernel_handle)->set_precompiled_config(precompiled_config);
+    return kernel_handle;
 }
 
 namespace quasar {
