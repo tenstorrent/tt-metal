@@ -792,41 +792,54 @@ Quick-reference status after Step 1+2:
 | T3K multi-device | ⏳ PENDING | — | Step 3 |
 | Accuracy/latency benchmarks | ⏳ PENDING | — | Step 5 |
 
-**Performance benchmarks (2026-04-24, N150 single device):**
+**Performance benchmarks (2026-04-24, N150 single device, --no-trace):**
 
-| Config | Layers | Warm avg ms/tok | tok/s |
-|-|-:|-:|-:|
-| Baseline BFP8 paged | 32 | ~37 | ~27 |
-| TQ Pre-rescaled (BFP4, prod) | 32 | 37.2 (flat to 128K) | ~27 |
-| TQ Full Dequant (--no-trace) | 2 | 7 | 144 |
-| TQ Full Dequant (--no-trace) | 4 | 237 | 4.2 |
-| TQ Full Dequant (--no-trace) | 32 | **hangs** (>2 min decode loop, no step output) | — |
-| TQ Full Dequant (trace) | 32 | **hangs** (trace captures, execute_trace never returns) | — |
+| Layers | Warm avg ms/tok | Per-layer cost (added) | Notes |
+|-:|-:|-:|-|
+| 2 | 7 | 3.5 ms | Fast path (small-model-compatible?) |
+| 3 | 121 | +114 ms | Jump: per-layer cost ~117 ms after layer 2 |
+| 4 | 238 | +117 ms | Consistent with 3L→4L |
+| 8 | 707 | +117 ms/layer | Linear from 3L onward |
+| 32 | ~3500 (extrapolated) | +117 ms/layer | ~100× slower than baseline |
 
-**🚨 Non-linear scaling issue** — 2→4 layers gives 34× slowdown (7 → 237 ms/tok),
-32 layers hangs outright. Root cause not yet isolated. Leading hypotheses:
-- Each layer has its own `TTNNTurboQuantCache` instance (`num_layers=1`), so the
-  32 fused-SDPA kernel invocations hit different K/V/norms DRAM addresses →
-  likely program-cache thrashing (each layer forces a fresh compile path)
-- With 32 × (K_idx + V_idx + K_norms + V_norms) = 128 paged tensors in DRAM,
-  noc-bandwidth contention may dominate
-- Fused kernel's ~50 SFPU ops/tile × 32 layers × 2 (K,V) × every chunk may just
-  be the arithmetic reality (but doesn't explain 4→32 hang)
+**Comparison points:**
+- Baseline BFP8 paged (32L): ~37 ms/tok (~27 tok/s)
+- TQ Pre-rescaled (32L, prod): 37.2 ms/tok (flat to 128K)
+- TQ Full Dequant (32L, projected): ~3500 ms/tok ≈ **0.3 tok/s**
+
+**🚨 Scaling pattern** — first 2 layers essentially free (7 ms total), then a step
+up of ~117 ms per additional layer. The 2→3 layer jump (7→121 ms) looks like a
+code-path switch, not simple arithmetic. 32-layer runs for >2 minutes per token
+(earlier "hang" was just slow decode finishing within timeout for small seqlen).
+
+Shared-cache refactor (commit `ff548d2d19c`): allocated one TTNNTurboQuantCache
+with `num_layers=N` instead of N separate instances with `num_layers=1`. Cleaner
+architecturally but did NOT change perf (same 238 ms/tok at 4L). So the
+non-linear jump isn't per-layer cache allocation — it's something structural in
+the fused-SDPA kernel invocation path at ≥3 layers.
+
+**Leading hypotheses** (need profiling to confirm):
+- Program cache may hash on buffer address or tensor identity, causing miss
+  even with identical shapes/layouts across layers
+- `sync_unpack_cb_read` helper (Step 1 fix) has a fixed 64-word volatile read
+  which may become a bottleneck under repeated invocation
+- Python→C++ dispatch overhead in `ttnn.permute` and `ttnn.experimental.paged_update_cache`
+  compounds with layer count (trace-mode could fix this but it hangs for other reasons)
+
+**Multi-device (2026-04-24, N150×4 mesh):** Added `mesh_mapper=ReplicateTensorToMesh(...)`
+in `TTNNTurboQuantCache.__init__` so the paged index/norm caches replicate properly
+on MeshDevice. Verified model load → cache alloc → compile (22.1 s compile time)
+work on 4-device mesh. Decode hangs at loop start for 2-layer test — same scaling
+issue as single-device layers×devices total-invocation count (2 layers × 4 devices
+= 8 cumulative invocations per step). Need to fix the core scaling issue before
+T3K validation is meaningful.
 
 **Followups before accuracy runs can be meaningful:**
-1. Make cache single-instance across layers (one shared cache with 32 per-layer
-   slots instead of 32 single-layer caches) — should restore program-cache hits
-2. Profile with tracy where the hang occurs at 32 layers
-3. Check if trace-captured version deadlocks on a CB semaphore
-
-**Multi-device (2026-04-24, N150x4 mesh):** Added `mesh_mapper=ReplicateTensorToMesh(...)`
-in `TTNNTurboQuantCache.__init__` so the paged index/norm caches replicate properly
-on a MeshDevice. Verified the script progresses through model load → cache alloc →
-compile (22.1s compile time); but 2-layer decode also hangs at loop start (same
-symptom as 32-layer single-device). The hang scales with total fused-SDPA invocations
-per step (layers × devices), confirming the root cause is not mesh-specific but
-shared with the single-device scaling issue. Need to fix (1) above before T3K
-validation can progress.
+1. Profile the 3L run with Tracy to identify where the ~117 ms/layer cost is spent
+2. Test with `--tq-full-dequant` + trace mode after resolving the trace-mode hang
+3. Check program cache hit rate (TT_METAL_PROGRAM_CACHE_STATS or similar)
+4. If dispatch-bound, reduce Python-side permute overhead by fusing into the
+   `fused_sdpa_decode` wrapper
 
 **3. Multi-device / T3K support** — PENDING
 - Replicate centroids across devices, shard indices/norms by heads
