@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <functional>
 #include <utility>
 
@@ -59,9 +60,19 @@ static std::pair<uint32_t, uint32_t> find_best_n_2d(
     return {best_rows, best_cols};
 }
 
-// fill_implicit_tile_padding takes a float; flatten the PadValue variant accordingly.
-static float pad_value_as_float(const PadValue& pad_value) {
-    return std::visit([](auto v) -> float { return static_cast<float>(v); }, pad_value);
+// Flatten PadValue to float for fill_implicit_tile_padding.
+static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
+    return std::visit(
+        [dtype](auto v) -> float {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, uint32_t>) {
+                if (dtype == DataType::FLOAT32) {
+                    return std::bit_cast<float>(v);
+                }
+            }
+            return static_cast<float>(v);
+        },
+        pad_value);
 }
 
 // True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
@@ -293,7 +304,7 @@ ttnn::Tensor reshape_tiled(
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
-    const float fill_value = detail::pad_value_as_float(pad_value);
+    const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {

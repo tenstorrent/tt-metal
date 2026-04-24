@@ -106,7 +106,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("recreate_mapping_tensor") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("skip_padding_fill") = false));
 }
