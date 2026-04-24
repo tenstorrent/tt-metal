@@ -101,14 +101,10 @@ def _raise_open_file_limit(desired: int = 65536) -> None:
         if new_soft <= soft:
             return
         resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
-    except Exception as e:
+    except (ImportError, OSError, ValueError) as e:
         utils.WARN(
             f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
         )
-        pass
-
-
-_raise_open_file_limit()
 
 
 class ScriptPriority(Enum):
@@ -449,6 +445,7 @@ def create_progress() -> Progress:
 
 def process_arguments(args: ScriptArguments) -> None:
     init_console_and_verbosity(args)
+    _raise_open_file_limit()
 
 
 def parse_arguments(
