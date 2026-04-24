@@ -52,6 +52,7 @@ def _t_bias(bias: torch.Tensor, device: Any) -> Any:
 
 
 _COMPUTE_CFG = None
+_LN_COMPUTE_CFG = None
 
 
 def _fused_compute_config(device: Any) -> Any:
@@ -66,6 +67,21 @@ def _fused_compute_config(device: Any) -> Any:
         packer_l1_acc=True,
     )
     return _COMPUTE_CFG
+
+
+def _ln_compute_config(device: Any) -> Any:
+    """HiFi2 + math_approx for layer_norm — approx rsqrt is faster on BH."""
+    global _LN_COMPUTE_CFG
+    if _LN_COMPUTE_CFG is not None:
+        return _LN_COMPUTE_CFG
+    _LN_COMPUTE_CFG = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return _LN_COMPUTE_CFG
 
 
 # Pre-computed (M, K, N) → (M_blk, K_blk, N_blk, sub_h, sub_w) for MANO shapes.
@@ -171,10 +187,11 @@ def _merge_heads(ctx, num_heads: int = NUM_HEADS, head_dim: int = HEAD_DIM):
 def _decoder_block(x, context, p: Dict[str, Any]):
     dev = x.device()
     ckcfg = _fused_compute_config(dev)
+    lncfg = _ln_compute_config(dev)
     _L1 = ttnn.L1_MEMORY_CONFIG
 
     # SA: N=1, so attn output == V; skip SDPA entirely.
-    h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"], memory_config=_L1)
+    h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"], memory_config=_L1, compute_kernel_config=lncfg)
     qkv = ttnn.experimental.minimal_matmul(
         h, p["sa_qkv_w"],
         config=_mm_cfg(1, 1024, 1536, dev),
@@ -195,7 +212,7 @@ def _decoder_block(x, context, p: Dict[str, Any]):
     x = ttnn.add(x, sa, memory_config=_L1)
 
     # Cross-attention via SDPA.
-    h = ttnn.layer_norm(x, weight=p["norm_ca"]["weight"], bias=p["norm_ca"]["bias"], memory_config=_L1)
+    h = ttnn.layer_norm(x, weight=p["norm_ca"]["weight"], bias=p["norm_ca"]["bias"], memory_config=_L1, compute_kernel_config=lncfg)
     q = ttnn.experimental.minimal_matmul(
         h, p["ca_q_w"],
         config=_mm_cfg(1, 1024, 512, dev),
@@ -223,13 +240,13 @@ def _decoder_block(x, context, p: Dict[str, Any]):
     x = ttnn.add(x, ca, memory_config=_L1)
 
     # FFN with fused GELU.
-    h = ttnn.layer_norm(x, weight=p["norm_ff"]["weight"], bias=p["norm_ff"]["bias"], memory_config=_L1)
+    h = ttnn.layer_norm(x, weight=p["norm_ff"]["weight"], bias=p["norm_ff"]["bias"], memory_config=_L1, compute_kernel_config=lncfg)
     h = ttnn.experimental.minimal_matmul(
         h, p["ff_fc1_w"],
         bias_tensor=p["ff_fc1_b"],
         config=_mm_cfg(1, 1024, 1024, dev),
         compute_kernel_config=ckcfg,
-        fused_activation=(ttnn.UnaryOpType.GELU, False),
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
         memory_config=_L1,
     )
     h = ttnn.experimental.minimal_matmul(
