@@ -5,6 +5,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
