@@ -36,6 +36,11 @@ on:
         description: "Verify mode: max minutes to wait for run to finish once started"
         type: string
         default: "120"
+      # --- LLM backend ---
+      llm-backend:
+        description: "LLM backend for agent-driven steps: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
       # --- Detection mode (used when fix-commit-sha is blank) ---
       max-phase:
         description: "Detection mode: stop after this phase (0-4)"
@@ -79,6 +84,7 @@ jobs:
     if: inputs.fix-commit-sha == ''
     uses: tenstorrent/tt-auto-triage/.github/workflows/bug-escapes-ci.yaml@ebanerjee/bug-escapes
     with:
+      llm-backend: ${{ inputs.llm-backend }}
       max-phase: ${{ inputs.max-phase }}
       test-workflows: ${{ inputs.test-workflows }}
       consecutive-runs: ${{ inputs.consecutive-runs }}
@@ -90,12 +96,14 @@ jobs:
     secrets:
       GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
       GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
 
   verify:
     if: inputs.fix-commit-sha != ''
     uses: tenstorrent/tt-auto-triage/.github/workflows/verify-bug-escape-ci.yaml@ebanerjee/bug-escapes
     with:
+      llm-backend: ${{ inputs.llm-backend }}
       fix-commit-sha: ${{ inputs.fix-commit-sha }}
       test-pipeline: ${{ inputs.verify-test-pipeline }}
       test-job: ${{ inputs.verify-test-job }}
@@ -107,3 +115,4 @@ jobs:
     secrets:
       GITHUB_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
