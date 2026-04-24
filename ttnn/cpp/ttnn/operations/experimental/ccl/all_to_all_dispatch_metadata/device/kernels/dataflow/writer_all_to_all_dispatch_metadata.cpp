@@ -909,6 +909,10 @@ void kernel_main() {
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
 
+    if (token_start_idx == token_end_idx) {
+        return;
+    }
+
 #ifdef USE_MUX
     // ========================================================================
     // MUX PATH: Use WorkerToFabricMuxSender connections via fabric mux

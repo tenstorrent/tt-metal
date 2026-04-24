@@ -685,7 +685,7 @@ def _run_test(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("batch", [512, 128, 64])
+@pytest.mark.parametrize("batch", [512, 128, 64, 48])
 @pytest.mark.parametrize("select_experts_k", [1, 2, 8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])

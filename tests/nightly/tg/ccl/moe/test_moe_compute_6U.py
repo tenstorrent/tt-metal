@@ -289,9 +289,11 @@ def prepare_output_tensor_from_combine_writer(
 
             torch_output[e, t] = contrib
 
-            if output_token_shard_row == (
-                tokens_per_shard_chunk if output_token_shard < tokens_per_shard_rem else tokens_per_shard_chunk - 1
-            ):
+            # Determine how many tokens this shard should have
+            # First tokens_per_shard_rem shards get one extra token
+            tokens_in_this_shard = tokens_per_shard_chunk + (1 if output_token_shard < tokens_per_shard_rem else 0)
+
+            if output_token_shard_row + 1 == tokens_in_this_shard:
                 output_token_shard += 1
                 output_token_shard_row = 0
             else:
@@ -341,10 +343,13 @@ def validate_matmul(
 
     matmul_all_passed = True
 
-    MATMUL_PCC_THRESHOLD = 0.987
+    # smaller batch -> smaller dataset so PCC is less stable. A lower threshold is acceptable.
+    MATMUL_PCC_THRESHOLD = 0.987 if total_tokens == 512 else 0.986
     for d in range(devices):
         for expert_id in range(experts_per_device):
             active_tokens = expert_token_counts[d, expert_id].item()
+            if active_tokens == 0:
+                continue
             # torch_output_ref is (L, D, E/D, T, H)
             torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
             tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
@@ -602,6 +607,54 @@ def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
     padding = torch.zeros(12, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
     all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
     return all_groups_per_bank
+
+
+def get_w0_w1_memory_config(num_layers, experts_per_device, hidden_size, compute_matmul_dram_core_range_set):
+    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+    w0_w1_shard_spec = ttnn.ShardSpec(
+        compute_matmul_dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w0_w1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
+    )
+    return w0_w1_memory_config
+
+
+def get_w2_memory_config(num_layers, experts_per_device, matmul_N, compute_matmul_dram_core_range_set):
+    w2_shard_height = num_layers * experts_per_device * 5 * (matmul_N + 192)
+    w2_shard_width = 4 * ttnn.TILE_SIZE
+    w2_shard_spec = ttnn.ShardSpec(
+        compute_matmul_dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
+    return w2_memory_config
+
+
+def determine_compute_matmul_cores(mesh_device):
+    MATMUL_FULL_CORES = {0, 3, 6, 9}
+    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
+
+    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
+    core2dram = {}
+    for dram_bank_id, core_coords in enumerate(in0_core_coords):
+        core2dram[core_coords] = dram_bank_id
+
+    in0_num_cores = len(in0_core_coords)
+
+    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
+
+    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
+    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+    return ring2cores, dram_core_range_set
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -1016,7 +1069,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 )
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("experts_per_device", [2])
-@pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
+@pytest.mark.parametrize("tokens_per_device", [3, 8, 16, 32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
     [(1, 1, 1), (8, 5, 1)],
@@ -1024,7 +1077,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_moe_compute(
@@ -1226,30 +1279,7 @@ def test_moe_compute(
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-    MATMUL_FULL_CORES_A = {0, 1, 8, 9}
-    MATMUL_PAD_CORES_A = {2, 3, 4, 5, 6, 7, 10, 11}
-
-    MATMUL_FULL_CORES_B = {0, 3, 6, 9}
-    MATMUL_PAD_CORES_B = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES_B else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+    ring2cores, dram_core_range_set = determine_compute_matmul_cores(mesh_device)
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -1273,27 +1303,13 @@ def test_moe_compute(
     # Create DRAM shard spec for w0_w1
     # Tensor shape: (num_layers, experts_per_device, hidden_size, 4608) -> padded and reordered to (12, num_layers, experts_per_device, 6, hidden_size, 64)
     # ------------------------------------------------------------------------
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-
-    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
+    w0_w1_mem_config = get_w0_w1_memory_config(num_layers, experts_per_device, hidden_size, dram_core_range_set)
 
     # ------------------------------------------------------------------------
     # Create DRAM shard spec for w2
     # Tensor shape: (num_layers, experts_per_device, N, hidden_size) -> padded and reordered to (12, num_layers, experts_per_device, 5, N + 192, 128)
     # ------------------------------------------------------------------------
-    w2_shard_height = num_layers * experts_per_device * 5 * (N + 192)
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-
-    w2_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-
-    w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
+    w2_mem_config = get_w2_memory_config(num_layers, experts_per_device, N, dram_core_range_set)
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)

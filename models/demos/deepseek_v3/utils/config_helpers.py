@@ -19,6 +19,31 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
+
+
+def get_fabric_config() -> ttnn.FabricConfig:
+    """Get the fabric config for the model."""
+    return (
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+    )
+
+
+def is_ring_fabric(fabric_config: ttnn.FabricConfig) -> bool:
+    """Check whether the given fabric config has a RING configuration"""
+    return fabric_config == ttnn.FabricConfig.FABRIC_1D_RING
+
+
+def is_quad_mesh_env() -> bool:
+    """True when ``MESH_DEVICE`` requests a QUAD run (before a mesh device exists)."""
+    return os.getenv("MESH_DEVICE") == "QUAD"
+
+
+def is_quad_mesh(mesh_device: ttnn.MeshDevice) -> bool:
+    """Check whether the mesh device has a QUAD configuration (16x8)."""
+    return mesh_device.shape[0] == 16 and mesh_device.shape[1] == 8
+
+
+OPTIMIZED_MOE_BLOCK_USERS_PER_ROW = 32
 USERS_PER_ROW = 32
 DEFAULT_MAX_SEQ_LEN = 2048
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
@@ -36,10 +61,20 @@ DEFAULT_SAMPLING_TOP_P = 0.95
 DEFAULT_SAMPLING_TOP_K = 32
 
 
-def get_fabric_config():
-    return (
-        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-    )
+def align_prefill_padded_seq_len(seq_len: int, num_mesh_rows: int) -> int:
+    """Round ``seq_len`` up to a multiple of ``TILE_SIZE * num_mesh_rows`` (mesh axis 0).
+
+    Used when padding prefill token batches so the workspace sequence length satisfies
+    dispatch / mesh-row alignment constraints.
+    """
+    seq_len_i = int(seq_len)
+    rows = int(num_mesh_rows)
+    if rows <= 0:
+        raise ValueError(f"num_mesh_rows must be > 0, got {num_mesh_rows!r}")
+    # for quad mesh, we need to align each seq_len chunk per row to the tile size
+    # for other meshes, we align the entire seq_len to the tile size
+    alignment = int(ttnn.TILE_SIZE) * rows if rows == 16 else int(ttnn.TILE_SIZE)
+    return ((seq_len_i + alignment - 1) // alignment) * alignment
 
 
 def make_deepseek_sampling_args(
