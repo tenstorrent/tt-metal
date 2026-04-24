@@ -643,8 +643,8 @@ def argmax_token_id_ttnn(
     ``tt_out[:, :, :B, :vocab_size]``; we must take the first ``batch_size`` slots, **not** the last index (which
     would read an unrelated padded slot and corrupt generation).
 
-    **Prefill** blocks (32-token *sequence* chunks) use dim 2 for sequence; that path is not used by the Dots
-    demo for device argmax (prefill uses host ``[B, 1, V]`` via :func:`argmax_token_id_host_via_ttnn`).
+    **Prefill** blocks (32-token *sequence* chunks) use dim 2 for sequence; raw 4D prefill logits are not used
+    here (prefill uses host ``[B, 1, V]`` via :func:`argmax_token_id_host_via_ttnn` before this helper).
 
     Args:
         tt_logits: ttnn tensor with vocab in the last dimension (e.g. ``[1, 1, 32, V]`` for decode).
