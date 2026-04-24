@@ -855,7 +855,7 @@ static ProcIdList compute_proc_ids_and_thread_count(
     experimental::quasar::QuasarComputeKernel* qck) {
     ProcIdList out{};
     out.num_threads = 1;
-    if (qdm && qdm->get_dm_processors().size() > 1) {
+    if (qdm && !qdm->get_dm_processors().empty()) {
         for (const auto& proc : qdm->get_dm_processors()) {
             out.proc_ids.push_back(
                 static_cast<uint8_t>(static_cast<std::underlying_type_t<std::remove_cvref_t<decltype(proc)>>>(proc)));
@@ -893,6 +893,9 @@ static TriscMode detect_quasar_trisc_mode(bool is_quasar_compute, const std::str
     }
     static const char* trisc_define_names[] = {"TRISC_UNPACK", "TRISC_MATH", "TRISC_PACK", "TRISC_ISOLATE_SFPU"};
     std::ifstream kscan(src_path);
+    if (!kscan) {
+        throw std::runtime_error("detect_quasar_trisc_mode: cannot read " + src_path);
+    }
     std::string kcontent((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
     for (int t = 0; t < 4 && !mode.needs_trisc_compile; t++) {
         if (kcontent.find(trisc_define_names[t]) != std::string::npos) {
@@ -1233,6 +1236,10 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
                 bridge_consumer_alloc.emplace(dim_key, base_addr);
             }
         }
+        // `base_addr` is already a host pointer truncated to uint32_t — the L1 pool
+        // is mmap'd with MAP_32BIT so every L1 address fits in the low 32 bits.
+        // Reconstructing the host pointer is a widening cast, not a new allocation.
+        // See docs/QUASAR_EMULATION.md §4.1 and IMPLEMENTATION_REPORT.md "Address Translation".
         uint8_t* base = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(base_addr));
         // STRIDED: M = max(P, C); BLOCKED: M = P.
         bool is_blocked = (cfg.cap == ::dfb::AccessPattern::BLOCKED);
@@ -1421,6 +1428,9 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
     for (size_t t = 0; t < ki_list.size(); t++) {
         per_thread_dfbs[t] = std::make_unique<tt_emule::EmuleDFBInterface[]>(tt_emule::MAX_DFBS);
         for (const auto& alloc : dfb_allocs) {
+            if (alloc.dfb_id >= tt_emule::MAX_DFBS) {
+                continue;
+            }
             populate_dfb_interface_slots(
                 per_thread_dfbs[t][alloc.dfb_id], alloc, ki_list[t].processor_id, ki_list[t].is_tensix);
         }
