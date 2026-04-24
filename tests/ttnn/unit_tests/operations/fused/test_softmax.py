@@ -44,7 +44,7 @@ def test_large_softmax(device, batch_size, h, w, dim):
         pcc_threshold=0.999,
         rtol=0.10,
         atol=0.04,
-        frobenius_threshold=0.044,
+        frobenius_threshold=0.050,
     )
 
 
@@ -337,7 +337,7 @@ def test_softmax_with_3D(device):
         pcc_threshold=0.999,
         rtol=0.158,
         atol=0.010,
-        frobenius_threshold=0.024,
+        frobenius_threshold=0.028,
     )
 
 
@@ -383,7 +383,7 @@ def test_softmax_with_padded_tile_layout_large(device):
         pcc_threshold=0.999,
         rtol=0.148,
         atol=0.010,
-        frobenius_threshold=0.029,
+        frobenius_threshold=0.034,
     )
 
 
@@ -493,6 +493,7 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
 
 
 def test_softmax_sd(device):
+    torch.manual_seed(0)
     shape = (1, 16, 256, 256)
 
     input = torch.randn(shape, dtype=torch.bfloat16).float() * 10

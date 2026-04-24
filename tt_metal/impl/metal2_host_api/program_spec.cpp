@@ -4,7 +4,10 @@
 
 #include <bit>
 #include <functional>
+#include <limits>
 #include <set>
+#include <string_view>
+#include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -171,6 +174,57 @@ void accumulate_nodes(
     }
 }
 
+// Local accessor names for kernel resource bindings must be valid C++ identifiers
+// They are used verbatim in the generated kernel source code.
+// TODO: Move this to ttsl in a follow up PR
+bool IsValidCppIdentifier(std::string_view s) {
+    if (s.empty()) {
+        return false;
+    }
+    // Reject names with non-identifier characters or an empty/leading-digit form.
+    const unsigned char c0 = static_cast<unsigned char>(s[0]);
+    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) {
+        return false;
+    }
+    for (size_t i = 1; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+
+    // Reject reserved identifier patterns per [lex.name]/3.
+    // Names containing "__", or starting with "_" followed by an uppercase letter.
+    if (s.size() >= 2 && s[0] == '_' && s[1] >= 'A' && s[1] <= 'Z') {
+        return false;
+    }
+    if (s.find("__") != std::string_view::npos) {
+        return false;
+    }
+
+    // Reject C++ keywords. Anything in this set would produce uncompilable code
+    // when emitted as a variable identifier in kernel_bindings_generated.h.
+    static const std::unordered_set<std::string_view> kCppKeywords = {
+        "alignas",     "alignof",   "and",        "and_eq",    "asm",      "auto",         "bitand",
+        "bitor",       "bool",      "break",      "case",      "catch",    "char",         "char8_t",
+        "char16_t",    "char32_t",  "class",      "compl",     "concept",  "const",        "consteval",
+        "constexpr",   "constinit", "const_cast", "continue",  "co_await", "co_return",    "co_yield",
+        "decltype",    "default",   "delete",     "do",        "double",   "dynamic_cast", "else",
+        "enum",        "explicit",  "export",     "extern",    "false",    "float",        "for",
+        "friend",      "goto",      "if",         "inline",    "int",      "long",         "mutable",
+        "namespace",   "new",       "noexcept",   "not",       "not_eq",   "nullptr",      "operator",
+        "or",          "or_eq",     "private",    "protected", "public",   "register",     "reinterpret_cast",
+        "requires",    "return",    "short",      "signed",    "sizeof",   "static",       "static_assert",
+        "static_cast", "struct",    "switch",     "template",  "this",     "thread_local", "throw",
+        "true",        "try",       "typedef",    "typeid",    "typename", "union",        "unsigned",
+        "using",       "virtual",   "void",       "volatile",  "wchar_t",  "while",        "xor",
+        "xor_eq",
+    };
+
+    // If we got this far, and the name doesn't match any keywords, it's valid.
+    return !kCppKeywords.contains(s);
+}
+
 // ============================================================================
 // Step 1: Spec Collection & Validation
 // ============================================================================
@@ -213,6 +267,11 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             TT_FATAL(
                 inserted,
                 "Kernel '{}' has duplicate local_accessor_name '{}'",
+                kernel.unique_id,
+                dfb_binding.local_accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(dfb_binding.local_accessor_name),
+                "Kernel '{}' DFB local_accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 dfb_binding.local_accessor_name);
 
@@ -382,18 +441,46 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.compiler_options.include_paths.empty(),
             "KernelSpec '{}' specifies include_paths -- this feature is not yet implemented. (Coming soon!)",
             kernel.unique_id);
-        TT_FATAL(
-            kernel.compiler_options.macros.empty(),
-            "KernelSpec '{}' specifies macros -- this feature is not yet implemented.",
-            kernel.unique_id);
     }
 
     // Validate no per-node thread maps are used (not yet implemented)
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.thread_node_map.has_value(),
-            "KernelSpec '{}' specifies thread_node_map, but per-node thread counts are not implemented.",
+            !kernel.node_specific_thread_counts.has_value(),
+            "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
             kernel.unique_id);
+    }
+
+    // Validate named RTA/CRTA schema and named CTAs
+    for (const auto& kernel : spec.kernels) {
+        // All three kinds share the args:: namespace — their names must be mutually unique.
+        std::unordered_map<std::string, const char*> seen;  // name -> kind
+        auto check_name = [&](const std::string& name, const char* kind) {
+            TT_FATAL(
+                IsValidCppIdentifier(name),
+                "KernelSpec '{}' {} name '{}' is not a valid C++ identifier.",
+                kernel.unique_id,
+                kind,
+                name);
+            auto [it, inserted] = seen.try_emplace(name, kind);
+            TT_FATAL(
+                inserted,
+                "KernelSpec '{}' has a naming collision: '{}' is declared as both a {} and a {}.",
+                kernel.unique_id,
+                name,
+                it->second,
+                kind);
+        };
+        for (const auto& name : kernel.runtime_arguments_schema.named_runtime_args) {
+            check_name(name, "named RTA");
+        }
+        for (const auto& name : kernel.runtime_arguments_schema.named_common_runtime_args) {
+            check_name(name, "named CRTA");
+        }
+        for (const auto& [name, value] : kernel.compile_time_arg_bindings) {
+            (void)value;
+            check_name(name, "named CTA");
+        }
     }
 
     // Validate kernel thread counts
@@ -1040,6 +1127,24 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // Step 3: Program Building Helpers
 // ============================================================================
 
+// Create map of local accessor name -> logical DFB id
+tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
+    out.reserve(kernel_spec.dfb_bindings.size());
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        TT_FATAL(
+            id <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' DFB '{}' logical id {} does not fit uint16_t",
+            kernel_spec.unique_id,
+            dfb_binding.dfb_spec_name,
+            id);
+        out.emplace(dfb_binding.local_accessor_name, static_cast<uint16_t>(id));
+    }
+    return out;
+}
+
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
@@ -1083,63 +1188,51 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // ----------------------------------------------------------------------------
 
 KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
-    KernelSource::SourceType source_type = (kernel_spec.source_type == KernelSpec::SourceType::FILE_PATH)
-                                               ? KernelSource::SourceType::FILE_PATH
-                                               : KernelSource::SourceType::SOURCE_CODE;
-    return KernelSource(kernel_spec.source, source_type);
-}
-
-// ----------------------------------------------------------------------------
-// InjectDFBAccessorArgs: inject DFB local accessor name -> ID into named_compile_args
-// ----------------------------------------------------------------------------
-//
-// TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel!
-//       This CTA hack will be deleted in the next PR.
-
-void InjectDFBAccessorArgs(
-    KernelSpec::CompileTimeArgBindings& named_compile_args,
-    const KernelSpec& kernel_spec,
-    const DFBNameToIdMap& dfb_name_to_id) {
-    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        TT_FATAL(
-            !named_compile_args.contains(local_dfb_name),
-            "DFB local accessor name '{}' collides with an existing CTA in kernel '{}'. ",
-            local_dfb_name,
-            kernel_spec.unique_id);
-        named_compile_args[local_dfb_name] = dfb_id;
-    }
+    return std::visit(
+        [&](const auto& src) -> KernelSource {
+            using T = std::decay_t<decltype(src)>;
+            if constexpr (std::is_same_v<T, KernelSpec::SourceFilePath>) {
+                TT_FATAL(!src.path.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
+                return KernelSource(src.path.string(), KernelSource::SourceType::FILE_PATH);
+            } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
+                TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
+                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+            } else {
+                static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
+            }
+        },
+        kernel_spec.source);
 }
 
 // ----------------------------------------------------------------------------
 // MakeGen1DataMovementConfig: Create a DataMovementConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+// (Temporary) Shims
+// ProgramSpec APIs use vector<pair> for conceptually map-like data structures.
+// This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
+// For now, just convert to the map types that the core runtime expects.
+// TODO: Fix this inefficiency eventually.
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
+    const KernelSpec::CompileTimeArgBindings& bindings) {
+    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+}
+std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
+    return std::map<std::string, std::string>(defines.begin(), defines.end());
+}
+
+DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
     const auto& gen1 = dm_config.gen1_data_movement_config.value();
-
-    // Convert defines from vector<pair> to map (yuck)
-    // API uses vector<pair> for ease of Program caching.
-    // TODO: Make the lower level runtime support vector<pair> to avoid pointless conversion.
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
-    // Temporary hack: inject DFB local accessors as CTAs
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1158,18 +1251,6 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         unpack_modes[dfb_id] = mode;
     }
 
-    // Convert defines from vector<pair> to map (yuck)
-    // API uses vector<pair> for ease of Program caching.
-    // TODO: Make the lower level runtime support vector<pair> to avoid pointless conversion.
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
-    // Temporary hack: inject DFB local accessors as CTAs
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
-
     return ComputeConfig{
         .math_fidelity = compute_config.math_fidelity,
         .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
@@ -1178,8 +1259,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1188,25 +1269,14 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
 // MakeQuasarDataMovementConfig: Create a QuasarDataMovementConfig from a KernelSpec
 // ----------------------------------------------------------------------------
 
-experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
-
-    // Convert defines from vector<pair> to map (yuck)
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
-    // Temporary hack: inject DFB local accessors as CTAs
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
 
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .compile_args = {},  // only named_compile_args is used
-        .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
@@ -1235,15 +1305,6 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         unpack_modes[dfb_id] = mode;
     }
 
-    // Convert defines from vector<pair> to map (yuck)
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    InjectDFBAccessorArgs(named_compile_args, kernel_spec, dfb_name_to_id);
-
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = compute_config.math_fidelity,
@@ -1253,8 +1314,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
-        .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
@@ -1347,28 +1408,57 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
 
+        // Make the local accessor name -> DFB ID map for this kernel
+        const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
+            MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
+
+        // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time
+        // to emit kernel_args_generated.h and factor into the kernel cache key.
+        const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
+        const auto& named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
+
+        // Create the kernel object
         std::shared_ptr<Kernel> kernel;
+
+        // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
+        constexpr bool is_metal2_kernel = true;
 
         if (is_gen2_arch()) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_dm_kernel()) {
-                auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
+                auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                    kernel_src, node_ranges, config, processors);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    named_rtas,
+                    named_crtas);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                    kernel_src, node_ranges, config, processors);
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    named_rtas,
+                    named_crtas);
             }
         } else {  // gen1
             if (kernel_spec.is_dm_kernel()) {
-                auto config = MakeGen1DataMovementConfig(kernel_spec, dfb_name_to_id);
-                kernel = std::make_shared<DataMovementKernel>(kernel_src, node_ranges, config);
+                auto config = MakeGen1DataMovementConfig(kernel_spec);
+                kernel = std::make_shared<DataMovementKernel>(
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
-                kernel = std::make_shared<ComputeKernel>(kernel_src, node_ranges, config);
+                kernel = std::make_shared<ComputeKernel>(
+                    kernel_src, node_ranges, config, is_metal2_kernel, dfb_handles, named_rtas, named_crtas);
             }
         }
 
@@ -1376,14 +1466,57 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
         program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
 
-        // Register the RTA+CRTA schema
-        const auto& schema = kernel_spec.runtime_arguments_schema;
-        std::unordered_map<CoreCoord, size_t> num_rtas_per_node;
-        for (const auto& [node_coord, num_args] : schema.num_runtime_args_per_node) {
-            num_rtas_per_node[node_coord] = num_args;
+        // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
+        // Used by ValidateProgramRunParams and SetProgramRunParameters to validate and serialize
+        // the user-provided values at dispatch time.
+        //
+        // User-facing vararg RTA specification (see kernel_spec.hpp):
+        //   - num_runtime_varargs (scalar): default count applied to every node the kernel
+        //     runs on.
+        //   - num_runtime_varargs_per_node (optional): sparse per-node overrides on top of
+        //     the scalar default. Unlisted nodes fall back to the scalar.
+        // We apply the scalar first across target_nodes, then overlay each override entry.
+        // An explicit override of 0 erases the scalar-default entry so run-params treats
+        // that node as having no varargs (rather than requiring an "empty" value list).
+        // Overlapping override entries (two entries covering the same node) are an error.
+        const auto& user_schema = kernel_spec.runtime_arguments_schema;
+        detail::ProgramImpl::KernelRTASchema runtime_schema;
+        runtime_schema.named_runtime_args = user_schema.named_runtime_args;
+        runtime_schema.named_common_runtime_args = user_schema.named_common_runtime_args;
+        if (user_schema.num_runtime_varargs > 0) {
+            const NodeRangeSet target_nodes = to_node_range_set(kernel_spec.target_nodes);
+            for (const NodeRange& range : target_nodes.ranges()) {
+                for (const NodeCoord& node : range) {
+                    runtime_schema.num_runtime_varargs_per_node[node] = user_schema.num_runtime_varargs;
+                }
+            }
         }
-        program_impl->register_kernel_rta_schema(
-            kernel_spec.unique_id, num_rtas_per_node, schema.num_common_runtime_args);
+        if (user_schema.num_runtime_varargs_per_node.has_value()) {
+            std::unordered_set<NodeCoord> seen_overrides;
+            for (const auto& [nodes_spec, num_varargs] : *user_schema.num_runtime_varargs_per_node) {
+                const NodeRangeSet expanded = to_node_range_set(nodes_spec);
+                for (const NodeRange& range : expanded.ranges()) {
+                    for (const NodeCoord& node : range) {
+                        const bool inserted = seen_overrides.insert(node).second;
+                        TT_FATAL(
+                            inserted,
+                            "KernelSpec '{}' num_runtime_varargs_per_node has overlapping entries "
+                            "for node {}",
+                            kernel_spec.unique_id,
+                            node.str());
+                        if (num_varargs > 0) {
+                            runtime_schema.num_runtime_varargs_per_node[node] = num_varargs;
+                        } else {
+                            // Explicit zero override: drop any scalar-default entry so
+                            // run-params treats this node as missing (→ 0 expected).
+                            runtime_schema.num_runtime_varargs_per_node.erase(node);
+                        }
+                    }
+                }
+            }
+        }
+        runtime_schema.num_common_runtime_varargs = user_schema.num_common_runtime_varargs;
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 
     return Program(std::move(program_impl));

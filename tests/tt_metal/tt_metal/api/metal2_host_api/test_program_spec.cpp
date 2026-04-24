@@ -138,6 +138,40 @@ TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    const std::vector<std::string> invalid_names = {
+        "",               // empty
+        "has-dash",       // hyphen
+        "has space",      // whitespace
+        "1starts_digit",  // leading digit
+        "has.dot",        // punctuation
+        "class",          // C++ keyword
+        "namespace",      // C++ keyword
+        "int",            // C++ keyword
+        "_Foo",           // reserved: underscore + uppercase
+        "__foo",          // reserved: leading double underscore
+        "foo__bar",       // reserved: embedded double underscore
+    };
+
+    for (const auto& bad_name : invalid_names) {
+        ProgramSpec spec;
+        spec.program_id = "test_program";
+
+        auto kernel = MakeMinimalDMKernel("kernel", node);
+        auto dfb = MakeMinimalDFB("dfb", node);
+
+        BindDFBToKernel(kernel, "dfb", bad_name, KernelSpec::DFBEndpointType::PRODUCER);
+
+        spec.kernels = {kernel};
+        spec.dataflow_buffers = {dfb};
+        spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb"})};
+
+        EXPECT_ANY_THROW(MakeProgramFromSpec(spec)) << "Expected rejection for name: '" << bad_name << "'";
+    }
+}
+
 TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
@@ -453,6 +487,69 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsFail) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// ---- Named RTA / CRTA / CTA schema validation ----
+
+TEST_F(ProgramSpecTestQuasar, NamedRuntimeArgsSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"input_ptr", "output_ptr"};
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"tile_count"};
+    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidNamedRtaIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"int"};  // C++ keyword
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("named RTA name 'int' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, InvalidNamedCrtaIdentifierFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"has-dash"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("named CRTA name 'has-dash' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, NamedRtaCrtaCollisionFails) {
+    // A single name cannot be both a named RTA and a named CRTA (they share the user namespace).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"count"};
+    spec.kernels[0].runtime_arguments_schema.named_common_runtime_args = {"count"};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'count' is declared as both a named RTA and a named CRTA")));
+}
+
+TEST_F(ProgramSpecTestQuasar, NamedRtaCtaCollisionFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"block_size"};
+    spec.kernels[0].compile_time_arg_bindings = {{"block_size", 64}};  // same name as CTA
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("naming collision: 'block_size' is declared as both a named RTA and a named CTA")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DifferentKernelsMayReuseArgNames) {
+    // Collision rule is per-kernel. Two different kernels may have identically-named args.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+    spec.kernels[1].runtime_arguments_schema.named_runtime_args = {"shared_name"};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
 TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     NodeCoord node{0, 0};
 
@@ -745,9 +842,11 @@ TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
-// These verify that valid configurations succeed.
-// NOTE: Program creation needs full HAL support.
-// TODO: Enable these tests with a Quasar mock device.
+// These verify that valid ProgramSpec configurations produce a Program without throwing.
+// They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
+//
+// Coverage gaps (JIT compilation, device-side execution) are covered by HW tests.
+// (see test_program_spec_hw.cpp)
 
 TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -913,11 +1012,31 @@ TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add runtime args schema
-    NodeCoord node{0, 0};
-    spec.kernels[0].runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
-    spec.kernels[0].runtime_arguments_schema.num_common_runtime_args = 2;
+    spec.kernels[0].runtime_arguments_schema.num_runtime_varargs = 3;
+    spec.kernels[0].runtime_arguments_schema.num_common_runtime_varargs = 2;
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
+    // Rule: overlapping entries in num_runtime_varargs_per_node are an error, even when
+    // their counts agree. Overlap suggests a user mistake.
+    using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{1, 0};
+    NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
+
+    ProgramSpec spec;
+    spec.program_id = "vararg_overlap_test";
+    auto kernel = MakeMinimalDMKernel("dm_kernel", both);
+    kernel.runtime_arguments_schema.num_runtime_varargs_per_node =
+        NumVarargsPerNode{{both, 3}, {node_a, 3}};  // node_a listed twice
+    spec.kernels = {kernel};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", both, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlapping entries")));
 }
 
 // ============================================================================
@@ -949,8 +1068,7 @@ TEST_F(ProgramSpecTestQuasar, SourceCodeKernelSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Change to inline source code
-    spec.kernels[0].source = "void kernel_main() {}";
-    spec.kernels[0].source_type = KernelSpec::SourceType::SOURCE_CODE;
+    spec.kernels[0].source = KernelSpec::SourceCode{"void kernel_main() {}"};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
@@ -1233,8 +1351,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
     // Demonstrates constructing KernelSpec with designated initializers
     KernelSpec dm_kernel{
         .unique_id = "my_dm_kernel",
-        .source = "void kernel_main() {}",
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeCoord{0, 0},
         .num_threads = 2,
         .config_spec =
@@ -1249,8 +1366,7 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
 
     KernelSpec compute_kernel{
         .unique_id = "my_compute_kernel",
-        .source = "void kernel_main() {}",
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .target_nodes = NodeRange{{0, 0}, {1, 1}},
         .num_threads = 4,
         .compiler_options =
@@ -1312,6 +1428,51 @@ TEST(AggregateSpecTypes, WorkerSpecDesignatedInitializers) {
     EXPECT_EQ(worker.dataflow_buffers.size(), 2u);
 }
 
+TEST(AggregateSpecTypes, RuntimeArgSchemaDesignatedInitializers) {
+    // Named RTAs + CRTAs + scalar vararg counts, all via designated initializers.
+    KernelSpec::RuntimeArgSchema schema{
+        .named_runtime_args = {"input_ptr", "output_ptr"},
+        .named_common_runtime_args = {"tile_count"},
+        .num_runtime_varargs = 4,
+        .num_common_runtime_varargs = 2,
+    };
+
+    EXPECT_EQ(schema.named_runtime_args.size(), 2u);
+    EXPECT_EQ(schema.named_common_runtime_args.size(), 1u);
+    EXPECT_EQ(schema.num_runtime_varargs, 4u);
+    EXPECT_EQ(schema.num_common_runtime_varargs, 2u);
+    EXPECT_FALSE(schema.num_runtime_varargs_per_node.has_value());
+}
+
+TEST(AggregateSpecTypes, RuntimeArgSchemaPerNodeOverrideDesignatedInitializers) {
+    // Per-node override path (advanced): ensure designated-init through std::optional works.
+    using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
+    KernelSpec::RuntimeArgSchema schema{
+        .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
+    };
+
+    ASSERT_TRUE(schema.num_runtime_varargs_per_node.has_value());
+    EXPECT_EQ(schema.num_runtime_varargs_per_node->size(), 2u);
+    EXPECT_EQ(schema.num_runtime_varargs, 0u);  // scalar left at default in this example
+}
+
+TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
+    KernelSpec k{
+        .unique_id = "k",
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .target_nodes = NodeCoord{0, 0},
+        .runtime_arguments_schema =
+            KernelSpec::RuntimeArgSchema{
+                .named_runtime_args = {"input_ptr"},
+            },
+        .config_spec =
+            DataMovementConfiguration{
+                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+            },
+    };
+    EXPECT_EQ(k.runtime_arguments_schema.named_runtime_args.size(), 1u);
+}
+
 TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     // Demonstrates constructing SemaphoreSpec with designated initializers
     SemaphoreSpec sem{
@@ -1333,8 +1494,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
             {
                 KernelSpec{
                     .unique_id = "producer",
-                    .source = "void kernel_main() {}",
-                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .target_nodes = NodeCoord{0, 0},
                     .dfb_bindings =
                         {
@@ -1352,8 +1512,7 @@ TEST(AggregateSpecTypes, ProgramSpecDesignatedInitializers) {
                 },
                 KernelSpec{
                     .unique_id = "consumer",
-                    .source = "void kernel_main() {}",
-                    .source_type = KernelSpec::SourceType::SOURCE_CODE,
+                    .source = KernelSpec::SourceCode{"void kernel_main() {}"},
                     .target_nodes = NodeCoord{0, 0},
                     .dfb_bindings =
                         {
@@ -1554,15 +1713,18 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
-// WH N150 grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
-//   - compute_grid = 8x8 (valid nodes: x in [0,7], y in [0,7])
-//   - OOB examples: {8, 0} (x too large), {0, 8} (y too large), {0, 100} (far OOB)
+// WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
+//   - Fast dispatch: compute_grid = 8x8 (y in [0,7]; one row reserved for dispatch)
+//   - Slow dispatch: compute_grid = 8x9 (y in [0,8]; full logical tensix grid, no rows reserved)
+//
+// The apparent grid size is different in slow dispatch vs. fast dispatch mode. CI runs with
+// both, so choose OOB coordinates that will fail in both cases.
 //
 // These tests use the WH mock device, not real hardware.
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
-    // {0, 8}: y=8 is one past the 8-tall compute grid.
-    const NodeCoord oob_node{0, 8};
+    // y=9 is just outside the 9-row slow-dispatch grid (also outside the 8-row fast-dispatch grid).
+    const NodeCoord oob_node{0, 9};
 
     ProgramSpec spec;
     spec.program_id = "test_program";
@@ -1577,7 +1739,7 @@ TEST_F(ProgramSpecTestGen1, KernelTargetsNodeBeyondGridYFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, KernelTargetsOutOfBoundsNodeFails) {
-    // {8, 0} is out of bounds: x=8 is beyond the 8-wide compute grid.
+    // x=8 is just outside the 8-column grid (same in fast and slow dispatch).
     const NodeCoord oob_node{8, 0};
 
     ProgramSpec spec;
@@ -1596,7 +1758,7 @@ TEST_F(ProgramSpecTestGen1, DFBTargetsOutOfBoundsNodeFails) {
     // Bounds checking applies to DFBs as well as kernels. The kernel itself is on a
     // valid node, but the DFB it produces to targets an OOB node.
     const NodeCoord valid_node{0, 0};
-    const NodeCoord oob_node{0, 100};
+    const NodeCoord oob_node{0, 9};  // just outside the 9-row slow-dispatch grid
 
     ProgramSpec spec;
     spec.program_id = "test_program";

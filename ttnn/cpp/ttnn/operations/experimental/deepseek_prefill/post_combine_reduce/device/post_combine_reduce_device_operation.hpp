@@ -36,6 +36,8 @@ namespace ttnn::prim {
 ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
+    const std::optional<ttnn::Tensor>& indices,
+    const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
