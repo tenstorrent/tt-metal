@@ -14,9 +14,9 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::unary_ng {
+namespace ttnn::operations::unary {
 
-struct UnaryNgDeviceOperation {
+struct UnaryDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
@@ -54,11 +54,11 @@ struct UnaryNgDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn::operations::unary
 
 namespace ttnn::prim {
 
-Tensor unary_ng(
+Tensor unary(
     const Tensor& input,
     const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
