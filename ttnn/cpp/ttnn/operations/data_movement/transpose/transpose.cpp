@@ -151,6 +151,23 @@ ttnn::Tensor transpose_nd(
     return ttnn::permute(input_tensor, permutation, memory_config_arg, pad_value);
 }
 
+// Predicate for the composite fallback guard in `transpose_impl`.
+//
+// When the input layout is ROW_MAJOR and either the input or the requested output is
+// BLOCK_SHARDED / WIDTH_SHARDED, neither the native sharded transpose kernels nor the
+// `prim::permute` RM shortcut can faithfully materialize the result: pages span multiple
+// cores, so local-only readers/writers produce silently-wrong data. Such cases are routed
+// through an L1 interleaved intermediate before/after the transpose.
+//
+// HEIGHT_SHARDED RM with a non-tile-aligned shard element count is handled separately by
+// `is_native_transpose_sharding`, which routes it through the interleaved factories'
+// TensorAccessor path without an explicit reshard hop (each page stays on a single core,
+// so NOC-based access is safe).
+inline bool is_block_or_width_sharded_mc(const tt::tt_metal::MemoryConfig& mc) {
+    return mc.is_sharded() && (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                               mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
+}
+
 }  // namespace detail
 
 ttnn::Tensor transpose_impl(
@@ -159,6 +176,33 @@ ttnn::Tensor transpose_impl(
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
+    {
+        const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
+        const bool in_bad = rm && detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
+        const bool out_bad =
+            rm && memory_config_arg.has_value() && detail::is_block_or_width_sharded_mc(memory_config_arg.value());
+        if (in_bad || out_bad) {
+            const auto interleaved_l1 =
+                tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+            Tensor x = in_bad ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt) : input_tensor;
+            const std::optional<MemoryConfig> intermediate_mc =
+                out_bad ? std::optional<MemoryConfig>(interleaved_l1) : memory_config_arg;
+            Tensor result = transpose_impl(x, dim1, dim2, intermediate_mc, pad_value);
+            if (out_bad) {
+                // If the requested sharded output lacks a shard_spec, synthesize one from the
+                // transposed tensor's padded shape using the same helper the device op uses, so
+                // `to_memory_config` receives a fully-specified sharded destination.
+                MemoryConfig final_mc = memory_config_arg.value();
+                if (!final_mc.shard_spec().has_value()) {
+                    auto shard_spec = operations::data_movement::transpose::generate_transpose_shard_spec(
+                        result, result.padded_shape(), final_mc.memory_layout());
+                    final_mc = final_mc.with_shard_spec(shard_spec);
+                }
+                result = ttnn::to_memory_config(result, final_mc, std::nullopt);
+            }
+            return result;
+        }
+    }
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
