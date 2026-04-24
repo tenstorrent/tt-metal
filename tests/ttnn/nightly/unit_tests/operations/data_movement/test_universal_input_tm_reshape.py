@@ -26,11 +26,15 @@ _DTYPE_ELEM_SIZE = {
 
 
 def _divisible_grid_1d(total_dim, max_cores, step):
-    """Largest n <= max_cores such that total_dim % (n*step) == 0."""
+    """Return the largest n <= max_cores such that total_dim % (n * step) == 0.
+
+    Raises:
+        ValueError: If no valid n exists (i.e. total_dim is not a multiple of step).
+    """
     for n in range(max_cores, 0, -1):
         if total_dim % (n * step) == 0:
             return n
-    return 1
+    raise ValueError(f"No valid 1D grid size for total_dim={total_dim}, max_cores={max_cores}, step={step}")
 
 
 def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloat16):
@@ -131,23 +135,6 @@ SCENARIOS = [
 ]
 SCENARIO_IDS = [s[0] for s in SCENARIOS]
 
-_SCENARIO_HAS_SHARDED_IN = {
-    "height_default",
-    "width_default",
-    "block_default",
-    "height_height",
-    "width_width",
-    "block_block",
-}
-_SCENARIO_HAS_SHARDED_OUT = {
-    "dram_height",
-    "dram_width",
-    "dram_block",
-    "height_height",
-    "width_width",
-    "block_block",
-}
-
 
 # ---------------------------------------------------------------------------
 # Shape cases. Each entry: (input_shape, output_shape, case_id).
@@ -179,17 +166,6 @@ SHAPE_CASES = [
 ]
 SHAPE_IDS = [s[2] for s in SHAPE_CASES]
 
-_TILE_ALIGNED_CASE_IDS = {
-    "merge_ch",
-    "swap_hw",
-    "halve_w_double_h",
-    "double_h_halve_w",
-    "2d_swap",
-    "2d_to_3d_view",
-    "2d_to_3d_dim_change",
-    "irreg_aligned",
-    "grid_reduction",
-}
 _IRREGULAR_CASE_IDS = {
     "irreg_2d_to_3d",
     "irreg_2d_swap",
@@ -197,7 +173,6 @@ _IRREGULAR_CASE_IDS = {
     "irreg_4d",
     "irreg_4d_swap",
 }
-_NON_4D_CASE_IDS = {"2d_swap", "2d_to_3d_view", "2d_to_3d_dim_change"}
 _GRID_REDUCTION_CASE_ID = "grid_reduction"
 
 LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
@@ -345,7 +320,7 @@ def test_reshape(device, input_shape, output_shape, case_id, scenario, layout, d
     default or explicit sharded output, sharded-to-sharded with the same
     strategy, non-4D and irregular shapes, and the grid-reduction edge case.
     """
-    label, in_builder, out_builder = scenario
+    _, in_builder, out_builder = scenario
     dtype, _ = dtype_spec
 
     in_memcfg = in_builder(device, input_shape, layout, dtype)
