@@ -107,12 +107,12 @@ def test_workflow_skill_has_phase_table(skill_file):
 
 
 def _extract_loads_paths(content):
-    """Extract file paths from Loads column in phase tables, ignoring <repo> placeholders."""
+    """Extract file paths from Loads column in phase tables, ignoring <placeholder> paths."""
     paths = []
     for match in re.finditer(r"`([^`]+)`", content):
         path = match.group(1)
-        # Skip paths with <repo> placeholder — resolved at runtime
-        if "<repo>" in path:
+        # Skip paths with any <placeholder> — resolved at runtime (e.g. <repo>, <topic>)
+        if re.search(r"<[^>]+>", path):
             continue
         # Only match paths that look like file references (contain / and end with .md)
         if "/" in path and path.endswith(".md"):

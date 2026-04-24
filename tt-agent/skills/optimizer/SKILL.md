@@ -74,7 +74,7 @@ overview-file entry.
 | Extract* | Capture model inputs, write unit test, verify ±10% | `extract.md` | test path + tensor path |
 | Baseline | Profile the unit test | `tt:profiler` | `profile-<scope>-<ts>.md`, baseline row |
 | Spawn* | Clone + branch + build per hypothesis | `workspaces.md` | N workspaces, N branches |
-| Iterate | Hypothesize → implement → build → profile → commit → record | `iterate.md` (+ `playbook.md`, `convergence.md`) | commits, profile notes, overview rows |
+| Iterate | Hypothesize → implement → build → profile → commit → record | `iterate.md` (+ `convergence.md`, `knowledge/<topic>.md`) | commits, profile notes, overview rows |
 | Review | Review-to-done loop on winning branch | `skills/code-review/review-loop.md` | `findings-review-<ts>-<scope>.md` |
 
 \* conditional — Extract runs only if no unit test exists; Spawn only for parallelism > 1.

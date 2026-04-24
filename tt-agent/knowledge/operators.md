@@ -1,4 +1,9 @@
-# Operator Reference Pointers
+# Operators
+
+Topic knowledge for ttnn operator implementations — external references
+only today; extend with patterns and traps as they surface.
+
+## External references
 
 ## Canonical simple eltwise op (full device operation pattern)
 `ttnn/cpp/ttnn/operations/eltwise/binary/device/`

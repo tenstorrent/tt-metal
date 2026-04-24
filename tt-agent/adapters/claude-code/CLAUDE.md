@@ -17,7 +17,7 @@ See `tt-agent/skills/` for available skills. Each skill declares its layer via
 
 When you need to understand how something works in a TT codebase — APIs, test
 patterns, build steps, op structure, model architecture — use `/tt:learn`.
-tt-learn follows `knowledge/references/` as starting pointers, uses deepwiki for
+tt-learn follows `knowledge/<topic>.md` as starting pointers, uses deepwiki for
 semantic search, and writes dated context notes to `~/.tt-agent/notes/`. These
 notes are reusable across sessions. Subagents doing research should also follow
 the tt-learn protocol (use references, write notes, use deepwiki).
@@ -28,10 +28,8 @@ exists and is recent, read it instead of re-researching.
 ## Knowledge
 
 - `knowledge/hardware/` — stable silicon facts (always valid to read directly)
-- `knowledge/references/` — curated pointers to canonical examples (starting points for tt-learn)
+- `knowledge/<topic>.md` — topic knowledge (matmul, ccl, kernels, models, operators, sharding): external references + distilled patterns, traps, optimization guidelines
 - `knowledge/recipes/` — per-repo execution patterns (build, test, env)
-- `knowledge/profiling/` — profiling patterns and methodologies
-- `knowledge/debugging/` — crash patterns and debug guides
 - For volatile info (APIs, patterns): use `/tt:learn`, never hardcode
 
 ## Notes

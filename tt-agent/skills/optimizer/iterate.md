@@ -31,7 +31,9 @@ sharding, fusion).
 ### 1. Orient
 
 - Read the baseline profile note, the Prepare note, and `tt:learn` notes.
-- Read `playbook.md` — entries there cost prior sessions full iterations.
+- Read relevant topic files in `tt-agent/knowledge/` (matmul.md, ccl.md,
+  sharding.md, ...) — the guidelines there cost prior sessions full
+  iterations to discover.
 - Identify the op-level bound class (overhead / bandwidth / compute /
   near-peak) from `skills/profiler/interpretation.md`. **Match levers to
   the class** — compute-bound levers on an overhead-bound op waste
@@ -58,11 +60,16 @@ Edit the source (dataflow) or test/config (parameter-search). Keep the
 edit tight — only what the hypothesis requires. Do not refactor or fix
 unrelated issues.
 
-**Comment hygiene:** see `playbook.md` § "Comments explain the current
-invariant only". Re-read every touched comment block at end of edit.
+**Comment hygiene.** A comment passes if it would still make sense were
+this iteration the first commit on the branch. Keep: subtle correctness
+arguments, hardware constraints the code depends on, workarounds for
+specific bugs. Drop anything that reads as a changelog: `vs`, `was`,
+`previously`, `instead of`, parenthesized numbers that no longer appear
+in the code, reasoning-by-elimination. The commit subject captures the
+Δ. Re-read every touched comment block at end of edit with this test.
 
 On matmul kernel-level assertions, apply the `print(pc)` recipe per
-`playbook.md` § "Print the realized program config on matmul crashes".
+`knowledge/matmul.md` § "Print the realized program config on crashes".
 
 ### 4. Build
 

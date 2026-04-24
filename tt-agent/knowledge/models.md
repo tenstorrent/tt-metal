@@ -1,4 +1,9 @@
-# Model Reference Pointers
+# Models
+
+Topic knowledge for model-level code on tt-metal — external references
+only today; extend with patterns and traps as they surface.
+
+## External references
 
 ## Production LLM layers
 `models/tt_transformers/tt/`

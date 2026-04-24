@@ -18,8 +18,9 @@ note in `~/.tt-agent/notes/` that the Baseline phase reads.
    **Check the sibling's mode branch** before borrowing structural choices.
    tt-metal models often branch on `mode=="prefill" | "decode"` with very
    different memory layouts. `grep` the sibling for the mode keyword and
-   trace which progcfg the target's shape would select. See `playbook.md`
-   § "Verify a sibling's mode before borrowing structural choices".
+   trace which progcfg the target's shape would select. See
+   `knowledge/matmul.md` § "Verify a sibling's mode before borrowing
+   structural choices".
 
 3. **Actual-vs-derived dim check.** For every `args.<dim>` used in a
    progcfg, compare to `self.<weight>.shape[-1]` of the loaded tensor.
@@ -34,8 +35,9 @@ note in `~/.tt-agent/notes/` that the Baseline phase reads.
    L1 budgeting, and subblock rules — reading it before iterating reshapes
    the hypothesis queue substantially.
 
-5. **Playbook skim.** Skim `playbook.md`. Entries there cost prior
-   sessions full iterations to discover.
+5. **Topic knowledge skim.** Skim `knowledge/matmul.md` (and `ccl.md`,
+   `sharding.md` if relevant). Entries there cost prior sessions full
+   iterations to discover.
 
 ## Output
 

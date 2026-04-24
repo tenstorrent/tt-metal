@@ -49,7 +49,7 @@ The first decision changes the entire task shape.
 
 For volatile details on op structure and canonical examples, invoke
 `tt-learn("ttnn op structure")`. Starting point:
-`tt-agent/knowledge/references/operators.md`
+`tt-agent/knowledge/operators.md`
 
 ### Full model (new or port)
 

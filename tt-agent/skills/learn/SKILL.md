@@ -33,9 +33,10 @@ check existing → load references → research subagent → return note
 1. **Check existing**: Look for `~/.tt-agent/notes/context-<topic-slug>.md`.
    If found and no refresh requested, return it immediately.
 
-2. **Load references**: If `tt-agent/knowledge/references/` exists in the current repo,
-   scan for files relevant to the topic. These provide starting pointers but are not
-   required — the skill works without them.
+2. **Load references**: Scan `tt-agent/knowledge/<topic>.md` files (matmul, ccl,
+   kernels, models, operators, sharding, ...) for content relevant to the topic.
+   These provide starting pointers but are not required — the skill works without
+   them.
 
 3. **Dispatch research subagent**: Launch an Agent with `research-prompt.md` as
    instructions. Pass the topic, any matched reference content, and the refresh flag.

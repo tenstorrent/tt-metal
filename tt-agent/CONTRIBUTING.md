@@ -68,13 +68,17 @@ debugging. This knowledge is loaded by workflow skills during relevant phases.
    skill immediately. They can exist unwired — the agent team wires them into
    skill phase tables when building or updating workflow skills.
 
-## Adding to knowledge/hardware/ and knowledge/references/
+## Adding to knowledge/
 
-`knowledge/hardware/` — only for silicon-stable facts (Tensix architecture, NOC topology,
-tile granularity). If it could change in a software release, it does not go here.
+`knowledge/hardware/` — only for silicon-stable facts (Tensix architecture, NOC
+topology, tile granularity). If it could change in a software release, it does
+not go here.
 
-`knowledge/references/` — curated pointers to canonical examples, one file per topic.
-Format: path + one-line description. No content inlined. Update paths when examples move.
+`knowledge/<topic>.md` — topic knowledge (matmul, ccl, kernels, models,
+operators, sharding, ...). Start with external references (path + one-line
+description), then add distilled patterns, traps, and optimization guidelines
+as they surface. One file per topic; promote to `knowledge/<topic>/` when a
+topic outgrows one file.
 
 **Do not add:** API signatures, function names, implementation patterns, op lists.
 These belong to `tt-learn` (fetched fresh from source), not to static files.
@@ -102,4 +106,4 @@ scope: add X — file.md: update foo, bar.md: fix baz   ✗
 - One skill per PR when possible
 - Include a brief note on which layer the skill belongs to and why
 - Run `pytest tt-agent/tests/` before submitting
-- Update `knowledge/references/` if your skill introduces canonical examples worth pointing to
+- Update the relevant `knowledge/<topic>.md` if your skill introduces canonical examples, patterns, or traps worth recording

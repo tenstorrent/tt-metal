@@ -1,4 +1,9 @@
-# Sharding Reference Pointers
+# Sharding
+
+Topic knowledge for tt-metal sharding — external references only today;
+extend with patterns and traps as they surface.
+
+## External references
 
 ## Tensor sharding tech report
 `tech_reports/tensor_sharding/`

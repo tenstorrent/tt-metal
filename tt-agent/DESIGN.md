@@ -28,9 +28,9 @@ tt-inference-server, tt-shield, etc.) without structural changes.
 
 1. **Skills never hardcode repo identity.** Detect context from the working directory
    (git remote, file structure), not from string-matching repo names.
-2. **knowledge/references/ are tt-metal hints, not requirements.** Skills must work
-   (via deepwiki + local search) even without them. They accelerate research in
-   tt-metal; they are not load-bearing.
+2. **Topic files in `knowledge/` are tt-metal hints, not requirements.** Skills
+   must work (via deepwiki + local search) even without them. They accelerate
+   research in tt-metal; they are not load-bearing.
 3. **Deepwiki is the repo-agnostic backbone.** Local Grep/Read works in whatever repo
    you're in. Deepwiki can search any TT repo by name.
 4. **Notes are repo-tagged.** Context notes include which repo was researched, so
@@ -86,7 +86,7 @@ learned fresh from source via `tt-learn`.
 API signatures, op implementations, sharding patterns, CCL usage — never written down.
 
 **Why:** These change with every PR. The `tt-learn` skill researches the live codebase
-via deepwiki-mcp on demand, using `knowledge/references/` as starting points. Findings
+via deepwiki-mcp on demand, using `knowledge/<topic>.md` as starting points. Findings
 are written to the notes directory with a commit hash, so readers can judge freshness.
 
 ---

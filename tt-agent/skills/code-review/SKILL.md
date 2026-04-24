@@ -127,6 +127,6 @@ Files each reviewer subagent loads (not loaded by the orchestrator):
 | Shared reviewer contract | `shared.md` |
 | Role-specific instructions | `reviewers/<name>.md` |
 | Hardware invariants (when relevant) | `tt-agent/knowledge/hardware/*.md` |
-| Canonical example pointers | `tt-agent/knowledge/references/*.md` |
+| Topic knowledge (matmul, ccl, kernels, ...) | `tt-agent/knowledge/<topic>.md` |
 | Per-repo recipes | `tt-agent/knowledge/recipes/<repo>/*.md` |
 | Volatile pattern questions | invoke `tt:learn("<topic>")` |

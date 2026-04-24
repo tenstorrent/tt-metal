@@ -1,4 +1,9 @@
-# Kernel Reference Pointers
+# Kernels
+
+Topic knowledge for tt-metal kernels — external references only today;
+extend with patterns and traps as they surface.
+
+## External references
 
 ## Canonical reader/compute/writer pattern
 `tt_metal/programming_examples/eltwise_binary/`

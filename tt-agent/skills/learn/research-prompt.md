@@ -9,8 +9,9 @@ tt-inference-server, etc.) — detect context from the working directory, don't 
 
 You will receive:
 - **Topic**: what to research (natural language query)
-- **Reference pointers**: relevant content from `tt-agent/knowledge/references/`, if
-  available in the current repo (file paths and one-line descriptions as starting points)
+- **Reference pointers**: relevant content from `tt-agent/knowledge/<topic>.md`, if
+  available in the current repo (external references + distilled patterns as
+  starting points)
 - **Notes path**: where to write the output (e.g., `~/.tt-agent/notes/context-<slug>.md`)
 
 ## Research Strategy
