@@ -18,6 +18,7 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -81,7 +82,7 @@ enum class MeshScope {
 
 struct PortDescriptor {
     port_id_t port_id = {RoutingDirection::NONE, 0};
-    std::size_t connection_hash = 0;
+    std::uint64_t connection_hash = 0;
 };
 
 // Stores the logical ports (routing direction, logical channel id and connection hash) between the src mesh and its
@@ -221,6 +222,11 @@ public:
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
+
+    // Peer fabric node (and its Ethernet channel) connected to `fabric_node_id` on `chan_id` via one physical hop
+    // (intra-mesh or inter-mesh).
+    std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
+        FabricNodeId fabric_node_id, chan_id_t chan_id) const;
 
     eth_chan_directions get_eth_chan_direction(FabricNodeId fabric_node_id, int chan) const;
     // TODO: remove this converter, we should consolidate the directions here
@@ -365,15 +371,23 @@ private:
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
-    // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
-    // to the physical channel id
-    std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
     // Unique exit FabricNodeIds on src mesh for each dst mesh (inter-mesh edges)
     std::unordered_map<MeshId, std::unordered_map<MeshId, std::unordered_set<FabricNodeId>>>
         intermesh_exit_fabric_node_ids_;
     // Directed inter-mesh links: exit node on src mesh paired with peer node on dst mesh (same cable / logical port).
     std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<std::pair<FabricNodeId, FabricNodeId>>>>
         intermesh_exit_peer_fabric_node_id_pairs_;
+
+    // Per-channel inter-mesh peer map: my (FabricNode, physical_chan) -> (peer FabricNode, peer physical_chan).
+    //
+    // This is the AUTHORITATIVE per-cable answer to "what is at the other end of this
+    // inter-mesh ethernet channel?" populated directly from PSD physical cable info during
+    // port assignment. get_connected_mesh_chip_chan_ids consults this map first for inter-mesh
+    // queries instead of relying on the chip-level inter_mesh_connectivity_ structure, which
+    // collapses multiple distinct peer chips for the same (src_chip, dst_mesh) pair into a
+    // single edge and only retains the first peer chip — silently corrupting per-channel
+    // routing whenever a single src chip is cabled to more than one chip in a given dst mesh.
+    std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>> intermesh_chan_to_peer_;
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
@@ -403,9 +417,6 @@ private:
 
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
-
-    std::pair<FabricNodeId, chan_id_t> get_connected_mesh_chip_chan_ids(
-        FabricNodeId fabric_node_id, chan_id_t chan_id) const;
 
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
@@ -454,9 +465,8 @@ private:
     // and Routing Table Generator.
     void generate_intermesh_connectivity();
 
-    // Multi-Host Intermesh Connectivity Helper Function:
-    // Assign a logical direction and channel id to each local exit node.
-    std::vector<PortDescriptor> assign_logical_ports_to_exit_nodes(
+    // Propose PortDescriptors per neighbor cable; final maps written after rank-0 pairing.
+    std::vector<PortDescriptor> propose_port_descriptors_for_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,

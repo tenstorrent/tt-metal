@@ -179,6 +179,10 @@ jobs:
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_bh_galaxy_experimental_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_bh_galaxy_experimental_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHDualGalaxyControlPlaneInit"
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_bh_galaxy_experimental_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_bh_galaxy_experimental_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHDualGalaxyFabric2DSanity"
 
+          # SP5 / SP4 superpod Blitz decode pipeline (mock cluster + MGD)
+          TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding sp5_cluster_desc_mapping.yaml --mesh-graph-descriptor models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+          TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml --mesh-graph-descriptor models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+
           # Topology Mapper tests
           TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="T3kTopologyMapperCustomMapping/*"
           TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.T3kMeshGraphTest*"

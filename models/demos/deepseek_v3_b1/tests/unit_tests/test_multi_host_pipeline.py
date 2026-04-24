@@ -1074,6 +1074,7 @@ def test_multi_host_multi_channel_parallel_loopback_pipeline(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         }
     ],
     indirect=True,
