@@ -22,11 +22,11 @@ void kernel_main() {
 
     // Factories that emit ROW_MAJOR_OUTPUT want absolute-offset packing so writers
     // read tiles in row-major order. Multicast factories (no define) use sequential pack.
-    constexpr bool row_major =
+    constexpr compute_kernel_lib::OutputLayout output_layout =
 #ifdef ROW_MAJOR_OUTPUT
-        true;
+        compute_kernel_lib::OutputLayout::RowMajor;
 #else
-        false;
+        compute_kernel_lib::OutputLayout::SubblockMajor;
 #endif
 
     mm_block_init(cb_in0, cb_in1, cb_intermed0, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -37,7 +37,7 @@ void kernel_main() {
             /*packer_l1_acc=*/false,
             /*pack_last_to_interm=*/false,
             /*pack_relu=*/false,
-            /*row_major_output=*/row_major>(
+            output_layout>(
             cb_in0,
             cb_in1,
             cb_out,
