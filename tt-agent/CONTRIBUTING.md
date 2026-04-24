@@ -13,15 +13,14 @@
 
 3. **Follow the golden rules:**
    - Skills describe *how to do something*, not *what the API is*
-   - Point to code locations, never inline API signatures: `see tt_metal/hw/inc/api/dataflow/`
-   - Keep SKILL.md ≤ 150 lines; move domain content to sub-files
+   - Point to code locations, never inline API signatures: `see tt-metal/tt_metal/hw/inc/api/dataflow/`
+   - Keep SKILL.md within the token-economy caps — see `skills/skill-creator/tt-guidelines.md § Token Economy`
    - Every SKILL.md must have valid YAML frontmatter with `name` and `description`
    - `name` must match the directory name exactly
 
 4. **Workflow skills must declare phases:**
-   - Each phase specifies Loads (knowledge/skill files) and Produces (output)
-   - Include a phase table in SKILL.md
-   - Every file referenced in Loads must exist on disk (enforced by tests)
+   - Each row in the phase table names the procedure (sub-file or invoked skill) and the note produced
+   - Every file referenced in the phase table must exist on disk (enforced by tests)
 
 5. **Run the validation test:**
    ```bash
@@ -49,24 +48,6 @@ can contribute without understanding skills.
 3. **Adding a new repo:** Create the directory, add `index.md` + relevant files.
    No skill changes required — tt-run discovers recipes by matching the detected
    repo name to a recipe directory.
-
-## Adding Domain Knowledge (Domain Experts)
-
-Domain experts contribute stable knowledge about disciplines like profiling or
-debugging. This knowledge is loaded by workflow skills during relevant phases.
-
-1. Add files to `knowledge/<domain>/` (e.g., `knowledge/profiling/`,
-   `knowledge/debugging/`).
-
-2. **Format rules:**
-   - Plain markdown, under 80 lines per file
-   - Describe patterns, methodologies, and interpretation guides
-   - Not step-by-step procedures (those are skills)
-   - Stable enough to maintain as static files (unlike APIs)
-
-3. **No wiring required.** New knowledge files don't need to be referenced by a
-   skill immediately. They can exist unwired — the agent team wires them into
-   skill phase tables when building or updating workflow skills.
 
 ## Adding to knowledge/
 

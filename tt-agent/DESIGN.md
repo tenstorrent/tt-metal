@@ -57,13 +57,14 @@ format, versioning, and distribution. Adapters in `adapters/` handle per-platfor
 Three content types that must not be conflated:
 
 - **Skills** (`skills/`) — how to accomplish a task. Procedural instructions.
-- **Knowledge** (`knowledge/`) — stable facts, patterns, and execution recipes:
-  - `hardware/` — silicon-stable facts (Tensix architecture, NOC topology, tile granularity)
-  - `references/` — curated pointers to canonical code examples (path + one-line description)
+- **Knowledge** (`knowledge/`) — stable facts, topic expertise, and execution recipes:
+  - `hardware/` — silicon-stable facts (Tensix architecture, NOC topology, tile granularity).
+  - `<topic>.md` — topic knowledge (matmul, ccl, kernels, models, operators, sharding, ...):
+    external references + distilled patterns + traps + optimization guidelines in one file
+    per topic. Promote to `<topic>/` when a topic outgrows one file. Paths pointing at a
+    specific TT repo are prefixed with the repo name (e.g., `tt-metal/tech_reports/...`).
   - `recipes/<repo>/` — per-repo execution patterns (build, test, env, server lifecycle).
     Plain markdown, no frontmatter, ≤60 lines per file. Each repo directory has an `index.md`.
-  - `<domain>/` (e.g., `profiling/`, `debugging/`) — domain expertise contributed by
-    subject-matter experts. Patterns, methodologies, interpretation guides — not procedures.
 - **Notes** (configured via `notes_path` in `tt-agent.yaml`) — shared blackboard.
   Findings written by agents and humans, shared across sessions and team members.
 
@@ -75,8 +76,8 @@ learned fresh from source via `tt-learn`.
 
 | Who | Contributes to | Without touching |
 |---|---|---|
-| Repo engineer | `knowledge/recipes/<repo>/` | Skills or domain knowledge |
-| Domain expert | `knowledge/<domain>/` | Skills or recipes |
+| Repo engineer | `knowledge/recipes/<repo>/` | Skills or topic knowledge |
+| Topic contributor | `knowledge/<topic>.md` | Skills or recipes |
 | Agent team | `skills/` | Wires knowledge in via phase tables |
 
 ---
@@ -129,12 +130,13 @@ Four layers, declared via `metadata.layer` in YAML frontmatter. Skills are flat 
 | `tool` | Does one concrete thing tied to a pipeline | tt-run |
 | `meta` | Cross-cutting utility, or builds/introspects the system | tt-skill-creator, tt-learn, tt-code-review |
 
-**Workflow skills declare phases.** Each phase specifies what knowledge to load (Loads)
-and what it produces (Produces). After each phase, the agent summarizes in 3-5 lines
-and moves on — loaded knowledge is consumed, not carried forward. The repo isn't known
-until after workspace detection, so repo-specific recipes can't be loaded eagerly.
+**Workflow skills declare phases** in a phase table. Each row names the procedure
+(sub-file or invoked skill) and the note produced. After each phase, the agent
+summarizes in 3-5 lines and moves on — loaded knowledge is consumed, not carried
+forward. The repo isn't known until after workspace detection, so repo-specific
+recipes can't be loaded eagerly.
 
-**Structural invariant:** Every file referenced in a Loads column must exist on disk.
+**Structural invariant:** Every file referenced in the phase table must exist on disk.
 Enforced by `test_skill_frontmatter.py`.
 
 ---

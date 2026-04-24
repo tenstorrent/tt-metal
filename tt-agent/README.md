@@ -29,21 +29,23 @@ Add to your root `CLAUDE.md` or ensure it references `tt-agent/adapters/claude-c
 skills/             — how to accomplish tasks (procedural instructions)
   orchestrator/     — routes requests to the right skill (orchestration)
   run/              — workspace detection, build, execute (tool)
+  profiler/         — device profiling + bottleneck interpretation (tool)
   optimizer/        — profile → analyze → optimize → verify (workflow)
-  debugger/         — reproduce → diagnose → fix → verify (workflow)
-  tester/           — design → execute → stress (workflow)
   skill-creator/    — create and validate new skills (meta)
   learn/            — research live codebases on demand (meta)
   code-review/      — strict, challenging parallel review (meta)
 
-knowledge/          — stable facts and patterns
+knowledge/          — stable facts and topic knowledge
   hardware/         — silicon-stable facts (Tensix architecture, CB model)
-  references/       — curated pointers to canonical code examples
+  matmul.md         — matmul refs + memory/compute/debug/K-blocking/numerical/structural
+  ccl.md            — CCL refs + configuration/numerical/tuning
+  kernels.md        — kernel references (grows with contributions)
+  models.md         — model references
+  operators.md      — operator references
+  sharding.md       — sharding references
   recipes/          — per-repo execution patterns (build, test, env)
-    tt-metal/       — build, test, env for tt-metal
-    vllm/           — build, server lifecycle, benchmark, test, env
-  profiling/        — bottleneck patterns, roofline analysis, trace setup
-  debugging/        — crash patterns, watcher interpretation
+    tt-metal/       — build, test, env, profiler for tt-metal
+    vllm/           — build, server lifecycle, benchmark for vLLM
 
 ~/.tt-agent/notes   — shared blackboard (findings, plans, experiments)
 ```
@@ -55,7 +57,7 @@ Three ways to contribute — each independent of the others:
 | Who | Contributes to | Guide |
 |---|---|---|
 | Repo engineer | `knowledge/recipes/<repo>/` | Add build/test/env files for your repo |
-| Domain expert | `knowledge/profiling/`, `debugging/` | Add patterns and methodologies |
+| Topic contributor | `knowledge/<topic>.md` | Add references, patterns, traps per topic |
 | Agent team | `skills/` | Build workflow logic via tt-skill-creator |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
