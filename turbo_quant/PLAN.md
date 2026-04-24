@@ -819,6 +819,15 @@ Quick-reference status after Step 1+2:
 2. Profile with tracy where the hang occurs at 32 layers
 3. Check if trace-captured version deadlocks on a CB semaphore
 
+**Multi-device (2026-04-24, N150x4 mesh):** Added `mesh_mapper=ReplicateTensorToMesh(...)`
+in `TTNNTurboQuantCache.__init__` so the paged index/norm caches replicate properly
+on a MeshDevice. Verified the script progresses through model load → cache alloc →
+compile (22.1s compile time); but 2-layer decode also hangs at loop start (same
+symptom as 32-layer single-device). The hang scales with total fused-SDPA invocations
+per step (layers × devices), confirming the root cause is not mesh-specific but
+shared with the single-device scaling issue. Need to fix (1) above before T3K
+validation can progress.
+
 **3. Multi-device / T3K support** — PENDING
 - Replicate centroids across devices, shard indices/norms by heads
 - `fused_sdpa_decode` to use mesh_composer/mesh_mapper where needed
