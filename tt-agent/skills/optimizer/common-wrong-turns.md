@@ -119,6 +119,111 @@ regression, L1 OOM on big `in0_block_w`, stale-dim crash) were each useful
 for pivoting and none needed reverting. They make the branch history a
 faithful record of what was tried.
 
+## CCL / multi-device traps
+
+### `num_links` on CCL ops must match the physical link count
+
+`ttnn.experimental.all_gather_async(..., num_links=N, ...)` and siblings
+(`reduce_scatter_*`, `all_reduce_*`) require `N` to match the physical
+inter-chip ethernet link count for the device topology. Wrong values
+**deadlock the device** (hang until watchdog reset) — not a soft failure.
+
+Counts observed in production code:
+- N150 single-chip: no CCL (N/A)
+- N300 (2 chips, Ring): `num_links=1`
+- Galaxy (32 chips, Ring): `num_links=4`
+- TG (Tensor Galaxy): per-axis, see the specific model's `tt_ccl.py`
+
+If unsure, copy from a sibling model's `tt_ccl` module (e.g.
+`tt_transformers/tt/ccl.py`) which auto-detects. Hardcoding the galaxy value
+on N300 was observed to deadlock for 10+ minutes before timing out, requiring
+`tt_device_reset`. Keep `tt_device_reset` preloaded when testing CCL tuning
+parameters (see SKILL.md Preflight).
+
+### Cross-device bias fusion needs `÷num_devices` pre-divide
+
+When a matmul is followed by AllGather + FastReduceNC (or any sum-reduce
+across devices), fusing the bias into the matmul via `ttnn.linear(bias=...)`
+adds the bias on each device, and the cross-device sum multiplies it by
+`num_devices`. Correct form:
+
+```python
+# In __init__, before creating the ttnn tensor:
+if args.num_devices > 1:
+    bias_torch = state_dict[...] / args.num_devices
+else:
+    bias_torch = state_dict[...]
+# Use a distinct cache filename (e.g. "bias_div") so the old cache is not reloaded.
+```
+
+The post-reduce sum then yields the original bias exactly. Same trick applies
+to any reduced intermediate followed by a bias/scale add.
+
+### AG/RS tuning parameters have local optima — sweep, don't assume monotonic
+
+`ttnn.experimental.all_gather_async` knobs `chunks_per_sync`,
+`num_workers_per_link`, `num_buffers_per_channel` do **not** improve
+monotonically with any direction of change. Observed on Gemma3 N300:
+
+- `chunks_per_sync`: 10 → 4 improved -309μs; 4 → 2 regressed +976μs
+- `num_workers_per_link`: 2 → 4 improved; 4 → 8 neutral (wastes cores)
+- `num_buffers_per_channel`: 2 → 4 regressed +47μs
+
+Do a small targeted sweep (3-4 values per knob) rather than a directional
+tune. Record the full sweep in a mini-table in the trend file — future
+sessions reading it can avoid re-walking the same regressions.
+
+## Numerical correctness traps
+
+### Fused activations have a different numerical path than standalone
+
+`matmul_config(..., fused_activation=ttnn.UnaryOpType.GELU)` (fused into
+the matmul's packer) and `ttnn.gelu(...)` as a separate op do **not** use
+identical approximations. Observed PCC shift: 0.9999596 → 0.9991 on a
+Gemma3 MLP when fusing GELU. This is expected, not a bug — the fused path
+is still within the 0.99 quality bar and the 0.999 abort threshold.
+
+Before concluding a fusion "broke correctness", re-check against the user's
+actual PCC bar (not the default 0.999 `pcc_abort`). Session-specific overrides
+may allow continuing.
+
+Corollary: the first GELU/SiLU/RELU-fusion iteration typically drops PCC
+by 2-5× versus pre-fusion. Don't revert on that alone.
+
+### `in0_block_w` divisor spacing can block the obvious next step
+
+`in0_block_w` must divide `K_tiles` exactly. The *spacing* between valid
+divisors matters — a K with sparse factorization leaves no middle ground.
+
+Example: `K_tiles=68 = 4 × 17`. Valid divisors: {1, 2, 4, 17, 34, 68}. Going
+from `in0_block_w=4` (17 K-iterations) to `=17` (4 K-iterations, 3× fewer
+dispatches) requires a 1820 KB CB footprint, which OOMs L1 (max 1499 KB).
+There is no `=8` or `=10` option.
+
+Before planning a K-blocking jump, factorize `K_tiles` and enumerate valid
+divisors. If the next valid value is too big for L1, the only ways forward
+are (a) reshape `per_core_M` smaller to free L1 for the bigger
+`in0_block_w`, or (b) accept the current block size and move the lever
+elsewhere.
+
+## Structural pivot traps
+
+### Check the sibling implementation's *mode* before committing to a structural change
+
+tt-metal models often share kernels across PREFILL and DECODE modes with
+different progcfgs per mode. If a target file says "reused from X", verify
+X's progcfg path used in the *same mode* as the target — not the other mode.
+
+Observed: planned L1-block-sharded activations for Gemma3 vision MLP (a
+PREFILL-like path at seq=16512), based on Llama MLP's DRAM-sharded config.
+Llama MLP uses DRAM-sharded only in DECODE; its PREFILL uses
+DRAM-interleaved. The L1-sharding plan would have burned iterations
+pressuring the 1.2 MB per-core budget for no reason.
+
+Prepare-phase check: `grep` the sibling module for the mode keyword
+(`prefill`, `decode`, `mode==`) and confirm the progcfg branch the target
+would inherit.
+
 ## Profiling workflow
 
 ### `tt-perf-report` 1.2.3 crashes on HiFi3 rows
@@ -133,3 +238,11 @@ Trial-to-trial noise on a 5ms matmul is typically ±0.5%. A "1% improvement"
 is inside the noise band — re-run the baseline before committing. The
 `improvement_threshold` in `convergence.md` (default 2%) exists for this
 reason.
+
+### Forensic commits: label intent in the first word of the subject
+
+`opt(<scope>): forensic — <what was tried>` distinguishes kept-but-failed
+iterations from productive ones at a glance. When the trend file's
+"forensic failures" table is regenerated from `git log`, the prefix filters
+cleanly. Consider `opt(<scope>): revert — ...` for explicit reverts of
+failed productive-commit branches.

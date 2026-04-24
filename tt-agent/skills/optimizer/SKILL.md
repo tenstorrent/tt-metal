@@ -45,6 +45,19 @@ work, confirm:
 
 See `skills/skill-creator/tt-guidelines.md` Developer-Rule Conflict Protocol.
 
+## Preflight: tool preload
+
+Before the first iteration, load the deferred tools this loop will need. If
+loaded mid-session, a CCL deadlock or hung test will block for the full
+test timeout (10+ minutes) before the reset tool becomes callable.
+
+Required schemas to fetch via `ToolSearch` before baseline:
+- `select:tt_device_reset` — for CCL hangs or watchdog-triggered device locks.
+- `select:tt_device_job_run,tt_device_job_run_bg,tt_device_job_wait,tt_device_job_kill,tt_device_job_logs` — tt:run dispatches through these.
+
+State that these are loaded in the first trend-file entry. If a CCL or CCL-
+tuning hypothesis is on the queue, this is mandatory — not optional.
+
 ## Inputs
 
 - **Target**: op or kernel name, and a test that exercises it (pytest path +
@@ -97,6 +110,14 @@ Before the first baseline profile:
    target. The original's config patterns may not apply to the new model's
    dimensions. Note any divergent dims, config lambdas, or cached `args.*`
    fields.
+
+   **Check X's mode branch** before borrowing structural choices. tt-metal
+   models often branch on `mode=="prefill" | "decode"` with very different
+   memory layouts. If the target runs in PREFILL, do not borrow X's DECODE
+   progcfg or sharding. `grep` the sibling for the mode keyword and trace
+   which progcfg the target's shape would select. See `common-wrong-turns.md`
+   § "Check the sibling implementation's mode before committing to a
+   structural change".
 
 3. **Actual-vs-derived dim check.** For every `args.<dim>` used in a
    progcfg, compare to `self.<weight>.shape[-1]` of the loaded tensor.

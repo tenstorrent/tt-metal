@@ -60,6 +60,38 @@ A session ends successfully when `best` crosses the user-supplied goal:
 On success: write `findings-optimizer-<scope>-<ts>.md`, invoke
 `tt:code-review` on the winning branch, report to the developer.
 
+## Bound-ceiling exit (utilization-goal only)
+
+When the goal is utilization-typed and the op's bound class after each
+iteration remains `overhead / sync-bound` with FLOPs% < 40%, the current
+kernel family may be structurally incapable of reaching the target. Exit
+condition:
+
+- After 3 productive iterations, the op's bound tag is still `overhead`, AND
+- FLOPs% has not crossed 35% in any trial, AND
+- The levers remaining in the current progcfg family (bigger `in0_block_w`,
+  bigger `per_core_M`, L1 sharding) have been tried or ruled out by L1
+  budget.
+
+Write a `kernel-family-ceiling` checkpoint to the trend file and ask the
+developer:
+
+```
+Reached kernel-family ceiling at iter <N>. Best <best> at <flops%>F /
+<dram%>D / overhead. The current matmul variant (<2D MC | 1D ring |
+DRAM-sharded>) appears structurally overhead-bound on this workload shape
+(<seq>, K=<k>, per_core_M=<m>). Reaching <target>% FLOPs likely requires
+a different matmul family.
+
+Options:
+  1. Switch to <alternative variant> as a parameter-search sweep.
+  2. Accept current best (structural change out of scope).
+  3. Broaden scope to adjacent ops (AllGather, tilize, ...).
+```
+
+This prevents 10+ iterations of subblock fiddling on a fundamentally
+mis-classified goal.
+
 ## Stall — asking the developer
 
 Prompt template:
@@ -142,6 +174,16 @@ iterations go in a separate table below).
 
 | # | Iter | What was tried | Result |
 |---|---|---|---|
+
+## Parameter sweeps (optional, per knob)
+
+When a single parameter was swept with non-monotonic results (common for
+CCL knobs, `in0_block_w`, `num_workers_per_link`), record the full sweep
+here so future sessions do not re-walk it:
+
+| Knob | Values tried | Best value | Notes |
+|---|---|---|---|
+| chunks_per_sync | 10, 4, 2 | 4 | 2 regressed +976μs |
 
 ## Op-level timing (context, optional)
 

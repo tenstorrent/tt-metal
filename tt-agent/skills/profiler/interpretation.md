@@ -91,6 +91,58 @@ max-fidelity peak. Swapping HiFi4 → HiFi2 can show FLOPs% dropping even as
 absolute TFLOPs rise (the denominator doubled). Compare absolute TFLOPs, not
 FLOPs%, across fidelity settings.
 
+### Absolute-TFLOPs formula (for fidelity-spanning comparisons)
+
+When the only column available is FLOPs% (fallback-to-pandas path) or when
+comparing across fidelities:
+
+```
+absolute_TFLOPs = 2 * M * K * N / (DEVICE_FW_DURATION_ns * 1e-9) / 1e12
+```
+
+where `M, K, N` are the *effective* matmul shape after any batch reshape
+(per-device, post-M-reshape if seq was folded into a batch dim). Record both
+`FLOPs%` and `absolute TFLOPs` per iteration when the optimization spans a
+fidelity change — the percentage alone is misleading.
+
+## Overhead confirmation — FW vs KERNEL gap
+
+`DEVICE FW DURATION` spans fw_start → fw_end. `DEVICE KERNEL DURATION` is
+the compute-kernel-only window. The ratio
+
+```
+overhead_ratio = (FW - KERNEL) / FW
+```
+
+is a direct measure of dispatch + barriers + CB-flush overhead.
+
+| overhead_ratio | Reading |
+|---|---|
+| < 15% | compute/bandwidth dominates — lever selection by DRAM%/FLOPs% table |
+| 15-40% | mixed; blocking decisions by per-RISC tag |
+| > 40% | **dispatch/sync dominates** — confirms overhead-bound class even if FLOPs% is ambiguous |
+
+An overhead_ratio > 50% combined with low FLOPs% is the signature of a
+**reshaped-batch matmul**: long sequences folded into a batch dim to keep
+`per_core_M` small, creating many tiny per-chunk dispatches. Typical symptom
+in prefill-path vision or LLM MLPs at seq ≥ 4K. Levers: larger `in0_block_w`,
+larger `out_subblock_h × w`, or (structural) switch to a DRAM-sharded or 1D
+matmul variant that amortizes dispatch differently.
+
+## Layer-scope profiling: contribution column
+
+When profiling an enclosing layer (MLP, attention block) rather than a
+single op, the top-op ranking is more useful with a contribution column:
+
+| Rank | Op Code | Device FW [ns] | % of scope total | Cumulative % |
+|---|---|---|---|---|
+| 1 | ... | 5,273,000 | 36.4% | 36.4% |
+| 2 | ... | 4,326,000 | 29.9% | 66.3% |
+
+`% of scope total` makes "is op X THE bottleneck" quantifiable: an op is THE
+bottleneck iff its contribution > sum(others). Use this when the caller's
+goal is utilization-typed (see `skills/optimizer/convergence.md`).
+
 ## First-run caveat
 
 The first iteration of any test populates the program cache. Host times on

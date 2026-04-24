@@ -75,9 +75,9 @@ kernel name. Examples: `matmul-2d`, `bert-tiny-demo`, `flash-attention`.
 
 ## Top Ops by Device FW Duration
 
-| Rank | Op Code | Device FW [ns] | Cores | Math Fidelity | Bottleneck tag |
-|---|---|---|---|---|---|
-| 1 | ... | ... | ... | ... | ... |
+| Rank | Op Code | Device FW [ns] | % scope | Cum % | Cores | Math Fidelity | DRAM % | FLOPs % | Abs TFLOPs | Bottleneck tag |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | ... | ... | ... | ... | ... | ... | ... | ... | ... | ... |
 
 ## Per-RISC Breakdown — Top Op
 
@@ -87,16 +87,25 @@ kernel name. Examples: `matmul-2d`, `bert-tiny-demo`, `flash-attention`.
 | NCRISC (writer) | ... | ... |
 | TRISC0/1/2 (compute) | ... | ... |
 
+**Overhead ratio** (top op): (FW - KERNEL) / FW = <pct>%
+
 ## Bottleneck Read
 
 <1-3 sentences. What dominates device time, which processor, any obvious
 under-utilization (low core count, low math fidelity setting, serialized NOC).
+Call out overhead-bound if overhead_ratio > 40% or FLOPs% + DRAM% both < 40%.
 No prescriptions.>
 
 ## Raw tt-perf-report Output
 
 <paste the full rendered report>
 ```
+
+The `% scope` / `Cum %` columns make "is op X THE bottleneck" a one-glance
+read — essential for utilization-typed goals. `DRAM %` / `FLOPs %` /
+`Abs TFLOPs` / overhead ratio feed bound classification per
+`interpretation.md`. When the report crashes and the pandas fallback is
+used, compute `Abs TFLOPs = 2*M*K*N / FW_ns / 1e3` manually per matmul row.
 
 ## Caller Contract
 
