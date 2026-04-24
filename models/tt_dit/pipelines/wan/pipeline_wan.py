@@ -6,10 +6,8 @@
 
 import html
 import os
-import sys
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List, Optional, Union
 
 import ftfy
@@ -27,13 +25,6 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-# The internal-prodia directory contains a hyphen, which is not a valid Python
-# identifier, so we add it to sys.path and import via its inner `pipelines` package.
-_INTERNAL_PRODIA_DIR = (Path(__file__).resolve().parents[4] / "internal-prodia").as_posix()
-if _INTERNAL_PRODIA_DIR not in sys.path:
-    sys.path.insert(0, _INTERNAL_PRODIA_DIR)
-from pipelines.pipeline_wan_demo_internal import create_pipeline as _create_demo_internal_pipeline  # noqa: E402
 
 from ...encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
@@ -378,11 +369,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         width: int = 0,
         num_frames: int = 81,
     ):
-        if "DEMO_WEIGHTS_DIR" in os.environ:
-            return _create_demo_internal_pipeline(
-                mesh_device=mesh_device,
-                weights_dir=os.environ["DEMO_WEIGHTS_DIR"],
-            )
         device_configs = {}
         if ttnn.device.is_blackhole():
             device_configs[(1, 4)] = {
