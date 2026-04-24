@@ -20,7 +20,7 @@ def get_activation_golden_function(activation):
 
     activation_map = {
         "relu": F.relu,
-        "relu6": lambda x: F.relu6(x),
+        "relu6": F.relu6,
         "silu": F.silu,
         "gelu": F.gelu,
         "tanh": torch.tanh,
@@ -38,7 +38,7 @@ def get_activation_golden_function(activation):
         # Handle UnaryWithParam objects
         op_type_map = {
             ttnn.UnaryOpType.RELU: F.relu,
-            ttnn.UnaryOpType.RELU6: lambda x: F.relu6(x),
+            ttnn.UnaryOpType.RELU6: F.relu6,
             ttnn.UnaryOpType.SILU: F.silu,
             ttnn.UnaryOpType.GELU: F.gelu,
             ttnn.UnaryOpType.TANH: torch.tanh,
@@ -478,10 +478,7 @@ def test_activation_with_different_program_configs(
 # ============================================================================
 
 from models.common.utility_functions import (
-    is_wormhole_b0,
     is_blackhole,
-    skip_for_wormhole_b0,
-    skip_for_blackhole,
 )
 
 
@@ -622,7 +619,6 @@ def run_test_matmul_dram_sharded_with_bias_and_activation(
     bias_shard_shape = [32, N_padded // num_banks]
     num_cores = grid_size[0] * grid_size[1]
 
-    in0_block_h = M // 32
     in0_block_w = K // num_cores // 32
     out_block_h = M // 32
     out_block_w = N // num_cores // 32
@@ -1095,7 +1091,7 @@ def test_matmul_1d_gather_with_activations(
                     # Sigmoid fast approximation has very low accuracy
                     if activation_param.op_type == ttnn.UnaryOpType.SIGMOID:
                         skip_low_accuracy_fast = True
-            except:
+            except Exception:
                 # If params can't be accessed, check string representation
                 if "params=[1" in str(activation_param) and activation_param.op_type == ttnn.UnaryOpType.SIGMOID:
                     skip_low_accuracy_fast = True
