@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import torch
@@ -19,6 +20,7 @@ def generate_tiny_hf_checkpoint(
     *,
     num_hidden_layers: int = 1,
     num_routed_experts: int = 4,
+    compress_ratios: Sequence[int] | None = None,
     seed: int = 0,
     overwrite: bool = False,
 ) -> Path:
@@ -30,7 +32,11 @@ def generate_tiny_hf_checkpoint(
     output_dir.mkdir(parents=True)
     (output_dir / "inference").mkdir()
 
-    config = tiny_config_dict(num_hidden_layers=num_hidden_layers, num_routed_experts=num_routed_experts)
+    config = tiny_config_dict(
+        num_hidden_layers=num_hidden_layers,
+        num_routed_experts=num_routed_experts,
+        compress_ratios=compress_ratios,
+    )
     inference_config = tiny_inference_config_dict(config)
     _write_json(output_dir / "config.json", config)
     _write_json(output_dir / "inference" / "config.json", inference_config)
@@ -51,11 +57,19 @@ def generate_tiny_hf_checkpoint(
     return output_dir
 
 
-def tiny_config_dict(*, num_hidden_layers: int = 1, num_routed_experts: int = 4) -> dict:
+def tiny_config_dict(
+    *,
+    num_hidden_layers: int = 1,
+    num_routed_experts: int = 4,
+    compress_ratios: Sequence[int] | None = None,
+) -> dict:
     if num_hidden_layers < 1:
         raise ValueError("num_hidden_layers must be >= 1")
-    compress_pattern = [0, 0, 4]
-    compress_ratios = [compress_pattern[i] if i < len(compress_pattern) else 4 for i in range(num_hidden_layers)]
+    if compress_ratios is None:
+        compress_pattern = [0, 0, 4]
+        compress_ratios = [compress_pattern[i] if i < len(compress_pattern) else 4 for i in range(num_hidden_layers)]
+    else:
+        compress_ratios = _validate_compress_ratios(compress_ratios, num_hidden_layers=num_hidden_layers)
     return {
         "architectures": ["DeepseekV4ForCausalLM"],
         "attention_bias": False,
@@ -116,6 +130,18 @@ def tiny_config_dict(*, num_hidden_layers: int = 1, num_routed_experts: int = 4)
         "compress_rope_theta": 160000,
         "compress_ratios": compress_ratios,
     }
+
+
+def _validate_compress_ratios(compress_ratios: Sequence[int], *, num_hidden_layers: int) -> list[int]:
+    ratios = list(compress_ratios)
+    if len(ratios) != num_hidden_layers:
+        raise ValueError(f"compress_ratios length {len(ratios)} must match num_hidden_layers {num_hidden_layers}")
+    for ratio in ratios:
+        if not isinstance(ratio, int) or isinstance(ratio, bool):
+            raise TypeError(f"compress_ratios entries must be integers, got {ratio!r}")
+        if ratio < 0:
+            raise ValueError(f"compress_ratios entries must be non-negative, got {ratio}")
+    return ratios
 
 
 def tiny_inference_config_dict(config: dict) -> dict:

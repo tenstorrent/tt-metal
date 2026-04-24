@@ -13,6 +13,7 @@ from models.demos.deepseek_v4_flash.ttnn_model import (
     ModelEmbeddingHeadWeights,
     embed_input_ids_host,
     load_model_embedding_head_weights,
+    normalize_tiny_model_layer_ids,
     validate_model_embedding_head_weights,
     validate_model_input_ids,
 )
@@ -63,3 +64,20 @@ def test_tiny_model_api_validation_errors() -> None:
         validate_model_input_ids(torch.tensor([[0, 64]], dtype=torch.int64), vocab_size=64)
     with pytest.raises(ValueError, match=r"input_ids values must be in \[0, 64\)"):
         embed_input_ids_host(torch.tensor([[-1]], dtype=torch.int64), weights.embed_weight)
+
+
+def test_tiny_model_layer_id_normalization() -> None:
+    assert normalize_tiny_model_layer_ids(layer=2, num_hidden_layers=3) == (2,)
+    assert normalize_tiny_model_layer_ids(layer_ids=(0, 1), num_hidden_layers=3) == (0, 1)
+    assert normalize_tiny_model_layer_ids(layer_ids=[0, 1, 2], num_hidden_layers=3) == (0, 1, 2)
+
+    with pytest.raises(ValueError, match="layer_ids must be non-empty"):
+        normalize_tiny_model_layer_ids(layer_ids=())
+    with pytest.raises(ValueError, match="duplicates"):
+        normalize_tiny_model_layer_ids(layer_ids=(0, 0))
+    with pytest.raises(ValueError, match=r"layer id must be in \[0, 2\)"):
+        normalize_tiny_model_layer_ids(layer_ids=(0, 2), num_hidden_layers=2)
+    with pytest.raises(ValueError, match="Pass either layer or layer_ids"):
+        normalize_tiny_model_layer_ids(layer=1, layer_ids=(0, 1), num_hidden_layers=3)
+    with pytest.raises(TypeError, match="layer ids must be integers"):
+        normalize_tiny_model_layer_ids(layer_ids=(True,))

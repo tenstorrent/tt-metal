@@ -156,3 +156,26 @@ def test_generate_and_convert_tiny_three_layer_fixture(tmp_path):
     with (source / "model.safetensors.index.json").open("r", encoding="utf-8") as handle:
         source_index = json.load(handle)
     assert "layers.2.attn.compressor.ape" in source_index["weight_map"]
+
+
+def test_generate_and_convert_tiny_compressed_stack_fixture(tmp_path):
+    source = generate_tiny_hf_checkpoint(tmp_path / "source", num_hidden_layers=2, compress_ratios=(4, 4))
+    output = convert_hf_checkpoint(source, tmp_path / "tt_preprocessed")
+    manifest = load_tt_manifest(output)
+
+    assert manifest["config"]["num_hidden_layers"] == 2
+    assert manifest["config"]["compress_ratios"] == [4, 4]
+
+    non_expert_artifact = output / manifest["artifacts"]["non_expert_safetensors"][0]
+    with safe_open(non_expert_artifact, framework="pt", device="cpu") as handle:
+        keys = set(handle.keys())
+        assert "layers.0.attn.compressor.ape" in keys
+        assert "layers.0.attn.indexer.wq_b.weight" in keys
+        assert "layers.1.attn.compressor.ape" in keys
+        assert "layers.1.attn.indexer.wq_b.weight" in keys
+
+    with safe_open(output / manifest["artifacts"]["metadata_safetensors"], framework="pt", device="cpu") as handle:
+        torch.testing.assert_close(handle.get_tensor("compress_ratios"), torch.tensor([4, 4], dtype=torch.int32))
+
+    with pytest.raises(ValueError, match="compress_ratios length"):
+        tiny_config_dict(num_hidden_layers=2, compress_ratios=(4,))

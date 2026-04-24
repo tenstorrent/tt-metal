@@ -80,6 +80,7 @@ class TtMoEFeedForwardBlock(LightweightModule):
         mesh_device,
         layer: int = 0,
         primary_submesh_coord: tuple[int, int] | None = None,
+        primary_submesh=None,
         replicas_per_expert: int = 1,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -89,10 +90,11 @@ class TtMoEFeedForwardBlock(LightweightModule):
             primary_submesh_coord = default_moe_primary_submesh_coord(mesh_shape)
         _validate_submesh_coord(primary_submesh_coord, mesh_shape)
 
-        primary_submesh = mesh_device.create_submesh(
-            ttnn.MeshShape(1, 1),
-            offset=ttnn.MeshCoordinate(*primary_submesh_coord),
-        )
+        if primary_submesh is None:
+            primary_submesh = mesh_device.create_submesh(
+                ttnn.MeshShape(1, 1),
+                offset=ttnn.MeshCoordinate(*primary_submesh_coord),
+            )
         router = TtRouter.from_preprocessed(
             preprocessed_path,
             device=primary_submesh,
@@ -141,10 +143,13 @@ class TtMoEFeedForwardBlock(LightweightModule):
             dtype=self.dtype,
             memory_config=self.memory_config,
         )
-        routed_output = routed_group.run_torch_host_combine(
-            torch_hidden_states,
-            decode_plan.route_weights_by_expert,
-        )
+        try:
+            routed_output = routed_group.run_torch_host_combine(
+                torch_hidden_states,
+                decode_plan.route_weights_by_expert,
+            )
+        finally:
+            _close_routed_group_submeshes(routed_group)
         shared_output = self._run_shared_expert(torch_hidden_states)
         return (routed_output.float() + shared_output.float()).to(torch_hidden_states.dtype)
 
@@ -225,3 +230,9 @@ def validate_moe_primary_submesh_disjoint(primary_coord: tuple[int, int], plan: 
             f"primary_submesh_coord {primary_coord} overlaps a routed expert primary submesh; "
             "choose a disjoint router/shared expert submesh"
         )
+
+
+def _close_routed_group_submeshes(routed_group: TtPlannedRoutedExpertGroup) -> None:
+    for submesh in routed_group.submeshes.values():
+        ttnn.synchronize_device(submesh)
+        ttnn.close_mesh_device(submesh)

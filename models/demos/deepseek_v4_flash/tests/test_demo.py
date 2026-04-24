@@ -30,6 +30,7 @@ def test_tiny_demo_arg_parser_defaults_and_overrides() -> None:
     assert defaults.artifact_dir is None
     assert defaults.tokens == 32
     assert defaults.layer == 2
+    assert defaults.layer_ids is None
     assert defaults.top_k == 5
     assert defaults.warmup_runs == 1
     assert defaults.measure_runs == 1
@@ -44,6 +45,8 @@ def test_tiny_demo_arg_parser_defaults_and_overrides() -> None:
             "64",
             "--layer",
             "1",
+            "--layer-ids",
+            "0,1",
             "--top-k",
             "3",
             "--warmup-runs",
@@ -57,6 +60,7 @@ def test_tiny_demo_arg_parser_defaults_and_overrides() -> None:
     assert parsed.artifact_dir == Path("/tmp/deepseek-v4-flash-artifacts")
     assert parsed.tokens == 64
     assert parsed.layer == 1
+    assert parsed.layer_ids == (0, 1)
     assert parsed.top_k == 3
     assert parsed.warmup_runs == 0
     assert parsed.measure_runs == 2
@@ -65,6 +69,8 @@ def test_tiny_demo_arg_parser_defaults_and_overrides() -> None:
         create_arg_parser().parse_args(["--tokens", "0"])
     with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
         create_arg_parser().parse_args(["--warmup-runs", "-1"])
+    with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
+        create_arg_parser().parse_args(["--layer-ids", "0,0"])
 
 
 def test_tiny_demo_deterministic_input_ids() -> None:
@@ -110,6 +116,7 @@ def test_tiny_demo_summary_reports_shape_checksum_topk_and_timings() -> None:
     }
     assert summary["input"]["token_count"] == 2
     assert summary["input"]["layer"] == 2
+    assert summary["input"]["layer_ids"] == [2]
     assert summary["input"]["warmup_runs"] == 1
     assert summary["input"]["measure_runs"] == 2
     assert summary["logits"]["shape"] == [1, 2, 4]

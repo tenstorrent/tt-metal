@@ -22,7 +22,7 @@ from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 DEMO_NAME = "deepseek_v4_flash_tiny_scaffold"
 DEMO_NOTE = (
-    "Tiny scaffold/demo only: synthetic checkpoint, one decoder layer, TTNN LM head; not a full model/perf result."
+    "Tiny scaffold/demo only: synthetic checkpoint, decoder layer stack, TTNN LM head; not a full model/perf result."
 )
 DEFAULT_TOKENS = 32
 DEFAULT_LAYER = 2
@@ -63,6 +63,12 @@ def create_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tokens", type=_positive_int, default=DEFAULT_TOKENS, help="Number of input tokens.")
     parser.add_argument("--layer", type=_nonnegative_int, default=DEFAULT_LAYER, help="Decoder layer index to run.")
     parser.add_argument(
+        "--layer-ids",
+        type=_layer_ids_arg,
+        default=None,
+        help="Comma-separated decoder layer indices to run as a stack. Overrides --layer.",
+    )
+    parser.add_argument(
         "--top-k",
         type=_positive_int,
         default=DEFAULT_TOP_K,
@@ -86,9 +92,11 @@ def create_arg_parser() -> argparse.ArgumentParser:
 def run_tiny_model_demo(args: argparse.Namespace) -> dict:
     total_start = time.perf_counter()
     setup_start = time.perf_counter()
+    layer_ids = _demo_layer_ids(args)
     with prepared_tiny_checkpoint(
         preprocessed_path=args.preprocessed_path,
         artifact_dir=args.artifact_dir,
+        layer_ids=layer_ids,
     ) as checkpoint:
         manifest = load_tt_manifest(checkpoint.preprocessed_path)
         vocab_size = int(manifest["config"]["vocab_size"])
@@ -103,11 +111,18 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
             from models.demos.deepseek_v4_flash.ttnn_model import TtDeepSeekV4FlashTinyModel
 
             model_init_start = time.perf_counter()
-            model = TtDeepSeekV4FlashTinyModel.from_preprocessed(
-                checkpoint.preprocessed_path,
-                mesh_device=mesh_device,
-                layer=args.layer,
-            )
+            if args.layer_ids is None:
+                model = TtDeepSeekV4FlashTinyModel.from_preprocessed(
+                    checkpoint.preprocessed_path,
+                    mesh_device=mesh_device,
+                    layer=args.layer,
+                )
+            else:
+                model = TtDeepSeekV4FlashTinyModel.from_preprocessed(
+                    checkpoint.preprocessed_path,
+                    mesh_device=mesh_device,
+                    layer_ids=layer_ids,
+                )
             _synchronize_submeshes(ttnn, mesh_device)
             model_init_s = time.perf_counter() - model_init_start
 
@@ -153,7 +168,7 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
             input_ids=input_ids,
             timings=timings,
             checkpoint=checkpoint,
-            layer=args.layer,
+            layer_ids=layer_ids,
             top_k=args.top_k,
             warmup_runs=args.warmup_runs,
             measure_runs=args.measure_runs,
@@ -165,6 +180,7 @@ def prepared_tiny_checkpoint(
     *,
     preprocessed_path: Path | None,
     artifact_dir: Path | None,
+    layer_ids: tuple[int, ...] = (DEFAULT_LAYER,),
 ) -> Iterator[PreparedCheckpoint]:
     if preprocessed_path is not None:
         preprocessed_path = preprocessed_path.expanduser().resolve()
@@ -179,13 +195,13 @@ def prepared_tiny_checkpoint(
     if artifact_dir is None:
         with tempfile.TemporaryDirectory(prefix="deepseek_v4_flash_tiny_demo_") as temp_dir:
             base = Path(temp_dir)
-            yield _generate_preprocessed_checkpoint(base)
+            yield _generate_preprocessed_checkpoint(base, layer_ids=layer_ids)
         return
 
     artifact_dir = artifact_dir.expanduser().resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     base = Path(tempfile.mkdtemp(prefix="deepseek_v4_flash_tiny_demo_", dir=artifact_dir))
-    yield _generate_preprocessed_checkpoint(base)
+    yield _generate_preprocessed_checkpoint(base, layer_ids=layer_ids)
 
 
 def deterministic_input_ids(*, tokens: int, vocab_size: int) -> torch.Tensor:
@@ -202,15 +218,22 @@ def summarize_demo_result(
     input_ids: torch.Tensor,
     timings: DemoTimings,
     checkpoint: PreparedCheckpoint,
-    layer: int,
     top_k: int,
     warmup_runs: int,
     measure_runs: int,
+    layer: int | None = None,
+    layer_ids: tuple[int, ...] | None = None,
 ) -> dict:
     if logits.ndim != 3 or logits.shape[0] != 1:
         raise ValueError(f"logits must have shape [1, tokens, vocab], got {tuple(logits.shape)}")
     if top_k <= 0:
         raise ValueError(f"top_k must be positive, got {top_k}")
+    if layer_ids is None:
+        if layer is None:
+            raise ValueError("layer or layer_ids must be provided")
+        layer_ids = (int(layer),)
+    if not layer_ids:
+        raise ValueError("layer_ids must be non-empty")
 
     first_token = logits[0, 0].float()
     top_count = min(top_k, first_token.shape[0])
@@ -227,7 +250,8 @@ def summarize_demo_result(
         "input": {
             "token_count": int(input_ids.shape[1]),
             "input_ids_shape": list(input_ids.shape),
-            "layer": int(layer),
+            "layer": int(layer_ids[-1]),
+            "layer_ids": [int(layer_id) for layer_id in layer_ids],
             "warmup_runs": int(warmup_runs),
             "measure_runs": int(measure_runs),
         },
@@ -265,8 +289,15 @@ def _synchronize_submeshes(ttnn_module, mesh_device) -> None:
         ttnn_module.synchronize_device(submesh)
 
 
-def _generate_preprocessed_checkpoint(base: Path) -> PreparedCheckpoint:
-    source = generate_tiny_hf_checkpoint(base / "hf_source", num_hidden_layers=3)
+def _generate_preprocessed_checkpoint(
+    base: Path, *, layer_ids: tuple[int, ...] = (DEFAULT_LAYER,)
+) -> PreparedCheckpoint:
+    num_hidden_layers = max(DEFAULT_LAYER + 1, max(layer_ids) + 1)
+    source = generate_tiny_hf_checkpoint(
+        base / "hf_source",
+        num_hidden_layers=num_hidden_layers,
+        compress_ratios=_demo_compress_ratios(layer_ids, num_hidden_layers=num_hidden_layers),
+    )
     preprocessed = convert_hf_checkpoint(source, base / "tt_preprocessed")
     return PreparedCheckpoint(
         preprocessed_path=preprocessed.resolve(),
@@ -294,6 +325,36 @@ def _nonnegative_int(value: str) -> int:
     if parsed < 0:
         raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {value!r}")
     return parsed
+
+
+def _layer_ids_arg(value: str) -> tuple[int, ...]:
+    parts = [part.strip() for part in value.split(",")]
+    if not parts or any(part == "" for part in parts):
+        raise argparse.ArgumentTypeError(f"expected comma-separated non-negative integers, got {value!r}")
+    try:
+        layer_ids = tuple(_nonnegative_int(part) for part in parts)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected comma-separated non-negative integers, got {value!r}") from exc
+    if len(set(layer_ids)) != len(layer_ids):
+        raise argparse.ArgumentTypeError(f"layer ids must not contain duplicates, got {value!r}")
+    return layer_ids
+
+
+def _demo_layer_ids(args: argparse.Namespace) -> tuple[int, ...]:
+    if args.layer_ids is not None:
+        return tuple(int(layer_id) for layer_id in args.layer_ids)
+    return (int(args.layer),)
+
+
+def _demo_compress_ratios(layer_ids: tuple[int, ...], *, num_hidden_layers: int) -> tuple[int, ...] | None:
+    if layer_ids == (DEFAULT_LAYER,):
+        return None
+    ratios = [0, 0, 4]
+    while len(ratios) < num_hidden_layers:
+        ratios.append(4)
+    for layer_id in layer_ids:
+        ratios[layer_id] = 4
+    return tuple(ratios[:num_hidden_layers])
 
 
 def _round_float(value: float) -> float:

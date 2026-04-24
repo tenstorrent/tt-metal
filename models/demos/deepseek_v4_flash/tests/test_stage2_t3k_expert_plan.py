@@ -96,6 +96,21 @@ def tiny_three_layer_tt_preprocessed_checkpoint(tmp_path_factory: pytest.TempPat
     return convert_hf_checkpoint(source, base / "tt_preprocessed")
 
 
+@pytest.fixture(scope="module")
+def tiny_compressed_stack_tt_preprocessed_checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    artifact_root = os.environ.get("DSV4_FLASH_ARTIFACT_DIR")
+    if artifact_root:
+        base = Path(artifact_root) / "pytest" / f"deepseek_v4_flash_t3k_model_stack_{os.getpid()}"
+        if base.exists():
+            shutil.rmtree(base)
+        base.mkdir(parents=True)
+    else:
+        base = tmp_path_factory.mktemp("deepseek_v4_flash_t3k_model_stack")
+
+    source = generate_tiny_hf_checkpoint(base / "hf_source", num_hidden_layers=3, compress_ratios=(4, 0, 4))
+    return convert_hf_checkpoint(source, base / "tt_preprocessed")
+
+
 @pytest.fixture
 def t3k_mesh():
     _skip_unless_t3k()
@@ -382,23 +397,61 @@ def test_t3k_tiny_model_scaffold_embedding_decoder_logits_match_torch(
     assert passing, f"Tiny model logits PCC below 0.98: {pcc_message}"
 
 
+def test_t3k_tiny_model_scaffold_two_decoder_layers_match_torch(
+    tiny_compressed_stack_tt_preprocessed_checkpoint: Path,
+    t3k_mesh,
+) -> None:
+    """Tiny model stack smoke: host embedding, two decoder layers, TTNN LM head."""
+
+    manifest = load_tt_manifest(tiny_compressed_stack_tt_preprocessed_checkpoint)
+    layer_ids = (0, 2)
+    seq_len = 32
+    vocab_size = int(manifest["config"]["vocab_size"])
+    input_ids = torch.zeros(1, seq_len, dtype=torch.int64)
+
+    expected = _tiny_model_reference_logits(
+        tiny_compressed_stack_tt_preprocessed_checkpoint,
+        manifest,
+        layer_ids=layer_ids,
+        input_ids=input_ids,
+    )
+
+    module = TtDeepSeekV4FlashTinyModel.from_preprocessed(
+        tiny_compressed_stack_tt_preprocessed_checkpoint,
+        mesh_device=t3k_mesh,
+        layer_ids=layer_ids,
+    )
+    torch_output = module(input_ids)
+
+    assert module.layer_ids == layer_ids
+    assert torch_output.shape == (1, seq_len, vocab_size)
+    passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.75)
+    assert passing, f"Tiny model stack logits PCC below 0.75: {pcc_message}"
+
+
 def _tiny_model_reference_logits(
     preprocessed_path: Path,
     manifest: dict,
     *,
-    layer: int,
     input_ids: torch.Tensor,
+    layer: int | None = None,
+    layer_ids: tuple[int, ...] | None = None,
 ) -> torch.Tensor:
+    if layer_ids is None:
+        if layer is None:
+            raise ValueError("layer or layer_ids must be provided")
+        layer_ids = (int(layer),)
     weights = load_model_embedding_head_weights(preprocessed_path, manifest=manifest)
     hidden_states = embed_input_ids_host(input_ids, weights.embed_weight).unsqueeze(1)
-    decoded = _decoder_layer_reference(
-        preprocessed_path,
-        manifest,
-        layer=layer,
-        hidden_states=hidden_states,
-        input_ids=input_ids,
-    )
-    return F.linear(decoded[:, 0].float(), weights.head_weight.float())
+    for layer_id in layer_ids:
+        hidden_states = _decoder_layer_reference(
+            preprocessed_path,
+            manifest,
+            layer=layer_id,
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+        )
+    return F.linear(hidden_states[:, 0].float(), weights.head_weight.float())
 
 
 def _decoder_layer_reference(
