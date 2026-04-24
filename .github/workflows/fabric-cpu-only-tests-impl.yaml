@@ -73,7 +73,6 @@ jobs:
 
           # Topology mapper: MockCluster3Pod16x8_* (3-pod tt-run + triple rank bindings; includes multi-MGD mock subcontext)
           tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/triple_16x8_quad_bh_galaxy_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.MockCluster3Pod16x8*"
-          # MockClusterBH6U_* — single-UU blackhole 6U cluster (32 ASICs); distinct from MockCluster3Pod16x8_SingleBHGalaxy on the 3-pod line above
           TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.MockClusterBH6U_*"
 
           TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="RoutingTableValidation*"

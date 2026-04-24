@@ -20,7 +20,6 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::tt_fabric;
 
@@ -41,40 +40,6 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
     return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 }
-
-namespace {
-// Dumps get_valid_groupings* maps (used only by GetValidGroupingsForMGDs_TwoDifferentMGDs_MockSubcontextMeshGraphs).
-void pgd_sp3_print_valid_groupings(const char* test_name, const ValidGroupingsMap& m) {
-    log_info(tt::LogFabric, "========== {} (PGD valid groupings) ==========", test_name);
-    std::vector<std::string> types;
-    types.reserve(m.size());
-    for (const auto& [t, _] : m) {
-        types.push_back(t);
-    }
-    std::sort(types.begin(), types.end());
-    for (const std::string& type : types) {
-        log_info(tt::LogFabric, "  type \"{}\":", type);
-        std::vector<std::string> names;
-        for (const auto& [n, _] : m.at(type)) {
-            names.push_back(n);
-        }
-        std::sort(names.begin(), names.end());
-        for (const std::string& n : names) {
-            const auto& gvec = m.at(type).at(n);
-            log_info(tt::LogFabric, "    instance \"{}\": {} grouping(s)", n, gvec.size());
-            for (const auto& g : gvec) {
-                log_info(
-                    tt::LogFabric,
-                    "      - name={} type={} asic_count={} adjacency_nodes={}",
-                    g.name,
-                    g.type,
-                    g.asic_count,
-                    g.adjacency_graph.get_nodes().size());
-            }
-        }
-    }
-}
-}  // namespace
 
 // Helper to check that a node's neighbors match expected (order-independent)
 static void expect_neighbors(
@@ -1710,12 +1675,33 @@ size_t count_mesh_grouping_entries(const ValidGroupingsMap& m) {
     }
     return n;
 }
+
+size_t count_fabric_grouping_entries(const ValidGroupingsMap& m) {
+    if (!m.contains("FABRIC")) {
+        return 0;
+    }
+    size_t n = 0;
+    for (const auto& [_, gvec] : m.at("FABRIC")) {
+        n += gvec.size();
+    }
+    return n;
+}
+
+size_t undirected_edge_count_u32(const AdjacencyGraph<uint32_t>& g) {
+    size_t sum_deg = 0;
+    for (uint32_t nid : g.get_nodes()) {
+        sum_deg += g.get_neighbors(nid).size();
+    }
+    return sum_deg / 2;
+}
 }  // namespace
 
 TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGDs_TwoDifferentMGDs_MockSubcontextMeshGraphs) {
     // Same mesh_graph_desc_path as mock_galaxy_single_host_subcontext_a/b_rank_bindings.yaml: one 4x4
-    // BH galaxy mesh vs dual 2x4 + inter-mesh. Merged get_valid_groupings_for_mgds should collect all
-    // MESH (and other) instance keys with mgd0_ / mgd1_ prefixes; MESH entry count = sum of per-MGD counts.
+    // BH galaxy mesh vs dual 2x4 + inter-mesh. Per-MGD: 4x4 MGD should only resolve 4x4_Mesh* PGD groupings;
+    // dual 2x4 should only resolve 4x2_Mesh* (half-tray 2x4 tiles). Merged map prefixes instance keys mgd0_/mgd1_.
+    // Graph (FABRIC) level: G0 is one logical mesh vs two meshes with one inter-mesh edge — PGD match or MGD fallback
+    // must preserve that mesh-graph shape (node/edge counts on the logical multi-mesh adjacency graph).
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
     const std::string mgd_path_4x4 =
@@ -1738,11 +1724,6 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGDs_TwoDifferentMG
 
     const std::vector<const MeshGraphDescriptor*> both = {&mgd_4x4, &mgd_dual};
     const auto merged = pgd.get_valid_groupings_for_mgds(both, psd);
-    pgd_sp3_print_valid_groupings(
-        "SP3 GetValidGroupingsForMGDs_MockSubcontext — MGD: bh_galaxy_single_4x4_mesh", valid_4x4);
-    pgd_sp3_print_valid_groupings(
-        "SP3 GetValidGroupingsForMGDs_MockSubcontext — MGD: bh_galaxy_dual_2x4_intermesh", valid_dual);
-    pgd_sp3_print_valid_groupings("SP3 GetValidGroupingsForMGDs_MockSubcontext — merged (mgd0_*/mgd1_* keys)", merged);
 
     // Per-MGD: both descriptors use mesh definition M0 (4×4 vs 2×4 device topology); ensure PGD matching found them.
     ASSERT_TRUE(valid_4x4.contains("MESH")) << "bh_galaxy_single_4x4_mesh: expect MESH groupings";
@@ -1754,12 +1735,41 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGDs_TwoDifferentMG
         << "bh_galaxy_single_4x4_mesh: expected MESH instance key M0 (mesh_descriptors.name)";
     ASSERT_TRUE(valid_dual.at("MESH").contains("M0")) << "bh_galaxy_dual_2x4_intermesh: expected MESH instance key M0";
 
+    for (const auto& [_, gvec] : valid_4x4.at("MESH")) {
+        for (const auto& g : gvec) {
+            EXPECT_NE(g.name.find("4x4_Mesh"), std::string::npos)
+                << "bh_galaxy_single_4x4_mesh: expected only 4x4_Mesh* PGD groupings; got " << g.name;
+            EXPECT_EQ(g.name.find("4x2_Mesh"), std::string::npos)
+                << "bh_galaxy_single_4x4_mesh: should not match 4x2_Mesh* (2x4 half-tray); got " << g.name;
+            EXPECT_EQ(g.asic_count, 16u) << "4x4 logical mesh should be 16 ASICs; grouping " << g.name;
+        }
+    }
+    for (const auto& [_, gvec] : valid_dual.at("MESH")) {
+        for (const auto& g : gvec) {
+            EXPECT_NE(g.name.find("4x2_Mesh"), std::string::npos)
+                << "bh_galaxy_dual_2x4_intermesh: expected only 4x2_Mesh* (2x4 tile) groupings; got " << g.name;
+            EXPECT_EQ(g.name.find("4x4_Mesh"), std::string::npos)
+                << "bh_galaxy_dual_2x4_intermesh: should not match 4x4_Mesh*; got " << g.name;
+            EXPECT_EQ(g.asic_count, 8u) << "2x4 tile should be 8 ASICs per grouping; grouping " << g.name;
+        }
+    }
+
     ASSERT_TRUE(merged.contains("MESH")) << "Merged result should include MESH";
-    for (const auto& [instance_name, _] : merged.at("MESH")) {
+    for (const auto& [instance_name, gvec] : merged.at("MESH")) {
         EXPECT_TRUE(instance_name.rfind("mgd0_", 0) == 0 || instance_name.rfind("mgd1_", 0) == 0)
             << "Unexpected MESH instance key (expected mgd{{i}}_ prefix): " << instance_name;
+        for (const auto& g : gvec) {
+            if (instance_name.rfind("mgd0_", 0) == 0) {
+                EXPECT_NE(g.name.find("4x4_Mesh"), std::string::npos)
+                    << "merged mgd0_*: expected only 4x4_Mesh*; got " << g.name;
+                EXPECT_EQ(g.asic_count, 16u);
+            } else {
+                EXPECT_NE(g.name.find("4x2_Mesh"), std::string::npos)
+                    << "merged mgd1_*: expected only 4x2_Mesh*; got " << g.name;
+                EXPECT_EQ(g.asic_count, 8u);
+            }
+        }
     }
-    // At least one MESH key per source MGD (prefixed)
     {
         size_t n0 = 0;
         size_t n1 = 0;
@@ -1779,41 +1789,46 @@ TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGDs_TwoDifferentMG
     EXPECT_EQ(count_mesh_grouping_entries(merged), expected_mesh_entries)
         << "Merged MESH grouping entry count should equal 4x4 MGD + dual-2x4-intermesh MGD";
 
-    // If get_valid_groupings_for_mgd produced FABRIC (or any higher-layer) entries, merged must be the
-    // per-MGD maps with instance keys renamed mgd0_<name> / mgd1_<name> (see get_valid_groupings_for_mgds).
-    auto assert_mgd_merge_for_type = [](const char* type_label,
-                                        const ValidGroupingsMap& a,
-                                        const char* a_prefix,
-                                        const ValidGroupingsMap& b,
-                                        const char* b_prefix,
-                                        const ValidGroupingsMap& merged) {
-        if (!a.contains(type_label) && !b.contains(type_label)) {
-            return;
-        }
-        ASSERT_TRUE(merged.contains(type_label)) << "merged: expected type " << type_label;
-        if (a.contains(type_label)) {
-            for (const auto& [instance_key, gvec] : a.at(type_label)) {
-                const std::string merged_key = std::string(a_prefix) + instance_key;
-                ASSERT_TRUE(merged.at(type_label).contains(merged_key))
-                    << "merged[" << type_label << "] should contain " << merged_key;
-                EXPECT_EQ(merged.at(type_label).at(merged_key).size(), gvec.size());
-            }
-        }
-        if (b.contains(type_label)) {
-            for (const auto& [instance_key, gvec] : b.at(type_label)) {
-                const std::string merged_key = std::string(b_prefix) + instance_key;
-                ASSERT_TRUE(merged.at(type_label).contains(merged_key))
-                    << "merged[" << type_label << "] should contain " << merged_key;
-                EXPECT_EQ(merged.at(type_label).at(merged_key).size(), gvec.size());
-            }
-        }
-        const size_t na = a.contains(type_label) ? a.at(type_label).size() : 0u;
-        const size_t nb = b.contains(type_label) ? b.at(type_label).size() : 0u;
-        EXPECT_EQ(merged.at(type_label).size(), na + nb) << "merged " << type_label << " key count";
-    };
-    assert_mgd_merge_for_type("FABRIC", valid_4x4, "mgd0_", valid_dual, "mgd1_", merged);
-    // Other types (e.g. SUPER_FABRIC) are rare here; MESH is already covered above.
-    ASSERT_FALSE(true) << "Not implemented";
+    // FABRIC / graph-level groupings (G0): single-mesh vs two-mesh-with-link topology.
+    ASSERT_TRUE(valid_4x4.contains("FABRIC")) << "4x4 MGD: expect FABRIC (graph) groupings for G0";
+    ASSERT_TRUE(valid_dual.contains("FABRIC")) << "dual 2x4 intermesh MGD: expect FABRIC groupings for G0";
+    ASSERT_TRUE(valid_4x4.at("FABRIC").contains("G0")) << "4x4 MGD: expected FABRIC instance G0";
+    ASSERT_TRUE(valid_dual.at("FABRIC").contains("G0")) << "dual 2x4 MGD: expected FABRIC instance G0";
+    ASSERT_GE(valid_4x4.at("FABRIC").at("G0").size(), 1u);
+    ASSERT_GE(valid_dual.at("FABRIC").at("G0").size(), 1u);
+
+    for (const auto& g : valid_4x4.at("FABRIC").at("G0")) {
+        EXPECT_EQ(g.adjacency_graph.get_nodes().size(), 1u)
+            << "single-mesh G0: logical mesh graph should have exactly one node; grouping " << g.name;
+        EXPECT_EQ(undirected_edge_count_u32(g.adjacency_graph), 0u)
+            << "single-mesh G0: no inter-mesh edges; grouping " << g.name;
+    }
+    for (const auto& g : valid_dual.at("FABRIC").at("G0")) {
+        EXPECT_EQ(g.adjacency_graph.get_nodes().size(), 2u)
+            << "dual-mesh intermesh G0: logical mesh graph should have two mesh nodes; grouping " << g.name;
+        EXPECT_EQ(undirected_edge_count_u32(g.adjacency_graph), 1u)
+            << "dual-mesh intermesh G0: exactly one undirected inter-mesh link; grouping " << g.name;
+    }
+
+    ASSERT_TRUE(merged.contains("FABRIC")) << "Merged result should include FABRIC";
+    ASSERT_TRUE(merged.at("FABRIC").contains("mgd0_G0"))
+        << "Merged FABRIC should include mgd0_G0 (4x4 MGD graph instance)";
+    ASSERT_TRUE(merged.at("FABRIC").contains("mgd1_G0"))
+        << "Merged FABRIC should include mgd1_G0 (dual 2x4 intermesh MGD graph instance)";
+    for (const auto& g : merged.at("FABRIC").at("mgd0_G0")) {
+        EXPECT_EQ(g.adjacency_graph.get_nodes().size(), 1u)
+            << "merged mgd0_G0: single logical mesh node; grouping " << g.name;
+        EXPECT_EQ(undirected_edge_count_u32(g.adjacency_graph), 0u) << "merged mgd0_G0: no inter-mesh edges";
+    }
+    for (const auto& g : merged.at("FABRIC").at("mgd1_G0")) {
+        EXPECT_EQ(g.adjacency_graph.get_nodes().size(), 2u) << "merged mgd1_G0: two mesh nodes; grouping " << g.name;
+        EXPECT_EQ(undirected_edge_count_u32(g.adjacency_graph), 1u)
+            << "merged mgd1_G0: one inter-mesh link; grouping " << g.name;
+    }
+    const size_t expected_fabric_entries =
+        count_fabric_grouping_entries(valid_4x4) + count_fabric_grouping_entries(valid_dual);
+    EXPECT_EQ(count_fabric_grouping_entries(merged), expected_fabric_entries)
+        << "Merged FABRIC grouping entry count should equal 4x4 MGD + dual-2x4-intermesh MGD";
 }
 
 TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_4x4Mesh) {

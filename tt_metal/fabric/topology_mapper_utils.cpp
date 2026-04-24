@@ -416,6 +416,12 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph_impl(
 
 }  // namespace
 
+// TODO: Add merge logical adjacnecy graphs from multiple MGDs
+LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
+    const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs) {
+    // Implement this
+}
+
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph_descriptor);

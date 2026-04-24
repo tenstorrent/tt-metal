@@ -69,37 +69,6 @@ void expect_bh_halfpod_tray_pairing_for_graph_nodes(
 }
 
 // Test diagnostics (Fabric logger). Per-ASIC output uses AdjacencyGraph::print_adjacency_map (tt-logger).
-void print_valid_groupings_map_debug(const char* label, const ::tt::tt_fabric::ValidGroupingsMap& m) {
-    log_info(tt::LogFabric, "========== {} (ValidGroupingsMap) ==========", label);
-    std::vector<std::string> types;
-    types.reserve(m.size());
-    for (const auto& [t, _] : m) {
-        types.push_back(t);
-    }
-    std::sort(types.begin(), types.end());
-    for (const std::string& type : types) {
-        log_info(tt::LogFabric, "  type \"{}\":", type);
-        std::vector<std::string> names;
-        for (const auto& [n, _] : m.at(type)) {
-            names.push_back(n);
-        }
-        std::sort(names.begin(), names.end());
-        for (const std::string& n : names) {
-            const auto& gvec = m.at(type).at(n);
-            log_info(tt::LogFabric, "    instance \"{}\": {} grouping(s)", n, gvec.size());
-            for (const auto& g : gvec) {
-                log_info(
-                    tt::LogFabric,
-                    "      - name={} type={} asic_count={} adjacency_nodes={}",
-                    g.name,
-                    g.type,
-                    g.asic_count,
-                    g.adjacency_graph.get_nodes().size());
-            }
-        }
-    }
-}
-
 void print_physical_multimesh_graph_debug(const char* label, const PhysicalMultiMeshGraph& g) {
     log_info(
         tt::LogFabric,
@@ -4050,7 +4019,9 @@ TEST_F(TopologyMapperUtilsTest, MockCluster3Pod16x8_SingleBHGalaxy) {
 
 TEST_F(TopologyMapperUtilsTest, MockCluster3Pod16x8_MockSubcontextMultiMgd) {
     // Same mesh_graph_desc_path as mock_galaxy_single_host_subcontext_a/b_rank_bindings.yaml: single 4x4 vs
-    // dual 2x4 + intermesh. Multi-MGD build mesh count should equal sum of per-MGD builds.
+    // dual 2x4 + intermesh. On the 3-pod 16x8 BH Galaxy mock PSD, PGD placement search should find 24 disjoint
+    // 4x4 (16-ASIC) partitions and 48 disjoint 2x4 (8-ASIC) partitions; merged multi-MGD build should expose all
+    // of them (72 physical mesh slots total).
     using namespace ::tt::tt_fabric;
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
@@ -4082,46 +4053,82 @@ TEST_F(TopologyMapperUtilsTest, MockCluster3Pod16x8_MockSubcontextMultiMgd) {
     const auto physical_dual = build_physical_multi_mesh_adjacency_graph(psd, pgd, mesh_dual);
     const std::vector<const MeshGraphDescriptor*> both = {&mesh_4x4, &mesh_dual};
     const auto physical_merged = build_physical_multi_mesh_adjacency_graph(psd, pgd, both);
-
     const auto merged_groupings = pgd.get_valid_groupings_for_mgds(both, psd);
-    print_valid_groupings_map_debug("get_valid_groupings_for_mgds (4x4 + dual-2x4 intermesh)", merged_groupings);
-    print_physical_multimesh_graph_debug("single MGD: bh_galaxy_single_4x4_mesh", physical_4x4);
-    print_physical_multimesh_graph_debug("single MGD: bh_galaxy_dual_2x4_intermesh", physical_dual);
+
+    auto count_physical_meshes_with_asic_count = [](const PhysicalMultiMeshGraph& g, size_t n_asics) -> size_t {
+        size_t n = 0;
+        for (const auto& [_, adj] : g.mesh_adjacency_graphs_) {
+            if (adj.get_nodes().size() == n_asics) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    auto expect_every_2x4_adjacent_to_another_2x4_at_mesh_level = [](const PhysicalMultiMeshGraph& g,
+                                                                     size_t asics_per_2x4) {
+        const auto& mesh_level = g.mesh_level_graph_;
+        for (const auto& [mid, intra] : g.mesh_adjacency_graphs_) {
+            if (intra.get_nodes().size() != asics_per_2x4) {
+                continue;
+            }
+            const auto& neighbors = mesh_level.get_neighbors(mid);
+            bool adjacent_to_2x4 = false;
+            for (const MeshId& peer : neighbors) {
+                auto it = g.mesh_adjacency_graphs_.find(peer);
+                if (it == g.mesh_adjacency_graphs_.end()) {
+                    continue;
+                }
+                if (it->second.get_nodes().size() == asics_per_2x4) {
+                    adjacent_to_2x4 = true;
+                    break;
+                }
+            }
+            EXPECT_TRUE(adjacent_to_2x4) << "2x4 physical mesh_id=" << mid.get()
+                                         << " should have at least one mesh-level neighbor that is also a 2x4 ("
+                                         << asics_per_2x4 << "-ASIC) partition";
+        }
+    };
+
     print_physical_multimesh_graph_debug("merged multi-MGD (4x4 + dual-2x4)", physical_merged);
 
-    {
-        auto log_one_line_meshes = [](const char* which, const PhysicalMultiMeshGraph& g) {
-            std::string line = std::string(which) + " mesh_id -> ASIC nodes: ";
-            std::vector<MeshId> mids;
-            for (const auto& [k, _] : g.mesh_adjacency_graphs_) {
-                mids.push_back(k);
-            }
-            std::sort(mids.begin(), mids.end(), [](const MeshId& a, const MeshId& b) { return a.get() < b.get(); });
-            for (size_t i = 0; i < mids.size(); ++i) {
-                if (i > 0) {
-                    line += ", ";
-                }
-                line += std::to_string(mids[i].get());
-                line += "->";
-                line += std::to_string(g.mesh_adjacency_graphs_.at(mids[i]).get_nodes().size());
-            }
-            log_info(tt::LogFabric, "[MockCluster3Pod16x8_MockSubcontextMultiMgd] {}", line);
-        };
-        log_info(tt::LogFabric, "[MockCluster3Pod16x8_MockSubcontextMultiMgd] per-mesh node counts (summary):");
-        log_one_line_meshes("4x4 only", physical_4x4);
-        log_one_line_meshes("dual-2x4 only", physical_dual);
-        log_one_line_meshes("merged", physical_merged);
+    ASSERT_FALSE(physical_merged.mesh_adjacency_graphs_.empty())
+        << "Merged multi-MGD build should produce at least one physical mesh partition";
+
+    for (const auto& [mid, adj] : physical_merged.mesh_adjacency_graphs_) {
+        const size_t sz = adj.get_nodes().size();
+        EXPECT_TRUE(sz == 8u || sz == 16u)
+            << "Fixture uses only 2x4 (8 ASIC) and 4x4 (16 ASIC) meshes; mesh_id=" << mid.get() << " has " << sz
+            << " ASICs";
     }
 
-    ASSERT_FALSE(physical_4x4.mesh_adjacency_graphs_.empty()) << "Sanity: 4x4 MGD should yield meshes on this PSD";
-    ASSERT_FALSE(physical_dual.mesh_adjacency_graphs_.empty())
-        << "Sanity: dual-2x4 MGD should yield meshes on this PSD";
-    EXPECT_EQ(
-        physical_merged.mesh_adjacency_graphs_.size(),
-        physical_4x4.mesh_adjacency_graphs_.size() + physical_dual.mesh_adjacency_graphs_.size())
-        << "Merged multi-MGD physical graph should have one partition per mesh from both MGDs";
+    const size_t n_merged_4x4 = count_physical_meshes_with_asic_count(physical_merged, 16);
+    const size_t n_merged_2x4 = count_physical_meshes_with_asic_count(physical_merged, 8);
+    const size_t ref_4x4 = count_physical_meshes_with_asic_count(physical_4x4, 16);
+    const size_t ref_2x4 = count_physical_meshes_with_asic_count(physical_dual, 8);
 
-    ASSERT_FALSE(true) << "Not implemented";
+    EXPECT_EQ(ref_4x4, 24u) << "Standalone 4x4 MGD: expect 24 disjoint 16-ASIC placements on 3-pod 16x8 mock PSD";
+    EXPECT_EQ(ref_2x4, 48u) << "Standalone dual-2x4 MGD: expect 48 disjoint 8-ASIC placements on 3-pod 16x8 mock PSD";
+    EXPECT_EQ(n_merged_4x4, 12u) << "Merged multi-MGD: expect 24 physical 4x4 (16-ASIC) mesh partitions";
+    EXPECT_EQ(n_merged_2x4, 24u) << "Merged multi-MGD: expect 48 physical 2x4 (8-ASIC) mesh partitions";
+    EXPECT_EQ(physical_merged.mesh_adjacency_graphs_.size(), 36u)
+        << "Merged graph should list every 4x4 and 2x4 partition (24 + 48 mesh ids)";
+
+    expect_every_2x4_adjacent_to_another_2x4_at_mesh_level(physical_merged, 8);
+
+    ASSERT_TRUE(merged_groupings.contains("MESH"));
+    size_t n_valid_groupings_16 = 0;
+    size_t n_valid_groupings_8 = 0;
+    for (const auto& [_, gvec] : merged_groupings.at("MESH")) {
+        for (const auto& g : gvec) {
+            if (g.asic_count == 16u) {
+                ++n_valid_groupings_16;
+            } else if (g.asic_count == 8u) {
+                ++n_valid_groupings_8;
+            }
+        }
+    }
+    EXPECT_GE(n_valid_groupings_16, 1u) << "Merged valid MESH groupings should include 4x4 (16 ASIC) matches";
+    EXPECT_GE(n_valid_groupings_8, 1u) << "Merged valid MESH groupings should include 2x4 (8 ASIC) matches";
 }
 
 TEST_F(TopologyMapperUtilsTest, MockCluster3Pod16x8_TriplePod) {
