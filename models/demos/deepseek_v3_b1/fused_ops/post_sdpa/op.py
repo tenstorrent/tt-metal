@@ -41,16 +41,28 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
+from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import AllGatherConfig
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+from models.demos.deepseek_v3_b1.utils import get_worker_noc_hop_distance
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
+
+
+def _get_gather_noc_idx_per_core(mesh_device, mesh_coord, sender_grid, target_core):
+    """Per-core noc selection: pick the NOC with fewer hops from sender to target."""
+    gather_noc_idx_per_core = []
+    for core in ttnn.corerange_to_cores(sender_grid, row_wise=True):
+        noc0_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_0, mesh_coord)
+        noc1_hop = get_worker_noc_hop_distance(mesh_device, core, target_core, ttnn.NOC.NOC_1, mesh_coord)
+        gather_noc_idx_per_core.append((core, 0 if noc0_hop <= noc1_hop else 1))
+    return gather_noc_idx_per_core
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -137,16 +149,22 @@ class PostSDPA:
         return result
 
     SDPA_NUM_GLOBAL_SEMAPHORES = 2  # SdpaReduceToAll recv semaphores (r1, r2)
+    ALLGATHER_NUM_GLOBAL_SEMAPHORES = 2  # AllGather handoff + recv semaphores
 
     @staticmethod
     def get_num_semaphores(num_links=1):
         """Return the total number of global semaphores required by PostSDPA.
 
         The flat list contains CCL all-reduce semaphores followed by SDPA
-        reduce-to-all semaphores.  The count is fixed regardless of whether
-        CCL or SDPA are actually enabled at runtime.
+        reduce-to-all semaphores followed by AllGather semaphores.  The count
+        is fixed regardless of whether CCL or SDPA are actually enabled at
+        runtime.
         """
-        return DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links) + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+        return (
+            DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links)
+            + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+            + PostSDPA.ALLGATHER_NUM_GLOBAL_SEMAPHORES
+        )
 
     @staticmethod
     def create_semaphores(mesh_device, num_links=1):
@@ -242,6 +260,12 @@ class PostSDPA:
         semaphore_index += ccl_num_sems
         sdpa_semaphores = semaphores[semaphore_index : semaphore_index + PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES]
         semaphore_index += PostSDPA.SDPA_NUM_GLOBAL_SEMAPHORES
+        allgather_handoff_semaphore = semaphores[semaphore_index]
+        semaphore_index += 1
+        allgather_recv_semaphore = semaphores[semaphore_index]
+        semaphore_index += 1
+        allgather_handoff_sem_addr = ttnn.get_global_semaphore_address(allgather_handoff_semaphore)
+        allgather_recv_sem_addr = ttnn.get_global_semaphore_address(allgather_recv_semaphore)
         assert semaphore_index == len(semaphores), "Unexpected PostSDPA semaphore consumption"
 
         if ccl_enabled:
@@ -295,16 +319,25 @@ class PostSDPA:
         mcast3_core_grid = ttnn.CoreRangeSet([mcast3_grid])
         num_mcast3_cores = mcast3_grid.grid_size().x * mcast3_grid.grid_size().y  # 130
 
+        # TP4 outer-dim: each device produces [1, per_device_out_w]
+        num_sp = mesh_shape[0]
+
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
         matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
+        matmul5_half_num_cores = num_matmul5_cores // 2  # 56
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.
         # Needed because o_proj grid is non-rectangular (12×8 + 8×2).
         # Row-major (y then x) matches WIDTH_SHARDED shard placement order.
         matmul5_cores = ttnn.corerange_to_cores(matmul5_active_core_grid, row_wise=True)
         gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
+
+        # TP4 outer-dim: each device produces [1, per_device_out_w]
+        # per_device_out_w = matmul5_half_num_cores * 32 * matmul5_out_w_per_core = 56*32*1 = 1792
+        per_device_out_w = matmul5_half_num_cores * 32  # 1792 (matmul5_out_w_per_core=1)
+        per_device_out_tiles = matmul5_half_num_cores  # 1792 / 32 = 56 1x32 tiles
 
         # Full grid (union of all cores for semaphore allocation)
         full_grid = matmul4_core_grid
@@ -435,10 +468,16 @@ class PostSDPA:
         matmul4_out_w_per_core = 4  # 128 / 32 = 4 tiles per core
 
         # ========================================================================
-        # Matmul5 parameters: [1, 8192] x [8192, 64] -> [1, 64]
+        # Matmul5 (KNSlicedMatmul) parameters: [1, 8192] x [4096, 32] -> [1, 32]
+        # TP4 outer-dim: weights packed as (4096, 3584) with K-halves interleaved
+        # 112 cores split into 2 halves of 56; each core: [1, 4096] @ [4096, 32] -> [1, 32]
         # ========================================================================
-        matmul5_k_num_tiles = 256  # 8192 / 32 = 256 tiles
-        matmul5_out_w_per_core = 2  # 64 / 32 = 2 tiles per core
+        matmul5_act_total_tiles = 256  # 8192 / 32 = 256 tiles (full activation)
+        matmul5_k_per_core = matmul5_act_total_tiles // 2  # 128 tiles per half
+        matmul5_out_w_per_core = 1  # 32 / 32 = 1 tile per core
+        matmul5_k_offset_per_core = [
+            (core, 0 if idx < matmul5_half_num_cores else matmul5_k_per_core) for idx, core in enumerate(matmul5_cores)
+        ]
 
         # ========================================================================
         # CB indices
@@ -450,11 +489,12 @@ class PostSDPA:
         matmul5_in0_cb = 48  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
         matmul5_in1_cb = 49  # Matmul5 weights (112 active cores)
         matmul5_out_cb = 50  # Matmul5 output (112 active cores)
-        gather3_dst_cb = 51  # Gather3 output = CCL local data (sender core 11,9)
-        ccl_recv_local_data_cb = 52  # CCL receiver-side local data (receiver core 12,9)
-        ccl_remote_data_cb = 53  # CCL received remote data (receiver core 12,9)
-        ccl_residual_cb = 54  # CCL residual (receiver core 12,9)
-        ccl_output_cb = 55  # CCL output (receiver core 12,9)
+        gather3_scratch_cb = 51  # GatherReduce3 scratch (2 halves, reused as AllGather transport scratch)
+        gather3_out_cb = 52  # GatherReduce3 output = CCL local data (sender core 11,9)
+        ccl_recv_local_data_cb = 53  # CCL receiver-side local data (receiver core 12,9)
+        ccl_remote_data_cb = 54  # CCL received remote data (receiver core 12,9)
+        ccl_residual_cb = 55  # CCL residual (receiver core 12,9)
+        ccl_output_cb = 56  # CCL output (receiver core 12,9) = AllGather destination base
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
@@ -473,20 +513,27 @@ class PostSDPA:
         mcast3_dst_num_pages = gather2_dst_num_pages  # 256 pages per receiver
 
         # ========================================================================
-        # Gather3 parameters: 112 cores -> [1, 7168]
+        # GatherReduce3 parameters: 112 cores (2x56 halves) -> [1, per_device_out_w]
+        # Each sender produces 1 tile of 1x32; halves are reduced on receiver
+        # using 32x32 tile reinterpretation (ceil(56/32) = 2 tiles per half).
         # ========================================================================
-        gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
-        gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
-        gather3_dst_num_pages = num_matmul5_cores * matmul5_out_w_per_core // 32  # 112 * 2 / 32 = 7 pages
+        gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size  # 1 tile per sender
+        gather3_src_num_pages = matmul5_out_w_per_core  # 1 page per sender
+        gather3_dst_num_tiles = (per_device_out_tiles + 31) // 32  # 2 tiles of 32x32 per half
+        gather3_half_size_bytes = gather3_dst_num_tiles * tile_32x32_size  # padded to 32x32 boundary
         gather3_noc0_num_senders = num_matmul5_cores
         gather3_noc1_num_senders = 0
 
         # ========================================================================
-        # CCL parameters: [1, 7168] all-reduce
+        # CCL parameters: [1, per_device_out_w] all-reduce then [1, full_out_w] all-gather
         # ========================================================================
         # CCL all-reduce uses 32x32 tile format to match gather3 output.
-        ccl_num_tiles = gather3_dst_num_pages  # 7 tiles of 32x32
+        ccl_num_tiles = gather3_dst_num_tiles  # 2 tiles of 32x32
         ccl_page_size_bytes = tile_32x32_size
+        ccl_cb_total_size = gather3_dst_num_tiles * tile_32x32_size
+        allgather_slice_size_bytes = per_device_out_tiles * tile_1x32_size  # 56 * 64 = 3584
+        allgather_num_links = 1
+        allgather_cluster_axis = 0  # gather along rows
 
         # ========================================================================
         # Semaphore IDs
@@ -507,7 +554,7 @@ class PostSDPA:
             cluster_axis=cluster_axis,
             num_links=ccl_num_links,
             chunk_num_tiles=None,
-            local_data_cb_id=gather3_dst_cb,
+            local_data_cb_id=gather3_out_cb,
             recv_local_data_cb_id=ccl_recv_local_data_cb,
             remote_data_cb_id=ccl_remote_data_cb,
             output_cb_id=ccl_output_cb,
@@ -515,11 +562,17 @@ class PostSDPA:
             skip_local_push=True,
             skip_ccl=not ccl_enabled,
             sender_core=sender_core,
+            num_tiles_override=gather3_dst_num_tiles,
+            page_size_override=tile_32x32_size,
         )
 
         if ccl_enabled:
             allreduce_config.set_local_data_addr(gather3_output_tensors_per_device[0].buffer_address())
             allreduce_config.set_remote_data_addr(intermediate_tensors_per_device[0].buffer_address())
+
+        # AllGather config is built lazily inside the per-device loop (once, using device 0's
+        # reference CB addresses) since it needs the resolved L1 address of gather3_scratch_cb.
+        allgather_config = None
 
         per_device_contexts = []
 
@@ -582,25 +635,28 @@ class PostSDPA:
                     ("mcast3_data_receiver_semaphore", mcast3_data_receiver_semaphore_id),
                     ("mcast3_dst_cb", matmul5_in0_cb),
                     ("mcast3_dst_num_pages", mcast3_dst_num_pages),
-                    # Matmul5
+                    # Matmul5 (KNSlicedMatmul)
                     ("matmul5_in0", matmul5_in0_cb),
                     ("matmul5_in1", matmul5_in1_cb),
                     ("matmul5_out", matmul5_out_cb),
-                    ("matmul5_k_num_tiles", matmul5_k_num_tiles),
                     ("matmul5_out_w_per_core", matmul5_out_w_per_core),
-                    # Gather3 sender (destination = sender core 11,9)
+                    ("matmul5_k_per_core", matmul5_k_per_core),
+                    ("matmul5_act_total_tiles", matmul5_act_total_tiles),
+                    # GatherReduce3 sender (destination = sender core 11,9)
                     ("gather3_dest_noc_x", sender_dest_noc_core.x),
                     ("gather3_dest_noc_y", sender_dest_noc_core.y),
                     ("gather3_data_size_bytes", gather3_data_size_bytes),
-                    ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
+                    ("gather3_receiver_semaphore_addr", gather3_noc0_receiver_semaphore_id),
                     ("gather3_src_cb", matmul5_out_cb),
                     ("gather3_src_num_pages", gather3_src_num_pages),
-                    ("gather3_sender_grid_start_x", 0),
-                    ("gather3_sender_grid_start_y", 0),
-                    ("gather3_sender_grid_end_x", 0),
-                    ("gather3_sender_grid_end_y", 0),
-                    ("gather3_row_major", 1),
-                    ("gather3_receiver_data_addr", gather3_receiver_data_addr),
+                    # Grid args unused when UsePerCoreSenderIdx=true, but required for struct init
+                    ("gather3_grid_start_x", 0),
+                    ("gather3_grid_start_y", 0),
+                    ("gather3_grid_end_x", 0),
+                    ("gather3_grid_end_y", 0),
+                    ("gather3_half_num_cores", matmul5_half_num_cores),
+                    ("gather3_dst_cb_id", gather3_scratch_cb),
+                    ("gather3_half_size_bytes", gather3_half_size_bytes),
                 ]
 
                 # Add SDPA NCRISC compile-time args when enabled
@@ -656,13 +712,13 @@ class PostSDPA:
                     ("mcast3_src_num_pages", mcast3_src_num_pages),
                     ("mcast3_dst_cb", matmul5_in0_cb),
                     ("mcast3_is_part_of_receiver_grid", mcast3_is_part_of_receiver_grid),
-                    # Gather3 receiver
+                    # GatherReduce3 receiver (on sender core 11,9)
                     ("gather3_noc0_num_senders", gather3_noc0_num_senders),
                     ("gather3_noc1_num_senders", gather3_noc1_num_senders),
                     ("gather3_noc0_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
                     ("gather3_noc1_receiver_semaphore_id", gather3_noc1_receiver_semaphore_id),
-                    ("gather3_dst_cb", gather3_dst_cb),
-                    ("gather3_dst_num_pages", gather3_dst_num_pages),
+                    ("gather3_dst_cb", gather3_scratch_cb),
+                    ("gather3_dst_num_tiles", gather3_dst_num_tiles),
                 ]
 
                 # Add SDPA BRISC compile-time args when enabled
@@ -708,12 +764,17 @@ class PostSDPA:
                     ("matmul4_out", matmul4_out_cb),
                     ("matmul4_k_num_tiles", matmul4_k_num_tiles),
                     ("matmul4_out_w_per_core", matmul4_out_w_per_core),
-                    # Matmul5
+                    # Matmul5 (KNSlicedMatmul)
                     ("matmul5_in0", matmul5_in0_cb),
                     ("matmul5_in1", matmul5_in1_cb),
                     ("matmul5_out", matmul5_out_cb),
-                    ("matmul5_k_num_tiles", matmul5_k_num_tiles),
                     ("matmul5_out_w_per_core", matmul5_out_w_per_core),
+                    ("matmul5_k_per_core", matmul5_k_per_core),
+                    ("matmul5_act_total_tiles", matmul5_act_total_tiles),
+                    # GatherReduce3 compute
+                    ("gather3_scratch_cb", gather3_scratch_cb),
+                    ("gather3_out_cb", gather3_out_cb),
+                    ("gather3_dst_num_tiles", gather3_dst_num_tiles),
                 ]
 
                 # Add SDPA TRISC compile-time args when enabled
@@ -741,6 +802,21 @@ class PostSDPA:
                 ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_named_ct_args(coord))
                 brisc_named_compile_time_args.extend(allreduce_config.get_brisc_named_ct_args(coord))
                 trisc_named_compile_time_args.extend(allreduce_config.get_trisc_named_ct_args(coord))
+
+                # TP4 outer-dim: residual NOC copy params (receiver core reads its row slice)
+                # input source: residual tensor on gather core (= receiver core itself).
+                input_noc_coord = gather_dest_noc_core
+                residual_byte_offset = row * per_device_out_tiles * tile_1x32_size
+                residual_copy_size = per_device_out_tiles * tile_1x32_size
+                residual_copy_named_compile_time_args = [
+                    ("residual_byte_offset", residual_byte_offset),
+                    ("residual_copy_size", residual_copy_size),
+                    ("residual_cb_id", ccl_residual_cb),
+                    ("residual_num_tiles", gather3_dst_num_tiles),
+                    ("input_noc_coord_x", input_noc_coord.x),
+                    ("input_noc_coord_y", input_noc_coord.y),
+                ]
+                ncrisc_named_compile_time_args.extend(residual_copy_named_compile_time_args)
 
                 # ========================================================================
                 # Circular buffer descriptors
@@ -837,18 +913,68 @@ class PostSDPA:
                         format_descriptors=[matmul5_out_cb_format],
                     )
 
-                # CB 51: gather3 output = CCL local data (backed by gather3_output_tensor)
-                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather3_dst_cb, gather3_output_tensor_device
+                # CB 51: GatherReduce3 scratch (2× size — holds both halves before reduction,
+                # also reused as AllGather transport scratch).
+                # Overlapped into kv_cache when available; otherwise standalone on sender core.
+                gather3_scratch_cb_format = ttnn.CBFormatDescriptor(
+                    buffer_index=gather3_scratch_cb,
+                    data_format=data_format,
+                    page_size=tile_32x32_size,
+                    tile=ttnn.TileDescriptor(TILE_32x32),
                 )
-                gather3_dst_cb_descriptor.format_descriptors = [
+                if sdpa_kv_cache_buffer_device is not None:
+                    gather3_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        gather3_scratch_cb,
+                        sdpa_kv_cache_buffer_device,
+                        address_offset=running_address_offset,
+                        total_size=2 * ccl_cb_total_size,
+                    )
+                    gather3_scratch_cb_descriptor.format_descriptors = [gather3_scratch_cb_format]
+                    running_address_offset += gather3_scratch_cb_descriptor.total_size
+                else:
+                    gather3_scratch_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=2 * ccl_cb_total_size,
+                        core_ranges=sender_core_grid,
+                        format_descriptors=[gather3_scratch_cb_format],
+                    )
+
+                # CB 52: GatherReduce3 output = CCL local data (backed by gather3_output_tensor)
+                gather3_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather3_out_cb, gather3_output_tensor_device
+                )
+                gather3_out_cb_descriptor.format_descriptors = [
                     ttnn.CBFormatDescriptor(
-                        buffer_index=gather3_dst_cb,
+                        buffer_index=gather3_out_cb,
                         data_format=data_format,
                         page_size=tile_32x32_size,
                         tile=ttnn.TileDescriptor(TILE_32x32),
                     )
                 ]
+
+                # AllGather config (no-ownership mode) — scratch lives in gather3_scratch_cb,
+                # output in output_tensor.  Built once using device-0 addresses; addresses
+                # are uniform across devices (same L1 layout).
+                if allgather_config is None and ccl_enabled:
+                    allgather_config = AllGatherConfig(
+                        mesh_device=mesh_device,
+                        cluster_axis=allgather_cluster_axis,
+                        num_links=allgather_num_links,
+                        slice_size_bytes=allgather_slice_size_bytes,
+                        scratch_base_addr=ttnn.get_cb_address(gather3_scratch_cb_descriptor),
+                        output_addr=output_tensors_per_device[0].buffer_address(),
+                        handoff_sem_addr=allgather_handoff_sem_addr,
+                        recv_sem_addr=allgather_recv_sem_addr,
+                        gather_noc_core=gather_dest_noc_core,
+                        transport_noc_core=sender_dest_noc_core,
+                        output_cb_id=ccl_output_cb,
+                        output_num_tiles=gather3_dst_num_tiles,
+                    )
+
+                # Extend CT args with allgather schema + named.  Must be after allgather_config exists.
+                if ccl_enabled:
+                    ncrisc_named_compile_time_args.extend(allgather_config.get_fused_ncrisc_named_ct_args(coord))
+                    brisc_named_compile_time_args.extend(allgather_config.get_fused_brisc_named_ct_args(coord))
+                    trisc_named_compile_time_args.extend(allgather_config.get_fused_trisc_named_ct_args(coord))
 
                 cb_list = [
                     matmul4_in0_cb_descriptor,
@@ -858,7 +984,8 @@ class PostSDPA:
                     matmul5_in0_cb_descriptor,
                     matmul5_in1_cb_descriptor,
                     matmul5_out_cb_descriptor,
-                    gather3_dst_cb_descriptor,
+                    gather3_scratch_cb_descriptor,
+                    gather3_out_cb_descriptor,
                 ]
 
                 # CCL CBs: fused op owns all CCL CB descriptors (no-ownership mode)
@@ -1169,6 +1296,9 @@ class PostSDPA:
                 # non-rectangular kv_b2 grid offset calculation (UsePerCoreSenderIdx=true)
                 # gather3_sender_idx: each matmul5 core needs a unique index for
                 # non-rectangular o_proj grid offset calculation (UsePerCoreSenderIdx=true)
+                gather3_noc_idx_per_core = _get_gather_noc_idx_per_core(
+                    mesh_device, coord, matmul5_active_core_grid, sender_core
+                )
                 per_core_compile_time_descriptors = [
                     PerCoreCompileTimeDescriptor(
                         named_compile_time_arg="gather2_sender_idx",
@@ -1180,18 +1310,41 @@ class PostSDPA:
                         core_values=gather3_sender_idx_per_core,
                         other_value=0,
                     ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="gather3_noc_idx",
+                        core_values=gather3_noc_idx_per_core,
+                        other_value=0,
+                    ),
+                    PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg="matmul5_k_offset",
+                        core_values=matmul5_k_offset_per_core,
+                        other_value=0,
+                    ),
                 ]
 
                 # ========================================================================
                 # Pre-compute CCL runtime args (fabric setup deferred to op())
                 # ========================================================================
+                # Receiver NCRISC common RT args: allreduce (6 items) + output tensor addr
+                # (index 6, for AllGather output) + residual input L1 addr (index 7, for NOC copy).
+                residual_input_l1_addr = (
+                    residual_tensors_per_device[device_idx].buffer_address()
+                    if ccl_enabled and residual_tensor_mesh is not None
+                    else 0
+                )
+                receiver_ncrisc_common_rt_args = list(allreduce_config.get_receiver_ncrisc_common_rt_args(coord)) + [
+                    output_tensors_per_device[device_idx].buffer_address() if ccl_enabled else 0,
+                    residual_input_l1_addr,
+                ]
+
                 ccl_ctx = {
                     "allreduce_config": allreduce_config,
+                    "allgather_config": allgather_config,
                     "sender_core": sender_core,
                     "receiver_core": gather_core,
                     "sender_ncrisc_common_rt_args": allreduce_config.get_sender_ncrisc_common_rt_args(coord),
                     "sender_brisc_common_rt_args": allreduce_config.get_sender_brisc_common_rt_args(coord),
-                    "receiver_ncrisc_common_rt_args": allreduce_config.get_receiver_ncrisc_common_rt_args(coord),
+                    "receiver_ncrisc_common_rt_args": receiver_ncrisc_common_rt_args,
                 }
 
                 # ========================================================================
@@ -1567,23 +1720,40 @@ class PostSDPA:
             # ==================================================================
             ccl = ctx["ccl"]
             ccl_sender_core = ccl["sender_core"]
+            allreduce_config = ccl["allreduce_config"]
+            allgather_config = ccl["allgather_config"]
             sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
             receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
             if sender_group is not None:
+                # Sender NCRISC: per-core = [allreduce fabric count] + allreduce fabric + allgather transport.
+                # Kernel reads the count first, then sets per_core_rta_start_idx past the allreduce fabric.
+                allreduce_ncrisc_pc_args = list(
+                    allreduce_config.get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+                sender_ncrisc_pc_args = [len(allreduce_ncrisc_pc_args)] + allreduce_ncrisc_pc_args
+                if allgather_config is not None:
+                    sender_ncrisc_pc_args.extend(
+                        allgather_config.get_transport_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                    )
                 sender_ncrisc_rt_args = ttnn.RuntimeArgs()
-                sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl[
-                    "allreduce_config"
-                ].get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = sender_ncrisc_pc_args
                 program.kernels[sender_group.ncrisc_kernel_index].runtime_args = sender_ncrisc_rt_args
                 program.kernels[sender_group.ncrisc_kernel_index].common_runtime_args = ccl[
                     "sender_ncrisc_common_rt_args"
                 ]
 
+                # Sender BRISC: per-core = [allreduce fabric count] + allreduce fabric + allgather transport.
+                allreduce_brisc_pc_args = list(
+                    allreduce_config.get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                )
+                sender_brisc_pc_args = [len(allreduce_brisc_pc_args)] + allreduce_brisc_pc_args
+                if allgather_config is not None:
+                    sender_brisc_pc_args.extend(
+                        allgather_config.get_transport_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                    )
                 sender_brisc_rt_args = ttnn.RuntimeArgs()
-                sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl[
-                    "allreduce_config"
-                ].get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = sender_brisc_pc_args
                 program.kernels[sender_group.brisc_kernel_index].runtime_args = sender_brisc_rt_args
                 program.kernels[sender_group.brisc_kernel_index].common_runtime_args = ccl[
                     "sender_brisc_common_rt_args"

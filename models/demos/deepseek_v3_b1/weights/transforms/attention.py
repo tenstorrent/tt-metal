@@ -190,15 +190,16 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     ``OverlappedTensor`` backed by its own per-core allocated tensor, avoiding
     lockstep L1 reservation on the ~115 cores used by the fused buffer.
 
-    Requires a **4×2** mesh.  ``o_proj_weights`` shape ``(16384, 7168)``.
+    Supports **4×2** (production) or **1×1** (single-device simulating mesh
+    position (0, 0) of the 4×2 layout).  ``o_proj_weights`` shape ``(16384, 7168)``.
     Must be the first per-core allocation on the device.
     """
     o_cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
     q_cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-    mesh_shape = (device.shape[0], device.shape[1])
-    if mesh_shape != (4, 2):
+    mesh_shape = (device.shape[0], device.shape[1]) if device.get_num_devices() > 1 else (1, 1)
+    if mesh_shape not in {(4, 2), (1, 1)}:
         raise ValueError(
-            "fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a requires a 4x2 mesh; "
+            "fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a requires a 4x2 or 1x1 mesh; "
             f"got {mesh_shape[0]}x{mesh_shape[1]}"
         )
     if tuple(o_proj_weights.shape) != (16384, 7168):
@@ -214,7 +215,7 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
     assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
 
-    o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_weights)
+    o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_weights, mesh_shape=mesh_shape)
     o_spec = replace(
         o_cfg.o_proj,
         raw_tensor_shape=tuple(o_packed.shape),

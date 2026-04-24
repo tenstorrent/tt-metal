@@ -311,20 +311,34 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
     )
 
     @staticmethod
-    def pack_o_proj_weights_tp4_shuffled(o_proj_weights: torch.Tensor) -> torch.Tensor:
+    def pack_o_proj_weights_tp4_shuffled(
+        o_proj_weights: torch.Tensor, mesh_shape: tuple[int, int] = (4, 2)
+    ) -> torch.Tensor:
         """Pack full-mesh o_proj weights for ``tp_dim=(1, 0)`` plus ``shuffle_q_a`` layout.
 
         Input ``o_proj_weights`` has global shape ``(16384, 7168)``.  Each mesh device's
         ``(8192, 1792)`` slice is packed with
-        :meth:`QAB_KVA_PROJ_SingleDeviceOverlapSpec.shuffle_q_a` to ``(4096, 3584)`` and
-        written to the sub-rectangle that :func:`~weights.overlap.packing.overlap_tensors`
-        reads for that device when ``raw_tensor_shape=(8192, 14336)`` and ``tp_dim=(1, 0)``.
+        :meth:`QAB_KVA_PROJ_SingleDeviceOverlapSpec.shuffle_q_a` to ``(4096, 3584)``.
+
+        For ``mesh_shape=(4, 2)`` (production TP4), all eight per-device blocks are
+        written into a single ``(8192, 14336)`` buffer at the sub-rectangles that
+        :func:`~weights.overlap.packing.overlap_tensors` reads when
+        ``raw_tensor_shape=(8192, 14336)`` and ``tp_dim=(1, 0)``.
+
+        For ``mesh_shape=(1, 1)`` (single-device simulating mesh position (0, 0)),
+        only the ``(0, 0)`` block is packed and returned as ``(4096, 3584)`` —
+        i.e. exactly the per-device shard of the TP4 layout.
         """
         if tuple(o_proj_weights.shape) != (16384, 7168):
             raise ValueError(
                 f"pack_o_proj_weights_tp4_shuffled expects shape (16384, 7168), got {tuple(o_proj_weights.shape)}"
             )
+        if mesh_shape not in {(4, 2), (1, 1)}:
+            raise ValueError(f"pack_o_proj_weights_tp4_shuffled supports mesh (4,2) or (1,1), got {mesh_shape}")
         shuffle = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.shuffle_q_a
+        if mesh_shape == (1, 1):
+            block = o_proj_weights[:8192, :1792]
+            return shuffle(block)
         out = torch.empty((8192, 14336), dtype=o_proj_weights.dtype, device=o_proj_weights.device)
         for mesh_row in range(4):
             for mesh_col in range(2):
