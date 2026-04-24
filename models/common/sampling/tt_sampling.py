@@ -130,6 +130,13 @@ class TTSampling(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
+        self._sampling_core_grid = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
+            )
+            if self.sub_core_grids is not None
+            else None
+        )
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -142,6 +149,13 @@ class TTSampling(LightweightModule):
                 self._param_dims = (0, None)  # shard along rows
         else:
             self._param_dims = (None, None)
+        self._param_mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape
+        )
+        self._replicated_mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape
+        )
+        self._seed_mapper = self._param_mapper if self._sampling_dp > 1 else self._replicated_mapper
 
         if hasattr(args, "model_config") and "GALAXY_NUM_LINKS" in args.model_config:
             # Calculate num_gather_links based on model config
@@ -186,21 +200,21 @@ class TTSampling(LightweightModule):
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
+            mesh_mapper=self._param_mapper,
         )
         self.p_tensor = ttnn.from_torch(
             p,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
+            mesh_mapper=self._param_mapper,
         )
         self.temp_tensor = ttnn.from_torch(
             temp,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
+            mesh_mapper=self._param_mapper,
         )
 
         # Create device offset indices for global indexing
@@ -217,22 +231,21 @@ class TTSampling(LightweightModule):
 
         # Seeds tensor: one RNG slot per user across all rows.
         # When sampling_dp > 1, shard across rows so each row gets its own slice.
-        # user_ids tensor: core routing only (32 per row, replicated).
+        # user_ids tensor: core routing for the sampling core grid.
         self.seeds_tt_tensor = ttnn.from_torch(
             torch.arange(total_param_size).to(torch.uint32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
-            if self._sampling_dp > 1
-            else None,
+            mesh_mapper=self._seed_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.user_ids_tt_tensor = ttnn.as_tensor(
+        self.user_ids_tt_tensor = ttnn.from_torch(
             torch.arange(self.max_batch_size).to(torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
+            mesh_mapper=self._replicated_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -339,33 +352,26 @@ class TTSampling(LightweightModule):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
-            # When _sampling_dp > 1, create multi-device host tensors so
-            # copy_host_to_device_tensor writes per-row shards correctly.
-            if self._sampling_dp > 1:
-                mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape)
-            else:
-                mapper = None
-
             self.k_tensor_new = ttnn.from_torch(
                 torch.tensor(k),
                 device=None,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
+                mesh_mapper=self._param_mapper,
             )
             self.p_tensor_new = ttnn.from_torch(
                 torch.tensor(p),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
+                mesh_mapper=self._param_mapper,
             )
             self.temp_tensor_new = ttnn.from_torch(
                 torch.tensor(temp),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mapper,
+                mesh_mapper=self._param_mapper,
             )
 
             ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
@@ -550,10 +556,11 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
+        # Seed exactly the cores used by ttnn.sampling; Galaxy worker grids can be larger than batch cores.
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self.sub_core_grids,
+            sub_core_grids=self._sampling_core_grid,
         )
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
@@ -562,11 +569,7 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
-            )
-            if self.sub_core_grids is not None
-            else None,
+            sub_core_grids=self._sampling_core_grid,
             output_tensor=tt_out_tok,
         )
 
