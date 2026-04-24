@@ -86,22 +86,13 @@ absolute numbers:
 HiFi2 peak is 2× HiFi4 because math cycles per tile halve; LoFi is another 2×.
 `tt-perf-report`'s FLOPs% is against the *current* fidelity's peak, not the
 max-fidelity peak. Swapping HiFi4 → HiFi2 can show FLOPs% dropping even as
-absolute TFLOPs rise (the denominator doubled). Compare absolute TFLOPs, not
-FLOPs%, across fidelity settings.
+absolute TFLOPs rise (the denominator doubled). Compare `Abs TFLOPs`, not
+`FLOPs%`, across fidelity settings.
 
-### Absolute-TFLOPs formula (for fidelity-spanning comparisons)
-
-When the only column available is FLOPs% (fallback-to-pandas path) or when
-comparing across fidelities:
-
-```
-absolute_TFLOPs = 2 * M * K * N / (DEVICE_FW_DURATION_ns * 1e-9) / 1e12
-```
-
-where `M, K, N` are the *effective* matmul shape after any batch reshape
-(per-device, post-M-reshape if seq was folded into a batch dim). Record both
-`FLOPs%` and `absolute TFLOPs` per iteration when the optimization spans a
-fidelity change — the percentage alone is misleading.
+For reshaped-batch matmul (seq folded into batch), the `M, K, N` used by
+`Abs TFLOPs` are the *effective* per-device shape after the reshape — not
+the pre-reshape activation shape. Record the effective shape in the note
+when the reshape is in play.
 
 ## Overhead confirmation — FW vs KERNEL gap
 
