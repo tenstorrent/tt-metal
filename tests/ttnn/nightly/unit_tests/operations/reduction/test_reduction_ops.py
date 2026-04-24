@@ -7,6 +7,8 @@
 # Many parameters are exposed to make it easy to add new tests, but are currently
 # set to a single value.
 
+from pathlib import Path
+
 import pytest
 import torch
 import ttnn
@@ -502,6 +504,227 @@ def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y,
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
+
+
+# Documents a latent bug uncovered during PR #42120 review (discussion #r3133352489):
+# the reduction ops' nanobind doc promises "Sharded (L1): Width, Height, and ND
+# sharding", i.e. sharded layouts are L1-only.  But the device op accepts an
+# `output_mem_config` with `BufferType.DRAM` plus a sharded layout and silently
+# constructs a TensorSpec that combines a DRAM buffer with the user-supplied (or
+# input-borrowed) shard grid.  Sharded grids and DRAM-bank coordinates live in
+# disjoint coordinate spaces -- a worker grid that spans y>0 (or x past the
+# DRAM bank count) cannot map to DRAM banks at all -- so the resulting buffer
+# either traps at allocation or produces wrong data when the kernel writes it.
+# This bug pre-dates the PR (verified against commit `ebab88533b` on `main`),
+# which still constructs the spec the same way for an explicit DRAM-sharded
+# `output_mem_config` (see reduce_op_device_operation.cpp:58/66 on that commit).
+# The test exercises both the legacy reduce path (`sum` -> ReduceDeviceOperation)
+# and the Welford path (`var` -> WelfordReduceDeviceOperation) and is marked
+# `xfail(strict=True)` so CI alerts when DRAM-sharded reductions become
+# correctly supported (XPASS) and the marker can be removed.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "DRAM-sharded reductions are out of contract per the docstring "
+        "('Sharded (L1)').  Today the op silently produces wrong output (or "
+        "TT_FATALs at allocation) because the L1 worker grid is treated as "
+        "DRAM bank coordinates.  See PR #42120 review #r3133352489."
+    ),
+)
+@pytest.mark.parametrize("op", ["sum", "var"])
+def test_generic_ops_dram_sharded_is_broken(device, op):
+    torch.manual_seed(0)
+    # Pick a shard grid that's a perfectly normal L1 worker grid (4 cols x 2
+    # rows = 8 cores) but cannot map onto DRAM banks: DRAM banks live on a 1D
+    # row at y=0, so any core at y=1 is a non-bank coordinate.  This is the
+    # smallest grid that exposes the bug deterministically -- a 1D y=0 grid
+    # would coincidentally line up with the first few DRAM bank IDs.
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+    input_shape = [4, 4, 256, 256]
+    # 4*4*256 = 4096 rows total / 8 cores = 512 rows per shard, full 256 width.
+    shard_spec = ttnn.ShardSpec(grid, [512, 256], ttnn.ShardOrientation.ROW_MAJOR)
+
+    input_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    # Same layout/grid but DRAM-typed -- the cores at y=1 are not DRAM banks.
+    output_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.DRAM,
+        shard_spec=shard_spec,
+    )
+
+    torch_input_tensor = torch.rand(input_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_mem_config,
+    )
+
+    ttnn_op = getattr(ttnn, op)
+    op_output_tensor = ttnn_op(input_tensor, dim=-2, keepdim=True, memory_config=output_mem_config)
+    output_tensor = ttnn.to_torch(op_output_tensor)
+
+    torch_op = getattr(torch, op)
+    torch_output_tensor = torch_op(torch_input_tensor, dim=-2, keepdim=True)
+
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=0.99, rtol=0.01, atol=0.01)
+    assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
+
+
+# Documents a second, orthogonal failure mode for DRAM-sharded reductions
+# uncovered during PR #42120 review (failure mode "B" in the analysis):
+#
+#   The `WIDTH_SHARDED` H-reduce program factory binds the input/output
+#   circular buffer directly to the buffer's address via
+#   `set_globally_allocated_address` (see
+#   reduce_op_multi_core_h_program_factory.cpp:93/118).  That routine is
+#   L1-only by construction:
+#       if (not buffer.is_l1()) {
+#           TT_THROW("Only L1 buffers can have an associated circular buffer!");
+#       }
+#   (circular_buffer_config.cpp:165-166).
+#
+# This bug is independent from the spec/coord-space mismatch exercised by
+# `test_generic_ops_dram_sharded_is_broken`: the grid we pass here uses only
+# valid DRAM bank coordinates (y=0, x in [0, num_banks)), so the
+# `compute_output_specs` path is well-formed.  Failure happens later, at
+# program-construction time, when the W-sharded factory tries to attach a CB
+# to the DRAM buffer.  We parameterize over `dram_role` to show that either
+# end of the reduction (input or output) is sufficient to trigger the throw.
+#
+# Marker rationale: we use `xfail(strict=True)` (not `pytest.raises`) for the
+# same reason as the A test -- the failure mode shifts as the stack hardens
+# (today: TT_THROW from set_globally_allocated_address; with the planned
+# `validate_reduce_sharded_buffer_types` TT_FATAL: the validation rejects the
+# config first).  Both are correct outcomes for the contract; only a true
+# DRAM-sharded reduce implementation should make this XPASS.
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "WIDTH_SHARDED reduce binds CBs directly to the input/output buffer "
+        "via set_globally_allocated_address, which is L1-only ('Only L1 "
+        "buffers can have an associated circular buffer!'), so DRAM W-sharded "
+        "I/O fails at program construction even with a valid DRAM-bank grid.  "
+        "See PR #42120 review #r3133352489 (failure mode B)."
+    ),
+)
+@pytest.mark.parametrize("dram_role", ["input", "output", "both"])
+def test_width_sharded_reduce_rejects_dram_cb_binding(device, dram_role):
+    torch.manual_seed(0)
+    # Pick 4 cores at y=0 so the grid is a strict subset of any plausible
+    # DRAM bank coordinate set (BH has 7x1, WH has 12x1).  This guarantees
+    # the spec/coord-space check (failure mode A) cannot fire here -- the
+    # grid is genuinely a valid DRAM bank set, isolating B.
+    num_cores = 4
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    # 1 row of tiles by num_cores cols of tiles; one [32,32] shard per core.
+    # H-reducing this with WIDTH_SHARDED I/O activates `use_width_sharding`
+    # in reduce_op_multi_core_h_program_factory.cpp.
+    input_shape = [1, 1, 32, num_cores * 32]
+    shard_spec = ttnn.ShardSpec(grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
+
+    l1_mc = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    dram_mc = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.DRAM,
+        shard_spec=shard_spec,
+    )
+
+    input_mc, output_mc = {
+        "input": (dram_mc, l1_mc),
+        "output": (l1_mc, dram_mc),
+        "both": (dram_mc, dram_mc),
+    }[dram_role]
+
+    torch_input_tensor = torch.rand(input_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=input_mc,
+    )
+
+    op_output_tensor = ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_mc)
+    output_tensor = ttnn.to_torch(op_output_tensor)
+
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=-2, keepdim=True)
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=0.99, rtol=0.01, atol=0.01)
+    assert passing, f"dram_role={dram_role} {output_pcc}"
+
+
+# Documents a third, orthogonal failure mode (failure mode "C" in the
+# analysis): the WIDTH_SHARDED H-reduce reader and writer kernels are wired
+# for *local L1* access only -- the writer is an outright no-op (the data
+# stays in the L1 CB region that was bound to the output buffer), and the
+# reader fetches tiles from `my_x[noc_index]/my_y[noc_index]` (its own
+# core's L1).  Neither path can route data to or from a DRAM bank.
+#
+# This failure mode is structurally *downstream* of failure mode B: the
+# program factory's `set_globally_allocated_address` call rejects DRAM
+# buffers before kernel execution is reached, so an end-to-end runtime test
+# would just duplicate the B test.  Instead, we capture the kernel-level
+# L1 contract directly by asserting on the kernel sources.  When the
+# W-sharded reduce kernels are eventually generalized to support DRAM
+# (TensorAccessor-style addressing for the reader, an actual NoC-write
+# writer), these assertions will fire and the test should be removed.
+def test_width_sharded_reduce_kernels_assume_local_l1():
+    repo_root = Path(__file__).resolve().parents[6]
+
+    writer_path = (
+        repo_root
+        / "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels"
+        / "dataflow/writer_unary_sharded.cpp"
+    )
+    reader_path = (
+        repo_root
+        / "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels"
+        / "dataflow/reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp"
+    )
+    assert writer_path.is_file(), f"missing {writer_path}"
+    assert reader_path.is_file(), f"missing {reader_path}"
+
+    writer_src = writer_path.read_text()
+    reader_src = reader_path.read_text()
+
+    # The W-sharded writer must remain a pure no-op: it just `wait_front`s
+    # on the output CB, relying on the CB's globally-allocated-address
+    # binding (failure mode B) to land the data in L1.  Any NoC-write path
+    # would mean the writer can actually deliver tiles to a buffer, in
+    # which case the kernel-side L1 contract has been broken (or fixed).
+    assert "wait_front" in writer_src, (
+        f"{writer_path.name} is expected to be a no-op writer that only "
+        f"`wait_front`s on the output CB (failure mode C)."
+    )
+    for forbidden in ("noc_async_write", "noc_async_write_tile", "noc_async_write_multicast"):
+        assert forbidden not in writer_src, (
+            f"{writer_path.name} now issues `{forbidden}`; failure mode C "
+            f"may no longer apply.  If DRAM-sharded reduce is now supported, "
+            f"update / remove the related xfail tests."
+        )
+
+    # The W-sharded reader hardcodes the source NoC coordinates to the
+    # kernel's own core (`my_x[noc_index]` / `my_y[noc_index]`) and reads
+    # via the CB's L1 write pointer.  No TensorAccessor / no per-tile bank
+    # lookup means there is no path to fetch from a DRAM bank.
+    assert "my_x[noc_index]" in reader_src and "my_y[noc_index]" in reader_src, (
+        f"{reader_path.name} no longer reads from `my_x/my_y[noc_index]`; " f"failure mode C may no longer apply."
+    )
+    assert "TensorAccessor" not in reader_src, (
+        f"{reader_path.name} now uses TensorAccessor; the kernel can "
+        f"potentially address DRAM banks and failure mode C may no longer "
+        f"apply.  Re-evaluate the related xfail tests."
+    )
 
 
 # Test that generic reduction ops work correctly with a scalar applied to the input.
