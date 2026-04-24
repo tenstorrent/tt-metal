@@ -1,83 +1,38 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_device_operation.hpp"
-
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::prim {
+namespace ttnn::operations::unary {
 
-using ttnn::operations::unary::UnaryOpType;
-
-namespace {
-void validate_supported_arch_dtype(DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
-    switch (op_type) {
-        case UnaryOpType::BITWISE_XOR:
-        case UnaryOpType::BITWISE_NOT:
-        case UnaryOpType::BITWISE_AND:
-        case UnaryOpType::BITWISE_OR:
-            TT_FATAL(
-                input_datatype == DataType::INT32,
-                "Unsupported input data type '{}' for UnaryOpType '{}' (Bitwise operation).",
-                static_cast<int>(input_datatype),
-                static_cast<int>(op_type));
-            TT_FATAL(
-                output_datatype == DataType::INT32,
-                "Unsupported output data type '{}' for UnaryOpType '{}' (Bitwise operation).",
-                static_cast<int>(output_datatype),
-                static_cast<int>(op_type));
-            break;
-        case UnaryOpType::FMOD:
-        case UnaryOpType::LGAMMA:
-            TT_FATAL(
-                (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::FLOAT32),
-                "Unsupported input data type '{}' for UnaryOpType '{}'.",
-                static_cast<int>(input_datatype),
-                static_cast<int>(op_type));
-            TT_FATAL(
-                (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
-                "Unsupported output data type '{}' for UnaryOpType '{}'.",
-                static_cast<int>(output_datatype),
-                static_cast<int>(op_type));
-            break;
-        default: return;
-    }
-}
-}  // namespace
-
-UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.input.is_sharded()) {
-        return UnaryShardedProgramFactory{};
-    }
-    if (args.sub_core_grids.has_value()) {
-        return UnarySubCoreGridProgramFactory{};
-    }
-    return UnaryProgramFactory{};
+tt::stl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
+    return tt::stl::hash::hash_objects_with_default_seed(
+        op_chain,
+        output_dtype,
+        memory_config,
+        fp32_dest_acc_en,
+        preserve_fp32_precision,
+        bfp8_pack_precise,
+        sub_core_grids,
+        worker_grid);
 }
 
 void UnaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+    const auto& output_tensor = tensor_args.output_tensor;
 
-    auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
-    if (preallocated_output_tensor.has_value()) {
-        out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->dtype();
-    }
-
-    auto input_datatype = input_tensor.dtype();
-    for (const auto& unary_op : args.op_chain) {
-        validate_supported_arch_dtype(input_datatype, output_datatype, unary_op.type());
+    auto out_memory_config = args.memory_config;
+    if (output_tensor.has_value()) {
+        out_memory_config = output_tensor->memory_config();
     }
 
     TT_FATAL(
@@ -87,99 +42,147 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         input_tensor.buffer() != nullptr,
-        "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
+        "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
-        "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
+            TT_FATAL(
+                input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
+                "Unary: LGAMMA requires BFLOAT16 or FLOAT32 input, got dtype {}",
+                static_cast<int>(input_tensor.dtype()));
+            const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
+            TT_FATAL(
+                effective_out == DataType::BFLOAT16 || effective_out == DataType::FLOAT32,
+                "Unary: LGAMMA requires BFLOAT16 or FLOAT32 output, got dtype {}",
+                static_cast<int>(effective_out));
+            break;
+        }
+    }
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "Unary operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
-            "memory layout: `{}`",
+            "Unary: Non-sharded input must be interleaved. Input memory layout: {}",
             static_cast<int>(input_tensor.memory_config().memory_layout()));
     }
 
-    if (preallocated_output_tensor.has_value()) {
+    if (!out_memory_config.is_sharded()) {
+        TT_FATAL(
+            out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Unary: Non-sharded output must be interleaved. Output memory layout: {}",
+            static_cast<int>(out_memory_config.memory_layout()));
+    }
+
+    if (output_tensor.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_output_tensor.value().logical_shape();
+        const auto preallocated_output_shape = output_tensor->logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
-            "When preallocted output tensor is used, Unary operation requires its shape to match the computed "
-            "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
+            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
             computed_output_shape,
             preallocated_output_shape);
 
-        if (!input_tensor.is_sharded()) {
-            TT_FATAL(
-                (preallocated_output_tensor.value().layout() == input_tensor.layout()),
-                "Unary operation requires output tensor layout ({}) to match input tensor layout ({}) when working "
-                "with non-sharded tensor.",
-                static_cast<int>(preallocated_output_tensor.value().layout()),
-                static_cast<int>(input_tensor.layout()));
-        }
+        TT_FATAL(
+            output_tensor->layout() == input_tensor.layout(),
+            "Unary: Output format (tile/row-major) must match input when preallocated. Output: {}, Input: {}",
+            static_cast<int>(output_tensor->layout()),
+            static_cast<int>(input_tensor.layout()));
     }
 }
 
 TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->tensor_spec();
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor->tensor_spec();
+    }
+
+    const auto output_shape = tensor_args.input.logical_shape();
+
+    if (args.memory_config.is_sharded()) {
+        const auto output_layout = tensor_args.input.layout();
+        const auto& memory_layout = args.memory_config.memory_layout();
+        const auto& buffer_type = args.memory_config.buffer_type();
+        auto shard_spec_opt = args.memory_config.shard_spec();
+
+        if (!shard_spec_opt.has_value()) {
+            const auto& padded_out_shape = tensor_args.input.padded_shape();
+            if (tensor_args.input.is_sharded()) {
+                shard_spec_opt = adjust_to_shape(
+                    *tensor_args.input.memory_config().shard_spec(),
+                    tensor_args.input.padded_shape(),
+                    padded_out_shape);
+            } else {
+                shard_spec_opt = generate_shard_spec_all_cores(tensor_args.input, padded_out_shape, memory_layout);
+            }
+        }
+
+        return TensorSpec(
+            output_shape,
+            TensorLayout(
+                args.output_dtype,
+                PageConfig(output_layout),
+                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     const auto output_layout = tensor_args.input.layout();
-
-    const auto output_shape = tensor_args.input.logical_shape();
     return TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(
             args.output_dtype,
             PageConfig(output_layout),
-            args.output_memory_config,
+            args.memory_config,
             output_shape,
             tensor_args.input.padded_shape()));
 }
 
 Tensor UnaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
+    if (tensor_args.output_tensor.has_value()) {
+        return *tensor_args.output_tensor;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
+    TT_FATAL(
+        tt::tt_metal::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
 
-    auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash;
-
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<UnaryDeviceOperation>(
-            args,
-            args.sub_core_grids,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape.volume(),
-            input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<UnaryDeviceOperation>(
-            args,
-            args.sub_core_grids,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
+    const auto output_spec = compute_output_specs(attributes, tensor_args);
+    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
+    std::optional<uint32_t> src_shard_vol = std::nullopt;
+    std::optional<uint32_t> dst_shard_vol = std::nullopt;
+    if (shard_specs.has_value()) {
+        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+        if (input_tensor.is_sharded()) {
+            src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
+        }
+        const auto out_tile_hw = output_spec.tile().get_tile_hw();
+        dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    return hash;
+    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
+    // different widths get separate cache entries. Consider hashing only the last
+    // dimension to allow cache reuse when only height differs
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return operation::hash_operation<UnaryDeviceOperation>(
+            attributes,
+            input_tensor.dtype(),
+            input_tensor.layout(),
+            input_tensor.memory_config(),
+            input_tensor.padded_shape(),
+            src_shard_vol,
+            dst_shard_vol);
+    }
+
+    return operation::hash_operation<UnaryDeviceOperation>(
+        attributes,
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        input_tensor.memory_config(),
+        src_shard_vol,
+        dst_shard_vol);
 }
 
 bool UnaryDeviceOperation::skip_launch(
@@ -189,6 +192,10 @@ bool UnaryDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
+}  // namespace ttnn::operations::unary
+
+namespace ttnn::prim {
+
 Tensor unary(
     const Tensor& input,
     const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
@@ -197,20 +204,33 @@ Tensor unary(
     bool fp32_dest_acc_en,
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
-    const std::optional<Tensor>& preallocated_output,
+    const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto operation_attributes = UnaryParams{
+    using OperationType = ttnn::operations::unary::UnaryDeviceOperation;
+
+    auto mem_config_actual =
+        optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
+
+    auto worker_grid = ttnn::operations::unary::get_worker_grid(
+        input,
+        optional_output_tensor,
+        std::optional<MemoryConfig>(output_memory_config),
+        sub_core_grids,
+        mem_config_actual);
+
+    auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,
         .output_dtype = output_dtype,
-        .output_memory_config = output_memory_config,
+        .memory_config = mem_config_actual,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .preserve_fp32_precision = preserve_fp32_precision,
         .bfp8_pack_precise = bfp8_pack_precise,
+        .worker_grid = worker_grid,
         .sub_core_grids = sub_core_grids,
     };
-    auto tensor_args = UnaryInputs{.input = input, .preallocated_output = preallocated_output};
 
-    return ttnn::device_operation::launch<UnaryDeviceOperation>(operation_attributes, tensor_args);
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .output_tensor = optional_output_tensor};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

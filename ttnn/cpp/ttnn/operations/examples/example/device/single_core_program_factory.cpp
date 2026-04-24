@@ -86,17 +86,11 @@ ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Compute kernel
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
-
+    // Compute kernel (eltwise_sfpu.cpp reads num_tiles via get_arg_val, i.e. runtime args)
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_group_1;
-    compute_desc.compile_time_args = compute_kernel_args_group_1;
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
         .math_approx_mode = false,
@@ -119,6 +113,8 @@ ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
 
         writer_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+
+        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles_per_core});
 
         num_tiles_written += num_tiles_per_core;
     }

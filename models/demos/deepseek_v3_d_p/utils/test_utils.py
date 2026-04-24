@@ -12,6 +12,24 @@ from loguru import logger
 import ttnn
 
 
+def print_buffers(device, name, buffer_type):
+    buffers = ttnn._ttnn.reports.get_buffers(device)
+    filtered_buffers = [buf for buf in buffers if buf.buffer_type == buffer_type]
+    for i, buf in enumerate(filtered_buffers):
+        logger.warning(
+            f"{buffer_type} [{name}] Buffer {i}: addr={buf.address}, "
+            f"size={buf.max_size_per_bank}, layout={buf.buffer_layout}"
+        )
+
+
+def print_l1_buffers(device, name):
+    print_buffers(device, name, ttnn.BufferType.L1)
+
+
+def print_l1_small_buffers(device, name):
+    print_buffers(device, name, ttnn.BufferType.L1_SMALL)
+
+
 def adjust_shapes_for_testing(config, mesh_device):
     """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct."""
     _, n_tp_devices = mesh_device.shape
