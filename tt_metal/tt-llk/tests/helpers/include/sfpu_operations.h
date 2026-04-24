@@ -19,12 +19,13 @@
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_abs.h"
-#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_activations.h"
+#include "sfpu/ckernel_sfpu_binary.h"
 #include "sfpu/ckernel_sfpu_elu.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_exp2.h"
 #include "sfpu/ckernel_sfpu_fill.h"
+#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_recip.h"
@@ -36,7 +37,6 @@
 #include "sfpu/ckernel_sfpu_square.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
 #include "sfpu/ckernel_sfpu_trigonometry.h"
-#include "sfpu/ckernel_sfpu_binary.h"
 
 namespace test_utils
 {
@@ -467,6 +467,14 @@ void call_binary_sfpu_operation(
     const std::uint32_t dst_index_out = 0,
     int vector_mode                   = static_cast<int>(VectorMode::RC))
 {
+    // NOTE: The functions invoked via SFPU_BINARY_CALL below run inside
+    // _llk_math_eltwise_binary_sfpu_params_, which already loops over 4 faces
+    // (for VectorMode::RC) and emits 2x TTI_SETRWC cr_d 8 between calls to
+    // advance the dst-write counter. The per-call inner ITERATIONS must
+    // therefore be 8 (one face's worth of SFPU rows), not 32 (a full tile),
+    // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
+    // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
+    constexpr int PER_FACE_ITERATIONS = 8;
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
         BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW)
@@ -475,7 +483,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_sfpu_binary_,
-            (APPROXIMATION_MODE, BINOP, ITERATIONS),
+            (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -487,7 +495,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_binary_right_shift_,
-            (APPROXIMATION_MODE, ITERATIONS, INT32, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -499,7 +507,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_binary_left_shift_,
-            (APPROXIMATION_MODE, ITERATIONS, INT32, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -511,7 +519,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_logical_right_shift_,
-            (APPROXIMATION_MODE, ITERATIONS, INT32, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -521,8 +529,22 @@ void call_binary_sfpu_operation(
     {
         // Use actual format when compiling for ADD_TOP_ROW tests, otherwise use Float32 as safe default for static assert
         constexpr DataFormat add_top_row_format = (BINOP == BinaryOp::ADD_TOP_ROW) ? static_cast<DataFormat>(MATH_FORMAT) : DataFormat::Float32;
+        // ADD_TOP_ROW addresses all four faces of the destination tile itself
+        // (via absolute tile_offset_* in TT_SFPLOAD/TT_SFPSTORE), so it must be
+        // invoked exactly once. Force VectorMode::RC_custom so
+        // _llk_math_eltwise_binary_sfpu_params_ takes its single-call branch
+        // and does not emit the per-face TTI_SETRWC cr_d 8 pair that would
+        // otherwise shift the dst write base between calls. This matches the
+        // production wrapper llk_math_eltwise_binary_sfpu_add_top_row.h.
         SFPU_BINARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_add_top_row_, (add_top_row_format), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_add_top_row_,
+            (add_top_row_format),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            static_cast<int>(VectorMode::RC_custom));
     }
     else
     {
