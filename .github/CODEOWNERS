@@ -36,8 +36,8 @@ tests/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeown
 tests/scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/ttsim-skip-list.yaml @mcraigheadTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat
-tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat
+tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
