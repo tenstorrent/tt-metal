@@ -72,6 +72,8 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
+from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
+
 _LM_HEAD_SAMPLING_REFERENCE_PT_ENV = "DEEPSEEK_V3_LM_HEAD_SAMPLING_REFERENCE_PT"
 
 
@@ -4910,7 +4912,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
         pipeline.setup_and_run()
         logger.debug(f"[TEST P{pid}] setup_and_run complete")
 
-        token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
+        token_meta_words = METADATA_TENSOR_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
             if run_golden:
@@ -4929,7 +4931,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token = torch.zeros(1, METADATA_TENSOR_BYTES // 4, dtype=torch.uint32)
                 slot_id = random.randint(0, 255)
                 torch_token[0, 6] = slot_id
                 logger.debug(f"[TEST P{pid}] iter {iteration} slot_id: {torch_token[0, 6].item()}")

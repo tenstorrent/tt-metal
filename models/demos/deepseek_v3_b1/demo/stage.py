@@ -18,6 +18,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.metadata.metadata import (
+    METADATA_TENSOR_BYTES,
+    METADATA_TENSOR_NUM_BF16,
+    METADATA_TENSOR_NUM_UINT32,
+)
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock, StageMetadata
@@ -46,6 +51,24 @@ def activation_fifo_size_bytes(page_size_bytes: int, fifo_pages: int = DEFAULT_A
     return page_size_bytes * fifo_pages
 
 
+def _round_up(value: int, alignment: int) -> int:
+    return ((value + alignment - 1) // alignment) * alignment
+
+
+def _mesh_sampling_scratch_shapes(mesh_rows: int, mesh_cols: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    topk_min_alignment = 32
+    bf16_tile_size = 2 * 32 * 32
+    uint32_tile_size = 4 * 32 * 32
+    stage1_tiles = (mesh_rows * topk_min_alignment + 1023) // 1024
+    stage2_tiles = (mesh_cols * topk_min_alignment + 1023) // 1024
+    total_tiles = stage1_tiles + stage2_tiles
+    scores_bytes = total_tiles * bf16_tile_size
+    indices_bytes = total_tiles * uint32_tile_size
+    scores_width = _round_up(scores_bytes, 2) // 2
+    indices_width = _round_up(indices_bytes, 4) // 4
+    return (1, scores_width), (1, indices_width)
+
+
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES)
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
@@ -59,16 +82,28 @@ ARGMAX_RELAY_CORE = ttnn.CoreCoord(12, 2)
 embedding_dim = 7168
 mtp_output_dim = 7168
 num_dram_banks = 8
-METADATA_NUM_ELEMS = 32
+# Number of bf16 elements appended to each activation shard to carry the full
+# DeepseekMetadata struct (header + p_indices + p_scores). The source unicasts
+# the whole struct from the LM-head input core to the sampling final core; only
+# the first `aligned_size_bytes()` bytes (the header) come from upstream — the
+# trailing region stays zero on the source and is overwritten on the destination
+# by sampling.hpp after top-P.
+METADATA_NUM_ELEMS = METADATA_TENSOR_NUM_BF16
 mtp_n_per_core = mtp_output_dim // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
-# Token metadata payload: just token info (id, type, pos) — same physical size as TOKEN.
-TOKEN_META_PAGE_SIZE_BYTES = TOKEN_PAGE_SIZE_BYTES
-TOKEN_META_FIFO_SIZE = TOKEN_FIFO_SIZE
+# Token metadata payload: full DeepseekMetadata struct (header + p_indices + p_scores).
+# This is the per-iteration metadata that flows through the model: every decoder
+# stage carries it, the BaseLMHeadStage produces the trailing p_indices / p_scores
+# arrays inside it, and the SpecLMHeadStage forwards it. Spec-LM output and the
+# embedding input are the only paths that don't carry the full struct.
+# FIFO depth is kept at TOKEN_FIFO_NUM_PAGES so buffering capacity (in pages) is
+# unchanged from the prior 64 B layout — total L1 footprint scales with page size.
+TOKEN_META_PAGE_SIZE_BYTES = METADATA_TENSOR_BYTES
+TOKEN_META_FIFO_SIZE = TOKEN_META_PAGE_SIZE_BYTES * TOKEN_FIFO_NUM_PAGES
 
-# Activation + token metadata payload: logits + 1 metadata tile (token).
-ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + TOKEN_PAGE_SIZE_BYTES
+# Activation + metadata payload: logits + full DeepseekMetadata.
+ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + TOKEN_META_PAGE_SIZE_BYTES
 ACTIVATION_W_TOKEN_META_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES)
 
 
@@ -174,7 +209,7 @@ class EmbeddingStage(StageKind):
             downstream_d2d_socket_fifo_size=activation_fifo_size,
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=activation_page_size,
-            h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            h2d_socket_fifo_size=TOKEN_META_FIFO_SIZE,
             d2h_socket_fifo_size=d2h_fifo,
             d2h_socket_page_size=d2h_page,
             embedding_tensor=self._weights.embedding,
@@ -387,24 +422,38 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        winner_page_bytes = 16
-        scratch_shape = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
-        scratch_mem_config = ttnn.MemoryConfig(
+        scores_scratch_shape, indices_scratch_shape = _mesh_sampling_scratch_shapes(mesh_rows, mesh_cols)
+        scores_scratch_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(argmax_final_core_grid, scratch_shape, ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(argmax_final_core_grid, scores_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR),
         )
-        scratch_buffer = ttnn.from_torch(
-            torch.zeros((num_devices, *scratch_shape), dtype=torch.uint32),
+        indices_scratch_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(argmax_final_core_grid, indices_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        scores_scratch_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, *scores_scratch_shape), dtype=torch.uint32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=scores_scratch_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        indices_scratch_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, *indices_scratch_shape), dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=scratch_mem_config,
+            memory_config=indices_scratch_mem_config,
             mesh_mapper=mesh_mapper,
         )
 
-        # Metadata buffer on argmax_final_core (64 B TOKEN_META page; NCRISC unicast target).
-        METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        # Metadata buffer on argmax_final_core (sized for the full DeepseekMetadata
+        # struct: 64 B header from upstream unicast + 192 B for sampling.hpp's
+        # local p_indices / p_scores writes).
+        METADATA_ELEMS = METADATA_TENSOR_NUM_UINT32
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -461,7 +510,8 @@ class SpecLMHeadStage(StageKind):
             "ttnn_scores": ttnn_scores,
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
-            "scratch_buffer": scratch_buffer,
+            "scores_scratch_tensor": scores_scratch_tensor,
+            "indices_scratch_tensor": indices_scratch_tensor,
             "metadata_tensor": metadata_tensor,
             "lmhead_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
@@ -495,7 +545,8 @@ class SpecLMHeadStage(StageKind):
             bcast_semaphores=d["bcast_semaphores"],
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
-            fabric_scratch_tensor=d["scratch_buffer"],
+            scores_scratch_tensor=d["scores_scratch_tensor"],
+            indices_scratch_tensor=d["indices_scratch_tensor"],
             fp32_dest_acc_en=self._fp32_dest_acc_en,
             skip_ccl=False,
             socket_input=d["lmhead_input_socket"],
@@ -506,6 +557,7 @@ class SpecLMHeadStage(StageKind):
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
             input_core_fused_buffer=d["input_core_fused_buffer"],
+            k=1
         )
 
 
@@ -533,6 +585,7 @@ class BaseLMHeadStage(StageKind):
         mtp_weights: DeepSeekV3MTPWeights | None = None,
         embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
         send_mtp_output_downstream: bool = False,
+        seed: int = 2005,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
@@ -547,6 +600,7 @@ class BaseLMHeadStage(StageKind):
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
+        self._seed = seed
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -676,26 +730,39 @@ class BaseLMHeadStage(StageKind):
             memory_config=output_index_mem_config,
             mesh_mapper=mesh_mapper,
         )
-        winner_page_bytes = 16
-        scratch_shape_per_device = (
-            1,
-            ((mesh_rows + mesh_cols) * winner_page_bytes) // 4,
-        )
-        scratch_mem_config = ttnn.MemoryConfig(
+        scores_scratch_shape, indices_scratch_shape = _mesh_sampling_scratch_shapes(mesh_rows, mesh_cols)
+        scores_scratch_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 argmax_final_core_grid,
-                scratch_shape_per_device,
+                scores_scratch_shape,
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        scratch_buffer = ttnn.from_torch(
-            torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+        indices_scratch_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                argmax_final_core_grid,
+                indices_scratch_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        scores_scratch_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, *scores_scratch_shape), dtype=torch.uint32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=scores_scratch_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        indices_scratch_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, *indices_scratch_shape), dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=scratch_mem_config,
+            memory_config=indices_scratch_mem_config,
             mesh_mapper=mesh_mapper,
         )
 
@@ -713,7 +780,9 @@ class BaseLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        # Sized for the full DeepseekMetadata struct (header + p_indices + p_scores).
+        # See METADATA_NUM_ELEMS / metadata.py for the source-side counterpart.
+        METADATA_ELEMS = METADATA_TENSOR_NUM_UINT32
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -840,7 +909,8 @@ class BaseLMHeadStage(StageKind):
             "ttnn_scores": ttnn_scores,
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
-            "scratch_buffer": scratch_buffer,
+            "scores_scratch_tensor": scores_scratch_tensor,
+            "indices_scratch_tensor": indices_scratch_tensor,
             "metadata_tensor": metadata_tensor,
             "lmhead_input_socket": lmhead_input_socket,
             "lmhead_output_socket": lmhead_output_socket,
@@ -898,7 +968,8 @@ class BaseLMHeadStage(StageKind):
             bcast_semaphores=d["bcast_semaphores"],
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
-            fabric_scratch_tensor=d["scratch_buffer"],
+            scores_scratch_tensor=d["scores_scratch_tensor"],
+            indices_scratch_tensor=d["indices_scratch_tensor"],
             fp32_dest_acc_en=self._fp32_dest_acc_en,
             skip_ccl=False,
             socket_input=d["lmhead_input_socket"],
@@ -911,6 +982,7 @@ class BaseLMHeadStage(StageKind):
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
             input_core_fused_buffer=d.get("input_core_fused_buffer"),
+            seed=self._seed,
         )
 
 
@@ -979,14 +1051,14 @@ class _CombinedPipelineBlock:
             mesh_device,
             ttnn.MeshCoreCoord(exit_node_coord, PIPELINE_CORE_COORD),
             ttnn.BufferType.L1,
-            TOKEN_FIFO_SIZE,
+            TOKEN_META_FIFO_SIZE,
             ttnn.H2DMode.HOST_PUSH,
         )
 
         self.h2d_host_io = HostInterface(
             self.h2d_socket,
             None,
-            TOKEN_PAGE_SIZE_BYTES,
+            TOKEN_META_PAGE_SIZE_BYTES,
             0,
             core_to_core_socket_buffer_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
             h2d_downstream_core=ttnn.MeshCoreCoord(next_stage_entry_coord, PIPELINE_CORE_COORD),

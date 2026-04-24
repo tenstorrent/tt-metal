@@ -8,6 +8,19 @@ import torch
 
 import ttnn
 
+# Full size of the on-device DeepseekMetadata struct (header + p_indices + p_scores).
+# MUST match `sizeof(deepseek_b1_ops::DeepseekMetadata)` in `metadata.hpp`. Used to
+# size the LM-head sampling source/destination metadata buffers (the source unicasts
+# the whole struct, and the destination has 192 B of trailing space that sampling.hpp
+# fills with the post-top-P p_indices / p_scores arrays).
+#
+# This is intentionally separate from `aligned_size_bytes()` (which describes the
+# header-only socket page used by the upstream pipeline) and from
+# `TOKEN_META_PAGE_SIZE_BYTES` (which describes the deferred output socket page).
+METADATA_TENSOR_BYTES = 256
+METADATA_TENSOR_NUM_BF16 = METADATA_TENSOR_BYTES // 2
+METADATA_TENSOR_NUM_UINT32 = METADATA_TENSOR_BYTES // 4
+
 
 @dataclass
 class DeepseekMetadata:
@@ -34,9 +47,12 @@ class DeepseekMetadata:
 
     @classmethod
     def aligned_size_bytes(cls) -> int:
-        alignment = 64
-        unpadded_size = len(fields(cls)) * cls.FIELD_SIZE_BYTES
-        return (unpadded_size + alignment - 1) // alignment * alignment
+        # Returns the full on-device struct size (header + p_indices + p_scores).
+        # Pipeline stages that forward metadata reserve this many bytes per shard
+        # so that the LM-head sampling stage can write `p_indices` / `p_scores`
+        # in place. The Python dataclass above only mirrors the header fields;
+        # the trailing arrays exist solely on device and are filled by sampling.hpp.
+        return METADATA_TENSOR_BYTES
 
     def to_list(self) -> list[int]:
         # More advanced serialization could be added here for mixed types to align with data struct on device

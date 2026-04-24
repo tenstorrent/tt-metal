@@ -138,7 +138,7 @@ class PipelineBlock:
         self.entry_socket_interface = None
         self.exit_socket_interface = None
 
-        token_size_bytes = 64
+        token_size_bytes = DeepseekMetadata.aligned_size_bytes()
         if self.is_pipeline_start:
             self._init_first_stage(
                 mesh_device,

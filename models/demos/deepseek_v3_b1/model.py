@@ -35,15 +35,20 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
-PCIE_PAGE_ALIGNMENT_BYTES: int = 64
+# Each H2D page carries the full DeepseekMetadata struct (header + reserved
+# p_indices/p_scores tail) so the on-device fused embedding kernel can copy the
+# entire struct downstream in one shot. The host only fills the header fields
+# (token id, position id, etc.); the trailing bytes stay zero.
+PCIE_PAGE_ALIGNMENT_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 
 
 # ---------------------------------------------------------------------------
-# Speculative-decode page layout (64 bytes = 16 uint32 words)
+# Speculative-decode page layout (DeepseekMetadata struct, PCIE_PAGE_ALIGNMENT_BYTES total)
 # ---------------------------------------------------------------------------
 
 

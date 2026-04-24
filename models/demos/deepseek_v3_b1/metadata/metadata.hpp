@@ -10,6 +10,11 @@
 
 namespace deepseek_b1_ops {
 
+// Full byte size of the DeepseekMetadata struct. MUST stay in sync with
+// `METADATA_TENSOR_BYTES` in metadata.py — both Python and C++ size the LM-head
+// sampling source/destination buffers from this constant.
+inline constexpr uint32_t kMetadataTensorBytes = 256;
+
 // Layout (total: 256 bytes):
 //   bytes 0..51   : 13 scalar fields (existing metadata, 13 * 4B = 52B)
 //   bytes 52..63  : padding to 64B (3 * 4B)
@@ -45,7 +50,8 @@ struct DeepseekMetadata {
     uint16_t p_scores[32];
 };
 
-static_assert(sizeof(DeepseekMetadata) == 256, "DeepseekMetadata must be exactly 256 bytes");
+static_assert(
+    sizeof(DeepseekMetadata) == kMetadataTensorBytes, "DeepseekMetadata size must equal kMetadataTensorBytes");
 static_assert(offsetof(DeepseekMetadata, p_indices) == 64, "p_indices must start at offset 64");
 static_assert(offsetof(DeepseekMetadata, p_scores) == 192, "p_scores must start at offset 192");
 

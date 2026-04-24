@@ -55,7 +55,7 @@
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
-#include "../../../unified_kernels/argmax.hpp"
+#include "../../../unified_kernels/sampling.hpp"
 #include "../../../unified_kernels/socket_send.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
@@ -80,10 +80,14 @@ struct Core {
     static constexpr bool is_mcast_grid_core = get_named_compile_time_arg_val("is_mcast_grid_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_rmsnorm_core = get_named_compile_time_arg_val("is_rmsnorm_core") == 1;
-    static constexpr bool is_argmax_core = get_named_compile_time_arg_val("is_argmax_core") == 1;
-    static constexpr bool is_argmax_final_core = get_named_compile_time_arg_val("is_argmax_final_core") == 1;
-    static constexpr bool is_argmax_mesh_sender_core =
-        get_named_compile_time_arg_val("is_argmax_mesh_sender_core") == 1;
+    // Sampling per-core role flags (previously argmax_*; renamed to match
+    // sampling.hpp + micro_ops/sampling/op.py naming).
+    static constexpr bool sampling_is_active_core =
+        get_named_compile_time_arg_val("sampling_is_active_core") == 1;
+    static constexpr bool sampling_is_final_core =
+        get_named_compile_time_arg_val("sampling_is_final_core") == 1;
+    static constexpr bool sampling_mesh_sender_core =
+        get_named_compile_time_arg_val("sampling_mesh_sender_core") == 1;
     static constexpr uint32_t fabric_gate_bcast_turn_semaphore_id =
         get_named_compile_time_arg_val("fabric_gate_bcast_turn_semaphore_id");
     static constexpr uint32_t fabric_gate_argmax_turn_semaphore_id =
@@ -201,47 +205,71 @@ void kernel_main() {
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
 
-    // ── Argmax reader (matmul cores) ────────────────────────────────
-    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ReaderCTArgs<
-        get_named_compile_time_arg_val("argmax_num_values"),
-        get_named_compile_time_arg_val("argmax_winner_page_bytes"),
-        get_named_compile_time_arg_val("argmax_num_senders"),
-        get_named_compile_time_arg_val("argmax_expected_remote_incs"),
-        get_named_compile_time_arg_val("argmax_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
-        get_named_compile_time_arg_val("argmax_mesh_mode"),
-        get_named_compile_time_arg_val("argmax_stage1_sender"),
-        get_named_compile_time_arg_val("argmax_stage1_receiver"),
-        get_named_compile_time_arg_val("argmax_stage2_sender"),
-        get_named_compile_time_arg_val("argmax_stage2_receiver"),
-        get_named_compile_time_arg_val("argmax_stage1_slot_base_offset"),
-        get_named_compile_time_arg_val("argmax_stage1_num_slots"),
-        get_named_compile_time_arg_val("argmax_stage1_expected_remote_incs"),
-        get_named_compile_time_arg_val("argmax_stage1_local_slot_offset"),
-        get_named_compile_time_arg_val("argmax_stage2_slot_base_offset"),
-        get_named_compile_time_arg_val("argmax_stage2_num_slots"),
-        get_named_compile_time_arg_val("argmax_stage2_expected_remote_incs"),
-        get_named_compile_time_arg_val("argmax_stage2_local_slot_offset"),
-        get_named_compile_time_arg_val("argmax_mesh_local_send_slot_offset"),
-        get_named_compile_time_arg_val("argmax_sender_idx"),
-        get_named_compile_time_arg_val("argmax_socket_mode"),
-        get_named_compile_time_arg_val("argmax_socket_cb"),
-        get_named_compile_time_arg_val("argmax_socket_page_size_bytes"),
-        get_named_compile_time_arg_val("matmul_out"),
-        get_named_compile_time_arg_val("matmul_out_w"),
-        get_named_compile_time_arg_val("argmax_gather_cb"),
-        get_named_compile_time_arg_val("argmax_defer_socket_output")>;
+    // ── Sampling reader (matmul cores) ──────────────────────────────
+    // Full CT-arg list from sampling.hpp :: TopKSampling::ReaderCTArgs<>
+    // (mirrors micro_ops/sampling/kernels/sampling_kernel.cpp).
+    //
+    // ScoresCBId/ScoresNumPages enable the CB-backed scores read path
+    // inside sampling.hpp (cb_wait_front + get_read_ptr + cb_pop_front).
+    // We wire them to the matmul-output CB so phase-1 sees the matmul
+    // result via cb_wait, not via a raw RT address.
+    using SamplingCTArgs = deepseek_b1_ops::TopKSampling::ReaderCTArgs<
+        get_named_compile_time_arg_val("sampling_num_values"),
+        get_named_compile_time_arg_val("sampling_topk_k"),
+        get_named_compile_time_arg_val("sampling_winner_page_bytes"),
+        get_named_compile_time_arg_val("sampling_num_senders"),
+        get_named_compile_time_arg_val("sampling_expected_remote_incs"),
+        get_named_compile_time_arg_val("sampling_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_mesh_mode"),
+        get_named_compile_time_arg_val("sampling_stage1_sender"),
+        get_named_compile_time_arg_val("sampling_stage1_receiver"),
+        get_named_compile_time_arg_val("sampling_stage2_sender"),
+        get_named_compile_time_arg_val("sampling_stage2_receiver"),
+        get_named_compile_time_arg_val("sampling_stage1_slot_base_offset"),
+        get_named_compile_time_arg_val("sampling_stage1_num_slots"),
+        get_named_compile_time_arg_val("sampling_stage1_expected_remote_incs"),
+        get_named_compile_time_arg_val("sampling_stage1_local_slot_offset"),
+        get_named_compile_time_arg_val("sampling_stage2_slot_base_offset"),
+        get_named_compile_time_arg_val("sampling_stage2_num_slots"),
+        get_named_compile_time_arg_val("sampling_stage2_expected_remote_incs"),
+        get_named_compile_time_arg_val("sampling_stage2_local_slot_offset"),
+        get_named_compile_time_arg_val("sampling_mesh_local_send_slot_offset"),
+        get_named_compile_time_arg_val("sampling_sender_idx"),
+        get_named_compile_time_arg_val("sampling_socket_mode"),
+        get_named_compile_time_arg_val("sampling_socket_cb"),
+        get_named_compile_time_arg_val("sampling_socket_page_size_bytes"),
+        get_named_compile_time_arg_val("matmul_out"),       // ScoresCBId   — matmul output CB
+        get_named_compile_time_arg_val("matmul_out_w"),     // ScoresNumPages — matmul output tile count
+        get_named_compile_time_arg_val("sampling_winner_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_in_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_out_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
+        get_named_compile_time_arg_val("sampling_scaler_cb"),
+        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
+        get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_indices_cb"),
+        get_named_compile_time_arg_val("sampling_phase2_scores_byte_offset"),
+        get_named_compile_time_arg_val("sampling_phase2_indices_byte_offset"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_scores_cb"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_indices_cb"),
+        get_named_compile_time_arg_val("sampling_scores_scratch_stage2_offset"),
+        get_named_compile_time_arg_val("sampling_indices_scratch_stage2_offset"),
+        get_named_compile_time_arg_val("sampling_scores_scratch_addr"),
+        get_named_compile_time_arg_val("sampling_indices_scratch_addr")>;
 
-    deepseek_b1_ops::Sampling::ReaderArgs sampling_args{
-        .scores_addr = 0,
+    // Layout matches sampling.hpp :: TopKSampling::ReaderArgs.
+    deepseek_b1_ops::TopKSampling::ReaderArgs sampling_args{
+        .scores_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .indices_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .output_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .final_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .final_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        .scratch_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .global_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
         .global_stage2_sem_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++),
-        .gather_addr = 0,
     };
 
     constexpr uint32_t mtp_embedding_base = get_named_compile_time_arg_val("mtp_embedding_dram_base");
@@ -407,19 +435,37 @@ void kernel_main() {
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
-    // ── Argmax writer (matmul cores, argmax_final_core) ─────────────
-    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
-        get_named_compile_time_arg_val("argmax_winner_page_bytes"),
-        get_named_compile_time_arg_val("argmax_local_ready_semaphore_id"),
-        get_named_compile_time_arg_val("argmax_socket_mode"),
-        get_named_compile_time_arg_val("argmax_socket_cb"),
-        get_named_compile_time_arg_val("argmax_socket_page_size_bytes"),
-        get_named_compile_time_arg_val("argmax_defer_socket_output")>;
+    // ── Sampling writer (matmul cores, sampling_is_final_core) ──────
+    // Full CT-arg list from sampling.hpp :: TopKSampling::WriterCTArgs<>.
+    // Template slot 18 (DeferSocketOutput) is the only arg this fused op
+    // uses that isn't in the micro-op's kernel; we wire it explicitly.
+    using SamplingCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
+        get_named_compile_time_arg_val("sampling_winner_page_bytes"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_socket_mode"),
+        get_named_compile_time_arg_val("sampling_socket_cb"),
+        get_named_compile_time_arg_val("sampling_socket_page_size_bytes"),
+        get_named_compile_time_arg_val("sampling_topk_k"),
+        get_named_compile_time_arg_val("sampling_softmax_out_cb"),
+        get_named_compile_time_arg_val("sampling_rand_cb"),
+        get_named_compile_time_arg_val("sampling_winner_cb"),
+        get_named_compile_time_arg_val("sampling_p_bf16"),
+        get_named_compile_time_arg_val("sampling_topk_scores_slot_bytes"),
+        get_named_compile_time_arg_val("sampling_mesh_mode"),
+        get_named_compile_time_arg_val("sampling_stage2_receiver"),
+        get_named_compile_time_arg_val("sampling_output_addr"),
+        get_named_compile_time_arg_val("sampling_rand_output_addr"),
+        get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
+        get_named_compile_time_arg_val("sampling_softmax_in_cb"),
+        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_defer_socket_output"),
+        get_named_compile_time_arg_val("sampling_enable_metadata"),
+        get_named_compile_time_arg_val("sampling_copy_probabilities"),
+        get_named_compile_time_arg_val("metadata_output_l1_addr")>;
 
-    deepseek_b1_ops::Sampling::WriterArgs sampling_args{
+    deepseek_b1_ops::TopKSampling::WriterArgs sampling_args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
         .final_noc_y = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
-        .scratch_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
         .socket_config_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
         .persistent_enable = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
         .persistent_dst_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -520,7 +566,7 @@ void kernel_main() {
         0>;  // enable_downstream_socket
 
     // Writer runtime args for worker cores (skip past argmax mesh sender args if co-located)
-    constexpr size_t reduce_brisc_arg_start = Core::is_argmax_mesh_sender_core ? 5 : 0;
+    constexpr size_t reduce_brisc_arg_start = Core::sampling_mesh_sender_core ? 5 : 0;
     deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
     if constexpr (Core::is_eh_reduce_worker_core) {
         reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
@@ -554,8 +600,35 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
     using McastEhCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_eh_args{};
-    using ArgmaxCTArgs = deepseek_b1_ops::Sampling::ComputeCTArgs;
-    deepseek_b1_ops::Sampling::ComputeArgs sampling_args{};
+    // ── Sampling compute (matmul cores; phase-1 everywhere, phase-2/final only on final core) ──
+    using SamplingCTArgs = deepseek_b1_ops::TopKSampling::ComputeCTArgs<
+        get_named_compile_time_arg_val("sampling_softmax_in_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_out_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
+        get_named_compile_time_arg_val("sampling_softmax_sub_cb"),
+        get_named_compile_time_arg_val("sampling_max_cb"),
+        get_named_compile_time_arg_val("sampling_sum_cb"),
+        get_named_compile_time_arg_val("sampling_scaler_cb"),
+        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_rand_cb"),
+        get_named_compile_time_arg_val("sampling_seed"),
+        get_named_compile_time_arg_val("sampling_topk_k"),
+        get_named_compile_time_arg_val("sampling_mesh_mode"),
+        get_named_compile_time_arg_val("sampling_stage1_receiver"),
+        get_named_compile_time_arg_val("sampling_stage2_receiver"),
+        get_named_compile_time_arg_val("sampling_num_values"),
+        get_named_compile_time_arg_val("sampling_num_senders"),
+        get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
+        get_named_compile_time_arg_val("sampling_topk_out_indices_cb"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_scores_cb"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_indices_cb"),
+        get_named_compile_time_arg_val("sampling_stage1_row_elements"),
+        get_named_compile_time_arg_val("sampling_stage1_num_input_tiles"),
+        get_named_compile_time_arg_val("sampling_stage2_row_elements"),
+        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles")>;
+    deepseek_b1_ops::TopKSampling::ComputeArgs sampling_args{};
 
     // ── ReduceToOneB1 compute (eh_reduce cores) ─────────────────────
     using ReduceToOneCTArgs = deepseek_b1_ops::ReduceToOneB1::ComputeCTArgs<
@@ -633,13 +706,48 @@ void kernel_main() {
         0,
         DST_ACCUM_MODE>;
 
-    compute_kernel_hw_startup(0, 0, 0);
+    // ── HW compute startup ──────────────────────────────────────────
+    // Sampling needs fp32_dest_acc_en and an SFPU/FPU semaphore pair (see
+    // micro_ops/sampling/kernels/sampling_kernel.cpp). On non-sampling
+    // compute cores we fall back to the bare default init so we don't
+    // read metadata from sampling CBs that aren't allocated there.
+    if constexpr (Core::sampling_is_active_core) {
+        MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
+        PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
+        if constexpr (SamplingCTArgs::topk_k == 32) {
+            deepseek_compute_kernel_hw_startup<true>(
+                SamplingCTArgs::topk_in_scores_cb,
+                SamplingCTArgs::topk_in_scores_cb,
+                SamplingCTArgs::topk_out_scores_cb);
+        } else {
+            deepseek_compute_kernel_hw_startup<true>(
+                SamplingCTArgs::softmax_in_cb,
+                SamplingCTArgs::softmax_in_cb,
+                SamplingCTArgs::softmax_out_cb);
+        }
+    } else {
+        compute_kernel_hw_startup(0, 0, 0);
+    }
 #endif
 
     deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
-    deepseek_b1_ops::Sampling::
-        Op<ArgmaxCTArgs, Core::is_matmul_core, Core::is_argmax_final_core, Core::is_argmax_mesh_sender_core>
-            sampling_op;
+    deepseek_b1_ops::TopKSampling::Op<
+        SamplingCTArgs,
+        Core::sampling_is_active_core,
+        Core::sampling_is_final_core,
+        Core::sampling_mesh_sender_core>
+        sampling_op;
+
+#if defined(COMPILE_FOR_TRISC)
+    // Mirrors micro_ops/sampling/kernels/sampling_kernel.cpp:183 — without
+    // this, rand_tile_init() is never called and the LLK random tile
+    // generator falls back to its uninitialised default state, making the
+    // `sampling_seed` CT arg a no-op. Gated on sampling_is_active_core so
+    // non-sampling cores don't touch the SFPU rand state.
+    if constexpr (Core::sampling_is_active_core) {
+        sampling_op.set_seed(SamplingCTArgs::seed);
+    }
+#endif
 
     deepseek_b1_ops::Mcast::
         Op<McastCTArgs, Core::is_input_core, Core::is_mcast_receiver_core, Core::is_matmul_core, true>
@@ -741,7 +849,11 @@ void kernel_main() {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
-            constexpr uint32_t metadata_size = 64;
+            // Send the full DeepseekMetadata struct (header + reserved space for
+            // p_indices / p_scores). The trailing region is overwritten locally
+            // by sampling.hpp on the final core, but unicasting the whole struct
+            // keeps source/destination layouts in lockstep.
+            constexpr uint32_t metadata_size = sizeof(deepseek_b1_ops::DeepseekMetadata);
             constexpr uint32_t bcast_num_pages = 225;
             constexpr uint32_t activation_size_bytes = 14336;
             uint32_t rmsnorm_buffer_addr = get_read_ptr(rmsnorm_input_cb);
@@ -779,11 +891,27 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_BRISC)
         // Device-local fabric gate (pre-sampling acquire on argmax final core).
-        if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
+        if constexpr (Core::sampling_is_final_core && !Core::skip_ccl) {
             auto* argmax_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
             noc_semaphore_wait(argmax_turn_sem, 1);
             noc_semaphore_set(argmax_turn_sem, 0);
+        }
+
+        // Pre-sampling metadata barrier (single source of truth for both stages).
+        // The exit-device input core unicasts the DeepseekMetadata struct and
+        // increments `metadata_ready_semaphore_id` above. Sampling.hpp reads
+        // temperature / k / probability_mass_threshold off this struct on the
+        // base stage (enable_metadata=True), and the downstream `mtp` /
+        // `update_speculative_state` lambdas read tok0_*/slot_id from it
+        // unconditionally. Waiting + clearing here means neither downstream
+        // path needs its own wait, and avoids the prior race where sampling
+        // started before metadata had landed.
+        if constexpr (Core::sampling_is_final_core && Core::is_exit_device) {
+            volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
+            noc_semaphore_wait(metadata_ready_sem, 1);
+            noc_semaphore_set(metadata_ready_sem, 0);
         }
 #endif
 
@@ -802,7 +930,7 @@ void kernel_main() {
     // [MTP] Token unicast from argmax_final_core to input_core on exit device
     // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_argmax_final_core && Core::is_exit_device) {
+        if constexpr (Core::sampling_is_final_core && Core::is_exit_device) {
             uint64_t dst = get_noc_addr(mtp_input_core_noc_x, mtp_input_core_noc_y, mtp_token_addr);
             noc_async_write(mtp_argmax_output_addr, dst, 4);
             noc_async_write_barrier();
@@ -1013,7 +1141,7 @@ void kernel_main() {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::is_argmax_final_core) {
+        if constexpr (Core::sampling_is_final_core) {
             constexpr uint32_t reduce_done_num = get_named_compile_time_arg_val("reduce_gate_num_targets");
             auto* reduce_done_sem =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(Core::reduce_gate_semaphore_id));
@@ -1023,17 +1151,12 @@ void kernel_main() {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::is_argmax_final_core && Core::is_exit_device) {
-            // Wait for metadata unicast from exit input core (same buffer spec stage reads).
-            volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
-            noc_semaphore_wait(metadata_ready_sem, 1);
-            noc_semaphore_set(metadata_ready_sem, 0);
-
+        if constexpr (Core::sampling_is_final_core && Core::is_exit_device) {
+            // Metadata is guaranteed valid here: lm_head_sampling() waited and
+            // cleared `metadata_ready_semaphore_id` before sampling_op ran.
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
 
-            // Write token metadata to gather destination CB
             invalidate_l1_cache();
             uint32_t base_token_type = metadata_ptr->tok0_type;
             uint32_t base_token_pos = metadata_ptr->position_id;
@@ -1041,17 +1164,17 @@ void kernel_main() {
             uint32_t slot_id = metadata_ptr->slot_id;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
-            constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
+            constexpr uint32_t sampling_socket_cb = get_named_compile_time_arg_val("sampling_socket_cb");
             constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
 
             cb_reserve_back(eh_gather_dst_cb, eh_gather_num_pages);
             cb_push_back(eh_gather_dst_cb, eh_gather_num_pages);
 
-            cb_wait_front(argmax_socket_cb, 1);
-            uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
+            cb_wait_front(sampling_socket_cb, 1);
+            uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(sampling_socket_cb));
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos, 0, 0, 0, input_pos_id, slot_id);
-            cb_pop_front(argmax_socket_cb, 1);
+            cb_pop_front(sampling_socket_cb, 1);
         }
 #endif
     };
@@ -1071,20 +1194,17 @@ void kernel_main() {
     auto update_speculative_state = [&]() {
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (
-            Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
+            Core::sampling_is_final_core && SamplingCTArgs::defer_socket_output && SamplingCTArgs::socket_mode != 0) {
             DeviceZoneScopedN("MTP_VERIFY_SEND");
 
-            // Wait for metadata to be ready to read from unicast coming from input core
-            volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
-            noc_semaphore_wait(metadata_ready_sem, 1);
-            noc_semaphore_set(metadata_ready_sem, 0);
+            // Metadata is guaranteed valid here: lm_head_sampling() waited and
+            // cleared `metadata_ready_semaphore_id` before sampling_op ran.
 
-            // Read the speculative token from the argmax socket CB (produced by spec stage argmax)
-            constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
-            cb_wait_front(argmax_socket_cb, 1);
+            // Read the speculative token from the sampling socket CB (produced by spec stage)
+            constexpr uint32_t sampling_socket_cb = SamplingCTArgs::socket_cb_id;
+            cb_wait_front(sampling_socket_cb, 1);
             invalidate_l1_cache();
-            uint32_t spec_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
+            uint32_t spec_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(sampling_socket_cb));
 
             // Read the base token from metadata L1 (transferred by NCRISC during the broadcast phase)
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
@@ -1097,11 +1217,11 @@ void kernel_main() {
             uint32_t spec_token_type = TOKEN_TYPE_SPEC;
             uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
             uint32_t input_pos_id = metadata_ptr->position_id;
-            cb_pop_front(argmax_socket_cb, 1);
+            cb_pop_front(sampling_socket_cb, 1);
 
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
-                argmax_socket_cb,
+                sampling_socket_cb,
                 base_token_id,
                 base_token_type,
                 base_token_pos,
@@ -1139,7 +1259,7 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (
-            Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0 &&
+            Core::sampling_is_final_core && SamplingCTArgs::defer_socket_output && SamplingCTArgs::socket_mode != 0 &&
             Core::persistent_mode) {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
@@ -1147,22 +1267,22 @@ void kernel_main() {
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
-                    unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
+                    unified_kernels::socket_send_from_cb<SamplingCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
                 } else {
-                    unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
+                    unified_kernels::socket_send_from_cb<SamplingCTArgs::socket_mode>(
                         sampling_args.socket_config_addr,
-                        ArgmaxCTArgs::socket_cb_id,
+                        SamplingCTArgs::socket_cb_id,
                         1,
-                        ArgmaxCTArgs::socket_page_size_bytes);
+                        SamplingCTArgs::socket_page_size_bytes);
                 }
 
             } else if constexpr (Core::is_spec_stage) {
-                unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
+                unified_kernels::socket_send_from_cb<SamplingCTArgs::socket_mode>(
                     sampling_args.socket_config_addr,
-                    ArgmaxCTArgs::socket_cb_id,
+                    SamplingCTArgs::socket_cb_id,
                     1,
-                    ArgmaxCTArgs::socket_page_size_bytes);
+                    SamplingCTArgs::socket_page_size_bytes);
             }
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
@@ -1170,7 +1290,7 @@ void kernel_main() {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-        if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
+        if constexpr (Core::sampling_is_final_core && !Core::skip_ccl) {
             auto bcast_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_bcast_noc_x,
                 Core::fabric_gate_bcast_noc_y,

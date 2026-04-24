@@ -42,6 +42,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedKernelDescriptor,
 )
 from models.demos.deepseek_v3_b1.utils import (
+    float_to_bfloat16_packed,
     float_to_uint32,
     get_pinned_optimal_dram_bank_to_logical_worker_assignment,
     merge_kernel_defines,
@@ -263,9 +264,11 @@ class LMHeadSampling:
         argmax_final_mesh_coord=None,
         global_semaphore=None,
         global_stage2_semaphore=None,
-        fabric_scratch_tensor=None,
+        scores_scratch_tensor=None,
+        indices_scratch_tensor=None,
         bcast_semaphores=None,
         bcast_num_links=1,
+        seed=2005,
         fp32_dest_acc_en=False,
         epsilon=1e-6,
         rsqrt_fast_approx=False,
@@ -286,6 +289,7 @@ class LMHeadSampling:
         mtp_bcast_semaphores=None,
         base_token_buffer=None,
         input_core_fused_buffer=None,
+        k=32,
     ):
         logger.debug(f"broadcast sender_coord={sender_coord}")
         """
@@ -434,13 +438,30 @@ class LMHeadSampling:
         fused_buffer_tensors_per_device = (
             ttnn.get_device_tensors(input_core_fused_buffer) if input_core_fused_buffer is not None else None
         )
-        scratch_tensors_per_device = (
-            ttnn.get_device_tensors(fabric_scratch_tensor) if (enable_argmax and not skip_ccl) else None
+        # [Sampling] Per-device scratch tensors for mesh stage-1/stage-2 gather.
+        # scores_scratch_tensor: bf16-logical scratch (height-sharded on argmax_final_core_grid)
+        # indices_scratch_tensor: uint32 scratch (height-sharded on argmax_final_core_grid)
+        # These replace the single `fabric_scratch_tensor` that argmax used.
+        scores_scratch_tensors_per_device = (
+            ttnn.get_device_tensors(scores_scratch_tensor)
+            if (enable_argmax and not skip_ccl and scores_scratch_tensor is not None)
+            else None
+        )
+        indices_scratch_tensors_per_device = (
+            ttnn.get_device_tensors(indices_scratch_tensor)
+            if (enable_argmax and not skip_ccl and indices_scratch_tensor is not None)
+            else None
         )
         if enable_argmax and not skip_ccl:
-            if global_semaphore is None or global_stage2_semaphore is None or fabric_scratch_tensor is None:
+            if (
+                global_semaphore is None
+                or global_stage2_semaphore is None
+                or scores_scratch_tensor is None
+                or indices_scratch_tensor is None
+            ):
                 raise ValueError(
-                    "global_semaphore, global_stage2_semaphore, and fabric_scratch_tensor are required for mesh argmax"
+                    "global_semaphore, global_stage2_semaphore, scores_scratch_tensor, and "
+                    "indices_scratch_tensor are required for mesh sampling"
                 )
             if mesh_rows < 2 or mesh_cols != 2:
                 raise NotImplementedError(
@@ -570,10 +591,34 @@ class LMHeadSampling:
         h_gamma_cb = 11  # [MTP] RMSNorm gamma weights for hidden states on sender core (tensor-backed)
         e_gamma_cb = 12  # [MTP] RMSNorm gamma weights for embeddings on sender core (tensor-backed)
         mcast_eh_src_cb = 15  # [MTP] Fused [h_norm|e_norm] on sender core, both RMSNorms write here directly
-        argmax_winner_cb = 3
-        argmax_gather_cb = 4
-        argmax_indices_cb = 5
-        argmax_socket_cb = 6
+        # ----------------------------------------------------------------------
+        # Sampling (top-K + top-P + softmax) CB indices — replace the 4 legacy
+        # argmax CBs (winner/gather/indices/socket) with the full CB layout that
+        # models/demos/deepseek_v3_b1/micro_ops/sampling/op.py :: _op_mesh_topk
+        # uses. IDs are chosen to avoid conflicts with existing LM-head CBs
+        # (taken: 0,1,2,7-13,15-23,30) and leave headroom for future CBs.
+        #
+        # Per-core CBs (live on every matmul/argmax_core_grid core):
+        sampling_winner_cb = 3  # local top-K winners (scores + indices, packed)
+        sampling_topk_in_scores_cb = 4  # LLK topk input scores (phase1 local + phase2 gather)
+        sampling_topk_in_indices_cb = 5  # LLK topk input indices (phase1 local + phase2 gather)
+        sampling_topk_out_scores_cb = 6  # LLK topk output scores (1 tile)
+        sampling_topk_out_indices_cb = 14  # LLK topk output indices (1 tile)
+        # Final-core-only compute CBs (softmax / top-P / RNG — 1 bf16 tile each):
+        sampling_softmax_in_cb = 24
+        sampling_softmax_out_cb = 25
+        sampling_softmax_exp_cb = 26
+        sampling_softmax_sub_cb = 27
+        sampling_max_cb = 28
+        sampling_sum_cb = 29
+        sampling_scaler_cb = 31
+        sampling_temp_cb = 32
+        sampling_rand_cb = 33
+        # Mesh-stage scratch CBs (live on stage-1 / stage-2 receiver = final core):
+        sampling_mesh_stage_scores_cb = 34
+        sampling_mesh_stage_indices_cb = 35
+        # Deferred-socket output CB (final core only):
+        sampling_socket_cb = 36
         matmul_out_cb = 16  # Matmul output on matmul cores (tensor-backed)
         matmul_out_eh_cb = 17  # [MTP] EH matmul output on matmul cores (tensor-backed)
         mcast_eh_dst_cb = 18  # [MTP] Second mcast destination
@@ -885,7 +930,9 @@ class LMHeadSampling:
                     argmax_num_senders = len(argmax_cores_row_wise)
                     argmax_expected_remote_incs = argmax_num_senders - 1
                     argmax_sender_idx_lookup = {(c.x, c.y): idx for idx, c in enumerate(argmax_cores_row_wise)}
-                    argmax_winner_page_bytes = 16
+                    # `sampling_winner_page_bytes` is computed below from
+                    # `sampling_topk_scores_slot_bytes + sampling_topk_indices_slot_bytes`
+                    # (sampling.hpp uses it to size the local winner-CB NOC writes).
                     argmax_mesh_mode = 0
                     argmax_stage1_sender = 0
                     argmax_stage1_receiver = 0
@@ -904,6 +951,101 @@ class LMHeadSampling:
                     sender_link_idx = 0
                     dest_coord = ttnn.MeshCoordinate(row, col)
                     per_core_brisc_runtime_args = []
+
+                    # ----------------------------------------------------------------
+                    # [Sampling] hyperparameter pre-computation.
+                    # Keep definitions identical to the mesh top-K micro-op
+                    # (micro_ops/sampling/op.py :: _op_mesh_topk) so the mesh
+                    # sender addressing in the per-core RT args below lines up
+                    # with the CB layout assembled later in this function.
+                    # ----------------------------------------------------------------
+                    sampling_topk_k = 32
+                    sampling_topk_min_alignment = 32
+                    sampling_l1_alignment = 16
+                    sampling_bf16_tile_size = 2 * 32 * 32  # 2048
+                    sampling_uint32_tile_size = 4 * 32 * 32  # 4096
+                    sampling_topk_scores_slot_bytes = (
+                        ((sampling_topk_min_alignment * 2) + sampling_l1_alignment - 1)
+                        // sampling_l1_alignment
+                    ) * sampling_l1_alignment
+                    sampling_topk_indices_slot_bytes = (
+                        ((sampling_topk_min_alignment * 4) + sampling_l1_alignment - 1)
+                        // sampling_l1_alignment
+                    ) * sampling_l1_alignment
+                    sampling_winner_page_bytes = (
+                        sampling_topk_scores_slot_bytes + sampling_topk_indices_slot_bytes
+                    )
+                    # Stage-1 scores/indices precede stage-2 in the receiver's
+                    # scratch tensors (one tensor for scores, one for indices).
+                    sampling_stage1_num_slots = mesh_rows
+                    sampling_stage2_num_slots = mesh_cols
+                    sampling_stage1_mesh_tiles = (
+                        sampling_stage1_num_slots * sampling_topk_min_alignment + 1023
+                    ) // 1024
+                    sampling_stage2_scores_scratch_offset = (
+                        sampling_stage1_mesh_tiles * sampling_bf16_tile_size
+                    )
+                    sampling_stage2_indices_scratch_offset = (
+                        sampling_stage1_mesh_tiles * sampling_uint32_tile_size
+                    )
+                    # Phase-2 offsets inside the per-core topk_in_{scores,indices}_cb.
+                    sampling_phase1_tiles = (n_per_core + 1023) // 1024
+                    sampling_phase2_scores_byte_offset = (
+                        sampling_phase1_tiles * sampling_bf16_tile_size
+                    )
+                    sampling_phase2_indices_byte_offset = (
+                        sampling_phase1_tiles * sampling_uint32_tile_size
+                    )
+                    sampling_stage2_mesh_tiles = (
+                        sampling_stage2_num_slots * sampling_topk_min_alignment + 1023
+                    ) // 1024
+                    # Per-stage CT-arg values:
+                    #   * BaseLMHeadStage (default + MTP base): k=32, enable_metadata=1,
+                    #     copy_probabilities=1; k/p/temperature actually consumed at
+                    #     runtime from the metadata packet.
+                    #   * SpecLMHeadStage (is_mtp_verify_stage): k=1, no metadata copy.
+                    if is_mtp_verify_stage:
+                        sampling_topk_k_value = 1
+                        sampling_enable_metadata_value = 0
+                        sampling_copy_probabilities_value = 0
+                    else:
+                        sampling_topk_k_value = sampling_topk_k
+                        sampling_enable_metadata_value = 1
+                        sampling_copy_probabilities_value = 1
+                    # Canonical packings, matching micro_ops/sampling/op.py:
+                    #   * inv_temp_bf16: two copies of bf16(1/temp) packed into uint32
+                    #     (the LLK softmax recip helper consumes both halves).
+                    #   * p_bf16: float32 bit pattern of `p`. (Naming is legacy; the
+                    #     kernel does __builtin_bit_cast<float>(uint32_t).)
+                    # These defaults only matter when sampling_enable_metadata=0
+                    # (spec stage); base stage overwrites k/p/temperature from the
+                    # runtime metadata packet.
+                    sampling_inv_temp_bf16 = float_to_bfloat16_packed(1.0)
+                    sampling_p_bf16 = float_to_uint32(1.0)
+                    # sampling.hpp dereferences `CTArgs::output_addr` unconditionally
+                    # (writes the selected token index to L1) — so passing 0 would
+                    # crash. The matching RT slot in ReaderArgs is declared but never
+                    # consumed inside sampling.hpp. We thread the per-device output
+                    # tensor address here. Rand output remains 0 (kernel-side guarded
+                    # by `if constexpr (rand_output_addr != 0)`).
+                    sampling_output_addr_ct = (
+                        int(output_index_tensor_device.buffer_address())
+                        if output_index_tensor_device is not None
+                        else 0
+                    )
+                    # Scratch tensor addresses are program-build-time-known and used
+                    # as CT args by sampling.hpp (NCRISC reader). Mirrors how
+                    # micro_ops/sampling/op.py wires them.
+                    sampling_scores_scratch_addr_ct = (
+                        int(scores_scratch_tensors_per_device[device_idx].buffer_address())
+                        if (not skip_ccl and scores_scratch_tensors_per_device is not None)
+                        else 0
+                    )
+                    sampling_indices_scratch_addr_ct = (
+                        int(indices_scratch_tensors_per_device[device_idx].buffer_address())
+                        if (not skip_ccl and indices_scratch_tensors_per_device is not None)
+                        else 0
+                    )
 
                     if not skip_ccl:
                         target_row = int(argmax_final_mesh_coord[0])
@@ -927,7 +1069,7 @@ class LMHeadSampling:
                         argmax_stage1_slot_base_offset = 0
                         argmax_stage1_num_slots = mesh_rows
                         argmax_stage2_slot_base_offset = (
-                            argmax_stage1_slot_base_offset + argmax_stage1_num_slots * argmax_winner_page_bytes
+                            argmax_stage1_slot_base_offset + argmax_stage1_num_slots * sampling_winner_page_bytes
                         )
                         argmax_stage2_num_slots = mesh_cols
                         argmax_stage1_expected_remote_incs = mesh_rows - 1
@@ -937,10 +1079,10 @@ class LMHeadSampling:
                         argmax_stage2_sender = 1 if (row == target_row and col != target_col) else 0
                         argmax_stage2_receiver = 1 if (row == target_row and col == target_col) else 0
                         argmax_stage1_local_slot_offset = (
-                            argmax_stage1_slot_base_offset + row * argmax_winner_page_bytes
+                            argmax_stage1_slot_base_offset + row * sampling_winner_page_bytes
                         )
                         argmax_stage2_local_slot_offset = (
-                            argmax_stage2_slot_base_offset + col * argmax_winner_page_bytes
+                            argmax_stage2_slot_base_offset + col * sampling_winner_page_bytes
                         )
                         is_argmax_mesh_sender_core = bool(argmax_stage1_sender or argmax_stage2_sender)
                         argmax_mesh_local_send_slot_offset = (
@@ -950,25 +1092,50 @@ class LMHeadSampling:
                         if is_argmax_mesh_sender_core:
                             if argmax_stage1_sender:
                                 dest_coord = ttnn.MeshCoordinate(target_row, col)
-                                send_slot_offset = argmax_stage1_slot_base_offset + row * argmax_winner_page_bytes
                                 sender_dst_sem_addr = global_sem_addr
                                 sender_link_idx = _x_axis_link_idx_for_stage1_sender(row)
                             else:
                                 dest_coord = ttnn.MeshCoordinate(target_row, target_col)
-                                send_slot_offset = argmax_stage2_slot_base_offset + col * argmax_winner_page_bytes
                                 sender_dst_sem_addr = global_stage2_sem_addr
                                 sender_link_idx = 0
 
                             dest_idx = int(dest_coord[0]) * mesh_cols + int(dest_coord[1])
+                            # [Sampling] mesh-sender writes its local top-K winner
+                            # (scores + indices) into the receiver's two scratch
+                            # tensors — scores into `scores_scratch`, indices into
+                            # `indices_scratch`. Slot layout mirrors _op_mesh_topk.
+                            dest_scores_scratch_base = int(
+                                scores_scratch_tensors_per_device[dest_idx].buffer_address()
+                            )
+                            dest_indices_scratch_base = int(
+                                indices_scratch_tensors_per_device[dest_idx].buffer_address()
+                            )
+                            if argmax_stage1_sender:
+                                dst_scores_addr = (
+                                    dest_scores_scratch_base + row * sampling_topk_scores_slot_bytes
+                                )
+                                dst_indices_addr = (
+                                    dest_indices_scratch_base + row * sampling_topk_indices_slot_bytes
+                                )
+                            else:
+                                dst_scores_addr = (
+                                    dest_scores_scratch_base
+                                    + sampling_stage2_scores_scratch_offset
+                                    + col * sampling_topk_scores_slot_bytes
+                                )
+                                dst_indices_addr = (
+                                    dest_indices_scratch_base
+                                    + sampling_stage2_indices_scratch_offset
+                                    + col * sampling_topk_indices_slot_bytes
+                                )
                             per_core_brisc_runtime_args.append(
                                 (
                                     argmax_final_core,
                                     [
-                                        int(argmax_mesh_local_send_slot_offset),
                                         int(mesh_device.get_fabric_node_id(dest_coord).mesh_id),
                                         int(mesh_device.get_fabric_node_id(dest_coord).chip_id),
-                                        int(scratch_tensors_per_device[dest_idx].buffer_address())
-                                        + int(send_slot_offset),
+                                        int(dst_scores_addr),
+                                        int(dst_indices_addr),
                                         int(sender_dst_sem_addr),
                                     ],
                                 )
@@ -1116,31 +1283,50 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     # Argmax sampling
-                    ("argmax_num_values", argmax_num_values),
-                    ("argmax_winner_page_bytes", argmax_winner_page_bytes),
-                    ("argmax_num_senders", argmax_num_senders),
-                    ("argmax_expected_remote_incs", argmax_expected_remote_incs),
-                    ("argmax_receiver_semaphore_id", argmax_receiver_semaphore_id),
-                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
-                    ("argmax_mesh_mode", argmax_mesh_mode),
-                    ("argmax_stage1_sender", argmax_stage1_sender),
-                    ("argmax_stage1_receiver", argmax_stage1_receiver),
-                    ("argmax_stage2_sender", argmax_stage2_sender),
-                    ("argmax_stage2_receiver", argmax_stage2_receiver),
-                    ("argmax_stage1_slot_base_offset", argmax_stage1_slot_base_offset),
-                    ("argmax_stage1_num_slots", argmax_stage1_num_slots),
-                    ("argmax_stage1_expected_remote_incs", argmax_stage1_expected_remote_incs),
-                    ("argmax_stage1_local_slot_offset", argmax_stage1_local_slot_offset),
-                    ("argmax_stage2_slot_base_offset", argmax_stage2_slot_base_offset),
-                    ("argmax_stage2_num_slots", argmax_stage2_num_slots),
-                    ("argmax_stage2_expected_remote_incs", argmax_stage2_expected_remote_incs),
-                    ("argmax_stage2_local_slot_offset", argmax_stage2_local_slot_offset),
-                    ("argmax_mesh_local_send_slot_offset", argmax_mesh_local_send_slot_offset),
-                    ("argmax_gather_cb", argmax_gather_cb),
-                    ("argmax_indices_cb", argmax_indices_cb),
-                    ("argmax_socket_mode", argmax_socket_mode),
-                    ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
-                    ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    ("sampling_num_values", argmax_num_values),
+                    ("sampling_winner_page_bytes", sampling_winner_page_bytes),
+                    ("sampling_num_senders", argmax_num_senders),
+                    ("sampling_expected_remote_incs", argmax_expected_remote_incs),
+                    ("sampling_receiver_semaphore_id", argmax_receiver_semaphore_id),
+                    ("sampling_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
+                    ("sampling_mesh_mode", argmax_mesh_mode),
+                    ("sampling_stage1_sender", argmax_stage1_sender),
+                    ("sampling_stage1_receiver", argmax_stage1_receiver),
+                    ("sampling_stage2_sender", argmax_stage2_sender),
+                    ("sampling_stage2_receiver", argmax_stage2_receiver),
+                    ("sampling_stage1_slot_base_offset", argmax_stage1_slot_base_offset),
+                    ("sampling_stage1_num_slots", argmax_stage1_num_slots),
+                    ("sampling_stage1_expected_remote_incs", argmax_stage1_expected_remote_incs),
+                    ("sampling_stage1_local_slot_offset", argmax_stage1_local_slot_offset),
+                    ("sampling_stage2_slot_base_offset", argmax_stage2_slot_base_offset),
+                    ("sampling_stage2_num_slots", argmax_stage2_num_slots),
+                    ("sampling_stage2_expected_remote_incs", argmax_stage2_expected_remote_incs),
+                    ("sampling_stage2_local_slot_offset", argmax_stage2_local_slot_offset),
+                    ("sampling_mesh_local_send_slot_offset", argmax_mesh_local_send_slot_offset),
+                    ("sampling_socket_mode", argmax_socket_mode),
+                    ("sampling_socket_cb", sampling_socket_cb if enable_socket_output else 0),
+                    ("sampling_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    # ── Sampling kernel additions (sampling.hpp ReaderCTArgs) ────
+                    ("sampling_topk_k", sampling_topk_k_value),
+                    ("sampling_winner_cb", sampling_winner_cb),
+                    ("sampling_softmax_in_cb", sampling_softmax_in_cb),
+                    ("sampling_softmax_out_cb", sampling_softmax_out_cb),
+                    ("sampling_softmax_exp_cb", sampling_softmax_exp_cb),
+                    ("sampling_scaler_cb", sampling_scaler_cb),
+                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
+                    ("sampling_topk_in_scores_cb", sampling_topk_in_scores_cb),
+                    ("sampling_topk_in_indices_cb", sampling_topk_in_indices_cb),
+                    ("sampling_topk_out_scores_cb", sampling_topk_out_scores_cb),
+                    ("sampling_topk_out_indices_cb", sampling_topk_out_indices_cb),
+                    ("sampling_phase2_scores_byte_offset", sampling_phase2_scores_byte_offset),
+                    ("sampling_phase2_indices_byte_offset", sampling_phase2_indices_byte_offset),
+                    ("sampling_mesh_stage_scores_cb", sampling_mesh_stage_scores_cb),
+                    ("sampling_mesh_stage_indices_cb", sampling_mesh_stage_indices_cb),
+                    ("sampling_scores_scratch_stage2_offset", sampling_stage2_scores_scratch_offset),
+                    ("sampling_indices_scratch_stage2_offset", sampling_stage2_indices_scratch_offset),
+                    ("sampling_scores_scratch_addr", sampling_scores_scratch_addr_ct),
+                    ("sampling_indices_scratch_addr", sampling_indices_scratch_addr_ct),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
@@ -1190,7 +1376,7 @@ class LMHeadSampling:
                     ("embedding_size_bytes", embedding_dim * 2 if enable_mtp_on_device else 0),
                     # Sender core NOC for L1-to-L1 copy (embedding region in mcast_eh_src_cb -> embedding_cb)
                     ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
-                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
+                    ("sampling_defer_socket_output", 1 if enable_socket_output else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("has_bypass_socket_output", 0),
@@ -1257,11 +1443,27 @@ class LMHeadSampling:
                     ("matmul_eh_out", matmul_out_eh_cb),
                     ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp_on_device else 0),
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
-                    ("argmax_winner_page_bytes", argmax_winner_page_bytes),
-                    ("argmax_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
-                    ("argmax_socket_mode", argmax_socket_mode),
-                    ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
-                    ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    ("sampling_winner_page_bytes", sampling_winner_page_bytes),
+                    ("sampling_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
+                    ("sampling_socket_mode", argmax_socket_mode),
+                    ("sampling_socket_cb", sampling_socket_cb if enable_socket_output else 0),
+                    ("sampling_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
+                    # ── Sampling kernel additions (sampling.hpp WriterCTArgs) ────
+                    ("sampling_topk_k", sampling_topk_k_value),
+                    ("sampling_softmax_out_cb", sampling_softmax_out_cb),
+                    ("sampling_rand_cb", sampling_rand_cb),
+                    ("sampling_winner_cb", sampling_winner_cb),
+                    ("sampling_p_bf16", sampling_p_bf16),
+                    ("sampling_topk_scores_slot_bytes", sampling_topk_scores_slot_bytes),
+                    ("sampling_mesh_mode", argmax_mesh_mode),
+                    ("sampling_stage2_receiver", argmax_stage2_receiver),
+                    ("sampling_output_addr", sampling_output_addr_ct),
+                    ("sampling_rand_output_addr", 0),
+                    ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
+                    ("sampling_softmax_in_cb", sampling_softmax_in_cb),
+                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_enable_metadata", sampling_enable_metadata_value),
+                    ("sampling_copy_probabilities", sampling_copy_probabilities_value),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
@@ -1292,7 +1494,7 @@ class LMHeadSampling:
                     ("mcast_eh_src_num_pages", rms_num_tiles if enable_mtp_on_device else 0),
                     ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
                     ("reduce_gate_num_targets", reduce_num_fabric_and_worker_cores),
-                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
+                    ("sampling_defer_socket_output", 1 if enable_socket_output else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("eh_matmul_num_cores", eh_matmul_num_cores if enable_mtp_on_device else 0),
@@ -1404,23 +1606,64 @@ class LMHeadSampling:
                     ("reduce_output_cb", reduce_output_cb),
                     ("reduce_scratch_cb", reduce_scratch_cb),
                     ("is_e_norm_device", 1 if is_e_norm_device else 0),
+                    # ── Sampling kernel additions (sampling.hpp ComputeCTArgs) ──
+                    ("sampling_softmax_in_cb", sampling_softmax_in_cb),
+                    ("sampling_softmax_out_cb", sampling_softmax_out_cb),
+                    ("sampling_softmax_exp_cb", sampling_softmax_exp_cb),
+                    ("sampling_softmax_sub_cb", sampling_softmax_sub_cb),
+                    ("sampling_max_cb", sampling_max_cb),
+                    ("sampling_sum_cb", sampling_sum_cb),
+                    ("sampling_scaler_cb", sampling_scaler_cb),
+                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_rand_cb", sampling_rand_cb),
+                    ("sampling_seed", int(seed) & 0xFFFFFFFF),
+                    ("sampling_topk_k", sampling_topk_k_value),
+                    ("sampling_mesh_mode", argmax_mesh_mode),
+                    ("sampling_stage1_receiver", argmax_stage1_receiver),
+                    ("sampling_stage2_receiver", argmax_stage2_receiver),
+                    ("sampling_num_values", argmax_num_values),
+                    ("sampling_num_senders", argmax_num_senders),
+                    ("sampling_topk_in_scores_cb", sampling_topk_in_scores_cb),
+                    ("sampling_topk_in_indices_cb", sampling_topk_in_indices_cb),
+                    ("sampling_topk_out_scores_cb", sampling_topk_out_scores_cb),
+                    ("sampling_topk_out_indices_cb", sampling_topk_out_indices_cb),
+                    ("sampling_mesh_stage_scores_cb", sampling_mesh_stage_scores_cb),
+                    ("sampling_mesh_stage_indices_cb", sampling_mesh_stage_indices_cb),
+                    ("sampling_stage1_row_elements", sampling_stage1_num_slots * sampling_topk_min_alignment),
+                    ("sampling_stage1_num_input_tiles", sampling_stage1_mesh_tiles),
+                    ("sampling_stage2_row_elements", sampling_stage2_num_slots * sampling_topk_min_alignment),
+                    ("sampling_stage2_num_input_tiles", sampling_stage2_mesh_tiles),
                 ]
 
                 # ================================================================
                 # CCL Broadcast common runtime args
                 # ================================================================
-                argmax_scratch_addr = (
-                    int(scratch_tensors_per_device[device_idx].buffer_address()) if not skip_ccl else 0
+                # [Sampling] argmax's single scratch_addr (RT) is dropped here:
+                # in sampling.hpp the scores_scratch_addr / indices_scratch_addr
+                # are passed as CT args (added to the NCRISC named CT-arg list
+                # below). RT layout follows sampling.hpp::ReaderArgs exactly:
+                #   scores_addr, indices_addr, output_addr, final_noc_x,
+                #   final_noc_y, global_sem_addr, global_stage2_sem_addr
+                sampling_scores_scratch_addr = (
+                    int(scores_scratch_tensors_per_device[device_idx].buffer_address())
+                    if (not skip_ccl and scores_scratch_tensors_per_device is not None)
+                    else 0
                 )
+                sampling_indices_scratch_addr = (
+                    int(indices_scratch_tensors_per_device[device_idx].buffer_address())
+                    if (not skip_ccl and indices_scratch_tensors_per_device is not None)
+                    else 0
+                )
+                sampling_scores_addr = int(output_tensor_device.buffer_address())
 
                 ncrisc_bcast_common_args = (
                     bcast_config.get_ncrisc_common_rt_args(coord)
                     + [
+                        sampling_scores_addr,
                         int(indices_tensor_device.buffer_address()),
                         int(output_index_tensor_device.buffer_address()),
                         int(final_core_phys.x),
                         int(final_core_phys.y),
-                        argmax_scratch_addr,
                         global_sem_addr,
                         global_stage2_sem_addr,
                     ]
@@ -1437,7 +1680,11 @@ class LMHeadSampling:
                     + [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
-                        argmax_scratch_addr,
+                        # [Sampling] BRISC doesn't need a global scratch addr —
+                        # per-core mesh sender RT args supply dst_{scores,indices}_addr
+                        # directly. The corresponding kernel-side
+                        # `.scratch_addr = get_common_arg_val(...)` slot must be
+                        # removed when the kernel is swapped to sampling.hpp.
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
                         persistent_enable,
                         int(persistent_target_input_core_phys.x),
@@ -1513,11 +1760,11 @@ class LMHeadSampling:
                 # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
                 matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor_device)
 
-                if enable_argmax:
-                    # CB 5: Argmax indices — tensor-backed on matmul/argmax cores
-                    argmax_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        argmax_indices_cb, indices_tensor_device
-                    )
+                # NOTE: The sampling kernel (unlike argmax) reads the per-core
+                # indices shard via noc_async_read from its buffer_address
+                # (passed as a runtime arg), not via a tensor-backed CB. So
+                # there is no CB binding for indices_tensor_device here —
+                # sampling_topk_in_indices_cb is a plain L1 CB allocated below.
 
                 # CB 16: Matmul output — tensor-backed on matmul cores
                 matmul_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_out_cb, output_tensor_device)
@@ -1654,48 +1901,202 @@ class LMHeadSampling:
                 if enable_mtp_on_device:
                     cbs_list.extend(mtp_cb_descriptors)
                 if enable_argmax:
-                    argmax_winner_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=argmax_winner_page_bytes,
+                    # ----------------------------------------------------------------
+                    # Sampling (top-K + top-P + softmax) CB descriptors.
+                    # Layout + sizing is copied from
+                    #   models/demos/deepseek_v3_b1/micro_ops/sampling/op.py
+                    # :: _op_mesh_topk (the multi-device mesh path).
+                    # ----------------------------------------------------------------
+                    sampling_l1_alignment = 16
+                    sampling_bf16_tile_size = 2 * 32 * 32  # 2048
+                    sampling_uint32_tile_size = 4 * 32 * 32  # 4096
+                    sampling_topk_min_alignment = 32
+
+                    def _sampling_round_up(value: int, alignment: int) -> int:
+                        return ((value + alignment - 1) // alignment) * alignment
+
+                    # Winner = K scores (bf16) + K indices (uint32), each padded up
+                    # to 16B L1 alignment. Matches micro-op's topk_min_alignment=32.
+                    sampling_topk_scores_slot_bytes = _sampling_round_up(
+                        sampling_topk_min_alignment * 2, sampling_l1_alignment
+                    )
+                    sampling_topk_indices_slot_bytes = _sampling_round_up(
+                        sampling_topk_min_alignment * 4, sampling_l1_alignment
+                    )
+                    sampling_winner_page_bytes = (
+                        sampling_topk_scores_slot_bytes + sampling_topk_indices_slot_bytes
+                    )
+
+                    # Phase-1 input = local per-core scores shard (num_values = n_per_core);
+                    # Phase-2 input = gathered top-K scores from all cores on this device.
+                    sampling_phase1_tiles = (n_per_core + 1023) // 1024
+                    sampling_phase2_tiles = (
+                        sampling_topk_min_alignment * argmax_num_senders + 1023
+                    ) // 1024
+                    sampling_total_input_tiles = sampling_phase1_tiles + sampling_phase2_tiles
+
+                    # Mesh-stage scratch sizing (stage-1 merges across mesh rows,
+                    # stage-2 merges across mesh cols on the final receiver core).
+                    sampling_stage1_num_slots = mesh_rows
+                    sampling_stage2_num_slots = mesh_cols
+                    sampling_stage1_mesh_tiles = (
+                        sampling_stage1_num_slots * sampling_topk_min_alignment + 1023
+                    ) // 1024
+                    sampling_stage2_mesh_tiles = (
+                        sampling_stage2_num_slots * sampling_topk_min_alignment + 1023
+                    ) // 1024
+                    sampling_total_mesh_stage_tiles = (
+                        sampling_stage1_mesh_tiles + sampling_stage2_mesh_tiles
+                    )
+
+                    sampling_final_core_crs = ttnn.CoreRangeSet(
+                        [ttnn.CoreRange(argmax_final_core, argmax_final_core)]
+                    )
+
+                    # --- Per-core CBs (all matmul / argmax_core_grid cores) -----------
+                    sampling_winner_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=sampling_winner_page_bytes,
                         core_ranges=argmax_core_grid,
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(
-                                buffer_index=argmax_winner_cb,
+                                buffer_index=sampling_winner_cb,
                                 data_format=ttnn.uint32,
-                                page_size=argmax_winner_page_bytes,
+                                page_size=sampling_winner_page_bytes,
                             )
                         ],
                     )
-                    argmax_gather_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=argmax_winner_page_bytes * argmax_num_senders,
+                    sampling_topk_in_scores_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=sampling_total_input_tiles * sampling_bf16_tile_size,
                         core_ranges=argmax_core_grid,
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(
-                                buffer_index=argmax_gather_cb,
-                                data_format=ttnn.uint32,
-                                page_size=argmax_winner_page_bytes,
+                                buffer_index=sampling_topk_in_scores_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=sampling_bf16_tile_size,
                             )
                         ],
                     )
+                    sampling_topk_in_indices_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=sampling_total_input_tiles * sampling_uint32_tile_size,
+                        core_ranges=argmax_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=sampling_topk_in_indices_cb,
+                                data_format=ttnn.uint32,
+                                page_size=sampling_uint32_tile_size,
+                            )
+                        ],
+                    )
+                    sampling_topk_out_scores_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=sampling_bf16_tile_size,
+                        core_ranges=argmax_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=sampling_topk_out_scores_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=sampling_bf16_tile_size,
+                            )
+                        ],
+                    )
+                    sampling_topk_out_indices_cb_descriptor = ttnn.CBDescriptor(
+                        total_size=sampling_uint32_tile_size,
+                        core_ranges=argmax_core_grid,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=sampling_topk_out_indices_cb,
+                                data_format=ttnn.uint32,
+                                page_size=sampling_uint32_tile_size,
+                            )
+                        ],
+                    )
+
                     cbs_list.extend(
                         [
-                            argmax_winner_cb_descriptor,
-                            argmax_gather_cb_descriptor,
-                            argmax_indices_cb_descriptor,
+                            sampling_winner_cb_descriptor,
+                            sampling_topk_in_scores_cb_descriptor,
+                            sampling_topk_in_indices_cb_descriptor,
+                            sampling_topk_out_scores_cb_descriptor,
+                            sampling_topk_out_indices_cb_descriptor,
                         ]
                     )
+
+                    # --- Final-core-only softmax / top-P / RNG compute CBs ------------
+                    # Each is a single bf16 tile (2 KB). Mirrors the final-device
+                    # block in _op_mesh_topk under `is_final_mesh_device`.
+                    for _sampling_compute_cb_id in (
+                        sampling_softmax_in_cb,
+                        sampling_softmax_out_cb,
+                        sampling_softmax_exp_cb,
+                        sampling_softmax_sub_cb,
+                        sampling_max_cb,
+                        sampling_sum_cb,
+                        sampling_scaler_cb,
+                        sampling_temp_cb,
+                        sampling_rand_cb,
+                    ):
+                        cbs_list.append(
+                            ttnn.CBDescriptor(
+                                total_size=sampling_bf16_tile_size,
+                                core_ranges=sampling_final_core_crs,
+                                format_descriptors=[
+                                    ttnn.CBFormatDescriptor(
+                                        buffer_index=_sampling_compute_cb_id,
+                                        data_format=ttnn.bfloat16,
+                                        page_size=sampling_bf16_tile_size,
+                                    )
+                                ],
+                            )
+                        )
+
+                    # --- Mesh-stage scratch CBs (stage-1 / stage-2 receiver) ----------
+                    # Only allocated on the final core. In the stand-alone micro-op
+                    # these are tensor-backed by caller-supplied scores_scratch /
+                    # indices_scratch tensors; here we allocate them as plain L1
+                    # CBs for now. If/when the fused op gains scratch-tensor
+                    # parameters they can be swapped to cb_descriptor_from_sharded_tensor.
+                    if mesh_rows > 1 or mesh_cols > 1:
+                        cbs_list.append(
+                            ttnn.CBDescriptor(
+                                total_size=sampling_total_mesh_stage_tiles * sampling_bf16_tile_size,
+                                core_ranges=sampling_final_core_crs,
+                                format_descriptors=[
+                                    ttnn.CBFormatDescriptor(
+                                        buffer_index=sampling_mesh_stage_scores_cb,
+                                        data_format=ttnn.bfloat16,
+                                        page_size=sampling_bf16_tile_size,
+                                    )
+                                ],
+                            )
+                        )
+                        cbs_list.append(
+                            ttnn.CBDescriptor(
+                                total_size=sampling_total_mesh_stage_tiles * sampling_uint32_tile_size,
+                                core_ranges=sampling_final_core_crs,
+                                format_descriptors=[
+                                    ttnn.CBFormatDescriptor(
+                                        buffer_index=sampling_mesh_stage_indices_cb,
+                                        data_format=ttnn.uint32,
+                                        page_size=sampling_uint32_tile_size,
+                                    )
+                                ],
+                            )
+                        )
+
+                    # --- Deferred socket output CB (final core, same page/role
+                    # as the old argmax_socket_cb) ------------------------------------
                     if enable_socket_output:
-                        argmax_socket_cb_descriptor = ttnn.CBDescriptor(
+                        sampling_socket_cb_descriptor = ttnn.CBDescriptor(
                             total_size=socket_page_size_bytes,
-                            core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
+                            core_ranges=sampling_final_core_crs,
                             format_descriptors=[
                                 ttnn.CBFormatDescriptor(
-                                    buffer_index=argmax_socket_cb,
+                                    buffer_index=sampling_socket_cb,
                                     data_format=ttnn.uint32,
                                     page_size=socket_page_size_bytes,
                                 )
                             ],
                         )
-                        cbs_list.append(argmax_socket_cb_descriptor)
+                        cbs_list.append(sampling_socket_cb_descriptor)
 
                 bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(coord)
                 if bcast_pkt_cb_descriptor is not None:
@@ -1911,7 +2312,7 @@ class LMHeadSampling:
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_argmax_core",
+                            named_compile_time_arg="sampling_is_active_core",
                             core_range=argmax_core_grid,
                             value=1 if enable_argmax else 0,
                             other_value=0,
@@ -1934,13 +2335,13 @@ class LMHeadSampling:
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_argmax_final_core",
+                            named_compile_time_arg="sampling_is_final_core",
                             core_range=argmax_final_core,
                             value=1,
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="is_argmax_mesh_sender_core",
+                            named_compile_time_arg="sampling_mesh_sender_core",
                             core_range=argmax_final_core,
                             value=1 if is_argmax_mesh_sender_core else 0,
                             other_value=0,
@@ -1994,7 +2395,7 @@ class LMHeadSampling:
                             if not enable_argmax
                             else [
                                 PerCoreCompileTimeDescriptor(
-                                    named_compile_time_arg="argmax_sender_idx",
+                                    named_compile_time_arg="sampling_sender_idx",
                                     core_values=[
                                         (core, argmax_sender_idx_lookup[(core.x, core.y)])
                                         for core in argmax_cores_row_wise
@@ -2044,9 +2445,9 @@ class LMHeadSampling:
                         mcast_receiver_role_cores.update((c.x, c.y) for c in group_cores)
                     if group.compile_time_arg_values.get("is_matmul_core", 0) == 1:
                         matmul_role_cores.update((c.x, c.y) for c in group_cores)
-                    if group.compile_time_arg_values.get("is_argmax_core", 0) == 1:
+                    if group.compile_time_arg_values.get("sampling_is_active_core", 0) == 1:
                         argmax_role_cores.update((c.x, c.y) for c in group_cores)
-                    if group.compile_time_arg_values.get("is_argmax_final_core", 0) == 1:
+                    if group.compile_time_arg_values.get("sampling_is_final_core", 0) == 1:
                         argmax_final_role_cores.update((c.x, c.y) for c in group_cores)
 
                 expected_input_role_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(mcast_sender_core_grid)}
@@ -2081,11 +2482,12 @@ class LMHeadSampling:
                         extra = sorted(argmax_role_cores - expected_matmul_role_cores)[:16]
                         raise RuntimeError(
                             "Unified kernel role mapping mismatch: "
-                            f"is_argmax_core core-set mismatch. missing={missing}, extra={extra}"
+                            f"sampling_is_active_core core-set mismatch. missing={missing}, extra={extra}"
                         )
                     if len(argmax_final_role_cores) != 1:
                         raise RuntimeError(
-                            "Unified kernel role mapping mismatch: " "is_argmax_final_core must map to exactly one core"
+                            "Unified kernel role mapping mismatch: "
+                            "sampling_is_final_core must map to exactly one core"
                         )
 
                 program = ttnn.ProgramDescriptor(
@@ -2120,7 +2522,7 @@ class LMHeadSampling:
                     )
 
                 if not skip_ccl and is_argmax_mesh_sender_core:
-                    sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)
+                    sender_group = kernel_result.get_group_by_arg("sampling_mesh_sender_core", 1)
                     if sender_group is None:
                         raise RuntimeError("Missing argmax mesh sender kernel group for BRISC fabric append")
                     sender_kernel_idx = sender_group.brisc_kernel_index
@@ -2135,7 +2537,7 @@ class LMHeadSampling:
                         fabric_rt_args
                     )
                 if persistent_enable:
-                    persistent_group = kernel_result.get_group_by_arg("is_argmax_final_core", 1)
+                    persistent_group = kernel_result.get_group_by_arg("sampling_is_final_core", 1)
                     if persistent_group is None:
                         raise RuntimeError("Missing argmax final core kernel group for persistent fabric append")
                     persistent_kernel_idx = persistent_group.brisc_kernel_index
@@ -2203,7 +2605,10 @@ class LMHeadSampling:
         if metadata_tensor is not None:
             io_tensors.append(metadata_tensor)
         if not skip_ccl:
-            io_tensors.append(fabric_scratch_tensor)
+            if scores_scratch_tensor is not None:
+                io_tensors.append(scores_scratch_tensor)
+            if indices_scratch_tensor is not None:
+                io_tensors.append(indices_scratch_tensor)
         if base_token_buffer is not None:
             io_tensors.append(base_token_buffer)
         if input_core_fused_buffer is not None:
