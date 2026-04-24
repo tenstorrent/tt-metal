@@ -13,12 +13,14 @@ import torch
 from safetensors import safe_open
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
-from models.demos.deepseek_v4_flash.cpu_reference import swiglu_expert
+from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, swiglu_expert
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 ttnn = pytest.importorskip("ttnn")
 
+from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
+from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 
 
@@ -114,5 +116,42 @@ def test_tiny_shared_expert_mlp_module_matches_torch(tiny_tt_preprocessed_checkp
     tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     module = TtSharedExpertMLP.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device)
     torch_output = ttnn.to_torch(module(tt_input))
+
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def test_tiny_routed_expert_mlp_module_matches_torch(tiny_tt_preprocessed_checkpoint: Path, device):
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    expert_id = 2
+    weights = {
+        projection: load_packed_expert_weight(
+            tiny_tt_preprocessed_checkpoint, layer=0, expert=expert_id, projection=projection
+        ).dequantize(dtype=torch.bfloat16)
+        for projection in ("w1", "w2", "w3")
+    }
+
+    hidden_size = weights["w1"].shape[-1]
+    intermediate_size = weights["w1"].shape[0]
+    torch_input = torch.linspace(-0.2, 0.2, steps=32 * hidden_size, dtype=torch.float32).reshape(1, 1, 32, hidden_size)
+    torch_input = torch_input.to(torch.bfloat16)
+    route_weights = torch.linspace(0.25, 1.0, steps=32, dtype=torch.float32).reshape(1, 32, 1)
+    route_indices = torch.full((1, 32, 1), expert_id, dtype=torch.int64)
+    expected = combine_routed_experts(
+        torch_input.reshape(1, 32, hidden_size),
+        route_weights,
+        route_indices,
+        {expert_id: (weights["w1"], weights["w2"], weights["w3"])},
+        swiglu_limit=float(manifest["config"]["swiglu_limit"]),
+    ).reshape_as(torch_input)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_route_weights = ttnn.from_torch(
+        route_weights.reshape(1, 1, 32, 1).expand(1, 1, 32, intermediate_size).to(torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    module = TtRoutedExpertMLP.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, expert=expert_id)
+    torch_output = ttnn.to_torch(module(tt_input, route_weight=tt_route_weights))
 
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
