@@ -79,6 +79,15 @@ void kernel_main() {
             last_rx_ptr = cur;
             // Wait for host to signal consumed before accepting next frame.
             // Host writes the same cur value to kRxRpAddr when done reading.
+            //
+            // SINGLE-BUFFER STALL: while the host holds kRxRpAddr unacknowledged,
+            // CMAC continues DMAing into PACKET_BUF and wraps, corrupting the
+            // unread frame.  At line rate (120 ns/frame) the host must ack before
+            // the next frame lands — this is feasible for the monitoring use-case
+            // but will drop frames under sustained traffic.
+            // TODO: add a second PACKET_BUF (ping-pong at 0x4000/0x6C00) so CMAC
+            // can fill buf[1] while host reads buf[0].  Requires a 4 KB L1 slot
+            // at 0x6C00 (currently free) and a buf_sel word in the mailbox block.
             while (REG32(kRxRpAddr) != cur) {
                 // While waiting, still service TX so we don't stall the TX path.
                 uint32_t tx_sz = REG32(kTxSizeAddr);
