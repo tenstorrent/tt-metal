@@ -22,12 +22,26 @@
 //    Simplest code pattern
 //=============================================================================
 
+namespace detail {
+inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
+
+template <uint32_t a, uint32_t b>
+constexpr uint32_t div_up() {
+    return (a + b - 1) / b;
+}
+
+}  // namespace detail
+
 namespace moe_ring {
 
 constexpr uint32_t NUM_CORES = 12;
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
+
+// TODO probably don't need this for W0_W1 and W2 because it's the same
+constexpr uint32_t W0_W1_BLOCK_TILES_W = 4;
+constexpr uint32_t W0_W1_BLOCK_TILES_H = (W0_W1_TXNS_PER_BLOCK * W0_W1_TILES_PER_TXN) / W0_W1_BLOCK_TILES_W;
 
 constexpr uint32_t W2_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W2_TILES_PER_TXN = 14;
