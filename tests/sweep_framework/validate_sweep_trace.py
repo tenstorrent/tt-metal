@@ -65,6 +65,19 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             result[k] = normalize(v, _parent_key=k)
         return result
     if isinstance(obj, list):
+        # Normalize distribution_shape: [32] and [4, 8] both represent 32 devices.
+        # Canonicalize to the product so 1D and 2D representations match.
+        if _parent_key == "distribution_shape" and all(isinstance(x, (int, float)) for x in obj):
+            product = 1
+            for x in obj:
+                product *= int(x)
+            return [product]
+        # Normalize placement arrays: all-replicate lists of different lengths
+        # (e.g. 1D ['PlacementReplicate'] vs 2D ['PlacementReplicate', 'PlacementReplicate'])
+        # are semantically equivalent — canonicalize to a single entry.
+        if _parent_key == "placement" and all(isinstance(x, str) for x in obj):
+            if all(x == "PlacementReplicate" for x in obj):
+                return ["PlacementReplicate"]
         return [normalize(item, _parent_key=_parent_key) for item in obj]
     return obj
 

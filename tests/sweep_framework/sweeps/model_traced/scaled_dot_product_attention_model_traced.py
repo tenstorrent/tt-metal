@@ -296,10 +296,27 @@ def run(
         op_kwargs["attention_sink"] = preallocated_attention_sink
 
     # TTNN execution
+    # For GQA K/V tensors (fewer heads than Q), the master model creates them as
+    # replicated per-device tensors so logical_shape() returns the per-device shape.
+    # create_tensor_on_mesh would expand+shard them (per-device → global → shard),
+    # causing logical_shape() to return the global shape (mismatch with master trace).
+    # Fix: replicate K/V with per-device shape to match the master trace exactly.
     if is_mesh_device and input_a_tensor_placement:
         q_tensor = create_tensor_on_mesh(torch_q, device, dtype_q, layout_q, mem_config_q, input_a_tensor_placement)
-        k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
-        v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)
+        if num_heads_k < num_heads_q:
+            k_tensor = ttnn.from_torch(
+                torch_k, dtype=dtype_k, layout=layout_k, device=device,
+                memory_config=mem_config_k, mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        else:
+            k_tensor = create_tensor_on_mesh(torch_k, device, dtype_k, layout_k, mem_config_k, input_b_tensor_placement)
+        if num_heads_v < num_heads_q:
+            v_tensor = ttnn.from_torch(
+                torch_v, dtype=dtype_v, layout=layout_v, device=device,
+                memory_config=mem_config_v, mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        else:
+            v_tensor = create_tensor_on_mesh(torch_v, device, dtype_v, layout_v, mem_config_v, input_c_tensor_placement)
     else:
         q_tensor = ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=mem_config_q)
         k_tensor = ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=mem_config_k)
