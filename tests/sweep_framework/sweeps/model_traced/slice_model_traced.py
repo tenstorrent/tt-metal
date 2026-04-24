@@ -72,7 +72,6 @@ def run(
     arg2=None,  # May contain ends from V2 traced configs (positional)
     arg3=None,  # May contain steps from V2 traced configs (positional)
     dtype=None,  # Output dtype from V2 traced configs
-    use_legacy=None,  # Legacy mode flag from V2 traced configs
     *,
     device,
     **kwargs,

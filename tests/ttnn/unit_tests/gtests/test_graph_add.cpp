@@ -65,8 +65,8 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         auto call = [&] {
             constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
-            const auto output_tensor = ttnn::add(
-                input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+            const auto output_tensor =
+                ttnn::add(input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none);
             return output_tensor;
         };
 

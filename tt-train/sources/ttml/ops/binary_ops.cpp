@@ -104,7 +104,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
 
     constexpr ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     out->set_value(
-        ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
+        ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none));
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(unbroadcast_grad(a, out->get_grad()));

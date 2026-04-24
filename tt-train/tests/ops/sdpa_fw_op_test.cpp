@@ -411,31 +411,29 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key, /*transpose_a=*/false, /*transpose_b=*/true);
 
     // σQ @ K
     if (attn_mask.has_value()) {
         ttnn::Tensor mask_tensor = attn_mask.value();
         qk_scaled = ttnn::add(
-            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
             ttnn::multiply(
-                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                 1e9F,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 none,
                 none,
-                none,
-                false),
+                none),
             std::nullopt,
             std::nullopt,
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
     }
 
     // Calculate intermediate results to test against kernel implementation

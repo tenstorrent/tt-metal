@@ -69,7 +69,6 @@ def run(
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     arg1=None,  # May contain scalar value or second input
-    use_legacy=None,  # Legacy mode flag
     memory_config=None,  # Alternative memory_config parameter
     dtype=None,  # Output dtype
     *,

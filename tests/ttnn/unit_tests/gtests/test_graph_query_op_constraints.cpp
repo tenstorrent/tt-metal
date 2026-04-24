@@ -518,8 +518,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -553,8 +552,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -588,8 +586,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -623,8 +620,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -658,8 +654,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported

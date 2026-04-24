@@ -99,7 +99,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"scalar_value", "fast_and_approximate_mode", "use_legacy"},
+        exclude={"scalar_value", "fast_and_approximate_mode"},
         output_memory_config=output_memory_config,
     )
 

@@ -56,7 +56,7 @@ def test_binary_add_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
     # Since to_torch converts ttnn.uint16 to int16 and then to int32, there will be an output mismatch
     # We can typecast ttnn.uint16 to ttnn.uint32 to avoid this mismatch
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -160,7 +160,7 @@ def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor_sharded = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     # Since typecast does not support sharded config, we can convert the sharded tensor to interleaved
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -216,7 +216,7 @@ def test_binary_sub_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
@@ -291,7 +291,7 @@ def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
     golden_function = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn.sub(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor_sharded = ttnn.sub(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
@@ -358,7 +358,7 @@ def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = bitwise_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = bitwise_op(input_tensor_a, input_tensor_b)
     # Since to_torch converts ttnn.uint16 to int16 and then to int32, there will be an output mismatch
     # We can typecast ttnn.uint16 to ttnn.uint32 to avoid this mismatch
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -418,7 +418,7 @@ def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op,
     golden_function = ttnn.get_golden_function(bitwise_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = bitwise_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=None)
+    output_tensor_sharded = bitwise_op(input_tensor_a, input_tensor_b, memory_config=sharded_config)
     # Since typecast does not support sharded config, we can convert the sharded tensor to interleaved
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -480,7 +480,7 @@ def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
@@ -573,7 +573,7 @@ def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, l
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     # Since to_torch converts ttnn.uint16 to int16 and then to int32, there will be an output mismatch
     # We can typecast ttnn.uint16 to ttnn.uint32 to avoid this mismatch
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -590,8 +590,7 @@ def test_binary_logical_uint16_bcast(a_shape, b_shape, ttnn_op, low_a, high_a, l
         ttnn.logical_and,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
+def test_binary_logical_uint16_edge_cases(ttnn_op, device):
     torch_input_tensor_a = torch.tensor([0, 1, 0, 32767, 65534, 65535])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -612,7 +611,7 @@ def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
@@ -818,7 +817,7 @@ def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, 
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=None)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)

@@ -387,7 +387,7 @@ std::vector<ttnn::Tensor> composite_sdpa(
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
-    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 
     // σQ @ K
     ttnn::Tensor qk_scaled = groups_shared_matmul(q_scaled, key, /*transpose_a=*/false, /*transpose_b=*/true);
@@ -396,24 +396,22 @@ std::vector<ttnn::Tensor> composite_sdpa(
         auto mask_tensor = attn_mask.value();
         // ttnn::where when mask is not of the same shape as qk_scaled
         qk_scaled = ttnn::add(
-            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
             ttnn::multiply(
-                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                 1e9F,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 none,
                 none,
-                none,
-                false),
+                none),
             std::nullopt,
             std::nullopt,
             std::nullopt,
             none,
             none,
-            none,
-            false);
+            none);
     }
     // Calculate logsumexp intermediate to test against kernel implementation
     auto max_value = ttnn::max(qk_scaled, /* dim */ 3, /* keepdim */ true);
@@ -447,8 +445,8 @@ std::vector<ttnn::Tensor> composite_sdpa(
         /* compute_kernel_config */ core::ComputeKernelConfig::precise());
     dL_dattention_weights.deallocate();
 
-    dL_dscaled_dot = ttnn::multiply(
-        dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,H,S,S]
+    dL_dscaled_dot =
+        ttnn::multiply(dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);  // [B,H,S,S]
 
     // dL_dQ = dL_dscaled_dot @ key
     ttnn::Tensor dL_dQ = groups_shared_matmul(dL_dscaled_dot, key, /*transpose_a=*/false, /*transpose_b=*/false);
