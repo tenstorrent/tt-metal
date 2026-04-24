@@ -339,17 +339,23 @@ public:
         return get_kernel(get_kernel_handle(name));
     }
 
-    // Metal 2.0: Runtime argument schema for validation
+    // Metal 2.0: Runtime argument schema for validation.
+    // Includes both the named args (declaration-order name lists) and the vararg counts.
     struct KernelRTASchema {
-        std::unordered_map<CoreCoord, size_t> num_runtime_args_per_node;
-        size_t num_common_runtime_args = 0;
+        // Named arg names, in declaration order. Used to serialize ProgramRunParams values
+        // into the dispatch buffer and to validate that every declared name is supplied.
+        std::vector<std::string> named_runtime_args;
+        std::vector<std::string> named_common_runtime_args;
+
+        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
+        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
+        // broadcast count.
+        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
+        size_t num_common_runtime_varargs = 0;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(
-        const KernelSpecName& name,
-        const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
-        size_t num_common_runtime_args);
+    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
     const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)

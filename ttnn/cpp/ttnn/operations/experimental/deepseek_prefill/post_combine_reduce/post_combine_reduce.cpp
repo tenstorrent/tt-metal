@@ -16,8 +16,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
 ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
-    const ttnn::Tensor& indices,
-    const ttnn::Tensor& expert_dispatch_table,
+    const std::optional<ttnn::Tensor>& indices,
+    const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config) {
     // Use default L1 memory config if not specified
