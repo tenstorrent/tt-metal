@@ -427,12 +427,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
     }
 }
 
-// Read all enabled perf counter groups into the L1 marker buffer. finish_profiler
-// (called at BRISC exit) pushes the accumulated markers to DRAM in a single write,
-// so no intermediate flush is needed. Worst case WH all-groups = 130 counters * 3
-// uint32s = 390 uint32s, which fits in the 488-uint32 body region.
 void read_perf_counters() {
-    // Compile-time unrolled: compiler drops calls whose group bit isn't set in PROFILE_PERF_COUNTERS.
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU
     read_single_group(PerfCounterGroup::FPU);
 #endif
@@ -466,9 +461,6 @@ void read_perf_counters() {
 
 }  // namespace kernel_profiler
 
-// Macros are only defined on the core that implements the underlying function.
-// The other cores get no-ops so accidental calls become compile-time errors via
-// "undefined" expansion rather than link-time failures.
 #if COMPILE_FOR_TRISC == 1
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
