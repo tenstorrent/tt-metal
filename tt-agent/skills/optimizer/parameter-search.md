@@ -60,6 +60,12 @@ For each candidate config:
    the second change is physically required by the first (e.g., raising
    `in0_block_w` forces a smaller `per_core_M` to fit L1). Note the
    coordination in the commit message.
+   **Comment hygiene:** do not leave iteration-journey comments in the
+   source ("was 4, now 9", "vs per_core_N=6 left 16 cores idle"). The
+   commit subject captures the Δ; the source should read as if this
+   iteration were the first commit on the branch. See
+   `common-wrong-turns.md` § "Comments explain the current invariant —
+   never the iteration history".
 2. If the matmul fails with a kernel-level assertion (`num_blocks_x`
    mismatch, CB overflow, dim assertion), add `print(pc)` before the
    `ttnn.linear` call and re-run. The realized `per_core_M/N`,

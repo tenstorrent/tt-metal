@@ -224,6 +224,64 @@ Prepare-phase check: `grep` the sibling module for the mode keyword
 (`prefill`, `decode`, `mode==`) and confirm the progcfg branch the target
 would inherit.
 
+## Code hygiene
+
+### Comments explain the current invariant — never the iteration history
+
+The optimizer loop naturally produces commit-narrative comments because each
+iteration is framed as a Δ from the previous best. Examples observed in a
+single MLP file after 19 iterations:
+
+```python
+# c_proj: use full 8-column grid. With per_core_N=5, all 64 cores engage
+# (vs 48 with per_core_N=6 which left 16 cores idle).
+# ...
+# MAX=4128 matches num_chunks=4, gives per_core_M=17 (fewer dispatch
+# barriers than 1376).
+# ...
+# HiFi2 + BF16 accumulation. Drops fp32_dest_acc_en=True — lifts DST
+# register pressure (8 regs instead of 4).
+```
+
+None of `48`, `1376`, `fp32_dest_acc_en=True`, or `4 regs` appear anywhere
+in the current code. They are facts about the *iteration journey*, not the
+*current code*. They rot the moment a future iteration touches a different
+variable, and they duplicate `git log` and the commit message.
+
+**Rule before leaving a comment:** would this comment still be true and
+useful if this iteration were the first commit on the branch? If no, drop
+it — the commit message captures the Δ.
+
+**Keep** comments about non-obvious current-state invariants — a subtle
+correctness argument, a hardware constraint the code depends on, a
+workaround for a specific bug that would be surprising to a future reader.
+Example that is good:
+
+```python
+# Pre-divide bias by num_devices so the post-AllReduce sum yields the
+# original bias exactly.
+```
+
+This explains *why the current code is shaped this way*, independent of
+history.
+
+**Drop** anything that reads as a changelog: `vs`, `was`, `previously`,
+`instead of`, `dropped`, `removed`, `now`, parenthesized numbers that no
+longer appear in the code. Those belong in the commit message of the
+iteration that introduced the change.
+
+**Drop** reasoning-by-elimination of rejected alternatives ("we chose A
+because B OOMs and C leaves cores idle"). By the time someone reads the
+code, only A exists — the reader has no way to verify the rejection
+claims are still true. If A has a non-obvious constraint (e.g. "A fits
+L1 only when fp32_dest_acc_en=False"), state the constraint on A, not
+the history of why B and C were rejected.
+
+This rule applies to **every edit in every iteration**. At the end of a
+productive iteration, re-read the edited region as if it were the first
+commit on the branch — delete any comment that wouldn't make sense in
+that framing. The commit subject already captures the Δ; don't duplicate.
+
 ## Profiling workflow
 
 ### `tt-perf-report` 1.2.3 crashes on HiFi3 rows

@@ -77,6 +77,16 @@ in the commit message so attribution stays traceable.
 Edit the source. Keep the edit tight — only what the hypothesis requires.
 Do not refactor surrounding code. Do not fix unrelated issues.
 
+**Comment hygiene:** do not leave iteration-journey comments. No "was X,
+now Y", no "vs per_core_N=6 which left 16 cores idle", no reasoning-by-
+elimination of rejected alternatives. Those belong in the commit subject,
+not the source. Only keep comments that would make sense to a reader who
+sees this iteration as the first commit on the branch — current-state
+invariants, hardware constraints, non-obvious correctness arguments. See
+`common-wrong-turns.md` § "Comments explain the current invariant — never
+the iteration history" for examples. Before finalizing the edit, re-read
+every touched comment block with this framing.
+
 If a matmul fails with a kernel-level assertion (`num_blocks_x` mismatch,
 CB overflow, dim assertion), add `print(pc)` before the `ttnn.linear` call
 and re-run. The realized `per_core_M/N`, `out_subblock_h/w`,
