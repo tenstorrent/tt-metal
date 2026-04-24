@@ -79,8 +79,7 @@ Once all questions are resolved, state: _"I'm ready to write. Shall I proceed?"_
 Only after receiving explicit approval to proceed:
 
 1. **Invoke `/skill-creator`** for base mechanics.
-2. **Load `tt-guidelines.md`** and apply TT-specific constraints — including
-   the Token Economy section. Size targets are non-optional.
+2. **Load `tt-guidelines.md`** and apply TT-specific constraints.
 3. Write SKILL.md + sub-files.
 
 ## Phase 3: Shrink
