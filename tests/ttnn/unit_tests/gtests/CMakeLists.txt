@@ -6,7 +6,12 @@ add_library(test_common_utils STATIC)
 # symbols when the final executable links both the OBJECT library and this
 # static lib).
 target_sources(test_common_utils PRIVATE common_test_utils.cpp)
-target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
+target_link_libraries(
+    test_common_utils
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
 tt_reuse_precompile_headers(test_common_utils TTNN::PCH)
 
 function(setup_ttnn_test_target target_name)
