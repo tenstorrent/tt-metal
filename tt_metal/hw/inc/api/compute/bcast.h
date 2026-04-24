@@ -26,7 +26,8 @@
 namespace ckernel {
 
 #if defined(ARCH_QUASAR) && (defined(TRISC_UNPACK) || defined(TRISC_MATH))
-// Shared by unpack and math TRISCs: 32b dest uses unpack-to-dest.
+// Shared by unpack and math TRISCs: 32b dest uses unpack-to-dest. Only declared on UNPACK/MATH
+// because get_operand_id / get_operand_dst_format come from llk_operands.h which is unpack/math-only.
 ALWI bool quasar_unary_bcast_unpack_to_dest_enabled(const uint32_t icb) {
     const std::uint32_t dst_format = get_operand_dst_format(get_operand_id(icb));
     return (dst_format == static_cast<std::uint32_t>(DataFormat::Float32)) ||
@@ -66,30 +67,21 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     PACK((llk_pack_init<false>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    const bool quasar_unpack_to_dest = quasar_unary_bcast_unpack_to_dest_enabled(icb);
-#endif
-#ifdef TRISC_UNPACK
     UNPACK((llk_unpack_hw_configure(icb)));
     UNPACK(
-        (quasar_unpack_to_dest
+        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
              ? llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(false, icb)
              : llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(false, icb)));
-#endif
 
-#ifdef TRISC_MATH
     MATH(
-        (quasar_unpack_to_dest
+        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
              ? llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type>(icb)
              : llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type>(icb)));
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
-#endif
 
-#ifdef TRISC_PACK
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
-#endif
 #endif
 }
 
@@ -112,23 +104,16 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
     }
 #endif
 #else
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    const bool quasar_unpack_to_dest = quasar_unary_bcast_unpack_to_dest_enabled(icb);
-#endif
-#ifdef TRISC_UNPACK
     UNPACK(
-        (quasar_unpack_to_dest
+        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
              ? llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, true>(icb, in_tile_index)
              : llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-#endif
 
-#ifdef TRISC_MATH
     MATH(
-        (quasar_unpack_to_dest
+        (quasar_unary_bcast_unpack_to_dest_enabled(icb)
              ? llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, bcast_type, true>(dst_tile_index, icb)
              : llk_math_eltwise_unary_datacopy<DataCopyType::B2D, DST_ACCUM_MODE, bcast_type, false>(
                    dst_tile_index, icb)));
-#endif
 #endif
 }
 
@@ -150,14 +135,10 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     }
 #endif
 #else
-#ifdef TRISC_UNPACK
     UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
-#endif
-#ifdef TRISC_MATH
     // Quasar's llk_math_eltwise_unary_datacopy_uninit is a no-op for both unpack_to_dest values,
     // so no runtime dispatch on dst format is needed here.
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type>()));
-#endif
 #endif
 }
 
@@ -360,9 +341,11 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, ocb, call_line);
-    constexpr auto MATH_FID_MODE = (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi;
 #ifndef ARCH_QUASAR
-    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FID_MODE>()));
+    MATH((llk_math_eltwise_binary_init<
+          tBcastOp,
+          tBcastDim,
+          (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi>()));
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<tBcastDim>(icb0, icb1)));
@@ -382,7 +365,10 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line =
 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
-    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FID_MODE>()));
+    MATH((llk_math_eltwise_binary_init<
+          tBcastOp,
+          tBcastDim,
+          (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi>()));
 #endif
 }
 
