@@ -15,6 +15,14 @@ struct noc_traits_t {
     static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
 };
 
+// Optional bounds-check hook. Specializations that model a bounded region (a page of a
+// TensorAccessor, a shard, a CB page) can override this to assert that
+// `args.offset_bytes + size_bytes` stays inside the region. The primary template is a no-op
+// so that endpoint types without page semantics (raw UnicastEndpoint, AllocatorBank, etc.)
+// are not forced to participate.
+template <typename T, typename Args>
+FORCE_INLINE void noc_traits_check_bounds(const T& /*endpoint*/, const Args& /*args*/, uint32_t /*size_bytes*/) {}
+
 /**
  * @brief Noc class that provides a high-level interface for asynchronous read and write operations.
  *
@@ -113,6 +121,12 @@ public:
         const dst_args_t<Dst>& dst_args,
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC,
         uint32_t trid = INVALID_TXN_ID) const {
+        // Trait-level bounds checks. For endpoints with page semantics (TensorAccessor, PageView,
+        // ShardView, CircularBuffer page), assert that the transaction fits inside the bounded
+        // region addressed by src_args / dst_args. For endpoints without page semantics, the
+        // default no-op is used.
+        noc_traits_check_bounds(src, src_args, size_bytes);
+        noc_traits_check_bounds(dst, dst_args, size_bytes);
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
             noc_async_read_set_trid(trid, noc_id_);
             while (noc_available_transactions(noc_id_, trid) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2)) {
@@ -245,6 +259,10 @@ public:
         uint32_t vc = NOC_UNICAST_WRITE_VC,
         uint32_t trid = INVALID_TXN_ID) const {
         constexpr bool posted = response_mode == ResponseMode::POSTED;
+
+        // Trait-level bounds checks (see async_read).
+        noc_traits_check_bounds(src, src_args, size_bytes);
+        noc_traits_check_bounds(dst, dst_args, size_bytes);
 
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
             // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction
