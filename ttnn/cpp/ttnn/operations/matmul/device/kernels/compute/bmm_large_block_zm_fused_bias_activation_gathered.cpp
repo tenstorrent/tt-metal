@@ -214,6 +214,8 @@ void kernel_main() {
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
         static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
+    constexpr uint32_t activation_param0 = get_named_compile_time_arg_val("activation_param0");
+    constexpr uint32_t activation_param1 = get_named_compile_time_arg_val("activation_param1");
 #endif
 
     experimental::CircularBuffer in1_cb(in1_cb_id);
@@ -239,7 +241,7 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
 #ifdef SFPU_ACTIVATION
-    init_sfpu_activation_pack<activation_type>();
+    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -398,7 +400,7 @@ void kernel_main() {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            sfpu_activation_pack<activation_type>(i);
+                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
                         }
 
                         // Wait for SFPU completion before packing
