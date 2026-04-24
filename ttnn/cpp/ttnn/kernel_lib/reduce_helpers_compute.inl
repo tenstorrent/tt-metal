@@ -71,7 +71,10 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             cb_wait_front(accumulate.config.cb_accumulator, onetile);
-            copy_tile_to_dst_init_short_with_dt(input_cb, accumulate.config.cb_accumulator);
+            // SRCA currently holds scaler_cb's format in matmul mode (reconfig_data_format(scaler_cb, input_cb)
+            // sets SRCA=scaler_cb, SRCB=input_cb), and input_cb's format otherwise.
+            const uint32_t old_srca_cb = use_matmul ? scaler_cb : input_cb;
+            copy_tile_to_dst_init_short_with_dt(old_srca_cb, accumulate.config.cb_accumulator);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             cb_pop_front(accumulate.config.cb_accumulator, onetile);
 
@@ -233,7 +236,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, use_matmul>(
                 input_cb, scaler_cb, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -424,7 +427,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, use_matmul>(
                     input_cb, scaler_cb, accumulate);
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
