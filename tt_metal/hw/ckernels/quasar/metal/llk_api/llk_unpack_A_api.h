@@ -4,8 +4,8 @@
 
 #pragma once
 #include "llk_unpack_common_api.h"
-#include "llk_unpack_unary_operand_api.h"
 #include "llk_unpack_unary_broadcast_operands_api.h"
+#include "llk_unpack_unary_operand.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -24,13 +24,21 @@
  */
 template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
 inline void llk_unpack_A_init(const std::uint32_t operand) {
-    llk_unpack_unary_operand_init<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand);
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id, NUM_TILES, num_faces);
 }
 
 /**
- * Shared compute-kernel entry point (same template surface as Blackhole / other metal arches):
- * unary and unary-broadcast unpack for one operand.
- * Quasar implements broadcast via llk_unpack_unary_broadcast_operands_* (not _llk_unpack_A_*).
+ *
+ * @brief Initialize unpacker for unary and unary-broadcast operations on one operand.
+ *
+ * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
+ * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
+ * @tparam binary_reuse_dest: Dest reuse mode
+ * @tparam unpack_to_dest: When true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B)
+ * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary path only)
+ * @param operand: The input operand logical dataflow buffer / CB id
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -40,10 +48,13 @@ template <
 inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const std::uint32_t operand = 0) {
     constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
     if constexpr (BType == BroadcastType::NONE) {
+        const std::uint32_t operand_id = get_operand_id(operand);
+        const std::uint32_t num_faces = get_operand_num_faces(operand_id);
         if (transpose_of_faces != 0) {
-            llk_unpack_unary_operand_init<unp_sel, true, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
+            _llk_unpack_unary_operand_init_<unp_sel, true, DST_ACCUM_MODE, binary_reuse_dest>(operand_id, 1, num_faces);
         } else {
-            llk_unpack_unary_operand_init<unp_sel, false, DST_ACCUM_MODE, binary_reuse_dest>(operand, 1);
+            _llk_unpack_unary_operand_init_<unp_sel, false, DST_ACCUM_MODE, binary_reuse_dest>(
+                operand_id, 1, num_faces);
         }
     } else {
         constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
@@ -62,7 +73,10 @@ inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const 
  */
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     WAYPOINT("UPAW");
-    llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(operand, tile_index);
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const auto& local_dfb = g_dfb_interface[operand_id];
+    const std::uint32_t l1_tile_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
+    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(l1_tile_idx);
     WAYPOINT("UPAD");
 }
 
@@ -75,7 +89,10 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     WAYPOINT("UPAW");
     constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
     if constexpr (BType == BroadcastType::NONE) {
-        llk_unpack_unary_operand_tile<unp_sel, binary_reuse_dest>(operand, tile_index);
+        const std::uint32_t operand_id = get_operand_id(operand);
+        const auto& local_dfb = g_dfb_interface[operand_id];
+        const std::uint32_t l1_tile_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
+        _llk_unpack_unary_operand_<unp_sel, binary_reuse_dest>(l1_tile_idx);
     } else {
         llk_unpack_unary_broadcast_operands<unp_sel, unpack_to_dest>(operand, tile_index);
     }
@@ -95,9 +112,12 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const auto& local_dfb = g_dfb_interface[operand_id];
+    const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
-        llk_unpack_unary_operand_tile<p_unpacr::UNP_A>(operand, tile_index);
+        _llk_unpack_unary_operand_<p_unpacr::UNP_A>(rd_entry_idx + tile_index);
         WAYPOINT("UPAD");
     }
 }
