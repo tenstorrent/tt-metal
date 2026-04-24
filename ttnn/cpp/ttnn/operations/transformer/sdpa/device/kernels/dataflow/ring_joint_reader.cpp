@@ -345,7 +345,6 @@ void kernel_main() {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
                 }
-                KV_chunks_processed_in_iter++;
 
                 Slice k_slice;
                 Slice v_slice;
@@ -408,6 +407,7 @@ void kernel_main() {
 
                 // Make K available to compute
                 cb_push_back(cb_k_in, k_chunk_tiles);
+                KV_chunks_processed_in_iter++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
