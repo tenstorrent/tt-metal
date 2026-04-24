@@ -99,13 +99,13 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
     producer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_producer.cpp"};
-    producer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
+    producer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // Consumer: NCRISC reads DFB → DRAM
     auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
     consumer.source =
         KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp"};
-    consumer.runtime_arguments_schema.num_runtime_args_per_node = {{node, 3}};
+    consumer.runtime_arguments_schema.num_runtime_varargs = 3;
 
     // DFB: both kernels bind it, with different local accessor names
     auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries);
@@ -130,7 +130,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     params.kernel_run_params = {
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "producer",
-            .runtime_args =
+            .runtime_varargs =
                 {{node,
                   {
                       input_buffer->address(),
@@ -140,7 +140,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
         },
         ProgramRunParams::KernelRunParams{
             .kernel_spec_name = "consumer",
-            .runtime_args =
+            .runtime_varargs =
                 {{node,
                   {
                       output_buffer->address(),
@@ -168,6 +168,140 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     // Verify
     // -------------------------------------------------------
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    ASSERT_EQ(output_data.size(), input_data.size());
+    EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// Named RTA / CRTA / CTA Loopback Test
+// ============================================================================
+//
+// End-to-end on real WH/BH hardware. Exercises the full Metal 2.0 kernel-args feature
+// surface (single-node scope):
+//
+//   Named args: named RTA, named CRTA, named CTA — via get_arg(args::name).
+//   Vararg RTAs: multiple indices per kernel (0/1/2 on producer, 0/1 on consumer) via
+//       get_vararg(idx). Different vararg count per kernel verifies that the baked-in
+//       named_rta_words offset is per-kernel, not shared state.
+//   Vararg CRTAs: get_common_vararg(0) on both kernels.
+//
+// Not covered here (intentional):
+//   - num_runtime_varargs_per_node (the per-node override path). The internal schema
+//     representation is a per-coord unordered_map regardless of how it was populated, so
+//     the dispatch-time behavior is identical to the scalar path covered here. The
+//     override-specific semantics are covered by host-side unit tests
+//     (VarargScalarDefaultWithSparseOverrideSucceeds,
+//      VarargSparseOverrideZeroErasesScalarDefault,
+//      VarargPerNodeOverrideMixedEntryTypesSucceeds).
+//
+// Verification trick — XOR cancellation:
+//   Each kernel computes the XOR of all its vararg values into a scalar sum and folds
+//   that sum into the first word of every DFB entry (producer on write, consumer on read).
+//   The host arranges both kernels' vararg values so their sums are equal, which means
+//   the two XORs cancel and the first word survives the round-trip unchanged. End-to-end
+//   input/output match then implies every vararg offset was computed correctly: if any
+//   index returned the wrong word (a named RTA, a past-the-end vararg, etc.), the two
+//   sums wouldn't match, the cancellation wouldn't happen, and the first word of each
+//   output entry would come back corrupted.
+
+TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries_in_dfb = 4;
+    constexpr uint32_t num_transfers = 8;
+    constexpr uint32_t total_bytes = entry_size * num_transfers;
+
+    const NodeCoord node{0, 0};
+
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+    auto input_buffer = CreateBuffer(dram_config);
+    auto output_buffer = CreateBuffer(dram_config);
+
+    ProgramSpec spec;
+    spec.program_id = "named_args_loopback";
+
+    // Producer: BRISC reads DRAM → DFB. 1 named RTA, 1 named CRTA, 2 named CTAs, 3 RTA
+    // varargs, 1 CRTA vararg.
+    auto producer = MakeMinimalGen1DMKernel("producer", node, DataMovementProcessor::RISCV_0);
+    producer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_producer.cpp"};
+    producer.runtime_arguments_schema.named_runtime_args = {"src_addr"};
+    producer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
+    producer.runtime_arguments_schema.num_runtime_varargs = 3;
+    producer.runtime_arguments_schema.num_common_runtime_varargs = 1;
+    producer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
+
+    // Consumer: NCRISC reads DFB → DRAM. Uses default `args` namespace, 1 named RTA,
+    // 1 named CRTA, 2 named CTAs, 2 RTA varargs (note: different count from producer —
+    // this verifies the named_rta_words offset is baked per-kernel), 1 CRTA vararg.
+    auto consumer = MakeMinimalGen1DMKernel("consumer", node, DataMovementProcessor::RISCV_1);
+    consumer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/named_args_loopback_consumer.cpp"};
+    consumer.runtime_arguments_schema.named_runtime_args = {"dst_addr"};
+    consumer.runtime_arguments_schema.named_common_runtime_args = {"num_entries"};
+    consumer.runtime_arguments_schema.num_runtime_varargs = 2;
+    consumer.runtime_arguments_schema.num_common_runtime_varargs = 1;
+    consumer.compile_time_arg_bindings = {{"bank_id", 0}, {"entry_size", entry_size}};
+
+    auto dfb = MakeMinimalDFB("loopback_dfb", node, entry_size, num_entries_in_dfb);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    BindDFBToKernel(producer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "loopback_dfb", "loopback_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.workers =
+        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"producer", "consumer"}, {"loopback_dfb"})};
+
+    Program program = MakeProgramFromSpec(spec);
+
+    // Vararg values picked so both kernels' XOR sums equal the same non-trivial S.
+    // The kernels fold this into the first word of each DFB entry; S ^ S = 0, so data
+    // survives the round-trip ONLY IF both kernels read the correct vararg values at
+    // the correct offsets. Non-trivial bits maximize the chance of a wrong-offset read
+    // producing a detectable mismatch rather than a coincidentally-equal XOR.
+    constexpr uint32_t kTargetXorSum = 0xDEADBEEFu;
+    constexpr uint32_t kProducerRta0 = 0x11112222u;
+    constexpr uint32_t kProducerRta1 = 0x33334444u;
+    constexpr uint32_t kProducerRta2 = 0x55556666u;
+    constexpr uint32_t kProducerCrta0 = kTargetXorSum ^ kProducerRta0 ^ kProducerRta1 ^ kProducerRta2;
+    constexpr uint32_t kConsumerRta0 = 0x77778888u;
+    constexpr uint32_t kConsumerRta1 = 0x9999AAAAu;
+    constexpr uint32_t kConsumerCrta0 = kTargetXorSum ^ kConsumerRta0 ^ kConsumerRta1;
+
+    ProgramRunParams params;
+    params.kernel_run_params = {
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "producer",
+            .named_runtime_args = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
+            .named_common_runtime_args = {{"num_entries", num_transfers}},
+            .runtime_varargs = {{node, {kProducerRta0, kProducerRta1, kProducerRta2}}},
+            .common_runtime_varargs = {kProducerCrta0},
+        },
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "consumer",
+            .named_runtime_args = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
+            .named_common_runtime_args = {{"num_entries", num_transfers}},
+            .runtime_varargs = {{node, {kConsumerRta0, kConsumerRta1}}},
+            .common_runtime_varargs = {kConsumerCrta0},
+        },
+    };
+    SetProgramRunParameters(program, params);
+
+    std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
+    for (size_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = static_cast<uint32_t>(i);
+    }
+    detail::WriteToBuffer(input_buffer, input_data);
+
+    detail::LaunchProgram(device, program);
+
     std::vector<uint32_t> output_data;
     detail::ReadFromBuffer(output_buffer, output_data);
 
