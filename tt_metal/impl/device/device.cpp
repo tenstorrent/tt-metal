@@ -865,11 +865,12 @@ void Device::quiesce_and_restart_fabric_workers() {
     // permanently damaging the relay endpoint, making ALL subsequent non-MMIO writes fail.
     //
     // After Phase 2.5 the ETH channels are in TERMINATED state.  TERMINATED firmware
-    // sits in a halt loop that polls for launch messages — identical to base-UMD relay
-    // firmware's behavior.  write_launch_msg_to_core (issued by configure_fabric_cores
-    // after the L1 clear) is sufficient to restart the fabric router without soft reset.
+    // sits in a halt loop that polls for launch messages.  write_launch_msg_to_core
+    // (issued explicitly below, after L1 is loaded) is sufficient to restart the fabric
+    // router without soft reset.
     // FIX M confirmed this mechanism works: base-UMD → fabric firmware transition via
     // write_launch_msg_to_core alone succeeded in CI run #24830129500.
+    tt::tt_fabric::FabricCoresHealth quiesce_health;
     {
         std::unordered_set<uint32_t> quiesce_skip_reset_chans;
         if (!this->is_mmio_capable()) {
@@ -877,16 +878,20 @@ void Device::quiesce_and_restart_fabric_workers() {
                 quiesce_skip_reset_chans.insert(chan);
             }
         }
-        tt::tt_fabric::configure_fabric_cores(this, {}, quiesce_skip_reset_chans);
+        quiesce_health = tt::tt_fabric::configure_fabric_cores(this, {}, quiesce_skip_reset_chans);
     }
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
     env_impl.get_cluster().l1_barrier(this->id());
 
-    // Re-launch only worker cores from the fabric program
     std::vector<std::vector<CoreCoord>> logical_cores_used = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
+    const auto& soc_desc_q = env_impl.get_cluster().get_soc_desc(this->id());
+
+    // Re-launch worker cores from the fabric program.
+    // WORKER (Tensix MUX) cores were halted in Phase 2; deassert BRISC reset after writing
+    // the launch message so the new kernel starts executing.
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
         CoreType core_type = hal.get_core_type(pct_idx);
         if (core_type != CoreType::WORKER) {
@@ -924,6 +929,70 @@ void Device::quiesce_and_restart_fabric_workers() {
                     physical_core.y,
                     e.what());
             }
+        }
+    }
+
+    // FIX O (#42429): Re-launch ETH ERISC cores from the fabric program.
+    //
+    // configure_fabric_cores() only performs soft reset (or skips it for non-MMIO) and
+    // clears L1.  It does NOT send write_launch_msg_to_core to ETH cores — that is done
+    // explicitly here and in configure_fabric().
+    //
+    // After Phase 2.5, ERISC channels are in TERMINATED state with BRISC polling for a
+    // launch message.  Without this loop, no launch message is ever sent, BRISC stays in
+    // its poll loop, status address stays at 0x00000000, and Phase 5 throws:
+    //   "Fabric health check failed — 4 ERISC channel(s) not at READY_FOR_TRAFFIC (0x00000000)"
+    //
+    // ETH cores must NOT have deassert_risc_reset_at_core called here — their BRISC was not
+    // halted in Phase 2 (resetting ERISC tears down the ETH PHY link on WH).
+    for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+        CoreType core_type = hal.get_core_type(pct_idx);
+        if (core_type != CoreType::ETH) {
+            continue;
+        }
+        for (const auto& logical_core : logical_cores_used[pct_idx]) {
+            // Skip channels that newly died during configure_fabric_cores() — writing launch
+            // messages through a dead ETH relay hangs indefinitely.
+            if (!quiesce_health.newly_dead_channels.empty()) {
+                try {
+                    auto eth_chan = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (quiesce_health.newly_dead_channels.count(eth_chan)) {
+                        log_warning(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} skipping "
+                            "write_launch_msg_to_core for dead ETH core ({},{}) channel {}",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan);
+                        continue;
+                    }
+                } catch (...) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} cannot resolve ETH channel "
+                        "for logical core ({},{}) — skipping write_launch_msg_to_core",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
+                    continue;
+                }
+            }
+
+            auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                this->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
 
