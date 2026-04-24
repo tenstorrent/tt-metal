@@ -311,14 +311,27 @@ For every function, write the `TTI_` / `TT_` sequence in order, with a comment p
 
 ```
 _calculate_{op}_sfp_rows_:
-    TTI_SFPLOAD(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)   // load tile row from Dest
+    TTI_SFPLOAD(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)    // load tile row from Dest
     TTI_SFPNONLINEAR(LREG0, LREG1, p_sfpnonlinear::EXP_MODE)         // x -> e^x
     TTI_SFPADD(LCONST_1, LREG1, LCONST_1, LREG2, 0)                  // 1 + e^x  (2-cycle)
     TTI_SFPNONLINEAR(LREG2, LREG0, p_sfpnonlinear::RECIP_MODE)       // 1 / (1 + e^x)
-    TTI_SFPSTORE(LREG0, 0, ADDR_MOD_7, 0, 0)                         // store back to Dest
+    TTI_SFPSTORE(LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)   // store back to Dest
 ```
 
 Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `TTI_NOP`).
+
+**Immediate-value convention in §6b pseudocode.** When an instruction takes a hex immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias, an imm12 bit-mask — write the pseudocode with a descriptive placeholder name (e.g. `FP16B_INV_PI`, `FP16B_SIN_C3`, `SFPSETCC_IMM_FP32_TEST`) and give its fp16b bit-pattern + decimal identity in a "Named constants" mini-table at the end of §6b:
+
+```
+Named constants this kernel requires:
+| Name                 | fp16b  | Meaning                                   |
+| FP16B_INV_PI         | 0x3EA2 | 1/pi ~= 0.31831                           |
+| FP16B_SIN_C3         | 0xBE2B | -1/6 (Maclaurin coefficient)              |
+| FP16B_RNE_BIAS_POS   | 0x4B40 | +1.5*2^23 (round-to-nearest-even bias)    |
+| SFPSETCC_IMM_FP32_TEST | 0x800 | imm12 bit 11 = "treat LREG as fp32"     |
+```
+
+Use the names in the pseudocode, not the raw hex. This lets the writer lift them straight into `constexpr std::uint32_t` declarations at the top of `namespace sfpu` without having to invent names on the fly. Positional `0` / `1` arguments (mod1, done, dest_reg, imm12) stay as bare literals in the pseudocode — the writer will annotate them inline per its own rules.
 
 ### 6c: Register allocation
 

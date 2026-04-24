@@ -18,6 +18,8 @@ These are non-negotiable. Every kernel you write must follow them.
 3. **Comment the non-obvious why, not the what.** The reader can see what `TTI_SFPSTORE(...)` does. They can't see why *this* LREG, *this* mode, or *this* ADDR_MOD was chosen when the reference used a different one. Only those architectural decisions need a comment. If the choice is obvious from the operand name (e.g., `SFPLOADI_MOD0_UPPER` writing the upper half), no comment is needed. See § Comment guidelines below.
 4. **Consistent conventions.** Pick one LREG, one ADDR_MOD, one naming pattern and stick with it throughout the file.
 5. **The reference is a guide, not gospel.** Understand what it does and why, then write the cleanest target version. Don't blindly copy, but don't gratuitously diverge either.
+6. **No dead parameters.** Every function signature carries a contract. If a parameter isn't used in the body, remove it — don't pass it through "for API parity" with a sibling kernel that actually uses it. A parameter that exists in the signature but has no effect on the output is misleading to callers. If the analysis specifies a parameter and you don't use it, either (a) use it, or (b) drop it and note the drop in your self-log. This applies to Python helper signatures in the generated test file too (e.g., don't keep `output_format` as a parameter if the function only reads `input_format`).
+7. **Name values, don't hide them.** Any literal value in a `TTI_SFPLOADI` / `TTI_SFPMULI` / `TTI_SFPADDI` / `TTI_SFPSETCC` immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias, a bit-mask — must live at the top of `namespace sfpu` as a named `constexpr std::uint32_t` with a one-line comment stating the decimal value and identity. This applies equally to values used once and values used many times; the name is what lets a reviewer understand the intent. The only hex values allowed inline are positional arguments already covered by a named constant from `sfpi::` / `p_sfpu::` / `p_sfpnonlinear::` (those *are* names). See § Naming literal values below for the full rule.
 
 ## Mission
 
@@ -176,11 +178,11 @@ Target style: short, inline, one line per comment. Look at existing sibling kern
 ```cpp
 inline void _calculate_abs_sfp_rows_()
 {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0]
-    // Apply absolute value: clear sign bit for FP32 (instr_mod1=1)
-    TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */); // load from dest into lreg[0]
+    // Apply absolute value: clear sign bit for FP32
+    TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPABS_MOD1_FLOAT);
     // Store result back to destination
-    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
 }
 
 inline void _calculate_abs_(const int iterations)
@@ -193,7 +195,7 @@ inline void _calculate_abs_(const int iterations)
     }
 }
 ```
-Notice: short end-of-line or single-line-above comments stating the intent of the instruction in plain words. No file header block, no per-function docblock, no ISA/Confluence citations, no analysis-section references, no multi-line rationale.
+Notice: short end-of-line or single-line-above comments stating the intent of the instruction in plain words. Every bare `0`/`1` in an instruction argument carries an inline `/* position */` note so the reader doesn't have to open `ckernel_ops.h`. Mode fields use named constants (`sfpmem::DEFAULT`, `sfpi::SFPABS_MOD1_FLOAT`) instead of raw integers. No file header block, no per-function docblock, no ISA/Confluence citations, no analysis-section references, no multi-line rationale.
 
 **Rules:**
 1. **One short comment per meaningful instruction is fine** — describing intent in plain words ("load from dest into lreg[0]", "clear sign bit for FP32"). Keep it to one line. Prefer end-of-line; use single-line-above only if the comment would push the code past a reasonable line length.
@@ -392,7 +394,106 @@ These rules apply across all kernel types:
 
    **The "no SFPI on Quasar" rule refers to the C++ DSL types only** (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`, `lut2`, etc.) — NOT the `sfpi::SFPLOADI_MOD0_*` mode constants. If a tester or refiner agent claims these constants are unavailable on Quasar and proposes replacing them with raw hex, that diagnosis is wrong — reject it and re-examine the actual compile error.
 
-4. **Namespace and includes**: already set by the scaffold from `kernel_template.py`. Do not modify.
+4. **SFPLOAD / SFPSTORE: use `p_sfpu::sfpmem::*` named constants for `instr_mod0`**: The second argument of `TTI_SFPLOAD` / `TT_SFPLOAD` / `TTI_SFPSTORE` / `TT_SFPSTORE` selects the memory-format mode. It MUST be written as a `p_sfpu::sfpmem::*` named constant, never as a bare integer — `DEFAULT` (= 0) expresses "use the ALU_FORMAT_SPEC_REG default" which is a *choice*, not a "no value":
+   ```cpp
+   // WRONG: literal 0 — reader can't tell this is a format field at all
+   TTI_SFPLOAD (p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+   TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+
+   // CORRECT: named format mode
+   TTI_SFPLOAD (p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
+   TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
+   ```
+   Available modes: `DEFAULT`, `FP16A`, `FP16B`, `FP32`, `INT32`, `UINT8`, `UINT16` (see `tt_llk_{target_arch}/common/inc/ckernel_instr_params.h`). Pick the one matching the reinterpretation you actually want. Some production Quasar kernels (sqrt, recip, tanh, sigmoid, lrelu, exp) still use literal `0` for historical reasons — don't model new experimental kernels on them. Match the `experimental/ckernel_sfpu_abs.h` convention instead.
+
+5. **Annotate bare `0` / `1` arguments with inline `/* position */` comments**: Every remaining literal `0` or `1` in a `TTI_SFP*` / `TT_SFP*` call that isn't already a named constant MUST carry an inline `/* ... */` naming the argument position (and its effect when non-obvious). Macro signatures in `ckernel_ops.h` are stable but position-heavy; without annotations a reader has to cross-reference the header for every line:
+   ```cpp
+   // WRONG: bare 0/1 — which position is mod1? which is done? what does 1 do?
+   TTI_SFPMAD   (a, b, c, dst, 0);
+   TTI_SFPLOAD  (lreg, DEFAULT, ADDR_MOD_7, 0, 0);
+   TTI_SFPSTORE (lreg, DEFAULT, ADDR_MOD_7, 0, 0);
+   TTI_SFPMOV   (src, dst, 1);
+   TTI_SFPENCC  (0, 0);
+   TTI_SFPSETCC (0, lreg, sfpi::SFPSETCC_MOD1_LREG_LT0);
+   TTI_SFPSETEXP(FP32_EXP_BIAS, src, dst, 1);
+
+   // CORRECT: each literal says what it is
+   TTI_SFPMAD   (a, b, c, dst, 0 /* mod1 */);
+   TTI_SFPLOAD  (lreg, DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
+   TTI_SFPSTORE (lreg, DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
+   TTI_SFPMOV   (src, dst, 1 /* mod1: flip sign */);
+   TTI_SFPENCC  (0 /* imm12 */, 0 /* mod1 */);
+   TTI_SFPSETCC (0 /* imm12 */, lreg, sfpi::SFPSETCC_MOD1_LREG_LT0);
+   TTI_SFPSETEXP(FP32_EXP_BIAS, src, dst, 1 /* mod1: exp from imm12 */);
+   ```
+   This applies to SFPMAD, SFPMUL, SFPMULI, SFPADD, SFPADDI, SFPMOV, SFPLOAD, SFPSTORE, SFPENCC, SFPSETCC, SFPSETEXP — any TTI/TT_OP macro where a bare numeric literal survives. Use terse labels (`mod1`, `done`, `dest_reg`, `imm12`) that match the macro signature in `ckernel_ops.h`. Add a `:` suffix only when the value's effect isn't "default" (`1 /* mod1: flip sign */`, `1 /* mod1: exp from imm12 */`).
+
+6. **Namespace and includes**: already set by the scaffold from `kernel_template.py`. Do not modify. If the kernel uses `sfpi::` mode constants (e.g. `sfpi::SFPLOADI_MOD0_FLOATB`, `sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE`, `sfpi::SFPABS_MOD1_FLOAT`) you MUST `#include "sfpi.h"` directly in the kernel header. Do NOT rely on transitive inclusion through the dispatcher — a dedicated test cpp that only includes your kernel header must compile standalone.
+
+---
+
+## Naming literal values
+
+Hex literals that carry semantic meaning (math coefficients, format patterns, bit masks) belong at the top of `namespace sfpu` as named constants, not sprinkled inline. The fp16b immediate-load instructions take the upper 16 bits of a float; reading `0x4B40` tells the reviewer nothing, reading `FP16B_RNE_BIAS_POS` tells them exactly what the instruction is doing. Naming a value also lets a later maintainer change the coefficient by editing one declaration instead of grepping for a hex pattern.
+
+**Rule:** If a literal appears in a `TTI_SFPLOADI` / `TTI_SFPMULI` / `TTI_SFPADDI` / `TTI_SFPSETCC` / `TTI_SFPSETEXP` immediate slot *and* encodes a semantic quantity, give it a name. This applies whether the value is used once or many times — the name is primarily about intent, not deduplication.
+
+**Recommended layout:**
+
+```cpp
+namespace ckernel
+{
+namespace sfpu
+{
+// fp16b bit patterns (upper 16 bits of the corresponding fp32) used as
+// SFPLOADI / SFPMULI / SFPADDI immediates in MOD0_FLOATB mode.
+constexpr std::uint32_t FP16B_INV_PI = 0x3EA2; // 1/pi ~= 0.31831
+constexpr std::uint32_t FP16B_PI     = 0x4049; // pi    ~= 3.1406
+constexpr std::uint32_t FP16B_HALF   = 0x3F00; // 0.5
+constexpr std::uint32_t FP16B_TWO    = 0x4000; // 2.0
+
+// Round-to-nearest-even bias constants for the float-to-int snap:
+// adding +1.5*2^23 then subtracting 1.5*2^23 forces x to round to nearest
+// integer with ties to even. Exact in fp16b for |x| < 2^22.
+constexpr std::uint32_t FP16B_RNE_BIAS_POS = 0x4B40; // +1.5 * 2^23
+constexpr std::uint32_t FP16B_RNE_BIAS_NEG = 0xCB40; // -1.5 * 2^23
+
+// Maclaurin coefficients: sin(z) = z + SIN_C3*z^3 + SIN_C5*z^5 + SIN_C7*z^7
+constexpr std::uint32_t FP16B_SIN_C3 = 0xBE2B; // -1/6   ~= -0.16666
+constexpr std::uint32_t FP16B_SIN_C5 = 0x3C08; //  1/120 ~=  0.008333
+constexpr std::uint32_t FP16B_SIN_C7 = 0xB950; // -1/5040 ~= -1.984e-4
+// ... etc
+
+// Bit masks / condition-flag immediates:
+constexpr std::uint32_t SFPSETCC_IMM_FP32_TEST = 0x800; // imm12 bit 11 = "treat LREG as fp32"
+constexpr std::uint32_t FP32_EXP_BIAS          = 127;   // IEEE fp32 biased-exponent offset
+}
+}
+```
+
+**Naming conventions:**
+
+| Category | Prefix | Example |
+|---|---|---|
+| Mathematical constant in fp16b form | `FP16B_` | `FP16B_INV_PI`, `FP16B_LN2`, `FP16B_HALF` |
+| Polynomial coefficient | `FP16B_<POLY>_C<K>` | `FP16B_SIN_C5`, `FP16B_COS_C10`, `FP16B_LOG_COEFF_A` |
+| Rounding / sentinel bias | `FP16B_<PURPOSE>_BIAS_<POS/NEG>` | `FP16B_RNE_BIAS_POS`, `FP16B_RNE_BIAS_NEG` |
+| Immediate bit-mask / flag | `<INSTR>_IMM_<MEANING>` | `SFPSETCC_IMM_FP32_TEST` |
+| IEEE-level numeric constant | plain descriptive | `FP32_EXP_BIAS` |
+
+Never use the word "MAGIC" in a constant name — if the only explanation for a value is "it's magic," that's evidence the name isn't descriptive enough. The +1.5·2^23 pair is the *round-to-nearest-even bias*, not a magic number. The `0x800` is the *FP32-test bit of SFPSETCC's imm12*, not a magic number.
+
+**What stays inline (does NOT need naming):**
+
+- Literal `0` and `1` used as instruction-position arguments — those are covered by rule 5's inline annotation requirement, not by constant-naming.
+- Literals that are already a named constant from `sfpi::` / `p_sfpu::` / `p_sfpnonlinear::` (those are already names).
+- Register and ADDR_MOD indices (already named via `p_sfpu::LREG*`, `ADDR_MOD_7`).
+
+**What to do when the analysis §6b gives you raw hex:**
+
+The analyzer's pseudocode may write `TTI_SFPLOADI(..., 0x3638)` verbatim. You are not required to transcribe the raw hex — in fact you MUST name it per rule 7 above. If multiple §6b call sites use the same hex value, give it ONE name; if a §6b value only appears once but has a clear mathematical identity (`1/(2k+1)!` for Maclaurin, `1/pi`, `ln(2)`, `-127` for exponent debias, etc.), name it anyway. Record the naming in your self-log under "Decisions & trade-offs".
+
+If an analysis §6b hex value has no clear semantic meaning — it's e.g. a fitted polynomial coefficient from an opaque least-squares run — name it `FP16B_<POLY>_COEFF_<A|B|...>` and add a line in the constants block comment saying which fit produced it.
 
 ---
 
