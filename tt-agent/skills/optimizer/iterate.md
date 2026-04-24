@@ -81,7 +81,16 @@ Invoke `tt:run` to execute the unit test (PCC check runs inside). Invoke
 - Append row to `trend-<scope>.md` (format in `convergence.md`) with
   utilization columns: `DRAM %`, `FLOPs %`, `Abs TFLOPs`, `Bound`, `Cores`.
   For parallel workspaces include the workspace letter in the `WS` column.
-- Emit the one-line Claude output with utilization snapshot.
+- Emit one line to the developer in real time:
+
+  ```
+  Iter <n> [<ws>] <sha>: <metric> (baseline <B>, Δbest <X%>, best@iter <m>) · <FLOPs%>F / <DRAM%>D / <Bound>
+  ```
+
+  Example:
+  ```
+  Iter 7 [a] abc1234: 8.2ms (baseline 12.1ms, Δbest -3%, best@iter 5) · 44%F / 18%D / overhead
+  ```
 
 ### 7. Evaluate
 

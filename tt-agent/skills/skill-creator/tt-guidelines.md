@@ -101,19 +101,21 @@ Must define explicit convergence criteria:
 - **Escalate:** [what to report when stuck]
 ```
 
-Must declare phases with a phase table. Each phase specifies what knowledge to load
-and what it produces:
+Must declare phases with a phase table. The phase table replaces the
+Progressive Load Table for workflow skills — don't include both. Columns:
+what happens (1-line summary), procedure (sub-file or invoked skill), and
+the note produced:
 
 ```markdown
-| Phase | Loads | Produces |
-|---|---|---|
-| Prepare | `skills/run/workspace-detect.md` | Workspace context |
-| Build | `knowledge/recipes/<repo>/build.md` (via tt-run) | Built artifacts |
-| ...   | ... | ... |
+| Phase | What happens | Procedure | Note produced |
+|---|---|---|---|
+| Prepare | Workspace + target research | `skills/run/workspace-detect.md` | `prepare-<scope>-<ts>.md` |
+| Build | Compile artifacts | `knowledge/recipes/<repo>/build.md` (via tt-run) | — |
+| ...   | ... | ... | ... |
 ```
 
 Rules for phase tables:
-- Every file referenced in Loads must exist on disk (enforced by tests)
+- Every file referenced must exist on disk (enforced by tests)
 - Repo-specific recipes use `<repo>` placeholder — resolved at runtime after workspace detection
 - After each phase, summarize in 3-5 lines and move on. Loaded knowledge is consumed, not carried forward.
 - Persistent findings go to `~/.tt-agent/notes/`
@@ -220,7 +222,7 @@ Before finalizing any skill:
 - [ ] Correct layer in `metadata.layer`
 - [ ] No inlined API signatures — all volatile content points to source
 - [ ] Workflow skills define convergence criteria
-- [ ] Workflow skills have a phase table with Loads and Produces columns
+- [ ] Workflow skills have a phase table (replaces Progressive Load Table — don't keep both)
 - [ ] All files referenced in Loads columns exist on disk
 - [ ] Autonomous skills declare and run the Developer-Rule Conflict Protocol
 - [ ] Every file within size target, or overrun justified in-file

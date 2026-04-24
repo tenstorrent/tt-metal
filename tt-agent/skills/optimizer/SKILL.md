@@ -67,16 +67,17 @@ trend-file entry.
 
 ## Phase Table
 
-| Phase | Loads / dispatches | Produces |
-|---|---|---|
-| Preflight | Developer-rule check (above); doc check (`prepare.md` step 4) | Go / no-go + doc pointers |
-| Prepare | `prepare.md`; `skills/run/workspace-detect.md` (via tt:run); `tt:learn("<target>")` | Workspace note, research note, dim-validation, doc pointers |
-| Extract (if no unit test) | dispatch `extract.md` subagent | Extracted unit test, saved tensors, ±10% verification pass |
-| Baseline | invoke `tt:profiler` on the unit test | Baseline profile note, first row in `trend-<scope>.md` |
-| Spawn workspaces (parallel only) | `workspaces.md` | N workspaces, N branches, ccache shared |
-| Iterate | dispatch `iterate.md` subagent(s); each calls `tt:run` + `tt:profiler` per trial | Per-iteration commits, profile notes, trend rows |
-| Converge | `convergence.md` | Success / stall-asks-user / PCC-abort |
-| Review | invoke `skills/code-review/review-loop.md` on the winning branch's diff | Clean-review findings note or documented abort, then final summary |
+| Phase | What happens | Procedure | Note produced |
+|---|---|---|---|
+| Preflight | Check dev-rule conflicts, preload tools, sweep docs | inline above | — |
+| Prepare | Research target, sibling-diff scan, dim validation, doc sweep | `prepare.md` | `prepare-<scope>-<ts>.md` |
+| Extract* | Capture model inputs, write unit test, verify ±10% | `extract.md` | test path + tensor path |
+| Baseline | Profile the unit test | `tt:profiler` | `profile-<scope>-<ts>.md`, baseline row |
+| Spawn* | Clone + branch + build per hypothesis | `workspaces.md` | N workspaces, N branches |
+| Iterate | Hypothesize → implement → build → profile → commit → record | `iterate.md` (+ `playbook.md`, `convergence.md`) | commits, profile notes, trend rows |
+| Review | Review-to-done loop on winning branch | `skills/code-review/review-loop.md` | `findings-review-<ts>-<scope>.md` |
+
+\* conditional — Extract runs only if no unit test exists; Spawn only for parallelism > 1.
 
 After each phase, summarize in 3-5 lines in the trend file and move on.
 Phase inputs are consumed, not carried forward.
@@ -97,19 +98,6 @@ Repo:
 - Commit subject format: see `iterate.md` § Record.
 - Never pushed.
 
-## Per-Iteration Claude Output
-
-One line per iteration, visible to the developer in real time:
-
-```
-Iter <n> [<ws>] <sha>: <metric> (baseline <B>, Δbest <X%>, best@iter <m>) · <FLOPs%>F / <DRAM%>D / <Bound>
-```
-
-Example:
-```
-Iter 7 [a] abc1234: 8.2ms (baseline 12.1ms, Δbest -3%, best@iter 5) · 44%F / 18%D / overhead
-```
-
 ## Convergence
 
 See `convergence.md`. Summary:
@@ -120,20 +108,6 @@ See `convergence.md`. Summary:
 
 No hard iteration cap. Developer can interrupt anytime; trend file and
 commits are current after every iteration.
-
-## Progressive Load Table
-
-| Sub-task | Load |
-|---|---|
-| Prepare-phase detail (research, sibling diff, dim validation, docs) | `prepare.md` |
-| Per-iteration loop (both modes), hypothesis discipline | `iterate.md` |
-| Guidelines distilled from prior sessions | `playbook.md` |
-| Convergence rules, trend file format, commit protocol | `convergence.md` |
-| Parallel workspace spawn, ccache, cleanup | `workspaces.md` |
-| Model → unit test + tensor capture | `extract.md` |
-| Build, test, profile execution | invoke `tt:run` and `tt:profiler` |
-| Target research, volatile APIs | invoke `tt:learn("<question>")` |
-| Final review on winning branch | invoke `tt:code-review` via `review-loop.md` |
 
 ## Caller Contract
 
