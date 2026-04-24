@@ -143,10 +143,15 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
         "dec_split": (head.decpose.out_features, head.decshape.out_features, head.deccam.out_features),
     }
     for blk in td.layers:
+        # Fuse SA for N=1: attn==V, so QKV→split→concat is identity.
+        # Pre-multiply V columns of QKV weight by out projection on CPU so the
+        # hot path does one (1024,1024) matmul instead of (1024,1536)+(512,1024).
+        sa_qkv_cpu = blk.sa.to_qkv.weight.t()    # (1024, 1536)
+        sa_out_cpu = blk.sa.to_out.weight.t()     # (512, 1024)
+        sa_fused_cpu = sa_qkv_cpu[:, 1024:].float() @ sa_out_cpu.float()  # (1024, 1024)
         params["layers"].append({
             "norm_sa": {"weight": _t(blk.norm_sa.weight, device), "bias": _t(blk.norm_sa.bias, device)},
-            "sa_qkv_w": _t(blk.sa.to_qkv.weight.t(), device),        # (1024, 3*512)
-            "sa_out_w": _t(blk.sa.to_out.weight.t(), device),        # (512, 1024)
+            "sa_fused_w": _t(sa_fused_cpu.to(torch.bfloat16), device),  # (1024, 1024) fused V+out
             "sa_out_b": _t_bias(blk.sa.to_out.bias, device),
             "norm_ca": {"weight": _t(blk.norm_ca.weight, device), "bias": _t(blk.norm_ca.bias, device)},
             "ca_q_w": _t(blk.ca.to_q.weight.t(), device),            # (1024, 512)
@@ -190,22 +195,12 @@ def _decoder_block(x, context, p: Dict[str, Any]):
     lncfg = _ln_compute_config(dev)
     _L1 = ttnn.L1_MEMORY_CONFIG
 
-    # SA: N=1, so attn output == V; skip SDPA entirely.
+    # SA: N=1 so attn==V; fused_w = sa_qkv_w[:, 1024:] @ sa_out_w → single matmul.
     h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"], memory_config=_L1, compute_kernel_config=lncfg)
-    qkv = ttnn.experimental.minimal_matmul(
-        h, p["sa_qkv_w"],
-        config=_mm_cfg(1, 1024, 1536, dev),
-        compute_kernel_config=ckcfg,
-        memory_config=_L1,
-    )
-    _, _, v = ttnn.transformer.split_query_key_value_and_split_heads(
-        qkv, num_heads=NUM_HEADS, transpose_key=False, memory_config=_L1,
-    )
-    v = ttnn.transformer.concatenate_heads(v, memory_config=_L1)
     sa = ttnn.experimental.minimal_matmul(
-        v, p["sa_out_w"],
+        h, p["sa_fused_w"],
         bias_tensor=p["sa_out_b"],
-        config=_mm_cfg(1, 512, 1024, dev),
+        config=_mm_cfg(1, 1024, 1024, dev),
         compute_kernel_config=ckcfg,
         memory_config=_L1,
     )
