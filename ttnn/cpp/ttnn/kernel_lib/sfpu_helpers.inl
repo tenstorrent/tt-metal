@@ -94,7 +94,7 @@ ALWI void Log<approx, Slot>::call(uint32_t d0) const { log_tile<static_cast<bool
 template <Dst Slot>
 ALWI void LogWithBase<Slot>::init() const { log_with_base_tile_init(); }
 template <Dst Slot>
-ALWI void LogWithBase<Slot>::call(uint32_t d0) const { log_with_base_tile(d0, base_scale); }
+ALWI void LogWithBase<Slot>::call(uint32_t d0) const { log_with_base_tile(d0, this->base_scale); }
 
 template <Approx approx, Dst Slot>
 ALWI void Log1p<approx, Slot>::init() const { log1p_tile_init<static_cast<bool>(approx)>(); }
@@ -159,17 +159,17 @@ ALWI void Expm1<approx, Slot>::call(uint32_t d0) const { expm1_tile<static_cast<
 template <Dst Slot>
 ALWI void Power<Slot>::init() const { power_tile_init(); }
 template <Dst Slot>
-ALWI void Power<Slot>::call(uint32_t d0) const { power_tile(d0, exponent); }
+ALWI void Power<Slot>::call(uint32_t d0) const { power_tile(d0, this->exponent); }
 
 template <Dst Slot>
 ALWI void PowerIterative<Slot>::init() const { power_tile_init(); }
 template <Dst Slot>
-ALWI void PowerIterative<Slot>::call(uint32_t d0) const { power_tile(d0, int_exponent); }
+ALWI void PowerIterative<Slot>::call(uint32_t d0) const { power_tile(d0, this->int_exponent); }
 
 template <Dst Slot>
 ALWI void Rpow<Slot>::init() const { rpow_tile_init(); }
 template <Dst Slot>
-ALWI void Rpow<Slot>::call(uint32_t d0) const { rpow_tile(d0, base_val); }
+ALWI void Rpow<Slot>::call(uint32_t d0) const { rpow_tile(d0, this->base_val); }
 
 // =============================================================================
 // Op Method Definitions — Activations (11 ops)
@@ -213,7 +213,7 @@ ALWI void Hardsigmoid<Slot>::call(uint32_t d0) const { hardsigmoid_tile(d0); }
 template <Dst Slot>
 ALWI void Hardtanh<Slot>::init() const { hardtanh_tile_init(); }
 template <Dst Slot>
-ALWI void Hardtanh<Slot>::call(uint32_t d0) const { hardtanh_tile(d0, param_min, param_max); }
+ALWI void Hardtanh<Slot>::call(uint32_t d0) const { hardtanh_tile(d0, this->param_min, this->param_max); }
 
 template <Dst Slot>
 ALWI void Softsign<Slot>::init() const { softsign_tile_init(); }
@@ -223,12 +223,12 @@ ALWI void Softsign<Slot>::call(uint32_t d0) const { softsign_tile(d0); }
 template <Dst Slot>
 ALWI void Softplus<Slot>::init() const { softplus_tile_init(); }
 template <Dst Slot>
-ALWI void Softplus<Slot>::call(uint32_t d0) const { softplus_tile(d0, beta, beta_recip, threshold); }
+ALWI void Softplus<Slot>::call(uint32_t d0) const { softplus_tile(d0, this->beta, this->beta_recip, this->threshold); }
 
 template <Dst Slot>
 ALWI void Xielu<Slot>::init() const { xielu_tile_init(); }
 template <Dst Slot>
-ALWI void Xielu<Slot>::call(uint32_t d0) const { xielu_tile(d0, alpha_p, alpha_n); }
+ALWI void Xielu<Slot>::call(uint32_t d0) const { xielu_tile(d0, this->alpha_p, this->alpha_n); }
 
 // =============================================================================
 // Op Method Definitions — Trigonometry (11 ops)
@@ -314,36 +314,36 @@ template <Dst Slot> ALWI void Nez<Slot>::init() const { nez_tile_init(); }
 template <Dst Slot> ALWI void Nez<Slot>::call(uint32_t d0) const { nez_tile(d0); }
 
 template <Dst Slot> ALWI void UnaryEq<Slot>::init() const { unary_eq_tile_init(); }
-template <Dst Slot> ALWI void UnaryEq<Slot>::call(uint32_t d0) const { unary_eq_tile(d0, param0); }
+template <Dst Slot> ALWI void UnaryEq<Slot>::call(uint32_t d0) const { unary_eq_tile(d0, this->param0); }
 template <Dst Slot> ALWI void UnaryNe<Slot>::init() const { unary_ne_tile_init(); }
-template <Dst Slot> ALWI void UnaryNe<Slot>::call(uint32_t d0) const { unary_ne_tile(d0, param0); }
+template <Dst Slot> ALWI void UnaryNe<Slot>::call(uint32_t d0) const { unary_ne_tile(d0, this->param0); }
 template <Dst Slot> ALWI void UnaryGt<Slot>::init() const { unary_gt_tile_init(); }
-template <Dst Slot> ALWI void UnaryGt<Slot>::call(uint32_t d0) const { unary_gt_tile(d0, param0); }
+template <Dst Slot> ALWI void UnaryGt<Slot>::call(uint32_t d0) const { unary_gt_tile(d0, this->param0); }
 template <Dst Slot> ALWI void UnaryGe<Slot>::init() const { unary_ge_tile_init(); }
-template <Dst Slot> ALWI void UnaryGe<Slot>::call(uint32_t d0) const { unary_ge_tile(d0, param0); }
+template <Dst Slot> ALWI void UnaryGe<Slot>::call(uint32_t d0) const { unary_ge_tile(d0, this->param0); }
 template <Dst Slot> ALWI void UnaryLt<Slot>::init() const { unary_lt_tile_init(); }
-template <Dst Slot> ALWI void UnaryLt<Slot>::call(uint32_t d0) const { unary_lt_tile(d0, param0); }
+template <Dst Slot> ALWI void UnaryLt<Slot>::call(uint32_t d0) const { unary_lt_tile(d0, this->param0); }
 template <Dst Slot> ALWI void UnaryLe<Slot>::init() const { unary_le_tile_init(); }
-template <Dst Slot> ALWI void UnaryLe<Slot>::call(uint32_t d0) const { unary_le_tile(d0, param0); }
+template <Dst Slot> ALWI void UnaryLe<Slot>::call(uint32_t d0) const { unary_le_tile(d0, this->param0); }
 
 // =============================================================================
 // Op Method Definitions — Additional Activations (7 ops)
 // =============================================================================
 
 template <Dst Slot> ALWI void Elu<Slot>::init() const { elu_tile_init(); }
-template <Dst Slot> ALWI void Elu<Slot>::call(uint32_t d0) const { elu_tile(d0, alpha); }
+template <Dst Slot> ALWI void Elu<Slot>::call(uint32_t d0) const { elu_tile(d0, this->alpha); }
 template <Dst Slot> ALWI void Selu<Slot>::init() const { selu_tile_init(); }
-template <Dst Slot> ALWI void Selu<Slot>::call(uint32_t d0) const { selu_tile(d0, scale, alpha); }
+template <Dst Slot> ALWI void Selu<Slot>::call(uint32_t d0) const { selu_tile(d0, this->scale, this->alpha); }
 template <Dst Slot> ALWI void Celu<Slot>::init() const { celu_tile_init(); }
-template <Dst Slot> ALWI void Celu<Slot>::call(uint32_t d0) const { celu_tile(d0, alpha, alpha_recip); }
+template <Dst Slot> ALWI void Celu<Slot>::call(uint32_t d0) const { celu_tile(d0, this->alpha, this->alpha_recip); }
 template <Dst Slot> ALWI void Softshrink<Slot>::init() const { softshrink_tile_init(); }
-template <Dst Slot> ALWI void Softshrink<Slot>::call(uint32_t d0) const { softshrink_tile(d0, lambda); }
+template <Dst Slot> ALWI void Softshrink<Slot>::call(uint32_t d0) const { softshrink_tile(d0, this->lambda); }
 template <Dst Slot> ALWI void Clamp<Slot>::init() const { clamp_tile_init(); }
-template <Dst Slot> ALWI void Clamp<Slot>::call(uint32_t d0) const { clamp_tile(d0, param_min, param_max); }
+template <Dst Slot> ALWI void Clamp<Slot>::call(uint32_t d0) const { clamp_tile(d0, this->param_min, this->param_max); }
 template <Dst Slot> ALWI void Threshold<Slot>::init() const { threshold_tile_init(); }
-template <Dst Slot> ALWI void Threshold<Slot>::call(uint32_t d0) const { threshold_tile(d0, threshold, value); }
+template <Dst Slot> ALWI void Threshold<Slot>::call(uint32_t d0) const { threshold_tile(d0, this->threshold, this->value); }
 template <Dst Slot> ALWI void Prelu<Slot>::init() const { prelu_tile_init(); }
-template <Dst Slot> ALWI void Prelu<Slot>::call(uint32_t d0) const { prelu_tile(d0, weight); }
+template <Dst Slot> ALWI void Prelu<Slot>::call(uint32_t d0) const { prelu_tile(d0, this->weight); }
 
 // =============================================================================
 // Op Method Definitions — Rounding (6 ops)
@@ -356,7 +356,7 @@ template <Dst Slot> ALWI void Ceil<Slot>::call(uint32_t d0) const { ceil_tile(d0
 template <Dst Slot> ALWI void Trunc<Slot>::init() const { rounding_op_tile_init(); }
 template <Dst Slot> ALWI void Trunc<Slot>::call(uint32_t d0) const { trunc_tile(d0); }
 template <Dst Slot> ALWI void Round<Slot>::init() const { rounding_op_tile_init(); }
-template <Dst Slot> ALWI void Round<Slot>::call(uint32_t d0) const { round_tile(d0, decimals); }
+template <Dst Slot> ALWI void Round<Slot>::call(uint32_t d0) const { round_tile(d0, this->decimals); }
 template <Dst Slot> ALWI void Frac<Slot>::init() const { rounding_op_tile_init(); }
 template <Dst Slot> ALWI void Frac<Slot>::call(uint32_t d0) const { frac_tile(d0); }
 template <Dst Slot> ALWI void StochasticRound<Slot>::init() const { rounding_op_tile_init(); }
@@ -380,49 +380,49 @@ template <Dst Slot> ALWI void Identity<Slot>::call(uint32_t d0) const { identity
 // =============================================================================
 
 template <Dst Slot> ALWI void AddScalar<Slot>::init() const { binop_with_scalar_tile_init(); }
-template <Dst Slot> ALWI void AddScalar<Slot>::call(uint32_t d0) const { add_unary_tile(d0, scalar); }
+template <Dst Slot> ALWI void AddScalar<Slot>::call(uint32_t d0) const { add_unary_tile(d0, this->scalar); }
 template <Dst Slot> ALWI void SubScalar<Slot>::init() const { binop_with_scalar_tile_init(); }
-template <Dst Slot> ALWI void SubScalar<Slot>::call(uint32_t d0) const { sub_unary_tile(d0, scalar); }
+template <Dst Slot> ALWI void SubScalar<Slot>::call(uint32_t d0) const { sub_unary_tile(d0, this->scalar); }
 template <Dst Slot> ALWI void MulScalar<Slot>::init() const { binop_with_scalar_tile_init(); }
-template <Dst Slot> ALWI void MulScalar<Slot>::call(uint32_t d0) const { mul_unary_tile(d0, scalar); }
+template <Dst Slot> ALWI void MulScalar<Slot>::call(uint32_t d0) const { mul_unary_tile(d0, this->scalar); }
 template <Dst Slot> ALWI void DivScalar<Slot>::init() const { binop_with_scalar_tile_init(); }
-template <Dst Slot> ALWI void DivScalar<Slot>::call(uint32_t d0) const { div_unary_tile(d0, scalar); }
+template <Dst Slot> ALWI void DivScalar<Slot>::call(uint32_t d0) const { div_unary_tile(d0, this->scalar); }
 template <Dst Slot> ALWI void RsubScalar<Slot>::init() const { binop_with_scalar_tile_init(); }
-template <Dst Slot> ALWI void RsubScalar<Slot>::call(uint32_t d0) const { rsub_unary_tile(d0, scalar); }
+template <Dst Slot> ALWI void RsubScalar<Slot>::call(uint32_t d0) const { rsub_unary_tile(d0, this->scalar); }
 
 template <Dst Slot> ALWI void Rsub<Slot>::init() const { rsub_tile_init(); }
-template <Dst Slot> ALWI void Rsub<Slot>::call(uint32_t d0) const { rsub_tile(d0, param0); }
+template <Dst Slot> ALWI void Rsub<Slot>::call(uint32_t d0) const { rsub_tile(d0, this->param0); }
 
 template <RoundingMode rounding_mode, Dst Slot>
 ALWI void Rdiv<rounding_mode, Slot>::init() const { rdiv_tile_init(); }
 template <RoundingMode rounding_mode, Dst Slot>
-ALWI void Rdiv<rounding_mode, Slot>::call(uint32_t d0) const { rdiv_tile<rounding_mode>(d0, value); }
+ALWI void Rdiv<rounding_mode, Slot>::call(uint32_t d0) const { rdiv_tile<rounding_mode>(d0, this->value); }
 
 template <Dst Slot>
-ALWI void Fmod<Slot>::init() const { fmod_tile_init(param0, param1); }
+ALWI void Fmod<Slot>::init() const { fmod_tile_init(this->param0, this->param1); }
 template <Dst Slot>
-ALWI void Fmod<Slot>::call(uint32_t d0) const { fmod_tile(d0, param0, param1); }
+ALWI void Fmod<Slot>::call(uint32_t d0) const { fmod_tile(d0, this->param0, this->param1); }
 
 template <Dst Slot>
-ALWI void Remainder<Slot>::init() const { remainder_tile_init(param0, param1); }
+ALWI void Remainder<Slot>::init() const { remainder_tile_init(this->param0, this->param1); }
 template <Dst Slot>
-ALWI void Remainder<Slot>::call(uint32_t d0) const { remainder_tile(d0, param0, param1); }
+ALWI void Remainder<Slot>::call(uint32_t d0) const { remainder_tile(d0, this->param0, this->param1); }
 
 template <Dst Slot>
 ALWI void Dropout<Slot>::init() const {}
 template <Dst Slot>
-ALWI void Dropout<Slot>::call(uint32_t d0) const { dropout_tile(d0, probability, scale_factor); }
+ALWI void Dropout<Slot>::call(uint32_t d0) const { dropout_tile(d0, this->probability, this->scale_factor); }
 
 // =============================================================================
 // Op Method Definitions — Fill and Random (3 ops)
 // =============================================================================
 
 template <Dst Slot> ALWI void FillTile<Slot>::init() const { fill_tile_init(); }
-template <Dst Slot> ALWI void FillTile<Slot>::call(uint32_t d0) const { fill_tile(d0, fill_val); }
+template <Dst Slot> ALWI void FillTile<Slot>::call(uint32_t d0) const { fill_tile(d0, this->fill_val); }
 template <Dst Slot> ALWI void FillTileBitcast<Slot>::init() const { fill_tile_init(); }
-template <Dst Slot> ALWI void FillTileBitcast<Slot>::call(uint32_t d0) const { fill_tile_bitcast(d0, param0); }
+template <Dst Slot> ALWI void FillTileBitcast<Slot>::call(uint32_t d0) const { fill_tile_bitcast(d0, this->param0); }
 template <Dst Slot> ALWI void RandTile<Slot>::init() const {}
-template <Dst Slot> ALWI void RandTile<Slot>::call(uint32_t d0) const { rand_tile(d0, from, scale); }
+template <Dst Slot> ALWI void RandTile<Slot>::call(uint32_t d0) const { rand_tile(d0, this->from, this->scale); }
 
 // =============================================================================
 // Op Method Definitions — Binary SFPU (9 ops)
@@ -500,7 +500,7 @@ ALWI void LgammaStirling<Slot>::call(uint32_t d0) const { lgamma_stirling_tile(d
 template <Dst Slot>
 ALWI void FillTileInt<Slot>::init() const { fill_tile_init(); }
 template <Dst Slot>
-ALWI void FillTileInt<Slot>::call(uint32_t d0) const { fill_tile_int(d0, value); }
+ALWI void FillTileInt<Slot>::call(uint32_t d0) const { fill_tile_int(d0, this->value); }
 
 template <Dst In0, Dst In1, Dst Out>
 ALWI void LgammaStirlingFloat<In0, In1, Out>::init() const { lgamma_stirling_float_tile_init(); }
@@ -554,12 +554,12 @@ ALWI void Lerp<df, In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c,
 template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
 ALWI void Addcmul<df, In0, In1, In2, Out>::init() const { addcmul_tile_init(); }
 template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
-ALWI void Addcmul<df, In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const { addcmul_tile<df>(a, b, c, d, value); }
+ALWI void Addcmul<df, In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const { addcmul_tile<df>(a, b, c, d, this->value); }
 
 template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
 ALWI void Addcdiv<df, In0, In1, In2, Out>::init() const { addcdiv_tile_init(); }
 template <DataFormat df, Dst In0, Dst In1, Dst In2, Dst Out>
-ALWI void Addcdiv<df, In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const { addcdiv_tile<df>(a, b, c, d, value); }
+ALWI void Addcdiv<df, In0, In1, In2, Out>::call(uint32_t a, uint32_t b, uint32_t c, uint32_t d) const { addcdiv_tile<df>(a, b, c, d, this->value); }
 
 // =============================================================================
 // Internal Helpers
