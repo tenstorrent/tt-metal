@@ -17,11 +17,7 @@ from models.demos.deepseek_v4_flash.fp4 import (
     unpack_fp4_indices,
 )
 from models.demos.deepseek_v4_flash.key_mapping import expert_packed_key, normalize_hf_key
-from models.demos.deepseek_v4_flash.manifest import (
-    TT_MANIFEST_SCHEMA_VERSION,
-    load_tt_manifest,
-    validate_tt_manifest,
-)
+from models.demos.deepseek_v4_flash.manifest import TT_MANIFEST_SCHEMA_VERSION, load_tt_manifest, validate_tt_manifest
 from models.demos.deepseek_v4_flash.synthetic import (
     generate_tiny_hf_checkpoint,
     tiny_config_dict,
@@ -33,13 +29,17 @@ def test_key_map_accepts_v4_and_hf_aliases():
     assert normalize_hf_key("embed.weight").canonical == "embed.weight"
     assert normalize_hf_key("model.embed_tokens.weight").canonical == "embed.weight"
     assert normalize_hf_key("lm_head.weight").canonical == "head.weight"
+    assert normalize_hf_key("model.layers.2.self_attn.q_a_proj.weight").canonical == "layers.2.attn.wq_a.weight"
     assert (
-        normalize_hf_key("model.layers.2.self_attn.q_a_proj.weight").canonical
-        == "layers.2.attn.wq_a.weight"
+        normalize_hf_key("model.layers.2.self_attn.q_b_proj.weight_scale_inv").canonical == "layers.2.attn.wq_b.scale"
     )
     assert (
-        normalize_hf_key("model.layers.2.self_attn.q_b_proj.weight_scale_inv").canonical
-        == "layers.2.attn.wq_b.scale"
+        normalize_hf_key("model.layers.2.self_attn.compressor.wgate.weight").canonical
+        == "layers.2.attn.compressor.wgate.weight"
+    )
+    assert (
+        normalize_hf_key("model.layers.2.self_attn.indexer.compressor.wkv.weight").canonical
+        == "layers.2.attn.indexer.compressor.wkv.weight"
     )
 
     mapped = normalize_hf_key("model.layers.3.mlp.experts.2.gate_proj.weight")
@@ -143,6 +143,9 @@ def test_generate_and_convert_tiny_three_layer_fixture(tmp_path):
         assert "layers.0.ffn.gate.tid2eid" in keys
         assert "layers.2.ffn.gate.tid2eid" in keys
         assert "layers.2.attn.compressor.ape" in keys
+        assert "layers.2.attn.compressor.norm.weight" in keys
+        assert "layers.2.attn.compressor.wgate.weight" in keys
+        assert "layers.2.attn.compressor.wkv.weight" in keys
         assert "layers.2.attn.indexer.wq_b.weight" in keys
 
     with (source / "model.safetensors.index.json").open("r", encoding="utf-8") as handle:

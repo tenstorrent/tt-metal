@@ -13,13 +13,14 @@ import torch
 from safetensors import safe_open
 
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
-from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, swiglu_expert
+from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, compressor_prefill, swiglu_expert
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 ttnn = pytest.importorskip("ttnn")
 
 from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
+from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 
@@ -35,7 +36,7 @@ def tiny_tt_preprocessed_checkpoint(tmp_path_factory: pytest.TempPathFactory) ->
     else:
         base = tmp_path_factory.mktemp("deepseek_v4_flash_device_smoke")
 
-    source = generate_tiny_hf_checkpoint(base / "hf_source", num_hidden_layers=1)
+    source = generate_tiny_hf_checkpoint(base / "hf_source", num_hidden_layers=3)
     return convert_hf_checkpoint(source, base / "tt_preprocessed")
 
 
@@ -155,3 +156,39 @@ def test_tiny_routed_expert_mlp_module_matches_torch(tiny_tt_preprocessed_checkp
     torch_output = ttnn.to_torch(module(tt_input, route_weight=tt_route_weights))
 
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=5e-2, atol=5e-2)
+
+
+def test_tiny_prefill_compressor_overlap_uses_host_ratio_pooling_and_matches_torch(
+    tiny_tt_preprocessed_checkpoint: Path, device
+):
+    """Smoke the first compressor prefill slice; overlap pooling is still host-side."""
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    layer = 2
+    weights = load_prefill_compressor_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
+    hidden_size = manifest["config"]["hidden_size"]
+    head_dim = manifest["config"]["head_dim"]
+    compress_ratio = manifest["config"]["compress_ratios"][layer]
+    seq_len = 32
+    torch_input = torch.linspace(-0.1, 0.1, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    expected = compressor_prefill(
+        torch_input[:, 0],
+        weights.wkv,
+        weights.wgate,
+        weights.ape,
+        weights.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=head_dim,
+        norm_eps=float(manifest["config"]["rms_norm_eps"]),
+        overlap=True,
+    )
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtPrefillCompressor.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=layer)
+    torch_output = ttnn.to_torch(module(tt_input))[:, 0]
+
+    assert torch_output.shape == expected.shape
+    torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
