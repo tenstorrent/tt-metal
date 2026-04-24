@@ -26,7 +26,6 @@ from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertO
 from models.demos.deepseek_v3_b1.weights.prepare import (
     create_gate_bias_tensor,
     create_gate_indices_tensor,
-    fold_ffn_norm_into_mlp_weights,
     prepare_attention_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
@@ -547,11 +546,7 @@ def create_reference_moe_model(state_dict, layer_idx):
 
     hf_config = AutoConfig.from_pretrained("models/demos/deepseek_v3/reference", trust_remote_code=True)
     moe_prefix = f"model.layers.{layer_idx}.mlp."
-    moe_state = {
-        k[len(moe_prefix) :]: v
-        for k, v in state_dict.items()
-        if k.startswith(moe_prefix) and not k.endswith("_folded_gamma")
-    }
+    moe_state = {k[len(moe_prefix) :]: v for k, v in state_dict.items() if k.startswith(moe_prefix)}
 
     if any(k.endswith("_scale_inv") for k in moe_state):
         from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
@@ -724,8 +719,6 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         num_routed_experts=256,
         include_global=False,
     )
-    state_dict = fold_ffn_norm_into_mlp_weights(state_dict, ROUTED_EXPERT_LAYER_IDX)
-
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
     r = create_routed_expert_tensors(
@@ -931,8 +924,6 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         winning_groups,
         winning_experts_by_group,
     )
-    state_dict = fold_ffn_norm_into_mlp_weights(state_dict, ROUTED_EXPERT_LAYER_IDX)
-
     # ── Create MoE tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
@@ -1207,8 +1198,6 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
         num_routed_experts=256,
         include_global=False,
     )
-    state_dict = fold_ffn_norm_into_mlp_weights(state_dict, ROUTED_EXPERT_LAYER_IDX)
-
     # ── Create MLP tensors (no routing) ──
     r = create_routed_expert_tensors(
         device,
@@ -1379,8 +1368,6 @@ def test_mlp_with_reduce(
         num_routed_experts=256 if is_moe else 4,
         include_global=False,
     )
-    state_dict = fold_ffn_norm_into_mlp_weights(state_dict, layer_idx)
-
     # ── Create MLP tensors (replicated across mesh) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(

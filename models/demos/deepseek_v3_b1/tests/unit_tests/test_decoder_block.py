@@ -32,7 +32,6 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     extract_routed_expert_output,
 )
 from models.demos.deepseek_v3_b1.weights.prepare import (
-    fold_ffn_norm_into_mlp_weights,
     get_layer_raw_tensors,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
@@ -405,8 +404,6 @@ def test_decoder(
         rigged_group_ids, rigged_expert_ids, torch_input = rig_experts(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
-
-    state_dict = fold_ffn_norm_into_mlp_weights(state_dict, ROUTED_EXPERT_LAYER_IDX)
 
     logger.info("Preparing layer weights on device...")
     layer_weights = prepare_moe_layer_weights(
@@ -929,8 +926,6 @@ def test_decoder_mlp(
         is_moe=False,
         seed=RoutedExpert.SEED,
     )
-
-    state_dict = fold_ffn_norm_into_mlp_weights(state_dict, DENSE_LAYER_IDX)
 
     logger.info("Preparing dense layer weights on device...")
     layer_weights = prepare_dense_layer_weights(submesh, state_dict, DENSE_LAYER_IDX, move_to_device=True)
