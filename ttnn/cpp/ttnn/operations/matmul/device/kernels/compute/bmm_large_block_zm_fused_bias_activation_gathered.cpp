@@ -10,7 +10,9 @@
 #include "experimental/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#ifdef SFPU_ACTIVATION
+#include "bmm_fused_activation.hpp"
+#endif
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -209,6 +211,11 @@ void kernel_main() {
     constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
     constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
 
+#ifdef SFPU_ACTIVATION
+    constexpr KernelActivation activation_type =
+        static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
+#endif
+
     experimental::CircularBuffer in1_cb(in1_cb_id);
     experimental::CircularBuffer sync_buf(sync_cb);
     experimental::CircularBuffer sync2_buf(sync_cb2);
@@ -231,8 +238,8 @@ void kernel_main() {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-#ifdef SFPU_OP_INIT_ACTIVATION
-    SFPU_OP_INIT_ACTIVATION
+#ifdef SFPU_ACTIVATION
+    init_sfpu_activation_pack<activation_type>();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -373,19 +380,32 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                     if (last_out) {
-// If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
-#if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
-#endif
                         if constexpr (untilize_out) {
                             pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_cb_id);
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
                         mm_out_cb.reserve_back(out_subblock_num_tiles);
+
+#if not defined FUSE_BIAS and defined SFPU_ACTIVATION
+                        PACK(TTI_SEMWAIT(
+                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                            semaphore::t6_sem(semaphore::MATH_PACK),
+                            p_stall::STALL_ON_ZERO));
+
+                        // Flip destination register offset for PACKER access
+                        PACK(TT_SETC16(
+                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            sfpu_activation_pack<activation_type>(i);
+                        }
+
+                        // Wait for SFPU completion before packing
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#else
                         tile_regs_wait();
+#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
