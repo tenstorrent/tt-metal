@@ -7,6 +7,11 @@
 #include "api/compute/reduce.h"
 #include "experimental/circular_buffer.h"
 
+#ifdef REDUCE_MINMAX_TWO_TILE_SCALER
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#endif
+
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
@@ -20,7 +25,12 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
+#ifdef REDUCE_MINMAX_TWO_TILE_SCALER
+    // Reader: two pages on c_2 - tile0 = 1.0 for reduce_tile, tile1 = user scale for post-mul
+    cb2.wait_front(2);
+#else
     cb2.wait_front(1);  // scaler tile from the reader
+#endif
 
     constexpr int onetile = 1;
 
@@ -50,6 +60,20 @@ void kernel_main() {
                     ++reduce_dst_idx;
                 }
             }
+
+#ifdef REDUCE_MINMAX_TWO_TILE_SCALER
+            /* Apply user-provided scaling factor to the reduced output.
+             * In the two-tile scaler configuration, reduction uses unity scaling,
+             * then the final reduced result is multiplied by the user scale.
+             */
+            uint32_t ntiles = chunk_end - wt;
+            copy_tile_init(tt::CBIndex::c_2);
+            copy_tile(tt::CBIndex::c_2, 1, ntiles);
+            mul_binary_tile_init();
+            for (uint32_t i = 0; i < ntiles; ++i) {
+                mul_binary_tile(i, ntiles, i);
+            }
+#endif
             for (uint32_t i = wt; i < chunk_end; ++i) {
                 cb3.reserve_back(onetile);
                 pack_tile((i - wt), tt::CBIndex::c_3);

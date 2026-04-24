@@ -17,13 +17,24 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
+    constexpr uint32_t cb_id_in2 = 2;
+
+#ifndef REDUCE_ROW_SUM_VIA_MM
+#ifdef REDUCE_MINMAX_TWO_TILE_SCALER
+    constexpr uint32_t packed_reduce_unity = get_compile_time_arg_val(0);
+    constexpr uint32_t packed_post_scale = get_compile_time_arg_val(1);
+    constexpr auto tensor_args = TensorAccessorArgs<2>();
+    // For Scaler CB: tile0 = 1.0 for reduce_tile; tile1 = user scale for SFPU post-mul.
+    generate_reduce_scaler(cb_id_in2, packed_reduce_unity);
+    generate_reduce_scaler_for_minmax(cb_id_in2, packed_post_scale);
+#else
     constexpr uint32_t scaler = get_compile_time_arg_val(0);
     constexpr auto tensor_args = TensorAccessorArgs<1>();
-
-    constexpr uint32_t cb_id_in2 = 2;
-#ifndef REDUCE_ROW_SUM_VIA_MM
     generate_reduce_scaler(cb_id_in2, scaler);
+#endif
 #else
+    constexpr uint32_t scaler = get_compile_time_arg_val(0);
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
     generate_mm_scaler(cb_id_in2, scaler);
 #endif
 

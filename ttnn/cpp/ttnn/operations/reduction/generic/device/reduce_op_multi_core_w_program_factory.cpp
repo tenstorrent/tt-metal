@@ -25,6 +25,15 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
 
+    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, user scale for post-mul)
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
+    bfloat16 bfloat_one = bfloat16::truncate(1.0f);
+    const bool is_min_or_max = (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN) ||
+                               (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX);
+    const bool min_max_scaler_cb = is_min_or_max && (bfloat_scaler_value != bfloat_one);
+    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    uint32_t packed_reduce_unity = pack_two_bfloat16_into_uint32({bfloat_one, bfloat_one});
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
 
@@ -63,8 +72,12 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             .set_page_size(src0_cb_index, src0_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
+    // CB Scaler: two pages when min/max and scalar != 1.0 - tile0 = 1.0 for reduce_tile, tile1 = user scale for
+    // post-mul
+    const uint32_t scaler_cb_pages = min_max_scaler_cb ? 2u : 1u;
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+        tt_metal::CircularBufferConfig(
+            scaler_cb_pages * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
@@ -75,10 +88,13 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args;
+    if (min_max_scaler_cb) {
+        reader_compile_time_args = {packed_reduce_unity, packed_scaler_value};
+    } else {
+        reader_compile_time_args = {packed_scaler_value};
+    }
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
@@ -102,6 +118,9 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::W);
+    if (min_max_scaler_cb) {
+        reduce_defines["REDUCE_MINMAX_TWO_TILE_SCALER"] = "1";
+    }
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,

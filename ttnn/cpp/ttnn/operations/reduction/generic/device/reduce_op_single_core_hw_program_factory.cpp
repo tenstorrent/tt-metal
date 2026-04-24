@@ -34,8 +34,23 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
     // must not reach this code path. Instead negative scalers are handled via the two-step
     // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
-    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
-    float scaler = std::sqrt(operation_attributes.scaler);
+
+    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, user scale for post-mul)
+    const bfloat16 bfloat_scaler_user = bfloat16::truncate(operation_attributes.scaler);
+    const bfloat16 bfloat_one = bfloat16::truncate(1.0f);
+    const bool is_min_or_max = (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN) ||
+                               (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX);
+    const bool min_max_scaler_cb = is_min_or_max && (bfloat_scaler_user != bfloat_one);
+    const uint32_t packed_reduce_unity = pack_two_bfloat16_into_uint32({bfloat_one, bfloat_one});
+    uint32_t packed_scaler_value = 0;
+    if (min_max_scaler_cb) {
+        packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_user, bfloat_scaler_user});
+    } else {
+        TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
+        float scaler = std::sqrt(operation_attributes.scaler);
+        bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
+        packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    }
 
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
 
@@ -70,8 +85,12 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .set_page_size(src0_cb_index, src0_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
+    // CB Scaler: two pages when min/max and scalar != 1.0 - tile0 = 1.0 for reduce_tile, tile1 = user scale for
+    // post-mul
+    const uint32_t scaler_cb_pages = min_max_scaler_cb ? 2u : 1u;
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+        tt_metal::CircularBufferConfig(
+            scaler_cb_pages * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
 
@@ -82,9 +101,12 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args;
+    if (min_max_scaler_cb) {
+        reader_compile_time_args = {packed_reduce_unity, packed_scaler_value};
+    } else {
+        reader_compile_time_args = {packed_scaler_value};
+    }
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     if (operation_attributes.negate) {
@@ -106,12 +128,16 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    std::map<std::string, std::string> reader_defines;
+    if (min_max_scaler_cb) {
+        reader_defines["REDUCE_MINMAX_TWO_TILE_SCALER"] = "1";
+    }
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
         "reader_unary_reduce_universal_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -129,6 +155,11 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw") +
         (operation_attributes.negate ? "_neg" : "") + ".cpp";
 
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW);
+    if (min_max_scaler_cb) {
+        reduce_defines["REDUCE_MINMAX_TWO_TILE_SCALER"] = "1";
+    }
     tt_metal::CreateKernel(
         program,
         compute_kernel,
@@ -137,7 +168,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
-            .defines = reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW)});
+            .defines = reduce_defines});
 
     tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.buffer()->address(), num_tensor_tiles, 0});
 

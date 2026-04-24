@@ -29,11 +29,13 @@ namespace ckernel {
  * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
  * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
  * in which case the scaling factor should be 1/sqrt(N)).
- * - If `reduce_type = MAX`, all scaling factors should preferably be 1.
+ * - If `reduce_type = MAX`, the default scaling factor is typically 1. When a user scalar is
+ * provided, reduction may use unity scaling first and apply the user scale after reduction.
  *
  * NOTE: For SUM and AVG operations, the value in `icb_scaler` is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms
- * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
- * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
+ * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. GMPOOL does not support all scaler values
+ * in the reduce path (per ISA documentation, the sign bit and mantissa are ignored). Therefore, when `scaler != 1.0`, reduction may use unity scaling and apply the requested
+ * scale as a post-multiply after reduction.
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
  *
  * Return value: None
@@ -108,15 +110,17 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  * - If `reduce_type = SUM`, all scaling factors should preferably be 1.
  * - If `reduce_type = AVG`, all scaling factors should preferably be 1/N (where N is the number of elements being averaged, except if the reduction dimension is scalar,
  * in which case the scaling factor should be 1/sqrt(N)).
- * - If `reduce_type = MAX`, all scaling factors should preferably be 1.
+ * - If `reduce_type = MAX`, the default scaling factor is typically 1. When a user scalar is
+ * provided, reduction may use unity scaling first and apply the user scale after reduction.
  *
  * The templates take `reduce_type` which can be `ReduceFunc::Sum`, `ReduceFunc::Avg`, or `ReduceFunc::Max` and `reduce_dim` which can be `Reduce::R`, `Reduce::C`, or
  * `Reduce::RC`. They can also be specified by defines REDUCE_OP and REDUCE_DIM.
  *
  * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer state to default.
  * NOTE: For SUM and AVG operations, the value in `icb_scaler` is a scaling factor of the final sum of values across rows/columns/both, so there is no real constraint in terms
- * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. In any case, it is recommended to use the
- * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
+ * of it's value. For MAX operation, maximum value will be obtained as expected, but it will be scaled by the values in `icb_scaler`. GMPOOL does not support all scaler values
+ * in the reduce path (per ISA documentation, the sign bit and mantissa are ignored). Therefore, when `scaler != 1.0`, reduction may use unity scaling and apply the requested
+ * scale as a post-multiply after reduction.
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
  * Return value: None
  *
