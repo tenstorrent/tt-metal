@@ -792,6 +792,33 @@ Quick-reference status after Step 1+2:
 | T3K multi-device | ⏳ PENDING | — | Step 3 |
 | Accuracy/latency benchmarks | ⏳ PENDING | — | Step 5 |
 
+**Performance benchmarks (2026-04-24, N150 single device):**
+
+| Config | Layers | Warm avg ms/tok | tok/s |
+|-|-:|-:|-:|
+| Baseline BFP8 paged | 32 | ~37 | ~27 |
+| TQ Pre-rescaled (BFP4, prod) | 32 | 37.2 (flat to 128K) | ~27 |
+| TQ Full Dequant (--no-trace) | 2 | 7 | 144 |
+| TQ Full Dequant (--no-trace) | 4 | 237 | 4.2 |
+| TQ Full Dequant (--no-trace) | 32 | **hangs** (>2 min decode loop, no step output) | — |
+| TQ Full Dequant (trace) | 32 | **hangs** (trace captures, execute_trace never returns) | — |
+
+**🚨 Non-linear scaling issue** — 2→4 layers gives 34× slowdown (7 → 237 ms/tok),
+32 layers hangs outright. Root cause not yet isolated. Leading hypotheses:
+- Each layer has its own `TTNNTurboQuantCache` instance (`num_layers=1`), so the
+  32 fused-SDPA kernel invocations hit different K/V/norms DRAM addresses →
+  likely program-cache thrashing (each layer forces a fresh compile path)
+- With 32 × (K_idx + V_idx + K_norms + V_norms) = 128 paged tensors in DRAM,
+  noc-bandwidth contention may dominate
+- Fused kernel's ~50 SFPU ops/tile × 32 layers × 2 (K,V) × every chunk may just
+  be the arithmetic reality (but doesn't explain 4→32 hang)
+
+**Followups before accuracy runs can be meaningful:**
+1. Make cache single-instance across layers (one shared cache with 32 per-layer
+   slots instead of 32 single-layer caches) — should restore program-cache hits
+2. Profile with tracy where the hang occurs at 32 layers
+3. Check if trace-captured version deadlocks on a CB semaphore
+
 **3. Multi-device / T3K support** — PENDING
 - Replicate centroids across devices, shard indices/norms by heads
 - `fused_sdpa_decode` to use mesh_composer/mesh_mapper where needed
