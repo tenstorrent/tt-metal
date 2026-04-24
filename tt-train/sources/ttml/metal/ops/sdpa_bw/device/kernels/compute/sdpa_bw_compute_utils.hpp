@@ -114,7 +114,7 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     // so it is safe inside an acquire block (unlike the full unary_bcast_init).
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_intermediates)));
-    MATH((llk_math_eltwise_unary_datacopy_init<B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_intermediates)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_intermediates)));
 
     unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile_idx */ 0, lse_reg);
 
