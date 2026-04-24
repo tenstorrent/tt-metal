@@ -23,7 +23,31 @@ struct InputConfig {
     std::string output_name;
     bool loc_info = true;  // Default to detailed location info
     bool is_cabling_directory = false;
+    std::vector<std::string> remove_hosts;  // Hostnames to drop after load, before emission
 };
+
+// Parse a comma-separated list of hostnames. Trims whitespace and drops empty entries.
+static std::vector<std::string> parse_csv_hostnames(const std::string& csv) {
+    std::vector<std::string> out;
+    std::string current;
+    auto flush = [&]() {
+        size_t start = current.find_first_not_of(" \t");
+        size_t end = current.find_last_not_of(" \t");
+        if (start != std::string::npos) {
+            out.push_back(current.substr(start, end - start + 1));
+        }
+        current.clear();
+    };
+    for (char c : csv) {
+        if (c == ',') {
+            flush();
+        } else {
+            current.push_back(c);
+        }
+    }
+    flush();
+    return out;
+}
 
 bool file_exists(const std::string& path) {
     return std::filesystem::exists(path) && std::filesystem::is_regular_file(path);
@@ -50,7 +74,11 @@ InputConfig parse_arguments(int argc, char** argv) {
         cxxopts::value<std::string>()->default_value(""))(
         "s,simple",
         "Generate simple CSV output (hostname-based) instead of detailed location information (rack, shelf, etc.)",
-        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))("h,help", "Print usage information");
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "remove-hosts",
+        "Comma-separated list of hostnames to remove from the loaded cluster before emission. "
+        "Dangling references and empty subgraphs are cleaned up; remaining host_ids are renumbered.",
+        cxxopts::value<std::string>()->default_value(""))("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
@@ -74,6 +102,13 @@ InputConfig parse_arguments(int argc, char** argv) {
                       << " --cabling cabling.textproto --deployment deployment.textproto --output test --simple"
                       << std::endl;
             std::cout << "  # Generates simple CSV with hostname information only" << std::endl;
+            std::cout << std::endl;
+            std::cout << "  " << argv[0]
+                      << " --cabling cabling.textproto --deployment deployment.textproto"
+                         " --remove-hosts host-a,host-b --output trimmed"
+                      << std::endl;
+            std::cout << "  # Removes the named hosts from the loaded cluster before generating outputs"
+                      << std::endl;
             exit(0);
         }
 
@@ -90,6 +125,7 @@ InputConfig parse_arguments(int argc, char** argv) {
         config.deployment_descriptor_path = result["deployment"].as<std::string>();
         config.output_name = result["output"].as<std::string>();
         config.loc_info = !result["simple"].as<bool>();
+        config.remove_hosts = parse_csv_hostnames(result["remove-hosts"].as<std::string>());
 
         // Check if cabling descriptor is a directory or file
         if (directory_exists(config.cabling_descriptor_path)) {
@@ -157,6 +193,14 @@ int main(int argc, char** argv) {
 
         std::cout << "Loading descriptors and initializing generator..." << std::endl;
         CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
+
+        if (!config.remove_hosts.empty()) {
+            std::cout << "Removing " << config.remove_hosts.size() << " host(s) from loaded cluster:" << std::endl;
+            for (const auto& h : config.remove_hosts) {
+                std::cout << "  - " << h << std::endl;
+            }
+            cabling_generator.remove_hosts(config.remove_hosts);
+        }
 
         std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
         std::string cabling_output = "out/scaleout/cabling_guide" + config.output_name + ".csv";

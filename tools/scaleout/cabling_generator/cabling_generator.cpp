@@ -1205,6 +1205,90 @@ void CablingGenerator::merge(
     generate_logical_chip_connections();
 }
 
+bool CablingGenerator::remove_host_from_resolved_graph(
+    ResolvedGraphInstance& graph, const std::string& hostname) {
+    // Leaf case: the target lives directly in this graph.
+    auto node_it = graph.nodes.find(hostname);
+    if (node_it != graph.nodes.end()) {
+        const HostId removed_id = node_it->second.host_id;
+        graph.nodes.erase(node_it);
+        std::erase_if(
+            graph.children_order,
+            [&](const std::pair<std::string, bool>& entry) { return entry.second && entry.first == hostname; });
+
+        // Drop every internal connection touching the removed host_id and rebuild lookups.
+        for (auto& [port_type, conns] : graph.internal_connections) {
+            std::erase_if(conns, [&](const PortConnection& conn) {
+                return std::get<0>(conn.first) == removed_id || std::get<0>(conn.second) == removed_id;
+            });
+        }
+        std::erase_if(graph.internal_connections, [](const auto& kv) { return kv.second.empty(); });
+        graph.endpoint_to_dest.clear();
+        graph.connection_pairs.clear();
+        for (const auto& [port_type, conns] : graph.internal_connections) {
+            for (const auto& conn : conns) {
+                graph.endpoint_to_dest[conn.first] = conn.second;
+                graph.endpoint_to_dest[conn.second] = conn.first;
+                graph.connection_pairs.insert(normalize_graph_connection(conn));
+            }
+        }
+        return true;
+    }
+
+    // Recursive case: find in a subgraph, then collapse the subgraph if it went empty.
+    for (auto& [sub_name, subgraph] : graph.subgraphs) {
+        if (!remove_host_from_resolved_graph(*subgraph, hostname)) {
+            continue;
+        }
+        if (subgraph->nodes.empty() && subgraph->subgraphs.empty()) {
+            const std::string collapsed_name = sub_name;
+            graph.subgraphs.erase(collapsed_name);
+            std::erase_if(graph.children_order, [&](const std::pair<std::string, bool>& entry) {
+                return !entry.second && entry.first == collapsed_name;
+            });
+        }
+        return true;
+    }
+    return false;
+}
+
+void CablingGenerator::remove_host(const std::string& hostname) {
+    if (!root_instance_ || !remove_host_from_resolved_graph(*root_instance_, hostname)) {
+        log_warning(tt::LogDistributed, "remove_host: hostname '{}' not found; no-op", hostname);
+        return;
+    }
+
+    std::erase_if(deployment_hosts_, [&](const Host& h) { return h.hostname == hostname; });
+
+    // Renumbers host_ids to 0..N-1, remaps connections, and refreshes host_id_to_node_.
+    reassign_host_ids_dfs();
+
+    // Reorder deployment_hosts_ to match the new DFS host_id order.
+    std::unordered_map<std::string, Host> all_hosts;
+    for (const auto& h : deployment_hosts_) {
+        all_hosts[h.hostname] = h;
+    }
+    const auto saved_hosts = deployment_hosts_;
+    rebuild_deployment_hosts_in_dfs_order(all_hosts);
+    if (deployment_hosts_.size() != saved_hosts.size()) {
+        // Reordering needs every node to have a matching hostname entry; if that isn't the
+        // case (e.g. synthetic test fixtures), keep the pre-reorder list intact.
+        deployment_hosts_ = saved_hosts;
+    }
+
+    // Reset port availability on all surviving nodes before re-deriving chip connections;
+    // otherwise ports already marked during the original load would conflict when the
+    // remaining internal_connections are re-applied.
+    recreate_nodes_from_templates(*root_instance_);
+    generate_logical_chip_connections();
+}
+
+void CablingGenerator::remove_hosts(const std::vector<std::string>& hostnames) {
+    for (const auto& hostname : hostnames) {
+        remove_host(hostname);
+    }
+}
+
 // Getters for all data
 const std::vector<Host>& CablingGenerator::get_deployment_hosts() const { return deployment_hosts_; }
 
