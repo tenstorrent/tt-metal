@@ -144,7 +144,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(
-    const ckernel::TensorShape tensor_shape, const std::uint32_t transpose_of_faces = 0, const std::uint32_t within_face_16x16_transpose = 0)
+    const ckernel::TensorShape tensor_shape, const std::uint32_t transpose_of_faces, const std::uint32_t within_face_16x16_transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -153,6 +153,18 @@ inline void _llk_unpack_AB_init_(
     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
 
     _llk_unpack_AB_mop_config_<BType>(transpose_of_faces > 0, tensor_shape); // transpose of faces 0,2,1,3
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, 0, 0);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose, transpose);
 }
 
 /**

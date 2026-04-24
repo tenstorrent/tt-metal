@@ -34,7 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Initialize unpack with column broadcast on srcB and transpose on srcA
     const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
-    _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, params.UNPACK_TRANSPOSE_FACES);
+    _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, params.UNPACK_TRANSPOSE_FACES, params.UNPACK_TRANSPOSE_FACES);
 
     // Unpack tiles: srcA will be transposed, srcB will be column broadcasted
     for (int i = 0; i < params.TILE_CNT; ++i)
