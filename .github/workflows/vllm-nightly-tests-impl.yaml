@@ -122,9 +122,9 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         VLLM_ALLOW_LONG_MAX_MODEL_LEN: 1
-        HF_HUB_OFFLINE: 1
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+        HF_HUB_OFFLINE: 0
+        HF_HUB_CACHE: /root/ai-summary/hub
+        TT_CACHE_HOME: /root/ai-summary/tt_cache
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
@@ -134,7 +134,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:ro') || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        - /home/ubuntu/ai-summary:/root/ai-summary
       options: "--device /dev/tenstorrent"
     defaults:
       run:
