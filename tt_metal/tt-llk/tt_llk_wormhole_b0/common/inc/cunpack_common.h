@@ -1037,6 +1037,8 @@ enum class UnpackerProgramType
  * @param unpA_face_r_dim   Expected face row dimension for unpacker A (default FACE_R_DIM)
  * @param unpA_num_faces    Expected number of faces for unpacker A (default TILE_NUM_FACES)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
+ * @return UnpackerAConfigStatus::Configured if the configuration matches all expected values,
+ *         otherwise the enum value identifying the first mismatching field.
  */
 template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
 __attribute__((noinline)) void is_unpacker_A_configured_correctly(
@@ -1114,6 +1116,8 @@ __attribute__((noinline)) void is_unpacker_A_configured_correctly(
  * @param unpA_num_faces    Expected number of faces for unpacker A (default TILE_NUM_FACES)
  * @param unpB_num_faces    Expected number of faces for unpacker B (default TILE_NUM_FACES)
  * @param nop_count         Number of nop operations to ensure configuration writes complete (default 80)
+ * @return UnpackersABConfigStatus::Configured if the configuration matches all expected values,
+ *         otherwise the enum value identifying the first mismatching field/unpacker.
  */
 template <UnpackerProgramType program_type = UnpackerProgramType::ProgramByTile>
 __attribute__((noinline)) void are_unpackers_AB_configured_correctly(
