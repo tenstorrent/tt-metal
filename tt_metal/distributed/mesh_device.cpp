@@ -1567,9 +1567,42 @@ bool MeshDeviceImpl::initialize_impl(
 // Sync marker ID - must match device-side REALTIME_PROFILER_SYNC_MARKER_ID
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
+namespace {
+// Host clock wrapper for the RT profiler sync handshake.
+//
+// When TRACY_ENABLE is defined, TracyGetCpuTime() returns a real monotonic
+// host timestamp (hardware TSC or CLOCK_MONOTONIC_RAW ns) and
+// TracyGetTimerMul() converts ticks -> nanoseconds. When Tracy is
+// disabled, the Tracy header stubs both to literal 0, which breaks the
+// handshake: the host ends up writing sync_host_timestamp = 0 to L1, and
+// the device kernel's `if (host_time > 0)` guard silently drops the sync
+// request. The sync then times out and retries for minutes in CI.
+//
+// Fall back to std::chrono::steady_clock (nanoseconds) when Tracy is off,
+// so the handshake works regardless of build config. The Tracy-enabled
+// path is a pure pass-through, so behavior on Tracy builds is unchanged.
+inline int64_t rt_profiler_host_ticks() {
+#ifdef TRACY_ENABLE
+    return TracyGetCpuTime();
+#else
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+#endif
+}
+
+inline double rt_profiler_ns_per_tick() {
+#ifdef TRACY_ENABLE
+    return TracyGetTimerMul();
+#else
+    // steady_clock already returns nanoseconds, so 1 tick == 1 ns.
+    return 1.0;
+#endif
+}
+}  // namespace
+
 void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev_state, uint32_t num_samples) {
     auto& cluster = MetalContext::instance().get_cluster();
-    int64_t host_start_time = TracyGetCpuTime();
+    int64_t host_start_time = rt_profiler_host_ticks();
 
     struct SyncSample {
         int64_t host_time;     // Full 64-bit host TSC ticks relative to host_start_time
@@ -1621,7 +1654,7 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
         // Send truncated 32-bit value as echo identifier for pairing
-        int64_t host_before = TracyGetCpuTime() - host_start_time;
+        int64_t host_before = rt_profiler_host_ticks() - host_start_time;
         uint32_t host_time_id = static_cast<uint32_t>(host_before);
         std::vector<uint32_t> host_time_data = {host_time_id};
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -1712,7 +1745,7 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
     // keeping all intermediate products well within double precision.
     if (samples.size() >= 2) {
         const double n = static_cast<double>(samples.size());
-        const double tracy_ratio = TracyGetTimerMul();
+        const double tracy_ratio = rt_profiler_ns_per_tick();
 
         // Pass 1: compute means for centering
         double host_mean = 0.0, device_mean = 0.0;
@@ -1837,7 +1870,7 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
         // 4. Send host timestamp to trigger device response.
         // Place the host-side Tracy marker right before the PCIe write so both
         // FINISH_SYNC and SYNC_CHECK use the same timing convention.
-        dev_state.sync_host_time_before = TracyGetCpuTime();
+        dev_state.sync_host_time_before = rt_profiler_host_ticks();
         uint32_t host_time_id = static_cast<uint32_t>(dev_state.sync_host_time_before & 0xFFFFFFFF);
         std::vector<uint32_t> host_time_data = {host_time_id};
         TracyMessageL("FINISH_SYNC");
@@ -2279,7 +2312,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         // the device zone is placed using only the coarse regression from
         // run_realtime_profiler_sync while the host message uses the message
         // timestamp — extrapolation skew can exceed the sync-accuracy test's ±10µs.
-        int64_t sync_check_host_anchor = TracyGetCpuTime();
+        int64_t sync_check_host_anchor = rt_profiler_host_ticks();
         uint32_t host_time_id = 0x5C5C5C5C;  // recognizable pattern
         std::vector<uint32_t> host_time_data = {host_time_id};
         TracyMessageL("SYNC_CHECK");
