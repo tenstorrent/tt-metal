@@ -17,6 +17,7 @@
 #include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
@@ -235,7 +236,7 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
         py_auto_context.def(
             "open_device",
-            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {
+            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj, nb::object worker_l1_size_obj) {
                 tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
 
                 if (!mesh_shape_obj.is_none()) {
@@ -255,11 +256,18 @@ void py_module(nb::module_& m) {
                     device_ids = nb::cast<std::vector<int>>(device_ids_obj);
                 }
 
-                self.open_device(mesh_shape, device_ids);
+                size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
+                if (!worker_l1_size_obj.is_none()) {
+                    worker_l1_size = nb::cast<size_t>(worker_l1_size_obj);
+                }
+
+                self.open_device(mesh_shape, device_ids, worker_l1_size);
             },
             nb::arg("mesh_shape") = nb::none(),
             nb::arg("device_ids") = nb::none(),
-            "Open a mesh device");
+            nb::arg("worker_l1_size") = nb::none(),
+            "Open a mesh device. Optional ``worker_l1_size`` below max reserves space for a larger TENSIX kernel "
+            "config buffer (needed for some large TT-Lang programs).");
         py_auto_context.def("close_device", &AutoContext::close_device, "Close mesh device");
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference, "Get mesh device");
         // TODO: argv's char** not supported

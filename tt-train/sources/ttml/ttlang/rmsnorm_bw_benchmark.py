@@ -16,13 +16,26 @@ Metal ``rmsnorm_bw`` is run with ``max_num_cores=1`` to match the TT-Lang kernel
 
     Current results:
 TTML:
-    B1_S256_C384_KernelBw_Metal   Time_us=    300.02  GB/s=   1.973  Elems_M=0.0983
-    B1_S256_C2048_KernelBw_Metal  Time_us=   1305.98  GB/s=   2.415  Elems_M=0.5243
-    B4_S256_C2048_KernelBw_Metal  Time_us=   5033.45  GB/s=   2.502  Elems_M=2.0972
+    256x384_KernelBw_Metal        Time_us=    158.08  GB/s=   3.744  Elems_M=0.0983
+    256x2048_KernelBw_Metal       Time_us=    246.02  GB/s=  12.822  Elems_M=0.5243
+    1024x2048_KernelBw_Metal      Time_us=    283.80  GB/s=  44.374  Elems_M=2.0972
+    2048x2048_KernelBw_Metal      Time_us=    373.95  GB/s=  67.331  Elems_M=4.1943
+    2048x5632_KernelBw_Metal      Time_us=    825.47  GB/s=  83.871  Elems_M=11.5343
+    4096x4096_KernelBw_Metal      Time_us=   1189.35  GB/s=  84.658  Elems_M=16.7772
+    4096x11008_KernelBw_Metal     Time_us=   3447.24  GB/s=  78.493  Elems_M=45.0888
+    8192x8192_KernelBw_Metal      Time_us=   4465.03  GB/s=  90.190  Elems_M=67.1089
+
 TTLANG:
-    B1_S256_C384_KernelBw_TTL     Time_us=   1657.60  GB/s=   0.357  Elems_M=0.0983
-    B1_S256_C2048_KernelBw_TTL    Time_us=  28726.91  GB/s=   0.110  Elems_M=0.5243
-    B4_S256_C2048_KernelBw_TTL    Time_us= 113754.19  GB/s=   0.111  Elems_M=2.0972
+    256x384_KernelBw_TTL          Time_us=    249.63  GB/s=   2.371  Elems_M=0.0983
+    256x2048_KernelBw_TTL         Time_us=    250.13  GB/s=  12.611  Elems_M=0.5243
+    1024x2048_KernelBw_TTL        Time_us=    393.97  GB/s=  31.965  Elems_M=2.0972
+    2048x2048_KernelBw_TTL        Time_us=    506.14  GB/s=  49.745  Elems_M=4.1943
+    2048x5632_KernelBw_TTL        Time_us=    817.26  GB/s=  84.713  Elems_M=11.5343
+    4096x4096_KernelBw_TTL        Time_us=   1033.92  GB/s=  97.385  Elems_M=16.7772
+    4096x11008_KernelBw_TTL       Time_us=   2338.71  GB/s= 115.698  Elems_M=45.0888
+    8192x8192_KernelBw_TTL        Time_us=   3380.75  GB/s= 119.116  Elems_M=67.1089
+
+
 """
 
 
@@ -39,6 +52,9 @@ from pathlib import Path
 import numpy as np
 import torch
 import ttnn
+TILE = 32
+
+_TTL_WORKER_L1_RESERVE_BYTES = 77824
 
 _TTML = Path(__file__).resolve().parents[2] / "sources" / "ttml"
 _TTLANG = _TTML / "ttlang"
@@ -73,19 +89,38 @@ def _import_ttl_rmsnorm_bw():
 from ttml.autograd import AutoContext, Tensor, create_tensor
 from ttml import ops
 
+
+def _open_mesh_for_kernel_bw(ctx: AutoContext, bw_kernel: str) -> None:
+    """Open mesh; TTL paths reserve L1 so the kernel-config ringbuffer fits large TTL programs."""
+    if bw_kernel != "ttl":
+        ctx.open_device((1, 1))
+        return
+    max_l1 = ttnn.device.get_max_worker_l1_unreserved_size()
+    print(f"max_l1: {max_l1}")
+    print(f"_TTL_WORKER_L1_RESERVE_BYTES: {_TTL_WORKER_L1_RESERVE_BYTES}")
+    worker_l1 = max_l1 - _TTL_WORKER_L1_RESERVE_BYTES
+    try:
+        ctx.open_device((1, 1), None, worker_l1)
+    except TypeError:
+        ctx.open_device((1, 1))
+
+
 RMSNORM_EPS = 0.0078125
 NUM_WARMUP = 5
 NUM_MEASURE = 50
 
 # Match ``ttl_rmsnorm_bw`` ``@ttl.operation(grid=(1, 1))`` when benchmarking vs ttml metal path.
-KERNEL_BW_TTML_MAX_CORES = 1
+KERNEL_BW_TTML_MAX_CORES = 0
 
 SHAPES = (
-    ([1, 1, 256, 384], "B1_S256_C384"),
-    ([1, 1, 256, 2048], "B1_S256_C2048"),
-    ([4, 1, 256, 2048], "B4_S256_C2048"),
-    # ([16, 1, 256, 2048], "B16_S256_C2048"),
-    # ([1, 1, 2048, 2048], "B1_S2048_C2048"),
+    # ([1, 1, 256, 384], "256x384"),
+    # ([1, 1, 256, 2048], "256x2048"),
+    # ([1, 1, 256, 11008], "1024x2048"),
+    # ([2, 1, 1024, 2048], "2048x2048"),
+    # ([2, 1, 1024, 5632], "2048x5632"),
+    # ([4, 1, 1024, 4096], "4096x4096"),
+    # ([4, 1, 1024, 11008], "4096x11008"),
+    ([8, 1, 1024, 8192], "8192x8192"),
 )
 
 
@@ -168,19 +203,22 @@ def _jit_disk_help_if_enospc(exc: BaseException) -> None:
 
 
 def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
-    """RMS from host Torch; each timed step: ``rmsnorm_bw`` or ``ttl_rmsnorm_bw`` TTL + sync."""
+    """RMS from host Torch; each timed step: ``rmsnorm_bw`` or TTL backward kernel + sync."""
     if bw_kernel not in ("metal", "ttl"):
         raise ValueError(f"bw_kernel must be 'metal' or 'ttl', got {bw_kernel!r}")
     ttl_mod = _import_ttl_rmsnorm_bw() if bw_kernel == "ttl" else None
     ttml_bw_fn = _make_ttml_bw_fn() if bw_kernel == "metal" else None
 
     ctx = AutoContext.get_instance()
-    ctx.open_device((1, 1))
+    _open_mesh_for_kernel_bw(ctx, bw_kernel)
     try:
         mesh = ctx.get_device()
         mesh.enable_program_cache()
 
-        tag = "Metal (rmsnorm_bw, 1c)" if bw_kernel == "metal" else "TTL (ttl_rmsnorm_bw.py, 1c)"
+        if bw_kernel == "metal":
+            tag = "Metal (rmsnorm_bw, 1c)"
+        else:
+            tag = "TTL (ttl_rmsnorm_bw.py, 1c)"
         print(f"Mode: KernelBw / {tag} (backward-only, RMS from torch forward on host)\n")
         if bw_kernel == "ttl":
             print(
@@ -227,9 +265,8 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                     d_in.deallocate_storage()
                     d_gamma.deallocate_storage()
 
-            else:
+            elif bw_kernel == "ttl":
                 assert ttl_mod is not None
-                k = ttl_mod.make_rmsnorm_bw_device_kernels_ttl()
                 rows = b * s_len
                 xv = x_t.get_value()
                 gv = g_t.get_value()
@@ -258,12 +295,25 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 ttl_device_tensors.extend((x2, dL2, g4, g_rep, r4, g2, r2, out_da, out_dg))
+                k, cfg = ttl_mod.make_kernel_for_shape(rows, c)
+                cc, rc, cpc, rpc, ht_p, wt_p = cfg
+                rows_p, cols_p = ht_p * TILE, wt_p * TILE
+                x_p = ttl_mod._to_dev(ttl_mod._pad(ttnn.to_torch(x2), rows_p, cols_p), mesh)
+                g_p = ttl_mod._to_dev(ttl_mod._pad(ttnn.to_torch(g2), rows_p, cols_p), mesh)
+                r2_t = ttnn.to_torch(r2)
+                rms_p = ttl_mod._to_dev(
+                    ttl_mod._pad_rms_for_kernel(r2_t, rows_p, cols_p, RMSNORM_EPS), mesh
+                )
+                dL_p = ttl_mod._to_dev(ttl_mod._pad(ttnn.to_torch(dL2), rows_p, cols_p), mesh)
+                out_da = ttl_mod._to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
+                out_dg = ttl_mod._to_dev(torch.zeros(rows_p, cols_p, dtype=torch.bfloat16), mesh)
+                ttl_device_tensors.extend((x_p, g_p, rms_p, dL_p, out_da, out_dg))
 
                 def fn(x, g, r, d):
                     return k(x, g, r, d, out_da, out_dg)
 
                 def run_step() -> None:
-                    fn(x2, g2, r2, dL2)
+                    fn(x_p, g_p, rms_p, dL_p)
                     ttnn.synchronize_device(mesh)
 
             for _ in range(NUM_WARMUP):
@@ -277,7 +327,10 @@ def _run_kernel_bw_only(bw_kernel: str = "metal") -> None:
             avg_s = total / NUM_MEASURE
             elems_m = elems_in / 1e6
             gb_s = total_dram_bytes / avg_s / 1e9
-            suffix = "KernelBw_Metal" if bw_kernel == "metal" else "KernelBw_TTL"
+            if bw_kernel == "metal":
+                suffix = "KernelBw_Metal"
+            else:
+                suffix = "KernelBw_TTL"
             row = f"{name}_{suffix}"
             print(f"  {row:28}  Time_us={avg_s * 1e6:10.2f}  GB/s={gb_s:8.3f}  Elems_M={elems_m:.4f}")
 
@@ -298,7 +351,10 @@ def main() -> int:
         "--bw-kernel",
         choices=("metal", "ttl"),
         default="metal",
-        help="ttml rmsnorm_bw vs TT-Lang ``ttl_rmsnorm_bw.py`` (needs ``ttl`` + ``tt-lang`` on path for ttl)",
+        help=(
+            "metal: ttml rmsnorm_bw; ttl: ``ttl_rmsnorm_bw.py``. "
+            "TTL needs ``ttl`` (+ ``tt-lang`` on path for ttl)."
+        ),
     )
     args = p.parse_args()
 

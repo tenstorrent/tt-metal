@@ -10,7 +10,10 @@
 
 namespace ttml::core {
 
-MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids) :
+MeshDevice::MeshDevice(
+    const tt::tt_metal::distributed::MeshShape& shape,
+    const std::vector<int>& device_ids,
+    size_t worker_l1_size) :
     m_mesh_device(ttnn::distributed::open_mesh_device(
         shape,
         DEFAULT_L1_SMALL_SIZE,
@@ -18,7 +21,8 @@ MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const 
         /* num_command_queues=*/1,
         tt::tt_metal::DispatchCoreConfig{},
         /*offset=*/std::nullopt,
-        /*physical_device_ids=*/device_ids)) {
+        /*physical_device_ids=*/device_ids,
+        worker_l1_size)) {
     assert(m_mesh_device);
 }
 
