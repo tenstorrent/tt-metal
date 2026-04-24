@@ -40,7 +40,7 @@ class TtBertEncoder:
             )
             attention_output_bias_path = str(
                 f"{tt_cache_path}/"
-                f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}.tensorbin"
+                f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}_v2.tensorbin"
             )
             mha_gamma_path = str(
                 f"{tt_cache_path}/"
