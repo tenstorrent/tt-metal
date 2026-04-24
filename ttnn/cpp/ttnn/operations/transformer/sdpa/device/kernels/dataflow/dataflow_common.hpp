@@ -250,6 +250,20 @@ void read_paged_chunk_with_padding(
         }
         physical_tile_id += skip_src_cols;  // Skip src cols if needed
     }
+
+    // Zero-fill padded destination tiles. This mirrors read_chunk_with_padding().
+    // The paged reader reserves/pushes dst_rows * dst_cols tiles, but only reads
+    // src_rows * src_cols valid tiles. Leaving the rest untouched can expose stale
+    // L1/CB data and produce NaNs/Infs in chunked attention.
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            if (row < src_rows && col < src_cols) {
+                continue;
+            }
+            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
+            fill_zeros_async(get_write_ptr(cb_id) + tile_id * tile_bytes, tile_bytes);
+        }
+    }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
 }
