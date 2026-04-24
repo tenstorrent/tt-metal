@@ -701,33 +701,34 @@ read time. Previously deprecated for latency; now justified by accuracy data.
 
 **Implementation Plan:**
 
-**1. Chunked online softmax in fused kernel** (critical, unblocks >2K context) — **IN PROGRESS (2026-04-20)**
-- Modify `sdpa_tq_decode.cpp` to stream K/V chunks instead of pre-filling
-- Reference pattern: `models/.../sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp`
-- Interleave: dequant one K/V chunk → matmul Q×K^T → softmax → V matmul → accumulate
-- Double-buffer CBs (~2× chunk size) instead of full-cache size
-- Effort: 2-3 days (kernel engineering, complex)
+**1. Chunked online softmax in fused kernel** (critical, unblocks >2K context) — **DONE (2026-04-24)**
 
-**Progress (WIP commit `6fc1a6a03d1`):**
-- ✅ Replaced two-phase pre-fill+SDPA with interleaved dequant+SDPA loop
-- ✅ CBs shrunk from `k_num_chunks` to 2 (double-buffer) → **no more OOM at 4K+**
-- ✅ New per-chunk dequant helpers (`dequant_k_chunk`, `dequant_v_chunk`) in
-  `sdpa_tq_decode.cpp` that match the original tile layout (transposed K,
-  natural V) for matmul_blocks compatibility
-- ✅ Single-chunk case (seq=128, k_num_chunks=1): cosine **0.9996 PASS**
-- ✅ Pre-rescaled path unchanged and working at all seqlens
-- ❌ **Multi-chunk bug (seq≥512)**: cosine 0.18-0.90 — online softmax /
-  lazy correction has a state-handoff bug
-  - Oversizing CBs to 8× chunk doesn't help → it's a logic bug, not a CB race
-  - Next debug pass needs DPRINT to compare state after each chunk vs
-    `sdpa_inner_loop`'s behavior tile-by-tile
-  - Likely candidates:
-    * Alias swap semantics between cb_sum_A↔B / cb_max_A↔B / cb_out_im_A↔B
-    * L1 pack accum state leaking from dequant's pack_tile<true> calls into
-      subsequent sub_exp_block_bcast_cols_inplace
-    * `cb_reserve_back` / `cb_push_back` ordering between alias CBs
-    * Packer reconfig (ReluType, data_format) after dequant not matching
-      what SDPA expects
+- Modified `sdpa_tq_decode.cpp` to stream K/V chunks instead of pre-filling
+- CBs shrunk from `k_num_chunks` to 2 (double-buffer) → no OOM at 4K+
+- New per-chunk dequant helpers (`dequant_k_chunk`, `dequant_v_chunk`) that
+  match tile layout (transposed K, natural V) for matmul_blocks compatibility
+- Interleaved: dequant one K/V chunk → matmul Q×K^T → softmax → V matmul → accumulate
+
+**Multi-chunk bug fix (commit `3da187312b0`, 2026-04-24):**
+Root cause was a PACK→UNPACK visibility gap on the ping-pong softmax-state CBs
+(cb_max_A/B, cb_sum_A/B, cb_out_im_A/B). PACK writes these via pack_tile+push_back
+in iteration N, but when UNPACK reads them as prev_max/sum/out in iteration N+1,
+the L1 data hasn't fully settled despite cb_push_back's TTI_STALLWAIT.
+
+Discovered via bisection: adding `DPRINT_UNPACK(DPRINT << TSLICE(...))` at
+end-of-iteration fixed it up to 8 chunks. Translated to non-DPRINT form as
+`sync_unpack_cb_read()` — a noinline function doing 64 volatile uint32 L1 reads
+on UNPACK thread, wrapped in `UNPACK(...)` macro. Reading only 8 words fails;
+64 is the empirical minimum.
+
+**Validation (all PASS, cos ≥ 0.9983):**
+| seqlen | k_chunks | cos |
+|--------|---------:|----:|
+| 128    |     1    | 0.9996 |
+| 2048   |    16    | 0.9997 |
+| 8192   |    64    | 0.9996 |
+| 32768  |   256    | 0.9995 |
+| 131072 |  1024    | 0.9983 |
 
 **2. Paged cache support for indices + norms**
 - Current `TTNNTurboQuantCache` uses `[1, max_seq, n_heads, head_dim]` interleaved
