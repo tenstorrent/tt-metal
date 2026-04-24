@@ -37,6 +37,7 @@ def create_torch_input(L, in0_num_cores, M, K):
         torch_input: Tensor of shape (L, in0_num_cores, M, K)
     """
     torch_input = torch.rand((L, 1, M, K), dtype=torch.bfloat16) - 0.5
+    # torch_input *= 8
     torch_input = torch_input.repeat(1, in0_num_cores, 1, 1)
     return torch_input
 
@@ -54,6 +55,7 @@ def create_torch_w(L, K, N):
         torch_w: Tensor of shape (L, K, N)
     """
     torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
+    # torch_w /= 2
     return torch_w
 
 
@@ -69,6 +71,8 @@ def create_torch_bias(L, N):
         torch_bias: Tensor of shape (L, N)
     """
     torch_bias = torch.rand((L, N), dtype=torch.bfloat16)
+    # torch_bias *= 0.03
+    # torch_bias += 0.5
     return torch_bias
 
 
@@ -188,9 +192,9 @@ def prepare_output_tensor(tt_output, ring2cores):
 
     # Initialize an empty array of shape tt_indices
     tt_indices = torch.empty(tt_as_bf16_indices.shape, dtype=torch.uint16)
-    breakpoint()
     for m, k in itertools.product(range(tt_as_bf16_indices.shape[0]), range(tt_as_bf16_indices.shape[1])):
         tt_indices[m, k] = tt_as_bf16_indices[m, k].item() >> 7
+    # breakpoint()
 
     return tt_values, tt_indices
 
@@ -345,7 +349,6 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=input_sharded_mem_config,
             )
-        breakpoint()
         ttnn.experimental.deepseek.moe.moe_gate_mm(
             tt_input,
             w_tensor=tt_w,
@@ -425,6 +428,7 @@ def run_test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
                 torch_bitmask[:, :, i] = masked_bits.sum(dim=2)
 
         # Calculate accuracy metrics for each layer
+        breakpoint()
         for layer_id, column_id in itertools.product(range(L), range(C)):
             torch_layer_values = torch_top8_values[layer_id, :, :]
             torch_layer_indices = torch_top8_indices[layer_id, :, :]

@@ -22,6 +22,58 @@ from models.demos.deepseek_v3.utils.run_config import (
 
 SEND_CORES = (0, 3, 6, 9)
 RECV_CORES = (1, 2, 4, 5, 7, 8, 10, 11)
+RING2CORES = None
+
+
+def prepare_output_tensor(tt_output, ring2cores):
+    """
+    Prepare the output tensor by picking the appropriate tiles from the cores that have the final data.
+
+    Args:
+        tt_output: Tensor of shape (M, in0_num_cores * ttnn.TILE_SIZE)
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, send_flag)
+
+    Returns:
+        tt_values: Tensor of shape (M, 8)
+    """
+    import itertools
+
+    breakpoint()
+    each_shard = []
+    current_column = 0
+    for ring_pos in range(len(ring2cores)):
+        _, _, send_flag = ring2cores[ring_pos]
+        if not send_flag:
+            each_shard.append(tt_output[:, current_column : current_column + ttnn.TILE_SIZE])
+        current_column += ttnn.TILE_SIZE
+
+    # --------------------------------------------------------------------------
+    # The following snippet is to be used if we want to return just the matmul
+    # output, without the final selection of top 8 experts.
+    # So we retain it for reference, but not used in the test.
+    # --------------------------------------------------------------------------
+    output = torch.cat(each_shard, dim=1)
+
+    # # Get the 32 scores values from each tile.
+    f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
+    f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
+
+    group_scores = torch.cat([f1_scores, f2_scores], dim=-1).transpose(0, 1)
+    # return group_scores
+    # --------------------------------------------------------------------------
+
+    # Only the last core has the values in the first 8 rows of the first 2 faces of the tile
+    # this is to get the intermediate results of the matmul + bias results
+    tt_values = each_shard[-1][:8, :].transpose(0, 1)
+    tt_as_bf16_indices = each_shard[-1][8:16, :].transpose(0, 1).view(torch.uint16)
+
+    # Initialize an empty array of shape tt_indices
+    tt_indices = torch.empty(tt_as_bf16_indices.shape, dtype=torch.uint16)
+    for m, k in itertools.product(range(tt_as_bf16_indices.shape[0]), range(tt_as_bf16_indices.shape[1])):
+        tt_indices[m, k] = tt_as_bf16_indices[m, k].item() >> 7
+    # breakpoint()
+
+    return tt_values, tt_indices
 
 
 class MoEGate(AbstractModule):
@@ -46,6 +98,8 @@ class MoEGate(AbstractModule):
         ).unsqueeze(0)
         with torch.no_grad():
             score_correction_bias -= torch.mean(score_correction_bias)
+        gate_weight *= 10
+        score_correction_bias *= 10
         # maybe divide weight's mean here
 
         def prepare_w_tensor(torch_w, torch_bias, L, K, N, ring2cores):
@@ -136,6 +190,8 @@ class MoEGate(AbstractModule):
         for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
             # key: ring_pos, value: (core_coord, dram_bank_id, send_flag)
             ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in SEND_CORES else 0)
+        global RING2CORES
+        RING2CORES = ring2cores
 
         L = gate_weight.shape[0]
         K = gate_weight.shape[1]
@@ -341,6 +397,14 @@ class MoEGate(AbstractModule):
         else:
             output_tensor = ttnn.concat(output_list, 0)
             output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        mesh_device = cfg["mesh_device"]
+        temp = ttnn.to_torch(
+            output_tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-1, -2), mesh_shape=tuple(mesh_device.shape)),
+        )
+        temp = temp[:32, :384]
+        temp1, temp2 = prepare_output_tensor(temp, RING2CORES)
+        breakpoint()
         output_tensor = ttnn.view(output_tensor, (-1, batch_size_per_iter, output_tensor.shape[-1]))
         assert SEND_CORES == (0, 3, 6, 9), "SEND_CORES should be (0, 3, 6, 9)"
         weight_tensor = ttnn.reshape(output_tensor, (output_tensor.shape[0], batch_size_per_iter, 4, -1))
@@ -357,6 +421,7 @@ class MoEGate(AbstractModule):
             dim=-1,
             memory_config=ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
+        breakpoint()
         topk_experts_weights = ttnn.transpose(topk_experts_weights, -1, -2)
         topk_experts_indices = ttnn.transpose(output_tensor[:, 8:16, -32:], -1, -2)
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
