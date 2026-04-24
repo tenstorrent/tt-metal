@@ -258,7 +258,10 @@ struct ReduceToOneB1 {
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                    // Root1
                     if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
+                        // TODO: (GR) here
+
                         // Persistent fabric core: wait for aggregator signal, then send
                         // cross-device atomic inc to bcast sender on entry device.
                         // Persistent args start after the worker sem addrs.
@@ -292,199 +295,204 @@ struct ReduceToOneB1 {
                         sender.close();
                         noc_async_full_barrier();
                     }
-                    return;
-                }
+                } else {
+                    // Non-Root1
 
-                // Read worker semaphore addresses from runtime args
-                size_t arg_idx = CTArgs::fabric_rt_arg_base;
-                uint32_t worker_sem_addr[CTArgs::num_workers];
-                for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
-                    worker_sem_addr[i] = get_arg_val<uint32_t>(arg_idx++);
-                }
-
-                const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
-
-                // Build fabric connection from runtime args
-                auto fabric_sender =
-                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-                fabric_sender.open();
-
-                // Forward worker packets
-                uint32_t slot_base = packet_buffer_addr;
-                for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
-                    uint32_t worker_header_addr = slot_base;
-                    uint32_t worker_payload_addr = slot_base + packet_header_size_bytes;
-
-                    volatile tt_l1_ptr uint32_t* worker_sem_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
-                    noc_semaphore_wait_min(worker_sem_ptr, 1);
-                    unified_kernels::semaphore_dec(worker_sem_ptr);
-
-                    fabric_sender.wait_for_empty_write_slot();
-                    fabric_sender.send_payload_without_header_non_blocking_from_address(
-                        worker_payload_addr, CTArgs::payload_size_bytes);
-                    fabric_sender.send_payload_flush_blocking_from_address(
-                        worker_header_addr, packet_header_size_bytes);
-
-                    slot_base += CTArgs::slot_size_bytes;
-                }
-
-                fabric_sender.close();
-                noc_async_write_barrier();
-                return;
-            }
-
-            // Worker core logic
-            const uint32_t my_noc_x = my_x[0];
-            const uint32_t my_noc_y = my_y[0];
-
-            // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
-            if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Notify the aggregator (or persistent forwarder) that this worker is done.
-                // Issued between socket_notify_receiver and socket_barrier in the socket branch
-                // so the downstream consumer can wake up while we wait for the socket ack.
-                auto signal_aggregator = [&]() __attribute__((always_inline)) {
-                    if (args.persistent_enable != 0) {
-                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
-                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        noc_semaphore_set(agg_sem_ptr, 0);
-
-                        uint64_t fc_sem = get_noc_addr(
-                            args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                        noc_semaphore_inc(fc_sem, 1);
-                        noc_async_atomic_barrier();
-                    } else if (args.agg_sem_l1_addr != 0) {
-                        uint64_t agg_sem_noc =
-                            get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                        noc_semaphore_inc(agg_sem_noc, 1);
-                        noc_async_atomic_barrier();
+                    // Read worker semaphore addresses from runtime args
+                    size_t arg_idx = CTArgs::fabric_rt_arg_base;
+                    uint32_t worker_sem_addr[CTArgs::num_workers];
+                    for (uint32_t i = 0; i < CTArgs::num_workers; i++) {
+                        worker_sem_addr[i] = get_arg_val<uint32_t>(arg_idx++);
                     }
-                };
 
-                if constexpr (CTArgs::enable_downstream_socket) {
-                    constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
-                    constexpr bool is_last_worker_metadata_forwarder = CTArgs::forward_metadata_size_bytes > 0;
-                    if (args.socket_config_addr != 0) {
-                        const bool is_last_worker = args.shard_idx == CTArgs::total_num_workers - 1;
-                        const uint32_t socket_page_size = (is_last_worker_metadata_forwarder && is_last_worker)
-                                                              ? useful_per_shard + CTArgs::forward_metadata_size_bytes
-                                                              : useful_per_shard;
-                        SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                        set_sender_socket_page_size(sender_socket, socket_page_size);
-                        socket_reserve_pages(sender_socket, 1);
-                        sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+                    const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
 
-                        uint64_t fifo_dst = get_noc_addr(
-                            downstream_enc.d2d.downstream_noc_x,
-                            downstream_enc.d2d.downstream_noc_y,
-                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
+                    // Build fabric connection from runtime args
+                    auto fabric_sender =
+                        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                    fabric_sender.open();
+
+                    // Forward worker packets
+                    uint32_t slot_base = packet_buffer_addr;
+                    for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
+                        uint32_t worker_header_addr = slot_base;
+                        uint32_t worker_payload_addr = slot_base + packet_header_size_bytes;
+
+                        volatile tt_l1_ptr uint32_t* worker_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
+                        noc_semaphore_wait_min(worker_sem_ptr, 1);
+                        unified_kernels::semaphore_dec(worker_sem_ptr);
+
+                        fabric_sender.wait_for_empty_write_slot();
+                        fabric_sender.send_payload_without_header_non_blocking_from_address(
+                            worker_payload_addr, CTArgs::payload_size_bytes);
+                        fabric_sender.send_payload_flush_blocking_from_address(
+                            worker_header_addr, packet_header_size_bytes);
+
+                        slot_base += CTArgs::slot_size_bytes;
+                    }
+
+                    fabric_sender.close();
+                    noc_async_write_barrier();
+                }
+            } else {
+                // Worker core logic
+                const uint32_t my_noc_x = my_x[0];
+                const uint32_t my_noc_y = my_y[0];
+
+                // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
+                if constexpr (CTArgs::device_role == MESH_ROOT1) {
+                    // Notify the aggregator (or persistent forwarder) that this worker is done.
+                    // Issued between socket_notify_receiver and socket_barrier in the socket branch
+                    // so the downstream consumer can wake up while we wait for the socket ack.
+                    auto signal_aggregator = [&]() __attribute__((always_inline)) {
+                        if (args.persistent_enable != 0) {
+                            volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                            noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                            noc_semaphore_set(agg_sem_ptr, 0);
+
+                            uint64_t fc_sem = get_noc_addr(
+                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                            noc_semaphore_inc(fc_sem, 1);
+                            noc_async_atomic_barrier();
+                        } else if (args.agg_sem_l1_addr != 0) {
+                            uint64_t agg_sem_noc =
+                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                            noc_semaphore_inc(agg_sem_noc, 1);
+                            noc_async_atomic_barrier();
+                        }
+                    };
+
+                    if constexpr (CTArgs::enable_downstream_socket) {
+                        constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
+                        constexpr bool is_last_worker_metadata_forwarder = CTArgs::forward_metadata_size_bytes > 0;
+                        if (args.socket_config_addr != 0) {
+                            const bool is_last_worker = args.shard_idx == CTArgs::total_num_workers - 1;
+                            const uint32_t socket_page_size =
+                                (is_last_worker_metadata_forwarder && is_last_worker)
+                                    ? useful_per_shard + CTArgs::forward_metadata_size_bytes
+                                    : useful_per_shard;
+                            SocketSenderInterface sender_socket =
+                                create_sender_socket_interface(args.socket_config_addr);
+                            set_sender_socket_page_size(sender_socket, socket_page_size);
+                            socket_reserve_pages(sender_socket, 1);
+                            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+
+                            uint64_t fifo_dst = get_noc_addr(
+                                downstream_enc.d2d.downstream_noc_x,
+                                downstream_enc.d2d.downstream_noc_y,
+                                sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
+                            cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                            uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
+                            // Socket barrier means receiver has received and acknowledged the write, so we can use
+                            // posted writes here
+                            noc_async_write<useful_per_shard, true, /*posted=*/true>(
+                                src_addr, fifo_dst, useful_per_shard);
+
+                            if constexpr (is_last_worker_metadata_forwarder) {
+                                if (is_last_worker) {
+                                    noc_async_write<CTArgs::forward_metadata_size_bytes, true, /*posted=*/true>(
+                                        args.metadata_addr,
+                                        fifo_dst + useful_per_shard,
+                                        CTArgs::forward_metadata_size_bytes);
+                                }
+                            }
+                            noc_async_posted_writes_flushed();
+
+                            socket_push_pages(sender_socket, 1);
+                            socket_notify_receiver(sender_socket);
+                            signal_aggregator();
+                            socket_barrier(sender_socket);
+                            update_socket_config(sender_socket);
+                        }
+                    } else {
+                        uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
+                        uint64_t dst_noc_addr_0 =
+                            get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
                         cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                         uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-                        // Socket barrier means receiver has received and acknowledged the write, so we can use posted
-                        // writes here
-                        noc_async_write<useful_per_shard, true, /*posted=*/true>(src_addr, fifo_dst, useful_per_shard);
-
-                        if constexpr (is_last_worker_metadata_forwarder) {
-                            if (is_last_worker) {
-                                noc_async_write<CTArgs::forward_metadata_size_bytes, true, /*posted=*/true>(
-                                    args.metadata_addr,
-                                    fifo_dst + useful_per_shard,
-                                    CTArgs::forward_metadata_size_bytes);
-                            }
-                        }
-                        noc_async_posted_writes_flushed();
-
-                        socket_push_pages(sender_socket, 1);
-                        socket_notify_receiver(sender_socket);
+                        noc_async_write<CTArgs::payload_size_bytes>(
+                            src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
+                        noc_async_write_barrier();
                         signal_aggregator();
-                        socket_barrier(sender_socket);
-                        update_socket_config(sender_socket);
                     }
+
+                    cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 } else {
-                    uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
-                    uint64_t dst_noc_addr_0 =
-                        get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
-                    cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                    uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-                    noc_async_write<CTArgs::payload_size_bytes>(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
-                    noc_async_write_barrier();
-                    signal_aggregator();
+                    // Non-ROOT1: send via fabric
+                    const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
+                    const uint32_t arrival_sem_addr = args.worker_sem_addr;
+
+                    // Get packet header
+                    PacketHeaderPool::reset();
+                    auto* packet_header = PacketHeaderPool::allocate_header(1);
+
+                    // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
+                    set_unicast_route(
+                        packet_header,
+                        static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id),
+                        static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id),
+                        static_cast<uint16_t>(CTArgs::num_hops));
+
+                    // Set up fused write + atomic inc
+                    uint64_t dst_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.dst_l1_addr);
+                    uint64_t dst_sem_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.dst_sem_addr);
+                    packet_header->to_noc_fused_unicast_write_atomic_inc(
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, dst_sem_noc_addr, 1, false},
+                        CTArgs::payload_size_bytes);
+
+                    // Calculate slot in fabric core's packet buffer
+                    uint32_t slot_offset = args.my_slot_idx * CTArgs::slot_size_bytes;
+                    uint32_t header_dest_addr = packet_buffer_addr + slot_offset;
+                    uint32_t payload_dest_addr = header_dest_addr + packet_header_size_bytes;
+
+                    uint64_t header_noc_addr =
+                        get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, header_dest_addr);
+                    uint64_t payload_noc_addr =
+                        get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, payload_dest_addr);
+                    uint64_t arrival_sem_noc_addr =
+                        get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
+
+                    // Source CB: LEAF uses local_cb, others use scratch_cb
+                    constexpr uint32_t source_cb =
+                        (CTArgs::device_role == MESH_LEAF) ? CTArgs::local_cb : CTArgs::scratch_cb;
+
+                    // Wait for data
+                    // - LEAF: when fused (SkipLocalCbPush=true), previous op pushed to local_cb, so we wait
+                    //         when standalone (SkipLocalCbPush=false), data is already in-place, no wait needed
+                    // - Others: always wait for compute to finish writing to scratch_cb
+                    if constexpr (CTArgs::device_role == MESH_LEAF) {
+                        if constexpr (SkipLocalCbPush) {
+                            cb_wait_front(source_cb, CTArgs::num_tiles);
+                        }
+                    } else {
+                        cb_wait_front(source_cb, CTArgs::num_tiles);
+                    }
+                    uint32_t data_addr = get_read_ptr(source_cb);
+
+                    // Send header and payload to fabric core
+                    noc_async_write<packet_header_size_bytes, true, /*posted=*/true>(
+                        reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
+                    noc_async_write<CTArgs::payload_size_bytes, true, /*posted=*/true>(
+                        data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
+
+                    // Signal fabric core
+                    noc_semaphore_inc(arrival_sem_noc_addr, 1);
+                    noc_async_atomic_barrier();
+
+                    // Pop source_cb to free it for the next iteration.
+                    // Must match the wait_front guard: LEAF standalone (SkipLocalCbPush=false)
+                    // uses sharded setup (no push/pop tracking), so skip the pop.
+                    if constexpr (CTArgs::device_role == MESH_LEAF) {
+                        if constexpr (SkipLocalCbPush) {
+                            cb_pop_front(source_cb, CTArgs::num_tiles);
+                        }
+                    } else {
+                        cb_pop_front(source_cb, CTArgs::num_tiles);
+                    }
                 }
-
-                cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                return;
             }
-
-            // Non-ROOT1: send via fabric
-            const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
-            const uint32_t arrival_sem_addr = args.worker_sem_addr;
-
-            // Get packet header
-            PacketHeaderPool::reset();
-            auto* packet_header = PacketHeaderPool::allocate_header(1);
-
-            // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
-            set_unicast_route(
-                packet_header,
-                static_cast<uint16_t>(CTArgs::dst_fabric_node_chip_id),
-                static_cast<uint16_t>(CTArgs::dst_fabric_node_mesh_id),
-                static_cast<uint16_t>(CTArgs::num_hops));
-
-            // Set up fused write + atomic inc
-            uint64_t dst_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.dst_l1_addr);
-            uint64_t dst_sem_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.dst_sem_addr);
-            packet_header->to_noc_fused_unicast_write_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, dst_sem_noc_addr, 1, false},
-                CTArgs::payload_size_bytes);
-
-            // Calculate slot in fabric core's packet buffer
-            uint32_t slot_offset = args.my_slot_idx * CTArgs::slot_size_bytes;
-            uint32_t header_dest_addr = packet_buffer_addr + slot_offset;
-            uint32_t payload_dest_addr = header_dest_addr + packet_header_size_bytes;
-
-            uint64_t header_noc_addr = get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, header_dest_addr);
-            uint64_t payload_noc_addr = get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, payload_dest_addr);
-            uint64_t arrival_sem_noc_addr =
-                get_noc_addr(args.fabric_core_noc_x, args.fabric_core_noc_y, arrival_sem_addr);
-
-            // Source CB: LEAF uses local_cb, others use scratch_cb
-            constexpr uint32_t source_cb = (CTArgs::device_role == MESH_LEAF) ? CTArgs::local_cb : CTArgs::scratch_cb;
-
-            // Wait for data
-            // - LEAF: when fused (SkipLocalCbPush=true), previous op pushed to local_cb, so we wait
-            //         when standalone (SkipLocalCbPush=false), data is already in-place, no wait needed
-            // - Others: always wait for compute to finish writing to scratch_cb
-            if constexpr (CTArgs::device_role == MESH_LEAF) {
-                if constexpr (SkipLocalCbPush) {
-                    cb_wait_front(source_cb, CTArgs::num_tiles);
-                }
-            } else {
-                cb_wait_front(source_cb, CTArgs::num_tiles);
-            }
-            uint32_t data_addr = get_read_ptr(source_cb);
-
-            // Send header and payload to fabric core
-            noc_async_write<packet_header_size_bytes, true, /*posted=*/true>(
-                reinterpret_cast<uint32_t>(packet_header), header_noc_addr, packet_header_size_bytes);
-            noc_async_write<CTArgs::payload_size_bytes, true, /*posted=*/true>(
-                data_addr, payload_noc_addr, CTArgs::payload_size_bytes);
-
-            // Signal fabric core
-            noc_semaphore_inc(arrival_sem_noc_addr, 1);
-            noc_async_atomic_barrier();
-
-            // Pop source_cb to free it for the next iteration.
-            // Must match the wait_front guard: LEAF standalone (SkipLocalCbPush=false)
-            // uses sharded setup (no push/pop tracking), so skip the pop.
-            if constexpr (CTArgs::device_role == MESH_LEAF) {
-                if constexpr (SkipLocalCbPush) {
-                    cb_pop_front(source_cb, CTArgs::num_tiles);
-                }
-            } else {
-                cb_pop_front(source_cb, CTArgs::num_tiles);
-            }
-
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC - Compute: performs reduction
