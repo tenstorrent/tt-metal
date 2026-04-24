@@ -27,7 +27,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm as TtRmsNorm
 from models.demos.dots_ocr.reference.dots_ocr.configuration_dots import DotsVisionConfig
-from models.demos.dots_ocr.reference.dots_ocr.modeling_dots_vision import apply_rotary_pos_emb_vision
 from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm as TtLayerNorm
 from models.tt_transformers.tt.common import Mode
 
@@ -76,6 +75,78 @@ def _qkv_from_state(state_dict: Dict[str, torch.Tensor], key: str) -> torch.Tens
 
 def _wo_from_state(state_dict: Dict[str, torch.Tensor], key: str) -> torch.Tensor:
     return state_dict[key].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+
+
+def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
+    d = x.shape[-1]
+    half = d // 2
+    x1 = ttnn.slice(
+        x,
+        [0, 0, 0, 0],
+        [x.shape[0], x.shape[1], x.shape[2], half],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    x2 = ttnn.slice(
+        x,
+        [0, 0, 0, half],
+        [x.shape[0], x.shape[1], x.shape[2], d],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    neg_x2 = ttnn.multiply(x2, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(x2)
+    out = ttnn.concat([neg_x2, x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(neg_x2)
+    ttnn.deallocate(x1)
+    return out
+
+
+def apply_rotary_pos_emb_vision_ttnn(tensor: torch.Tensor, freqs: torch.Tensor, mesh_device: Any) -> torch.Tensor:
+    """
+    TTNN equivalent of reference apply_rotary_pos_emb_vision using raw freqs.
+    Input tensor shape: [1, S, H, D], freqs shape: [S, D/2].
+    """
+    orig_dtype = tensor.dtype
+    tensor_tt = ttnn.from_torch(
+        tensor.float(),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    freqs_tt = ttnn.from_torch(
+        freqs.float(),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    cos_half = ttnn.cos(freqs_tt)
+    sin_half = ttnn.sin(freqs_tt)
+    ttnn.deallocate(freqs_tt)
+
+    cos_full = ttnn.concat([cos_half, cos_half], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sin_full = ttnn.concat([sin_half, sin_half], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(cos_half)
+    ttnn.deallocate(sin_half)
+
+    cos = ttnn.reshape(cos_full, (1, cos_full.shape[0], 1, cos_full.shape[1]))
+    sin = ttnn.reshape(sin_full, (1, sin_full.shape[0], 1, sin_full.shape[1]))
+    ttnn.deallocate(cos_full)
+    ttnn.deallocate(sin_full)
+
+    rotated = _rotate_half_ttnn(tensor_tt)
+    out_a = ttnn.multiply(tensor_tt, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out_b = ttnn.multiply(rotated, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.add(out_a, out_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    ttnn.deallocate(tensor_tt)
+    ttnn.deallocate(rotated)
+    ttnn.deallocate(cos)
+    ttnn.deallocate(sin)
+    ttnn.deallocate(out_a)
+    ttnn.deallocate(out_b)
+
+    out_torch = ttnn.to_torch(out)
+    ttnn.deallocate(out)
+    return out_torch.to(orig_dtype)
 
 
 class VisionRotaryEmbeddingTt(LightweightModule):
@@ -409,8 +480,8 @@ class DotsAttnQkvprojTt(LightweightModule):
         hd = self.cfg.head_dim
         q, k, v = qkv.reshape(s, 3, h, hd).permute(1, 0, 2, 3).unbind(0)
         rpe = rotary_pos_emb[:s].to(q.dtype)
-        q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rpe).squeeze(0)
-        k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rpe).squeeze(0)
+        q = apply_rotary_pos_emb_vision_ttnn(q.unsqueeze(0), rpe, self.mesh).squeeze(0)
+        k = apply_rotary_pos_emb_vision_ttnn(k.unsqueeze(0), rpe, self.mesh).squeeze(0)
         mask = torch.zeros(1, s, s, dtype=torch.bool, device=q.device)
         for b in range(1, len(cu_seqlens)):
             a, z = int(cu_seqlens[b - 1].item()), int(cu_seqlens[b].item())
