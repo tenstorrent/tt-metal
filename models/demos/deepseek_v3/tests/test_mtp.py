@@ -27,7 +27,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel,
 from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import DEFAULT_MAX_SEQ_LEN, USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config, get_weight_config
@@ -41,6 +41,7 @@ MIN_TOKENS_PER_SEC = float(os.getenv("DEEPSEEK_V3_MTP_MIN_TPS", "1.0"))
 MIN_TOKENS_PER_SEC_TRACE = float(os.getenv("DEEPSEEK_V3_MTP_MIN_TPS_TRACE", "0"))
 DEFAULT_PREFILL_LEN = int(os.getenv("DEEPSEEK_V3_MTP_PREFILL_LEN", "16"))
 DEFAULT_VERIFY_STEPS = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", "16"))
+DEFAULT_MTP_TEST_MAX_SEQ_LEN = int(os.getenv("DEEPSEEK_V3_MTP_MAX_SEQ_LEN", "256"))
 SKIP_IN_CI = pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
 
 
@@ -54,6 +55,45 @@ def _get_reference_dir() -> Path:
 
 def _debug_mtp_enabled() -> bool:
     return os.getenv("DEEPSEEK_DEBUG_MTP", "0") == "1"
+
+
+def _get_mtp_test_max_seq_len() -> int:
+    """Return the reduced max_seq_len used by the MTP test harness."""
+    max_seq_len = DEFAULT_MTP_TEST_MAX_SEQ_LEN
+    if max_seq_len <= 0:
+        raise ValueError(f"DEEPSEEK_V3_MTP_MAX_SEQ_LEN must be > 0, got {max_seq_len}")
+    if max_seq_len % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"DEEPSEEK_V3_MTP_MAX_SEQ_LEN={max_seq_len} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}")
+
+    num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
+    if max_seq_len < num_steps:
+        raise ValueError(
+            f"DEEPSEEK_V3_MTP_MAX_SEQ_LEN={max_seq_len} is too small for "
+            f"DEEPSEEK_V3_MTP_REF_STEPS={num_steps}; raise the MTP test max_seq_len or lower the reference steps."
+        )
+    return max_seq_len
+
+
+def test_mtp_test_max_seq_len_default_covers_reference_window(monkeypatch):
+    monkeypatch.setitem(globals(), "DEFAULT_MTP_TEST_MAX_SEQ_LEN", 256)
+    monkeypatch.delenv("DEEPSEEK_V3_MTP_REF_STEPS", raising=False)
+
+    assert _get_mtp_test_max_seq_len() == 256
+
+
+def test_mtp_test_max_seq_len_rejects_short_cache(monkeypatch):
+    monkeypatch.setitem(globals(), "DEFAULT_MTP_TEST_MAX_SEQ_LEN", 96)
+    monkeypatch.delenv("DEEPSEEK_V3_MTP_REF_STEPS", raising=False)
+
+    with pytest.raises(ValueError, match="too small"):
+        _get_mtp_test_max_seq_len()
+
+
+def test_mtp_test_max_seq_len_rejects_non_tile_aligned(monkeypatch):
+    monkeypatch.setitem(globals(), "DEFAULT_MTP_TEST_MAX_SEQ_LEN", 255)
+
+    with pytest.raises(ValueError, match="must be divisible"):
+        _get_mtp_test_max_seq_len()
 
 
 # Test: host-side selective aliasing only rewires the intended interleaved verify rows.
@@ -417,6 +457,7 @@ def _prepare_generator(
         mesh_device=mesh_device,
         model_path=model_path,
         cache_dir=cache_path,
+        max_seq_len=_get_mtp_test_max_seq_len(),
         enable_mtp=enable_mtp,
         force_recalculate=force_recalculate,
     )
@@ -506,7 +547,7 @@ class _MtpModuleRunner:
         self.enable_mtp = True
 
         self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-        self.hf_config.max_seq_len = DEFAULT_MAX_SEQ_LEN
+        self.hf_config.max_seq_len = _get_mtp_test_max_seq_len()
         if int(getattr(self.hf_config, "num_nextn_predict_layers", 0)) <= 0:
             raise RuntimeError("MTP module runner requires a model config with num_nextn_predict_layers > 0.")
 
