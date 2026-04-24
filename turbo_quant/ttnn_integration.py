@@ -459,6 +459,14 @@ class TTNNTurboQuantCache:
             idx_shape = (max_batch_size, num_kv_heads, max_seq_padded, head_dim)
             norms_shape = (max_batch_size, num_kv_heads, max_seq_padded, 1)
 
+        # On a MeshDevice, replicate the cache tensor across all devices. Each
+        # device then independently scatters its own shard of K/V heads into its
+        # local copy. Matches how the standard layer_past is allocated in
+        # models/tt_transformers/tt/attention.py::init_kv_cache.
+        mesh_mapper = None
+        if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+
         zero_idx = torch.zeros(idx_shape, dtype=torch.bfloat16)
         self.k_indices_dev = [
             ttnn.from_torch(
@@ -467,6 +475,7 @@ class TTNNTurboQuantCache:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             for _ in range(num_layers)
         ]
@@ -477,6 +486,7 @@ class TTNNTurboQuantCache:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             for _ in range(num_layers)
         ]
@@ -490,6 +500,7 @@ class TTNNTurboQuantCache:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             for _ in range(num_layers)
         ]
@@ -500,6 +511,7 @@ class TTNNTurboQuantCache:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
             )
             for _ in range(num_layers)
         ]
