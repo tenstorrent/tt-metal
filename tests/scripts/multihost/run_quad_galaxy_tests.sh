@@ -72,7 +72,6 @@ run_quad_galaxy_unit_tests() {
   local mpirun_args="$mpi_host $mpirun_args_base"
 
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
-  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
