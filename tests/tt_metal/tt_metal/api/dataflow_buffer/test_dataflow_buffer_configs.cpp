@@ -50,11 +50,6 @@ void validate_dfb_tile_counters(
     const CoreCoord& logical_core,
     const experimental::dfb::DataflowBufferConfig& config,
     const DFBTileCounterExpectation& expectation) {
-    // Finalize DFB configs (TC/remapper allocation) before inspecting state.
-    // Normally called during EnqueueProgram; here we trigger it explicitly
-    // so config-only tests can validate TC layout without dispatching.
-    program.impl().finalize_dataflow_buffer_configs();
-
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1) << "Expected exactly 1 DFB on core";
 
@@ -118,11 +113,8 @@ void validate_dfb_tile_counters(
         }
     }
 
-    // For BLOCKED mode with Tensix involvement, validate remapper pair indices.
-    // DM-DM BLOCKED uses the broadcast path (no remapper), so remapper_pair_index
-    // is not populated and uniqueness must not be checked.
-    bool has_tensix = (config.producer_risc_mask & 0xFF00u) || (config.consumer_risc_mask & 0xFF00u);
-    if (config.cap == dfb::AccessPattern::BLOCKED && has_tensix) {
+    // For BLOCKED mode, validate remapper pair indices
+    if (config.cap == dfb::AccessPattern::BLOCKED) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
@@ -245,7 +237,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .expected_producer_tc_count = 1,  // 1 producer with 1 consumer -> 1 TC per producer
         .expected_consumer_tc_count = 1,  // 1 consumer with 1 producer -> 1 TC per consumer
         .producer_to_consumer_pairings = {
-            {0, {{4, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 4 TC[0]
+            {0, {{0, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 0 TC[0]
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
@@ -499,18 +491,16 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
-    // DM-DM BLOCKED 1P-4C: producer uses broadcast path (num_consumers TCs, one per consumer).
-    // No remapper. Each producer TC slot is shared with exactly one consumer.
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 4,  // DM-DM BLOCKED: one TC per consumer (num_consumers=4)
+        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
         .expected_consumer_tc_count = 1,  // BLOCKED: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0,
              {
-                 {1, 0, 0},  // Producer 0 TC[0] shared with Consumer risc 1 TC[0]
-                 {2, 1, 0},  // Producer 0 TC[1] shared with Consumer risc 2 TC[0]
-                 {3, 2, 0},  // Producer 0 TC[2] shared with Consumer risc 3 TC[0]
-                 {4, 3, 0},  // Producer 0 TC[3] shared with Consumer risc 4 TC[0]
+                 {1, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 1 TC[0] via remapper
+                 {2, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 2 TC[0] via remapper
+                 {3, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 3 TC[0] via remapper
+                 {4, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 4 TC[0] via remapper
              }}}};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
@@ -567,39 +557,37 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
-    // DM-DM BLOCKED 4P-4C: each producer broadcasts to num_consumers=4 TCs.
-    // Each producer TC slot[c] is shared with consumer c. No remapper.
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 4,  // DM-DM BLOCKED: one TC per consumer (num_consumers=4)
+        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
         .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
              {
-                 {4, 0, 0},  // Producer 0 TC[0] shared with Consumer risc 4 TC[0]
-                 {5, 1, 0},  // Producer 0 TC[1] shared with Consumer risc 5 TC[0]
-                 {6, 2, 0},  // Producer 0 TC[2] shared with Consumer risc 6 TC[0]
-                 {7, 3, 0},  // Producer 0 TC[3] shared with Consumer risc 7 TC[0]
+                 {4, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 4 TC[0]
+                 {5, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 5 TC[0]
+                 {6, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 6 TC[0]
+                 {7, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 7 TC[0]
              }},
             {1,
              {
-                 {4, 0, 1},  // Producer 1 TC[0] shared with Consumer risc 4 TC[1]
-                 {5, 1, 1},  // Producer 1 TC[1] shared with Consumer risc 5 TC[1]
-                 {6, 2, 1},  // Producer 1 TC[2] shared with Consumer risc 6 TC[1]
-                 {7, 3, 1},  // Producer 1 TC[3] shared with Consumer risc 7 TC[1]
+                 {4, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 4 TC[1]
+                 {5, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 5 TC[1]
+                 {6, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 6 TC[1]
+                 {7, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 7 TC[1]
              }},
             {2,
              {
-                 {4, 0, 2},  // Producer 2 TC[0] shared with Consumer risc 4 TC[2]
-                 {5, 1, 2},  // Producer 2 TC[1] shared with Consumer risc 5 TC[2]
-                 {6, 2, 2},  // Producer 2 TC[2] shared with Consumer risc 6 TC[2]
-                 {7, 3, 2},  // Producer 2 TC[3] shared with Consumer risc 7 TC[2]
+                 {4, 0, 2},  // Producer 2 TC[0] maps to Consumer risc 4 TC[2]
+                 {5, 0, 2},  // Producer 2 TC[0] maps to Consumer risc 5 TC[2]
+                 {6, 0, 2},  // Producer 2 TC[0] maps to Consumer risc 6 TC[2]
+                 {7, 0, 2},  // Producer 2 TC[0] maps to Consumer risc 7 TC[2]
              }},
             {3,
              {
-                 {4, 0, 3},  // Producer 3 TC[0] shared with Consumer risc 4 TC[3]
-                 {5, 1, 3},  // Producer 3 TC[1] shared with Consumer risc 5 TC[3]
-                 {6, 2, 3},  // Producer 3 TC[2] shared with Consumer risc 6 TC[3]
-                 {7, 3, 3},  // Producer 3 TC[3] shared with Consumer risc 7 TC[3]
+                 {4, 0, 3},  // Producer 3 TC[0] maps to Consumer risc 4 TC[3]
+                 {5, 0, 3},  // Producer 3 TC[0] maps to Consumer risc 5 TC[3]
+                 {6, 0, 3},  // Producer 3 TC[0] maps to Consumer risc 6 TC[3]
+                 {7, 0, 3},  // Producer 3 TC[0] maps to Consumer risc 7 TC[3]
              }},
         }};
 
@@ -625,31 +613,29 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
-    // DM-DM BLOCKED 4P-2C: each producer broadcasts to num_consumers=2 TCs.
-    // Producer TC slot[c] is shared with consumer c. No remapper.
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 2,  // DM-DM BLOCKED: one TC per consumer (num_consumers=2)
+        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
         .expected_consumer_tc_count = 4,  // BLOCKED: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
              {
-                 {4, 0, 0},  // Producer 0 TC[0] shared with Consumer risc 4 TC[0]
-                 {5, 1, 0},  // Producer 0 TC[1] shared with Consumer risc 5 TC[0]
+                 {4, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 4 TC[0]
+                 {5, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 5 TC[0]
              }},
             {1,
              {
-                 {4, 0, 1},  // Producer 1 TC[0] shared with Consumer risc 4 TC[1]
-                 {5, 1, 1},  // Producer 1 TC[1] shared with Consumer risc 5 TC[1]
+                 {4, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 4 TC[1]
+                 {5, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 5 TC[1]
              }},
             {2,
              {
-                 {4, 0, 2},  // Producer 2 TC[0] shared with Consumer risc 4 TC[2]
-                 {5, 1, 2},  // Producer 2 TC[1] shared with Consumer risc 5 TC[2]
+                 {4, 0, 2},  // Producer 2 TC[0] maps to Consumer risc 4 TC[2]
+                 {5, 0, 2},  // Producer 2 TC[0] maps to Consumer risc 5 TC[2]
              }},
             {3,
              {
-                 {4, 0, 3},  // Producer 3 TC[0] shared with Consumer risc 4 TC[3]
-                 {5, 1, 3},  // Producer 3 TC[1] shared with Consumer risc 5 TC[3]
+                 {4, 0, 3},  // Producer 3 TC[0] maps to Consumer risc 4 TC[3]
+                 {5, 0, 3},  // Producer 3 TC[0] maps to Consumer risc 5 TC[3]
              }},
         }};
 
@@ -679,25 +665,23 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     // consumer_risc_mask 0x3C = riscs 2,3,4,5
-    // DM-DM BLOCKED 2P-4C: each producer broadcasts to num_consumers=4 TCs.
-    // Producer TC slot[c] is shared with consumer c. No remapper.
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 4,  // DM-DM BLOCKED: one TC per consumer (num_consumers=4)
+        .expected_producer_tc_count = 1,  // BLOCKED: each producer has 1 TC
         .expected_consumer_tc_count = 2,  // BLOCKED: each consumer has num_producers TCs = 2
         .producer_to_consumer_pairings = {
             {0,
              {
-                 {2, 0, 0},  // Producer 0 TC[0] shared with Consumer risc 2 TC[0]
-                 {3, 1, 0},  // Producer 0 TC[1] shared with Consumer risc 3 TC[0]
-                 {4, 2, 0},  // Producer 0 TC[2] shared with Consumer risc 4 TC[0]
-                 {5, 3, 0},  // Producer 0 TC[3] shared with Consumer risc 5 TC[0]
+                 {2, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 2 TC[0]
+                 {3, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 3 TC[0]
+                 {4, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 4 TC[0]
+                 {5, 0, 0},  // Producer 0 TC[0] maps to Consumer risc 5 TC[0]
              }},
             {1,
              {
-                 {2, 0, 1},  // Producer 1 TC[0] shared with Consumer risc 2 TC[1]
-                 {3, 1, 1},  // Producer 1 TC[1] shared with Consumer risc 3 TC[1]
-                 {4, 2, 1},  // Producer 1 TC[2] shared with Consumer risc 4 TC[1]
-                 {5, 3, 1},  // Producer 1 TC[3] shared with Consumer risc 5 TC[1]
+                 {2, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 2 TC[1]
+                 {3, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 3 TC[1]
+                 {4, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 4 TC[1]
+                 {5, 0, 1},  // Producer 1 TC[0] maps to Consumer risc 5 TC[1]
              }},
         }};
 
