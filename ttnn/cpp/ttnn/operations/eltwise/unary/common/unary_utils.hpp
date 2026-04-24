@@ -8,7 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <optional>
 
-namespace ttnn::operations::unary_ng {
+namespace ttnn::operations::unary {
 
 /** True if native L1 sharding path can be used (input and output both L1, even sharding). */
 bool is_native_L1_sharding(const TensorSpec& input_spec, const tt::tt_metal::MemoryConfig& output_memory_config);
@@ -39,4 +39,4 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
     const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout);
 
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn::operations::unary

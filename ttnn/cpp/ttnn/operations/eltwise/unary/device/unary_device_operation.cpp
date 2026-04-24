@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "unary_ng_device_operation.hpp"
-#include "ttnn/operations/eltwise/unary_ng/common/unary_ng_utils.hpp"
+#include "unary_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -11,9 +11,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::unary_ng {
+namespace ttnn::operations::unary {
 
-tt::stl::hash::hash_t UnaryNgDeviceOperation::operation_attributes_t::to_hash() const {
+tt::stl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
         op_chain,
         output_dtype,
@@ -25,7 +25,7 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::operation_attributes_t::to_hash() 
         worker_grid);
 }
 
-void UnaryNgDeviceOperation::validate_on_program_cache_miss(
+void UnaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_tensor = tensor_args.output_tensor;
@@ -37,23 +37,23 @@ void UnaryNgDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
-        "UnaryNg operation requires input to be on Device. Input storage type: {}",
+        "Unary operation requires input to be on Device. Input storage type: {}",
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
         input_tensor.buffer() != nullptr,
-        "UnaryNg: Operands need to be allocated in buffers on the device. Buffer is null.");
+        "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
             TT_FATAL(
                 input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
-                "UnaryNg: LGAMMA requires BFLOAT16 or FLOAT32 input, got dtype {}",
+                "Unary: LGAMMA requires BFLOAT16 or FLOAT32 input, got dtype {}",
                 static_cast<int>(input_tensor.dtype()));
             const DataType effective_out = output_tensor.has_value() ? output_tensor->dtype() : args.output_dtype;
             TT_FATAL(
                 effective_out == DataType::BFLOAT16 || effective_out == DataType::FLOAT32,
-                "UnaryNg: LGAMMA requires BFLOAT16 or FLOAT32 output, got dtype {}",
+                "Unary: LGAMMA requires BFLOAT16 or FLOAT32 output, got dtype {}",
                 static_cast<int>(effective_out));
             break;
         }
@@ -62,14 +62,14 @@ void UnaryNgDeviceOperation::validate_on_program_cache_miss(
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "UnaryNg: Non-sharded input must be interleaved. Input memory layout: {}",
+            "Unary: Non-sharded input must be interleaved. Input memory layout: {}",
             static_cast<int>(input_tensor.memory_config().memory_layout()));
     }
 
     if (!out_memory_config.is_sharded()) {
         TT_FATAL(
             out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "UnaryNg: Non-sharded output must be interleaved. Output memory layout: {}",
+            "Unary: Non-sharded output must be interleaved. Output memory layout: {}",
             static_cast<int>(out_memory_config.memory_layout()));
     }
 
@@ -78,19 +78,19 @@ void UnaryNgDeviceOperation::validate_on_program_cache_miss(
         const auto preallocated_output_shape = output_tensor->logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
-            "UnaryNg: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
+            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
             computed_output_shape,
             preallocated_output_shape);
 
         TT_FATAL(
             output_tensor->layout() == input_tensor.layout(),
-            "UnaryNg: Output format (tile/row-major) must match input when preallocated. Output: {}, Input: {}",
+            "Unary: Output format (tile/row-major) must match input when preallocated. Output: {}, Input: {}",
             static_cast<int>(output_tensor->layout()),
             static_cast<int>(input_tensor.layout()));
     }
 }
 
-TensorSpec UnaryNgDeviceOperation::compute_output_specs(
+TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor->tensor_spec();
@@ -135,7 +135,7 @@ TensorSpec UnaryNgDeviceOperation::compute_output_specs(
             tensor_args.input.padded_shape()));
 }
 
-Tensor UnaryNgDeviceOperation::create_output_tensors(
+Tensor UnaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return *tensor_args.output_tensor;
@@ -143,13 +143,11 @@ Tensor UnaryNgDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(
-        tt::tt_metal::is_device_tensor(input_tensor),
-        "UnaryNg: Unexpected tensor type {}",
-        input_tensor.storage_type());
+        tt::tt_metal::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
 
     const auto output_spec = compute_output_specs(attributes, tensor_args);
     const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
@@ -168,7 +166,7 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
     // different widths get separate cache entries. Consider hashing only the last
     // dimension to allow cache reuse when only height differs
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryNgDeviceOperation>(
+        return operation::hash_operation<UnaryDeviceOperation>(
             attributes,
             input_tensor.dtype(),
             input_tensor.layout(),
@@ -178,7 +176,7 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
             dst_shard_vol);
     }
 
-    return operation::hash_operation<UnaryNgDeviceOperation>(
+    return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
         input_tensor.dtype(),
         input_tensor.layout(),
@@ -187,18 +185,18 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
         dst_shard_vol);
 }
 
-bool UnaryNgDeviceOperation::skip_launch(
+bool UnaryDeviceOperation::skip_launch(
     const operation_attributes_t& /*attributes*/,
     const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn::operations::unary
 
 namespace ttnn::prim {
 
-Tensor unary_ng(
+Tensor unary(
     const Tensor& input,
     const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
@@ -208,12 +206,12 @@ Tensor unary_ng(
     bool bfp8_pack_precise,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using OperationType = ttnn::operations::unary_ng::UnaryNgDeviceOperation;
+    using OperationType = ttnn::operations::unary::UnaryDeviceOperation;
 
     auto mem_config_actual =
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
-    auto worker_grid = ttnn::operations::unary_ng::get_worker_grid(
+    auto worker_grid = ttnn::operations::unary::get_worker_grid(
         input,
         optional_output_tensor,
         std::optional<MemoryConfig>(output_memory_config),
