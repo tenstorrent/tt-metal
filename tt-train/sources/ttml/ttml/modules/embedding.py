@@ -108,14 +108,15 @@ class VocabParallelEmbedding(AbstractModuleBase):
         if isinstance(input_ids, np.ndarray):
             ids_np = input_ids.astype(np.int64)
         else:
-            composer = None
             topology = input_ids.get_value().tensor_topology()
             for p in tuple(topology.placements()):
                 if isinstance(p, ttnn.PlacementShard):
-                    dev = ttml.autograd.AutoContext.get_instance().get_device()
-                    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(dev, p.dim)
-                    break
-            ids_np = input_ids.to_numpy(ttnn.DataType.UINT32, composer=composer).astype(np.int64)
+                    raise ValueError(
+                        "VocabParallelEmbedding does not support sharded input_ids "
+                        f"(found PlacementShard(dim={p.dim}) in tensor topology). "
+                        "Pass a replicated tensor or a numpy array."
+                    )
+            ids_np = input_ids.to_numpy(ttnn.DataType.UINT32).astype(np.int64)
 
         ids_np = ids_np.reshape(ids_np.shape[0], -1)  # (B, T)
         B, T = ids_np.shape
