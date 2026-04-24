@@ -23,7 +23,7 @@ import analyze_steps
 
 
 def _verify_path(path: str, allowed_root: str) -> str:
-    # Check if path is under allowed root to avoid security risk
+    """Check if path is under allowed root to avoid security risk. Return absolute path."""
     path = os.path.abspath(os.path.join(allowed_root, path))
     if not path.startswith(allowed_root):
         raise Exception(f"binary path must be under {allowed_root}: {path}")
@@ -121,18 +121,17 @@ def main() -> int:
     # Turn off tt-logger to reduce log noise
     os.environ["TT_LOGGER_LEVEL"] = "off"
 
-    model_config = _verify_path(parsed_args.model_config, tt_metal_runtime_root)
-    output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
-
     # Save current git commit hash
     git_commit_hash = get_git_commit_hash()
 
     # Create output directory to store metrics
+    output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Report failing models
     failing_models = []
 
+    model_config = _verify_path(parsed_args.model_config, tt_metal_runtime_root)
     with open(model_config) as f:
         models = yaml.safe_load(f)
         # Check if there are any duplicate filenames
@@ -155,7 +154,9 @@ def main() -> int:
 
         cmd = process_binary_path(binary, tt_metal_runtime_root) + args
         print(f"Running {model_filename}: {' '.join(cmd)}")
+        cmd_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
+        print(f"{model_filename} elapsed time: {time.time() - cmd_start}")
 
         # Record failing model run but continue to run remaining models
         if ret_code != 0:
