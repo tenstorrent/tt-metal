@@ -147,8 +147,15 @@ def run(
 
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
 
+    # Detect whether the master trace used positional or named args.
+    # If the vector has arg1 (positional dtype), call positionally to match the trace.
+    use_positional = pos_args.get(1) is not None and kwargs.get("dtype") is None
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
+    if use_positional:
+        output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    else:
+        output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
