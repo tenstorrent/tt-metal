@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -497,6 +498,7 @@ class ttMLA:
     def forward(
         self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor, cache_user_idx: int = 0
     ) -> ttnn.Tensor:
+        signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
@@ -693,4 +695,5 @@ class ttMLA:
             )
         else:
             out = v_out
+        signpost(header="MLA_END")
         return out

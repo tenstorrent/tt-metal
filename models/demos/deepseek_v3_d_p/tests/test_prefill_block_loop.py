@@ -34,7 +34,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    PROMPTS_PATH,
+    PROMPT_1K_PATH,
+    PROMPT_25K_PATH,
     create_hf_model_with_weights,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
@@ -67,8 +68,8 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("num_iters", [30])
-@pytest.mark.parametrize("isl_total", [1024])
+@pytest.mark.parametrize("isl_total", [1024, 25 * 1024], ids=["isl_1k", "isl_25k"])
+@pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -110,7 +111,7 @@ def test_prefill_block_loop(
     device_params,
     isl_total,
     layer_idx,
-    num_iters,
+    skip_reference,
     gate_fallback_mode,
     num_links,
     topology,
@@ -119,6 +120,8 @@ def test_prefill_block_loop(
     state_dict,
     request,
 ):
+    # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
+    num_iters = 1 if skip_reference else 30
     # --- Validate fixtures ---
     if hf_config is None:
         pytest.skip("HF config not available")
@@ -170,6 +173,10 @@ def test_prefill_block_loop(
     # For uniform/zero experts, HOST=DEVICE (proven), skip HOST to save time
     if layer_idx in (-1, -4, -5, -6) and gate_fallback_mode != GateComputeMode.DEVICE:
         pytest.skip("uniform/zero experts: DEVICE=HOST (proven), skipping HOST")
+    # Torch reference + large isl OOMs host RAM (HF model of num_layers_hf=real_layer_idx+1
+    # plus dequantized weights). Restrict the PCC path to small isl.
+    if not skip_reference and isl_total > 1024:
+        pytest.skip(f"with_ref is limited to 1K isl (got {isl_total}); use no_ref for larger isl")
 
     logger.info(
         f"=== Iterative PCC test: layer {layer_idx} ({layer_type}), "
@@ -343,23 +350,56 @@ def test_prefill_block_loop(
     if synthetic_experts:
         logger.info(f"Overrode HF model weights with synthetic values")
 
-    logger.info(f"Creating HF model with {num_layers_hf} layers (only layer {real_layer_idx} has real weights)...")
-    hf_model = create_hf_model_with_weights(config, num_layers_hf, hf_sd)
+    if skip_reference:
+        logger.info("skip_reference=True: skipping HF reference model build (perf-only mode)")
+        hf_model = None
+    else:
+        logger.info(f"Creating HF model with {num_layers_hf} layers (only layer {real_layer_idx} has real weights)...")
+        hf_model = create_hf_model_with_weights(config, num_layers_hf, hf_sd)
 
     # ------------------------------------------------------------------
     # 2. Tokenize & embed (shared initial input)
     # ------------------------------------------------------------------
     tok = request.getfixturevalue("tokenizer")
 
-    prompts = load_prompts_from_json(str(PROMPTS_PATH))
-    prompt_text = prompts[0] if isinstance(prompts, list) else prompts
-    token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
-    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
-
-    logger.info(f"Token IDs shape: {token_ids.shape}, first 10: {token_ids[0, :10].tolist()}")
+    if skip_reference:
+        # Perf mode: pick the prompt that natively matches isl_total; any other length
+        # repeats the 1K prompt. Never pad — pad tokens all have the same embedding and
+        # collapse gate routing onto a handful of experts, distorting expert-load
+        # measurements.
+        if isl_total == 25 * 1024:
+            prompt_path = PROMPT_25K_PATH
+        else:
+            prompt_path = PROMPT_1K_PATH
+        prompts = load_prompts_from_json(str(prompt_path))
+        prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+        raw_ids = tok(prompt_text, return_tensors="pt").input_ids
+        n_base = raw_ids.shape[1]
+        if n_base >= isl_total:
+            token_ids = raw_ids[:, :isl_total]
+            repeats = 1
+        else:
+            repeats = (isl_total + n_base - 1) // n_base
+            token_ids = raw_ids.repeat(1, repeats)[:, :isl_total]
+        attention_mask = torch.ones(1, isl_total, dtype=torch.long)
+        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+        logger.info(
+            f"Using {prompt_path.name}: n_base={n_base}, isl_total={isl_total}, repeats={repeats}, "
+            f"final shape={token_ids.shape}, first 10: {token_ids[0, :10].tolist()}"
+        )
+    else:
+        prompts = load_prompts_from_json(str(PROMPT_1K_PATH))
+        prompt_text = prompts[0] if isinstance(prompts, list) else prompts
+        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
+        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+        logger.info(f"Token IDs shape: {token_ids.shape}, first 10: {token_ids[0, :10].tolist()}")
 
     with torch.no_grad():
-        h0 = hf_model.embed_tokens(token_ids).to(torch.bfloat16)  # [1, 1024, 7168]
+        if skip_reference:
+            # Use embed_weight directly — avoids allocating the full HF model
+            h0 = torch.nn.functional.embedding(token_ids, embed_weight).to(torch.bfloat16)
+        else:
+            h0 = hf_model.embed_tokens(token_ids).to(torch.bfloat16)  # [1, 1024, 7168]
     logger.info(f"Initial embedding shape: {h0.shape}")
 
     # ------------------------------------------------------------------
@@ -376,19 +416,23 @@ def test_prefill_block_loop(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
     )
+    block_kwargs["is_balanced"] = True  # MLA/RoPE layout — must match RotarySetup(is_balanced=True) below
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
         block_kwargs["capacity_factor"] = 32  # default=2 causes massive overflow with pretrained weights
-        block_kwargs["routed_expert_activations_dtype"] = ttnn.bfloat16
-        block_kwargs["routed_expert_weights_dtype"] = ttnn.bfloat16
-        block_kwargs["shared_expert_activations_dtype"] = ttnn.bfloat16
-        block_kwargs["shared_expert_weights_dtype"] = ttnn.bfloat16
+        if not skip_reference:
+            # bf16 everywhere for clean PCC comparison; skip_reference (perf mode) keeps
+            # production defaults (bfp8 activations, bfp4 routed weights, bfp8 shared weights)
+            block_kwargs["routed_expert_activations_dtype"] = ttnn.bfloat16
+            block_kwargs["routed_expert_weights_dtype"] = ttnn.bfloat16
+            block_kwargs["shared_expert_activations_dtype"] = ttnn.bfloat16
+            block_kwargs["shared_expert_weights_dtype"] = ttnn.bfloat16
 
     logger.info("Creating TtPrefillBlock...")
     block = TtPrefillBlock(**block_kwargs)
     ttnn.synchronize_device(mesh_device)
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
@@ -455,20 +499,27 @@ def test_prefill_block_loop(
         )
 
         # --- Torch reference ---
-        ref_cache = DynamicCache()
-        with torch.no_grad():
-            layer_out = hf_model.layers[real_layer_idx](
-                h_torch,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=ref_cache,
-                use_cache=True,
-            )
-            h_torch_next = layer_out[0]
+        if not skip_reference:
+            ref_cache = DynamicCache()
+            with torch.no_grad():
+                layer_out = hf_model.layers[real_layer_idx](
+                    h_torch,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=ref_cache,
+                    use_cache=True,
+                )
+                h_torch_next = layer_out[0]
 
         # --- TT forward ---
         h_tt_next, _ = block(h_tt, rope_tensors, tt_kvpe_cache)
         ttnn.synchronize_device(mesh_device)
+
+        if skip_reference:
+            logger.info(f"  Iter {iteration:>3d}/{num_iters}  TT forward done (perf-only, no PCC)")
+            h_tt = h_tt_next
+            ttnn.deallocate(tt_kvpe_cache)
+            continue
 
         # --- PCC ---
         tt_out_host = ttnn.to_torch(
@@ -519,6 +570,10 @@ def test_prefill_block_loop(
 
         # --- Cleanup KV cache ---
         ttnn.deallocate(tt_kvpe_cache)
+
+    if skip_reference:
+        logger.info("skip_reference=True: perf-only run complete (no PCC/plot/summary)")
+        return
 
     # ------------------------------------------------------------------
     # 5. Plot
