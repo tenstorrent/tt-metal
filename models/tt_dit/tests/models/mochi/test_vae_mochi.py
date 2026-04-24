@@ -92,29 +92,15 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     ids=["large_latent"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, num_links",
-    [
-        ((1, 1), 1),
-        ((1, 2), 1),
-        ((1, 8), 1),
-        ((2, 4), 1),
-        ((8, 4), 4),  # WH Galaxy
-        ((8, 4), 2),  # BH Galaxy
-    ],
-    ids=[
-        "1x1",
-        "1x2",
-        "1x8",
-        "2x4",
-        "wh_8x4",
-        "bh_8x4",
-    ],
-    indirect=["mesh_device"],
+    "mesh_device",
+    [(1, 1), (1, 2), (1, 8), (2, 4), (8, 4)],
+    ids=["1x1", "1x2", "1x8", "2x4", "8x4"],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
 )
-def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds, num_links):
+def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
 

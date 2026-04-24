@@ -66,7 +66,7 @@
 - name: Galaxy Mochi demo tests
   cmd: |
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-    pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500
+    pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "wh_4x8sp1tp0" --timeout=1500
   model: mochi
   skus:
     wh_galaxy_perf:
