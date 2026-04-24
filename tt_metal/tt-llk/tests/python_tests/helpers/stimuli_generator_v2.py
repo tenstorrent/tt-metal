@@ -6,7 +6,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Set, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 
@@ -85,8 +85,11 @@ class StimuliSpec:
             Every element is set to *value*.  Ignores *low*, *high*, *seed*.
 
         "sequential"
-            Values 1, 2, 3, …, size.
-            Ignores *low*, *high*, *seed*.
+            Arithmetic progression.  By default generates 1, 2, 3, …,
+            size (legacy behavior).  Use the ``sequential()`` factory
+            with *low*, *high*, and *step* to customize.  When *high*
+            is set, positions beyond it are zero-filled.  Supports
+            *intervals* — values outside the union are zeroed.
 
         "ramp"
             Continuous linear sweep: deterministic, evenly spaced values
@@ -180,6 +183,32 @@ class StimuliSpec:
         with global short-circuit distributions ("identity",
         "sequential", linspace variants) — raises ValueError
         if combined.
+    intervals : list[tuple[float, float]], optional
+        Union of [low, high] ranges.  When set, *low*/*high* are ignored
+        and values are generated from the union of these intervals.
+        Supported distributions:
+
+        - **uniform** (random): each interval is selected with
+          probability proportional to its length.
+        - **log_uniform** (random): each interval is selected with
+          probability proportional to its log-space length.
+        - **integer uniform**: each interval is selected with
+          probability proportional to the number of integer points.
+        - **gaussian**: truncated Gaussian via rejection sampling —
+          only values inside the union are kept.  For integer formats
+          the samples are rounded and clamped to representable integers
+          within the intervals.
+        - **saw**: piecewise linspace — each interval gets a proportional
+          share of the total *size* elements, concatenated in order.
+        - **ramp / log_uniform_linspace**: same piecewise linspace
+          semantics as *saw*, applied at the tensor level.
+        - **sequential**: values outside the union are zeroed.
+
+        Not supported for *gaussian_linspace* (raises ValueError).
+        Ignored by *identity*, *face_identity*, *custom*.
+        Example::
+
+            StimuliSpec.uniform(intervals=[(-10.0, -1.0), (1.0, 10.0)])
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
@@ -192,6 +221,7 @@ class StimuliSpec:
     seed: Optional[int] = None
     face_specs: Optional[List[Optional["StimuliSpec"]]] = None
     masked_faces: Optional[Set[int]] = None
+    intervals: Optional[List[Tuple[float, float]]] = None
 
     def __post_init__(self) -> None:
         if not (
@@ -276,9 +306,26 @@ class StimuliSpec:
         )
 
     @classmethod
-    def sequential(cls, **kwargs) -> "StimuliSpec":
-        """Sequential values 1, 2, 3, …"""
-        return cls(distribution=DistributionKind.SEQUENTIAL, **kwargs)
+    def sequential(
+        cls,
+        low: Optional[float] = None,
+        high: Optional[float] = None,
+        step: float = 1.0,
+        **kwargs,
+    ) -> "StimuliSpec":
+        """Arithmetic progression, optionally bounded with zero-fill.
+
+        No arguments produces the legacy 1, 2, 3, … sequence.  With
+        *low*/*high*/*step*, generates low, low+step, low+2*step, …
+        up to *high* (then zero-fills the remainder).
+        """
+        kw = dict(distribution=DistributionKind.SEQUENTIAL, **kwargs)
+        if low is not None:
+            kw["low"] = low
+        if high is not None:
+            kw["high"] = high
+        kw["std"] = step
+        return cls(**kw)
 
     @classmethod
     def uniform(cls, low: float = 0.0, high: float = 1.0, **kwargs) -> "StimuliSpec":
@@ -1028,17 +1075,44 @@ def _generate_linspace_tensor(
     dist = spec.distribution
 
     if dist == DistributionKind.RAMP:
+        if spec.intervals:
+            counts = _split_size_across_intervals(spec.intervals, size)
+            segments = []
+            for (lo, hi), n in zip(spec.intervals, counts):
+                if n > 0:
+                    segments.append(torch.linspace(lo, hi, n, dtype=torch.float32))
+            return torch.cat(segments).to(dtype=dtype)
         return torch.linspace(spec.low, spec.high, size, dtype=torch.float32).to(
             dtype=dtype
         )
 
     if dist == DistributionKind.GAUSSIAN_LINSPACE:
-        # Inverse CDF of the standard normal: Φ⁻¹(p) = √2 · erfinv(2p − 1)
+        if spec.intervals:
+            raise ValueError("intervals not supported for gaussian_linspace yet")
         p = torch.linspace(_GAUSSIAN_LINSPACE_EPS, 1.0 - _GAUSSIAN_LINSPACE_EPS, size)
         values = spec.mean + spec.std * math.sqrt(2.0) * torch.erfinv(2.0 * p - 1.0)
         return values.to(dtype=dtype)
 
     if dist == DistributionKind.LOG_UNIFORM_LINSPACE:
+        if spec.intervals:
+            for lo, hi in spec.intervals:
+                if lo <= 0 or hi <= 0:
+                    raise ValueError(
+                        f"log_uniform_linspace intervals require strictly positive "
+                        f"bounds, got ({lo}, {hi})"
+                    )
+            counts = _split_size_across_intervals(spec.intervals, size)
+            segments = []
+            for (lo, hi), n in zip(spec.intervals, counts):
+                if n > 0:
+                    log_lo = math.log(lo)
+                    log_hi = math.log(hi)
+                    segments.append(
+                        torch.exp(
+                            torch.linspace(log_lo, log_hi, n, dtype=torch.float32)
+                        )
+                    )
+            return torch.cat(segments).to(dtype=dtype)
         if spec.low <= 0 or spec.high <= 0:
             raise ValueError(
                 f"log_uniform_linspace requires strictly positive low and high, "
@@ -1096,6 +1170,226 @@ def _get_integer_bounds(stimuli_format: DataFormat) -> tuple[int, int]:
     )
 
 
+def _sample_uniform_intervals(
+    intervals: List[Tuple[float, float]],
+    size: int,
+    dtype: torch.dtype,
+    generator: Optional[torch.Generator],
+) -> torch.Tensor:
+    """Sample uniformly from a union of [low, high] intervals.
+
+    Each interval is selected with probability proportional to its length.
+    """
+    if not intervals:
+        raise ValueError("intervals must be a non-empty list")
+    lows = torch.tensor([lo for lo, _ in intervals], dtype=torch.float32)
+    highs = torch.tensor([hi for _, hi in intervals], dtype=torch.float32)
+    lengths = torch.clamp(highs - lows, min=0.0)
+    total = lengths.sum()
+    if total <= 0:
+        raise ValueError("Total interval length must be positive")
+    cdf = (lengths / total).cumsum(dim=0)
+    u = torch.rand(size, dtype=torch.float32, generator=generator)
+    idx = torch.searchsorted(cdf, u, right=False)
+    u_inner = torch.rand(size, dtype=torch.float32, generator=generator)
+    lo_sel = lows[idx]
+    hi_sel = highs[idx]
+    return (lo_sel + u_inner * (hi_sel - lo_sel)).to(dtype)
+
+
+def _sample_log_uniform_intervals(
+    intervals: List[Tuple[float, float]],
+    size: int,
+    dtype: torch.dtype,
+    generator: Optional[torch.Generator],
+) -> torch.Tensor:
+    """Sample log-uniformly from a union of strictly positive intervals.
+
+    Each interval is selected with probability proportional to its
+    log-space length (log(hi) - log(lo)).
+    """
+    if not intervals:
+        raise ValueError("intervals must be a non-empty list")
+    for lo, hi in intervals:
+        if lo <= 0 or hi <= 0:
+            raise ValueError(
+                f"log_uniform intervals require strictly positive bounds, "
+                f"got ({lo}, {hi})"
+            )
+    log_lows = torch.tensor([math.log(lo) for lo, _ in intervals], dtype=torch.float32)
+    log_highs = torch.tensor([math.log(hi) for _, hi in intervals], dtype=torch.float32)
+    lengths = torch.clamp(log_highs - log_lows, min=0.0)
+    total = lengths.sum()
+    if total <= 0:
+        raise ValueError("Total log-space interval length must be positive")
+    cdf = (lengths / total).cumsum(dim=0)
+    u = torch.rand(size, dtype=torch.float32, generator=generator)
+    idx = torch.searchsorted(cdf, u, right=False)
+    u_inner = torch.rand(size, dtype=torch.float32, generator=generator)
+    ll = log_lows[idx]
+    lh = log_highs[idx]
+    return torch.exp(ll + u_inner * (lh - ll)).to(dtype)
+
+
+def _sample_integer_intervals(
+    intervals: List[Tuple[float, float]],
+    int_min: int,
+    int_max: int,
+    size: int,
+    dtype: torch.dtype,
+    generator: Optional[torch.Generator],
+) -> torch.Tensor:
+    """Sample uniformly from a union of integer intervals (inclusive).
+
+    Each interval is selected with probability proportional to the
+    number of integer points it contains.
+    """
+    clamped = []
+    counts = []
+    for lo_f, hi_f in intervals:
+        lo_i = max(math.ceil(lo_f), int_min)
+        hi_i = min(math.floor(hi_f), int_max)
+        if hi_i >= lo_i:
+            clamped.append((lo_i, hi_i))
+            counts.append(hi_i - lo_i + 1)
+    if not clamped:
+        fallback = max(int_min, min((int_min + int_max) // 2, int_max))
+        warnings.warn(
+            f"No valid integer exists in any interval after clamping to "
+            f"[{int_min}, {int_max}]. Returning constant tensor filled with {fallback}.",
+            stacklevel=3,
+        )
+        return torch.full((size,), fallback, dtype=dtype)
+    lengths = torch.tensor(counts, dtype=torch.float32)
+    cdf = (lengths / lengths.sum()).cumsum(dim=0)
+    u = torch.rand(size, dtype=torch.float32, generator=generator)
+    idx = torch.searchsorted(cdf, u, right=False)
+    lows = torch.tensor([lo for lo, _ in clamped], dtype=torch.int64)
+    ranges = torch.tensor(counts, dtype=torch.int64)
+    lo_sel = lows[idx]
+    range_sel = ranges[idx]
+    u_inner = torch.rand(size, dtype=torch.float32, generator=generator)
+    offsets = (u_inner * range_sel.to(torch.float32)).to(torch.int64)
+    return (lo_sel + offsets).to(dtype)
+
+
+def _in_intervals(
+    values: torch.Tensor, intervals: List[Tuple[float, float]]
+) -> torch.Tensor:
+    """Return a boolean mask: True where the value falls inside any [lo, hi]."""
+    mask = torch.zeros(values.shape, dtype=torch.bool)
+    for lo, hi in intervals:
+        mask |= (values >= lo) & (values <= hi)
+    return mask
+
+
+def _split_size_across_intervals(
+    intervals: List[Tuple[float, float]], size: int
+) -> List[int]:
+    """Split *size* elements across intervals proportional to interval length.
+
+    Rounding residuals are distributed to the intervals with the largest
+    fractional parts so the total is exactly *size*.
+    """
+    if not intervals:
+        raise ValueError("intervals must be non-empty for piecewise linspace")
+    lengths = [abs(hi - lo) for lo, hi in intervals]
+    total_length = sum(lengths)
+    if total_length <= 0:
+        raise ValueError(
+            "Total interval length must be positive for piecewise linspace"
+        )
+    raw = [size * l / total_length for l in lengths]
+    counts = [int(r) for r in raw]
+    remainder = size - sum(counts)
+    fracs = sorted(range(len(counts)), key=lambda i: raw[i] - counts[i], reverse=True)
+    for j in range(remainder):
+        counts[fracs[j]] += 1
+    return counts
+
+
+def _sample_gaussian_intervals(
+    spec: StimuliSpec,
+    size: int,
+    dtype: torch.dtype,
+    generator: Optional[torch.Generator],
+) -> torch.Tensor:
+    """Sample from a truncated Gaussian over a union of intervals via rejection."""
+    _MAX_ATTEMPTS = 100
+    result = torch.empty(0, dtype=torch.float32)
+    remaining = size
+    for _ in range(_MAX_ATTEMPTS):
+        batch = max(remaining * 4, 64)
+        candidates = (
+            torch.randn(batch, dtype=torch.float32, generator=generator) * spec.std
+            + spec.mean
+        )
+        accepted = candidates[_in_intervals(candidates, spec.intervals)]
+        result = torch.cat([result, accepted])
+        if result.numel() >= size:
+            return result[:size].to(dtype)
+        remaining = size - result.numel()
+    raise ValueError(
+        f"Gaussian rejection sampling failed to fill {size} elements after "
+        f"{_MAX_ATTEMPTS} attempts. The intervals {spec.intervals} may be "
+        f"incompatible with mean={spec.mean}, std={spec.std}."
+    )
+
+
+def _sample_integer_gaussian_intervals(
+    spec: StimuliSpec,
+    int_min: int,
+    int_max: int,
+    size: int,
+    dtype: torch.dtype,
+    generator: Optional[torch.Generator],
+) -> torch.Tensor:
+    """Truncated integer Gaussian over a union of intervals via rejection.
+
+    When intervals are set, spec.low/spec.high are ignored — the domain is
+    spec.intervals intersected with the format's representable range.
+    """
+    clamped = []
+    for lo_f, hi_f in spec.intervals:
+        lo_i = max(math.ceil(lo_f), int_min)
+        hi_i = min(math.floor(hi_f), int_max)
+        if hi_i >= lo_i:
+            clamped.append((lo_i, hi_i))
+    if not clamped:
+        raise ValueError(
+            f"No valid integer interval remains after clamping "
+            f"{spec.intervals} to [{int_min}, {int_max}]."
+        )
+
+    def _in_int_intervals(vals: torch.Tensor) -> torch.Tensor:
+        mask = torch.zeros(vals.shape, dtype=torch.bool)
+        for lo_i, hi_i in clamped:
+            mask |= (vals >= lo_i) & (vals <= hi_i)
+        return mask
+
+    _MAX_ATTEMPTS = 100
+    result = torch.empty(0, dtype=torch.int64)
+    remaining = size
+    for _ in range(_MAX_ATTEMPTS):
+        batch = max(remaining * 4, 64)
+        raw = (
+            torch.randn(batch, dtype=torch.float32, generator=generator) * spec.std
+            + spec.mean
+        )
+        rounded = raw.round().clamp(int_min, int_max).to(torch.int64)
+        accepted = rounded[_in_int_intervals(rounded)]
+        result = torch.cat([result, accepted])
+        if result.numel() >= size:
+            return result[:size].to(dtype)
+        remaining = size - result.numel()
+    raise ValueError(
+        f"Integer Gaussian rejection sampling failed to fill {size} elements "
+        f"after {_MAX_ATTEMPTS} attempts. The intervals {spec.intervals} "
+        f"(clamped to {clamped}) may be incompatible with "
+        f"mean={spec.mean}, std={spec.std}."
+    )
+
+
 def _generate_integer_face(
     spec: StimuliSpec,
     stimuli_format: DataFormat,
@@ -1146,6 +1440,15 @@ def _generate_integer_face(
     distribution = spec.distribution
 
     if distribution == DistributionKind.UNIFORM:
+        if spec.intervals:
+            return _sample_integer_intervals(
+                spec.intervals,
+                int_min,
+                int_max,
+                size,
+                dtype,
+                generator,
+            )
         return torch.randint(
             low=low, high=high + 1, size=(size,), dtype=dtype, generator=generator
         )
@@ -1159,6 +1462,15 @@ def _generate_integer_face(
         )
 
     if distribution == DistributionKind.GAUSSIAN:
+        if spec.intervals:
+            return _sample_integer_gaussian_intervals(
+                spec,
+                int_min,
+                int_max,
+                size,
+                dtype,
+                generator,
+            )
         raw = (
             torch.randn(size, dtype=torch.float32, generator=generator) * spec.std
             + spec.mean
@@ -1187,6 +1499,85 @@ def _generate_integer_face(
         f"Unknown distribution {distribution!r} for integer format. "
         f"Expected a DistributionKind member or a callable."
     )
+
+
+def _generate_sequential(
+    spec: StimuliSpec,
+    size: int,
+    dtype: torch.dtype,
+    stimuli_format: Optional[DataFormat] = None,
+) -> torch.Tensor:
+    """Generate a sequential arithmetic progression.
+
+    Three modes:
+
+    1. **Legacy** (StimuliSpec.sequential() with no args): 1, 2, 3, …, size.
+    2. **Intervals** (spec.intervals is set): base sequence
+       1, 1+step, 1+2*step, … filling the full *size*, then values
+       outside the interval union are zeroed.  spec.low/spec.high
+       are ignored.
+    3. **Custom** (low/high/step without intervals): start at
+       *low*, increment by *step*, zero-fill positions beyond *high*.
+    """
+    is_int = stimuli_format is not None and stimuli_format.is_integer()
+
+    # -- Mode 1: legacy (all dataclass defaults, no intervals) ---------------
+    if (
+        spec.low == 0.0
+        and spec.high == 1.0
+        and spec.std == 1.0
+        and spec.intervals is None
+    ):
+        if is_int:
+            int_min, int_max = _get_integer_bounds(stimuli_format)
+            result = torch.arange(1, size + 1, dtype=torch.int64)
+            return result.clamp(min=int_min, max=int_max).to(dtype)
+        return torch.arange(1, size + 1, dtype=dtype)
+
+    # -- Mode 2: intervals set — ignore low/high, use step + mask -----------
+    if spec.intervals is not None:
+        step = spec.std
+        idx = torch.arange(size, dtype=torch.float32)
+        vals = 1.0 + step * idx
+
+        if is_int:
+            int_min, int_max = _get_integer_bounds(stimuli_format)
+            vals = vals.round().clamp(int_min, int_max)
+
+        mask = _in_intervals(vals, spec.intervals)
+        vals = vals * mask.float()
+        return vals.to(dtype)
+
+    # -- Mode 3: custom low/high/step, no intervals -------------------------
+    low = spec.low
+    step = spec.std
+    high = spec.high
+
+    if high == 1.0 and low != 0.0:
+        idx = torch.arange(size, dtype=torch.float32)
+        vals = low + step * idx
+    else:
+        vals_list: list = []
+        v = low
+        if step > 0:
+            while len(vals_list) < size and v <= high:
+                vals_list.append(v)
+                v += step
+        elif step < 0:
+            while len(vals_list) < size and v >= high:
+                vals_list.append(v)
+                v += step
+        else:
+            vals_list = [low] * size
+        if len(vals_list) < size:
+            vals_list.extend([0.0] * (size - len(vals_list)))
+        vals = torch.tensor(vals_list[:size], dtype=torch.float32)
+
+    if is_int:
+        int_min, int_max = _get_integer_bounds(stimuli_format)
+        vals = vals.round().clamp(int_min, int_max)
+
+    return vals.to(dtype)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1251,12 +1642,7 @@ def generate_face_v2(
         return torch.full((size,), spec.value, dtype=dtype)
 
     if distribution == DistributionKind.SEQUENTIAL:
-        if stimuli_format.is_integer():
-            int_min, int_max = _get_integer_bounds(stimuli_format)
-            result = torch.arange(1, size + 1, dtype=torch.int64)
-            result = result.clamp(min=int_min, max=int_max)
-            return result.to(dtype=dtype)
-        return torch.arange(1, size + 1, dtype=dtype)
+        return _generate_sequential(spec, size, dtype, stimuli_format)
 
     if distribution == DistributionKind.IDENTITY:
         raise ValueError(
@@ -1298,20 +1684,30 @@ def generate_face_v2(
 
     # ── float / BFP / MX formats ─────────────────────────────────────────────
     if distribution == DistributionKind.UNIFORM:
+        if spec.intervals:
+            return _sample_uniform_intervals(spec.intervals, size, dtype, generator)
         raw = torch.rand(size, dtype=dtype, generator=generator)
         return raw * (spec.high - spec.low) + spec.low
 
     if distribution == DistributionKind.GAUSSIAN:
-        # NOTE: Gaussian is unbounded — extreme outliers in reduced-precision
-        # formats (bfloat16, float16) may produce inf/NaN.  Set *std*
-        # conservatively relative to the format's representable range.
+        if spec.intervals:
+            return _sample_gaussian_intervals(spec, size, dtype, generator)
         raw = torch.randn(size, dtype=dtype, generator=generator)
         return raw * spec.std + spec.mean
 
     if distribution == DistributionKind.SAW:
+        if spec.intervals:
+            counts = _split_size_across_intervals(spec.intervals, size)
+            segments = []
+            for (lo, hi), n in zip(spec.intervals, counts):
+                if n > 0:
+                    segments.append(torch.linspace(lo, hi, n, dtype=dtype))
+            return torch.cat(segments)
         return torch.linspace(spec.low, spec.high, size, dtype=dtype)
 
     if distribution == DistributionKind.LOG_UNIFORM:
+        if spec.intervals:
+            return _sample_log_uniform_intervals(spec.intervals, size, dtype, generator)
         if spec.low <= 0 or spec.high <= 0:
             raise ValueError(
                 f"log_uniform requires strictly positive low and high, "
@@ -1392,13 +1788,7 @@ def _generate_source_tensor_v2(
         return tensor
 
     if spec.distribution == DistributionKind.SEQUENTIAL:
-        if stimuli_format.is_integer():
-            int_min, int_max = _get_integer_bounds(stimuli_format)
-            tensor = torch.arange(1, num_elements + 1, dtype=torch.int64)
-            tensor = tensor.clamp(min=int_min, max=int_max).to(dtype=dtype)
-        else:
-            tensor = torch.arange(1, num_elements + 1, dtype=dtype)
-
+        tensor = _generate_sequential(spec, num_elements, dtype, stimuli_format)
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
         return tensor
