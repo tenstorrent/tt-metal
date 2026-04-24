@@ -200,24 +200,15 @@ def run_model_device_perf_test_with_merge(
     )
 
 
-def _perf_param(
-    op, worker_file, worker_test, topo, nlinks, payload, expected_ns, op_filter, margin=0.03, layout="tile"
-):
+def _perf_param(op, worker_file, worker_test, topo, nlinks, payload, expected_ns, op_filter, margin=0.03):
     """Build one pytest.param tuple for the perf tests."""
     worker_id = f"perf-{topo}-8-{nlinks}link-{payload}"
-    model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link_{payload}"
-    if layout != "tile":
-        model_name += f"_{layout}"
-    # Only the combine worker has a layout parametrize (tile / row_major);
-    # dispatch has no such axis, so adding "and tile" would match nothing.
-    k_filter = f"perf_no_pcc and {worker_id} and random"
-    if op == "combine":
-        k_filter += f" and {layout}"
     return (
-        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
+        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} "
+        f"-k 'perf_no_pcc and {worker_id} and random'",
         expected_ns,
         f"deepseek_v3_{op}",
-        model_name,
+        f"deepseek_v3_{op}_{topo}_8_{nlinks}link_{payload}",
         1,  # num_iterations
         1,  # batch_size
         margin,
@@ -288,18 +279,6 @@ _COMBINE_PERF_PARAMS_FULL = [
         ("ring", 1, "14k", 4_968_952),
         ("ring", 2, "14k", 2_975_783),
     ]
-] + [
-    _perf_param(
-        "combine",
-        "test_prefill_combine.py",
-        "test_ttnn_combine",
-        "linear",
-        1,
-        "7k",
-        6_055_667,
-        "CombineDeviceOperation",
-        layout="row_major",
-    ),
 ]
 
 
