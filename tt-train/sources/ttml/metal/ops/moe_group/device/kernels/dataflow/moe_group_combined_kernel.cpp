@@ -65,8 +65,12 @@ constexpr uint32_t k = get_compile_time_arg_val(6);
 constexpr uint32_t e_local = get_compile_time_arg_val(7);
 constexpr uint32_t t_cap = get_compile_time_arg_val(8);
 constexpr uint32_t num_total_cores = get_compile_time_arg_val(9);
+// Per-core shared-table slot size in uint32s: host picks ceil(e_local/4)*4
+// so each slot is a multiple of 16B (NOC L1 write alignment) and holds
+// exactly e_local uint32s with minimum padding.
+constexpr uint32_t SHARED_SLOT_U32 = get_compile_time_arg_val(10);
 
-constexpr auto plan_args = TensorAccessorArgs<10>();
+constexpr auto plan_args = TensorAccessorArgs<11>();
 constexpr auto dispatched_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto metadata_args = TensorAccessorArgs<dispatched_args.next_compile_time_args_offset()>();
 constexpr auto counts_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
@@ -82,13 +86,9 @@ constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
 constexpr uint32_t MD_ROW_STRIDE_U16 = md_aligned_page / sizeof(uint16_t);
-// Per-core slot in shared tables padded to 16 uint32s (64 B) so adjacent cores'
-// NOC writes don't overlap (NOC writes must be 32B-aligned size on DRAM; L1
-// writes are less strict but keep slots non-overlapping to dodge races).
-constexpr uint32_t SHARED_SLOT_U32 = 16U;
-static_assert(
-    SHARED_SLOT_U32 * sizeof(uint32_t) >= 8U * sizeof(uint32_t),
-    "SHARED_SLOT_U32 must hold e_local uint32s; bump if e_local > 16");
+// SHARED_SLOT_U32 is defined above from CT arg 10. Each shared-table slot is
+// SHARED_SLOT_U32 uint32s (multiple of 16B) to keep adjacent cores' writes
+// from overlapping and to meet the NOC L1 write address alignment.
 
 inline uint32_t round_up_32(uint32_t x) {
     return ((x + 31U) >> 5U) << 5U;

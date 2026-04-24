@@ -82,8 +82,13 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     tt::tt_metal::CoreRangeSet all_cores{full_range};
 
     uint32_t total_tiles = t_cap / tt::constants::TILE_HEIGHT;
+    // Use the CoreCoord overload (like layernorm_bw) — routes through
+    // num_cores_to_corerangeset, avoiding the sub-grid placement bug in
+    // the CoreRangeSet overload that throws "Failed to assign all N
+    // requested cores" when total_tiles % grid_size lands on specific
+    // remainders.
     auto [num_workers, worker_all, worker_group_1, worker_group_2, tiles_group_1, tiles_group_2] =
-        tt::tt_metal::split_work_to_cores(all_cores, total_tiles);
+        tt::tt_metal::split_work_to_cores(compute_grid, total_tiles);
 
     uint32_t num_total_cores = num_workers;  // every core does scan + worker
 
@@ -132,9 +137,14 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         slice_block_rows = 1U;
 
     uint32_t overhead_bytes = 128U + 32U + (3U * e_local + 1U) * sizeof(uint32_t) + 64U;
-    // Each shared table has num_total_cores slots, each slot padded to 16 uint32 (64 B)
-    // so cross-core writes don't overlap.
-    constexpr uint32_t kSharedSlotBytes = 64U;
+    // Each shared table has num_total_cores slots; slot size = ceil(e_local/4)*4
+    // uint32s (smallest multiple of 16B = 4 uint32s that fits e_local, matching
+    // NOC L1 write-size/alignment minimum). Scales with e_local instead of a
+    // fixed 16-uint32 cap.
+    uint32_t shared_slot_u32 = ((e_local + 3U) / 4U) * 4U;
+    if (shared_slot_u32 < 4U)
+        shared_slot_u32 = 4U;
+    uint32_t kSharedSlotBytes = shared_slot_u32 * sizeof(uint32_t);
     uint32_t shared_table_bytes = num_total_cores * kSharedSlotBytes;
     uint32_t two_shared_tables = 2U * shared_table_bytes;
     uint32_t md_block_bytes = slice_block_rows * 32U + 32U;
@@ -185,7 +195,8 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         k,
         e_local,
         t_cap,
-        num_total_cores};
+        num_total_cores,
+        shared_slot_u32};
     tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(dispatched_buf).append_to(combined_ct_args);
     tt::tt_metal::TensorAccessorArgs(metadata_buf).append_to(combined_ct_args);
