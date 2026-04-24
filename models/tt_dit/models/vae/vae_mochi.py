@@ -519,12 +519,24 @@ class ResBlock(Module):
         return x_NTHWC
 
     @staticmethod
+    def _valid_multicast(nvr, num_batches):
+        """Check the uniform-multicast-group constraint from GroupNorm.
+
+        When nvr < num_batches each virtual row handles at most one batch
+        element, so multicast groups are trivially uniform.  When
+        nvr >= num_batches, nvr must divide evenly by num_batches so every
+        batch contributes the same number of rows to each multicast group.
+        """
+        return nvr < num_batches or nvr % num_batches == 0
+
+    @staticmethod
     def _valid_norm_grid(norm, batch_size, HW):
         """Find a valid core_grid for GroupNorm given the actual tensor dimensions.
 
         The ttnn group_norm kernel requires:
             num_virtual_rows = (grid_x / num_virtual_cols) * grid_y
             Ht % num_virtual_rows == 0  and  num_virtual_rows <= Ht
+            nvr < num_batches  OR  nvr % num_batches == 0  (uniform multicast)
         where Ht = batch_size * ceil(HW / 32).
 
         The grid computed at init time may be invalid when the actual HW differs
@@ -539,9 +551,10 @@ class ResBlock(Module):
         for gx in range(norm.core_grid.x, nvc - 1, -1):
             for gy in range(norm.core_grid.y, 0, -1):
                 nvr = (gx // nvc) * gy
-                if nvr > 0 and nvr <= Ht and Ht % nvr == 0:
+                if nvr > 0 and nvr <= Ht and Ht % nvr == 0 and ResBlock._valid_multicast(nvr, batch_size):
                     return ttnn.CoreGrid(x=gx, y=gy)
-        # Ultimate fallback: nvr=1 (always divides Ht).
+        # Ultimate fallback: nvr=1 always satisfies the multicast constraint
+        # (1 < batch_size for batch_size > 1) and divides any Ht.
         return ttnn.CoreGrid(x=nvc, y=1)
 
     @staticmethod
@@ -558,7 +571,7 @@ class ResBlock(Module):
             for gx in range(norm.core_grid.x, nvc - 1, -1):
                 for gy in range(norm.core_grid.y, 0, -1):
                     nvr = (gx // nvc) * gy
-                    if nvr > 0 and nvr <= Ht and Ht % nvr == 0:
+                    if nvr > 0 and nvr <= Ht and Ht % nvr == 0 and ResBlock._valid_multicast(nvr, bs):
                         return bs
         return 1
 
@@ -939,8 +952,6 @@ class ResBlock(Module):
             )
 
             logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} norm done")
-            ttnn.synchronize_device(x_chunk.device())
-            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} norm sync OK")
 
             # DEBUG: dump norm output before partition (chunk 0 only)
             if chunk_dump_dir is not None:
@@ -972,8 +983,6 @@ class ResBlock(Module):
                 )
             x_chunk = ttnn.squeeze(x_chunk, 0)  # remove N dim → (bs, H, W, C)
             logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} partition done")
-            ttnn.synchronize_device(x_chunk.device())
-            logger.info(f"[CHUNK_LOOP] C={C} chunk {chunk_idx} partition sync OK")
 
             # DEBUG: dump partitioned chunk 0 (fractured per-device)
             if chunk_dump_dir is not None:
