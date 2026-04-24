@@ -144,10 +144,9 @@ bool get_exp_approx_mode(const std::optional<ttnn::operations::transformer::SDPA
     return true;
 }
 
-// Flat work distribution: single (batch, head, q_chunk) linear space split evenly across cores.
-// Mirrors the kernel-side `proxy_q_range(q_num_chunks, proxy).q_num_effective` so host and kernels
-// agree on the per-head slot count. Zigzag sub-mode engages for causal + even q_num_chunks and
-// distributes in pairs so light/heavy Q chunks balance after linear_to_zigzag remap.
+// Host-side mirror of the kernel's proxy_q_range: (B * NQH * q_num_effective) is split evenly
+// across cores. Zigzag mode engages for causal + even q_num_chunks and distributes in pairs so
+// light/heavy Q chunks balance after linear_to_zigzag.
 struct FlatWorkDistribution {
     uint32_t q_num_effective = 0;
     uint32_t total_q_chunks = 0;
@@ -419,12 +418,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
     // Flat work distribution (optional): treat (batch, head, q_chunk) as one linear space and split
-    // it evenly across cores. When disabled (default), use the hierarchical batch -> heads -> q_chunks
-    // split. Zigzag sub-mode engages automatically for causal + even q_num_chunks to pair light/heavy
-    // q_chunks per core for load balancing.
+    // it evenly across cores. When disabled, use the hierarchical batch -> heads -> q_chunks split.
+    // Zigzag sub-mode engages for causal + even q_num_chunks to pair light/heavy q_chunks per core.
     //
-    // Note: at ring iter 0 of a causal + balanced ring SDPA, each device runs plain causal SDPA on
-    // its local Q/K/V with this same flat distribution, so flatten_work=true makes a single-chip SDPA
+    // At ring iter 0 of a causal + balanced ring SDPA, each device runs plain causal SDPA on its
+    // local Q/K/V with this same flat distribution, so flatten_work=true makes a single-chip SDPA
     // an equivalent perf proxy for that iteration.
     const bool flatten_work = program_config.has_value() && program_config->flatten_work;
     const ttnn::operations::transformer::RingProxyCase proxy_case =
@@ -480,9 +478,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
     const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
 
-    // Flat-distribution per-core assignments (only used when flatten_work is true). Host and kernels
-    // agree on (q_num_effective, zigzag) via this helper + kernel-side proxy_q_range. DOWN proxy:
-    // only the heavy Q half is assigned; UP / none: all Q chunks assigned.
+    // Per-core flat assignments (only used when flatten_work is true). DOWN proxy: only the heavy
+    // Q half is assigned; UP / none: all q_chunks assigned.
     const FlatWorkDistribution flat_dist =
         compute_flat_distribution(B, NQH, q_num_chunks, num_cores, is_causal && flatten_work, is_proxy_down);
 
@@ -517,11 +514,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
 
-    // KV chain forwarding is active for non-causal SDPA, and for the flat-work causal path when
-    // the lightweight causal mask is in use.  Chain participants over-read K past each Q's
-    // logical q_high; the lightweight causal mask zeroes those softmax columns, keeping output
-    // correct.  Without lightweight_causal we have no mechanism to kill the phantom columns, so
-    // stay on the per-Q truncated-K (no-chain) path.  See RingSDPA_SingleChip_CausalChain_Plan.md.
+    // KV chain forwarding runs for non-causal SDPA, and for flat-work causal when the lightweight
+    // causal mask is available — chain cores over-read K past each Q's q_high, and the mask is
+    // what zeroes those extra softmax columns. Without lightweight_causal the phantom columns
+    // can't be killed, so causal non-flat stays on the per-Q truncated-K (no-chain) path.
     const bool chain_enabled = !is_chunked && (!is_causal || (flatten_work && lightweight_causal));
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -651,10 +647,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
-    // Flat-work gate + zigzag sub-mode (tail args; kernel reads via
-    // chunk_start_idx_args.next_compile_time_args_offset()).
     reader_compile_time_args.push_back(static_cast<uint32_t>(flatten_work));
-    reader_compile_time_args.push_back(static_cast<uint32_t>(flat_dist.zigzag));
 
     // Create semaphores for KV chain forwarding BEFORE kernel compilation (when chain_enabled)
     // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
@@ -706,10 +699,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    // Flat-work gate + zigzag sub-mode (tail args; kernel reads via
-    // out_args.next_compile_time_args_offset()).
     writer_compile_time_args.push_back(static_cast<uint32_t>(flatten_work));
-    writer_compile_time_args.push_back(static_cast<uint32_t>(flat_dist.zigzag));
 
     const bool uniform_dataformat = check_uniform_dataformat(
         input_tensor_q, input_tensor_k, input_tensor_v, output_tensor, attn_mask, use_streaming_compute);
@@ -749,8 +739,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         (std::uint32_t)use_streaming_compute,  // arg 30
         valid_Skt,                             // arg 31: unpadded K tile count for streaming padded_k_tiles
         (std::uint32_t)uniform_dataformat,     // arg 32: skip reconfig when all formats match
-        (std::uint32_t)flatten_work,           // arg 33: flat-work gate, read by sdpa.cpp
-        (std::uint32_t)flat_dist.zigzag,       // arg 34: flat-distribution zigzag sub-mode, read by sdpa.cpp
+        (std::uint32_t)flatten_work,           // arg 33
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -767,8 +756,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
-    // Flat work distribution gate: passed as a compile-time arg bool (see reader/writer/compute
-    // CT arg lists). Kernels use `if constexpr (flatten_work)` rather than `#if defined`.
     if (is_proxy_up) {
         defines["SDPA_RING_PROXY_UP"] = "1";
     } else if (is_proxy_down) {
@@ -978,9 +965,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             work.physical_core = device->worker_core_from_logical_core(core);
 
             if (flatten_work) {
-                // Flat distribution: each core owns [core_range.start, core_range.start + count) in
-                // B * NQH * flat_dist.q_num_effective space. Decompose into per-(batch, head) segments
-                // matching the reader's decompose_flat_q_index(_, q_num_effective, NQH, zigzag=false).
+                // Core owns [start, start+count) in B * NQH * q_num_effective space; decompose into
+                // per-(batch, head) segments matching the reader's decompose_flat_q_index.
                 const auto core_range = flat_dist.core_range(i);
 
                 uint32_t remaining = core_range.count;
@@ -1100,15 +1086,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
             const std::size_t start = chain_start_idx.value();
 
-            // Build chain order. In flatten_work mode, use linear traversal only
-            // (mirror ring_joint_sdpa): chain_start_idx already picks the first
-            // non-straddling core, and proceeding forward from there naturally
-            // places the (possibly lighter) trailing straddler last — which
-            // satisfies the kernel's descending-q invariant without an explicit
-            // sort, and also avoids the injector-clustering pattern that the
-            // wrap+sort path produces for mixed-q chains (see
-            // RingSDPA_ChainInjectorDRAMProfile.md).  In the hierarchical
-            // (non-flat) path, keep the wrap+reorder behavior.
+            // Flat mode uses linear traversal (same as ring_joint_sdpa): chain_start_idx already
+            // picks the first non-straddling core, so walking forward leaves the (possibly lighter)
+            // trailing straddler at the tail, which satisfies the kernel's descending-q invariant
+            // without an explicit sort. Hierarchical mode keeps the wrap + reorder behavior.
             std::vector<std::size_t> chain_order;
             if (flatten_work) {
                 for (std::size_t idx = start; idx < segments.size(); ++idx) {
@@ -1164,10 +1145,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             }
 
             if (flatten_work) {
-                // Linear-only flat mode: leave chain_order[0] as the injector.
-                // Descending-q invariant is satisfied structurally because the
-                // only lighter segment (if any) is the trailing straddler at the
-                // tail of the chain.
+                // Linear-only: chain_order[0] stays the injector, and the descending-q invariant
+                // holds structurally because any lighter segment is the trailing straddler at the
+                // chain tail.
             } else if (uniform_q) {
                 // All cores have equal q_chunk_count — safe to pick any injector.
                 // Choose the core whose physical X is furthest from existing
@@ -1569,14 +1549,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             read_offset,  // read_offset
         };
 
-        // Tail args are optional and only pushed when the matching kernel define is emitted. Kernels
-        // advance argidx through the same set, so slots never collide with num_phases==2 args.
+        // Tail args are only pushed when the matching kernel gate is on. Kernels walk argidx
+        // through the same set so slots never collide with the num_phases==2 args above.
         if (flatten_work) {
             reader_args.push_back(global_q_start);
             reader_args.push_back(global_q_count);
         }
 
-        // Add chain metadata when chain forwarding is enabled (non-causal, or flat-work causal)
+        // Chain metadata: only pushed when chain forwarding is active (non-causal, or flat-work causal).
         if (chain_enabled) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
@@ -1633,7 +1613,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             compute_args.push_back(global_q_count);
         }
         if (chain_enabled) {
-            // Chain cores must loop the full k_num_chunks to stay in sync with reader/writer, which
+            // Chain cores loop the full k_num_chunks to stay in sync with reader/writer, which
             // over-read K under causal + chain; lightweight_causal_mask zeroes the extra columns.
             compute_args.push_back(static_cast<uint32_t>(chain.participates));
         }

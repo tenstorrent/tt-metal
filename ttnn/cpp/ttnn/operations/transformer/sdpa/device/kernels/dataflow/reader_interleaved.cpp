@@ -84,10 +84,10 @@ void kernel_main() {
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
-    // Flat-work gate + zigzag sub-mode (tail args; zigzag is only meaningful when flatten_work is true).
+    // Flat-work gate (tail CT arg). Zigzag is derived from is_causal + q_num_chunks.
     constexpr uint32_t flat_work_cta_base = chunk_start_idx_args.next_compile_time_args_offset();
     constexpr bool flatten_work = get_compile_time_arg_val(flat_work_cta_base) == 1;
-    constexpr bool flat_use_zigzag = get_compile_time_arg_val(flat_work_cta_base + 1) == 1;
+    constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -116,9 +116,7 @@ void kernel_main() {
     uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
     uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
-    // Flat work distribution: causal only, non-chunked, no attention sink. num_phases is always 1
-    // for this factory, so these args sit right after read_offset_phase_1 with no intervening args.
-    // Zigzag sub-mode is compile-time arg flat_use_zigzag (declared above).
+    // Per-core [start, count) slice of the B*NQH*q_num_effective flat range.
     uint32_t global_q_start = 0;
     uint32_t global_q_count = 0;
     if constexpr (flatten_work) {
@@ -282,9 +280,8 @@ void kernel_main() {
     }
     uint32_t read_offset = 0;
 
-    // Shared per-(nb, nq, q_chunk, q_iter_local, mask_batch_offset) body. Flat and hierarchical
-    // branches below only differ in how they iterate (nb, nq, q_chunk) and how they derive
-    // q_iter_local / mask_batch_offset; everything from the Q read through the K-loop is identical.
+    // Flat and hierarchical branches below compute (nb, nq, q_chunk, q_iter_local, mask_batch_offset)
+    // differently; everything from the Q read through the K-loop is identical and lives in this lambda.
     uint32_t valid_Skt_bound = 0;
     auto process_q_chunk =
         [&](uint32_t nb, uint32_t nq, uint32_t q_chunk, uint32_t q_iter_local, uint32_t mask_batch_offset) {
@@ -310,21 +307,19 @@ void kernel_main() {
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
 
-            // Chain forwarding conditions are loop-invariant — compute once. q_iter_local counts slots
-            // within the current (batch, head) so that straddling cores in flat mode (whose range spans
-            // multiple heads) gate forwards on the per-head slot count rather than the whole-range gq.
             bool should_forward = false;
             bool should_receive = false;
 #if defined(SDPA_KV_CHAIN_ENABLED)
+            // q_iter_local counts slots within this (nb, nq) on this core, so a straddling flat-mode
+            // core still gates forwards by per-head slot count rather than whole-range gq.
             should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
                              (q_iter_local < next_core_q_chunks);
             should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
 #endif
 
-        // Loop while k_low < q_high. Ring proxy UP caps K at k_num_chunks/2 to mirror the ring_joint
-        // non-diag iter that sees only half of K per Q. Under SDPA_KV_CHAIN_ENABLED, chain cores
-        // loop the full k_num_chunks regardless of Q position so injector + receivers walk matching
-        // K ranges — lightweight_causal mask zeroes out the extra columns past q_high_idx.
+        // Ring proxy UP caps K at k_num_chunks/2 to mirror the ring_joint non-diag iter. Under
+        // SDPA_KV_CHAIN_ENABLED chain cores walk the full k range so injector + receivers stay in
+        // lockstep — the lightweight causal mask zeroes softmax columns past q_high.
 #if defined(SDPA_RING_PROXY_UP)
             const uint32_t k_chunk_end = k_num_chunks / 2;
 #elif defined(SDPA_KV_CHAIN_ENABLED)
@@ -602,36 +597,28 @@ void kernel_main() {
         }
 
         if constexpr (flatten_work) {
-            // Flat iteration over a linear range of B*NQH*q_num_chunks chunks. Host enforces
-            // !is_chunked and !use_attention_sink, so the hierarchical-only page-table / sink reads
-            // don't apply. q_iter_local resets at every (batch, head) transition so chain forwarding
-            // guards (`q_iter_local < next_core_q_chunks`) count slots within the current head only;
-            // for straddling cores whose range spans multiple heads, this differs from gq.
-            uint32_t prev_nb_flat = static_cast<uint32_t>(-1);
-            uint32_t mask_batch_offset = 0;
-            uint32_t q_iter_local_counter = 0;
-            uint32_t prev_head_id_flat = static_cast<uint32_t>(-1);
+            // Host enforces !is_chunked and !use_attention_sink, so the page-table and sink reads
+            // the hierarchical branch does don't apply here.
+#if defined(SDPA_KV_CHAIN_ENABLED)
+            uint32_t q_iter_local = 0;
+            uint32_t prev_head_id = static_cast<uint32_t>(-1);
+#endif
             for (uint32_t gq = 0; gq < global_q_count; ++gq) {
                 const auto decoded = decompose_flat_q_index_with_proxy(
                     global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
+                uint32_t mask_batch_offset = 0;
+                if constexpr (!broadcast_provided_mask_batch) {
+                    constexpr uint32_t heads_factor = broadcast_provided_mask_heads ? 1u : NQH;
+                    mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt * heads_factor;
+                }
+#if defined(SDPA_KV_CHAIN_ENABLED)
                 const uint32_t cur_head_id = decoded.nb * NQH + decoded.nq;
-                if (cur_head_id != prev_head_id_flat) {
-                    q_iter_local_counter = 0;
-                    prev_head_id_flat = cur_head_id;
-                } else {
-                    q_iter_local_counter++;
-                }
-                if (decoded.nb != prev_nb_flat) {
-                    prev_nb_flat = decoded.nb;
-                    if constexpr (!broadcast_provided_mask_batch) {
-                        if constexpr (broadcast_provided_mask_heads) {
-                            mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt;
-                        } else {
-                            mask_batch_offset = decoded.nb * valid_Sqt * valid_Skt * NQH;
-                        }
-                    }
-                }
-                process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk, q_iter_local_counter, mask_batch_offset);
+                q_iter_local = (cur_head_id == prev_head_id) ? (q_iter_local + 1) : 0;
+                prev_head_id = cur_head_id;
+                process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk, q_iter_local, mask_batch_offset);
+#else
+                process_q_chunk(decoded.nb, decoded.nq, decoded.q_chunk, 0u, mask_batch_offset);
+#endif
             }
         } else {
             for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -687,7 +674,7 @@ void kernel_main() {
 #else
                         q_chunk = local_q_start + q_iter;
 #endif
-                        // Non-flat mode: one (nb, nq) pair per q_iter, so q_iter is the per-head slot.
+                        // Each (nb, nq) iterates q_iter from 0, so q_iter is also the per-head slot.
                         process_q_chunk(nb, nq, q_chunk, q_iter, mask_batch_offset);
                     }
                 }

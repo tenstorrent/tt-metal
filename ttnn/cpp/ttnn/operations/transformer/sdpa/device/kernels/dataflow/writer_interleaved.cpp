@@ -31,10 +31,10 @@ void kernel_main() {
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
 
     constexpr auto out_args = TensorAccessorArgs<21>();
-    // Flat-work gate + zigzag sub-mode (tail args; zigzag is only meaningful when flatten_work is true).
+    // Flat-work gate (tail CT arg). Zigzag is derived from is_causal + q_num_chunks.
     constexpr uint32_t flat_work_cta_base = out_args.next_compile_time_args_offset();
     constexpr bool flatten_work = get_compile_time_arg_val(flat_work_cta_base) == 1;
-    constexpr bool flat_use_zigzag = get_compile_time_arg_val(flat_work_cta_base + 1) == 1;
+    constexpr bool flat_use_zigzag = flatten_work && is_causal && (q_num_chunks % 2 == 0);
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -48,8 +48,6 @@ void kernel_main() {
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
     uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
     const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
-    // Tail args are optional and their presence is gated by host predicates matching the flatten_work
-    // CT arg / num_phases==2 (chunked 2-phase). Use argidx so the two modes never share a slot.
     uint32_t argidx = 12;
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
@@ -126,9 +124,8 @@ void kernel_main() {
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;
 
-    // Shared per-(nb, nq, q_chunk) body. Flat and hierarchical branches below only differ in how
-    // they iterate (nb, nq, q_chunk); the mask + output-write work is identical once those three
-    // are known.
+    // Flat and hierarchical branches below only differ in how they enumerate (nb, nq, q_chunk);
+    // the mask + output-write work itself is identical and lives in this lambda.
     auto process_q_chunk = [&](uint32_t nb, uint32_t nq, uint32_t q_chunk) {
         // Generate mask only when user didn't provide one.
         // Lightweight path already has a single -inf tile fronted — skip generate_mask.
@@ -156,8 +153,8 @@ void kernel_main() {
             write_offset = write_offset_phase_2;
         }
         if constexpr (flatten_work) {
-            // decompose_flat_q_index_with_proxy returns q_chunk already shifted into the heavy half
-            // for DOWN; UP and None leave it unshifted.
+            // decoded.q_chunk is already shifted into the heavy half for DOWN; UP and None leave
+            // it unshifted (see proxy_q_range in q_chunk_remapping.hpp).
             for (uint32_t gq = 0; gq < global_q_count; ++gq) {
                 const auto decoded = decompose_flat_q_index_with_proxy(
                     global_q_start + gq, q_num_chunks, NQH, flat_use_zigzag, sdpa_proxy_mode);
