@@ -397,7 +397,7 @@ int main(int argc, char* argv[]) {
                 const double peak_tflops = peak_greq * kLoFiMuladdsPerFpuReq / 1000.0;
                 const double achieved_tflops = peak_tflops * c_avg;
                 t << "~" << std::fixed << std::setprecision(0) << achieved_tflops << " / " << std::setprecision(0)
-                  << peak_tflops << " TFLOPs (LoFi matmul-eq)";
+                  << peak_tflops << " TF (LoFi-eq; HiFi2 real ÷2, HiFi4 ÷4)";
             } else {
                 t << "";
             }
