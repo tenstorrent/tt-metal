@@ -198,22 +198,27 @@ def main():
                     ttnn.deallocate(t)
                 attn.layer_past = None
 
-        for layer in tt_model.layers:
+        # Single shared cache with one slot per layer — reuses the same kernel
+        # program across all 32 layers (different layer_idx → different cache slot
+        # but same program signature → program cache hits). Creating 32 separate
+        # num_layers=1 caches caused the decode to hang at scale.
+        shared_tq = TTNNTurboQuantCache(
+            mesh_device,
+            num_layers=len(tt_model.layers),
+            num_kv_heads=n_local_kv_heads,
+            head_dim=model_args.head_dim,
+            max_seq_len=model_args.max_seq_len,
+            bits=args.bits,
+            memory_efficient=True,  # paged BFP4 indices + BF16 norms
+            paged_config=paged_attention_config,
+            max_batch_size=args.batch_size,
+        )
+        if absorb_rotation:
+            shared_tq.rotation_absorbed = True
+        for layer_idx, layer in enumerate(tt_model.layers):
             attn = layer.attention
-            tq = TTNNTurboQuantCache(
-                mesh_device,
-                num_layers=1,
-                num_kv_heads=n_local_kv_heads,
-                head_dim=model_args.head_dim,
-                max_seq_len=model_args.max_seq_len,
-                bits=args.bits,
-                memory_efficient=True,  # paged BFP4 indices + BF16 norms
-                paged_config=paged_attention_config,
-                max_batch_size=args.batch_size,
-            )
-            if absorb_rotation:
-                tq.rotation_absorbed = True
-            attn.tq_cache = tq
+            attn.tq_cache = shared_tq
+            attn.tq_layer_idx = layer_idx
     elif args.bfp4_cache:
         # KV_CACHE already allocated as BFP4 at model init (via make_optimizations override).
         print("  Using BFP4 paged cache (allocated at model init via optimization override)")
