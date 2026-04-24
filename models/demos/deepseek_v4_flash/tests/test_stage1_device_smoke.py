@@ -35,6 +35,7 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     grouped_output_projection_a,
     load_attention_projection_weights,
 )
+from models.demos.deepseek_v4_flash.ttnn_decoder_layer import load_decoder_layer_norm_weights
 from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import TtPrefillAttentionBlock, load_attention_sink
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
 from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import TtPrefillIndexer, load_prefill_indexer_weights
@@ -477,6 +478,116 @@ def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preproc
     assert torch_output.shape == expected.shape
     passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.999)
     assert passing, f"Prefill attention block output PCC below 0.999: {pcc_message}"
+
+
+def test_tiny_decoder_layer_attention_norm_residual_matches_torch(tiny_tt_preprocessed_checkpoint: Path, device):
+    """Decoder-layer attention boundary smoke; hyperconnection mixing is a remaining gap."""
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    layer = 2
+    norm_weights = load_decoder_layer_norm_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
+    projection_weights = load_attention_projection_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=layer,
+        include_output_projection=True,
+    )
+    compressor_weights = load_prefill_compressor_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=layer,
+    )
+    indexer_weights = load_prefill_indexer_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
+    attn_sink = load_attention_sink(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
+
+    hidden_size = manifest["config"]["hidden_size"]
+    num_heads = manifest["config"]["num_attention_heads"]
+    head_dim = manifest["config"]["head_dim"]
+    index_n_heads = manifest["config"]["index_n_heads"]
+    index_head_dim = manifest["config"]["index_head_dim"]
+    compress_ratio = manifest["config"]["compress_ratios"][layer]
+    seq_len = 32
+    torch_input = torch.linspace(-0.16, 0.24, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    attn_input = rms_norm(torch_input[:, 0], norm_weights.attn_norm, float(manifest["config"]["rms_norm_eps"]))
+
+    q_rank = F.linear(attn_input.float(), projection_weights.wq_a.to(torch.bfloat16).float()).to(torch.bfloat16)
+    q_rank = rms_norm(
+        q_rank,
+        projection_weights.q_norm.to(torch.bfloat16),
+        float(manifest["config"]["rms_norm_eps"]),
+    )
+    q = F.linear(q_rank.float(), projection_weights.wq_b.to(torch.bfloat16).float()).to(torch.bfloat16)
+    compressed_kv = compressor_prefill(
+        attn_input,
+        compressor_weights.wkv.to(torch.bfloat16),
+        compressor_weights.wgate.to(torch.bfloat16),
+        compressor_weights.ape,
+        compressor_weights.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=head_dim,
+        norm_eps=float(manifest["config"]["rms_norm_eps"]),
+        overlap=True,
+    ).to(torch.bfloat16)
+    q_heads = q.reshape(1, seq_len, num_heads, head_dim)
+    index_q = F.linear(q_rank.float(), indexer_weights.wq_b.to(torch.bfloat16).float()).to(torch.bfloat16)
+    index_q = index_q.reshape(1, seq_len, index_n_heads, index_head_dim)
+    index_kv = compressor_prefill(
+        attn_input,
+        indexer_weights.compressor.wkv.to(torch.bfloat16),
+        indexer_weights.compressor.wgate.to(torch.bfloat16),
+        indexer_weights.compressor.ape,
+        indexer_weights.compressor.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=index_head_dim,
+        norm_eps=float(manifest["config"]["rms_norm_eps"]),
+        overlap=True,
+    )
+    index_weights = F.linear(attn_input.float(), indexer_weights.weights_proj.to(torch.bfloat16).float()).to(
+        torch.bfloat16
+    )
+    index_weights = index_weights.float() * (index_head_dim**-0.5 * index_n_heads**-0.5)
+    topk_idxs = indexer_topk(
+        index_q,
+        index_kv,
+        index_weights,
+        index_topk=int(manifest["config"]["index_topk"]),
+        compress_ratio=compress_ratio,
+        start_pos=0,
+        offset=0,
+    )
+    attention_output = sparse_attention(
+        q_heads,
+        compressed_kv,
+        attn_sink,
+        topk_idxs,
+        softmax_scale=head_dim**-0.5,
+    )
+    attention_output = attention_output.reshape(1, seq_len, num_heads * head_dim).to(torch.bfloat16)
+    output_rank = grouped_output_projection_a(
+        attention_output,
+        projection_weights.wo_a,
+        o_groups=int(manifest["config"]["o_groups"]),
+    )
+    expected_attention = F.linear(output_rank.float(), projection_weights.wo_b.to(torch.bfloat16).float()).unsqueeze(1)
+    expected = (torch_input.float() + expected_attention.float()).to(torch_input.dtype)
+
+    tt_attn_input = ttnn.from_torch(
+        attn_input.unsqueeze(1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    module = TtPrefillAttentionBlock.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=layer)
+    torch_attention = ttnn.to_torch(module(tt_attn_input, topk_idxs=None))
+    torch_output = (torch_input.float() + torch_attention.float()).to(torch_input.dtype)
+
+    assert torch.any(topk_idxs < 0)
+    assert torch_output.shape == expected.shape
+    passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.999)
+    assert passing, f"Decoder attention/norm residual PCC below 0.999: {pcc_message}"
 
 
 def test_tiny_sparse_prefill_attention_abi_smoke_matches_torch(device):

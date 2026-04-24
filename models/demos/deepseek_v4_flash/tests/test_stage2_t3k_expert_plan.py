@@ -10,10 +10,19 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 from safetensors import safe_open
 
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v4_flash.converter import convert_hf_checkpoint
-from models.demos.deepseek_v4_flash.cpu_reference import combine_routed_experts, v4_router
+from models.demos.deepseek_v4_flash.cpu_reference import (
+    combine_routed_experts,
+    compressor_prefill,
+    indexer_topk,
+    rms_norm,
+    sparse_attention,
+    v4_router,
+)
 from models.demos.deepseek_v4_flash.expert_abi import load_packed_expert_weight
 from models.demos.deepseek_v4_flash.expert_plan import plan_batch1_decode_expert_placements
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
@@ -21,12 +30,20 @@ from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 ttnn = pytest.importorskip("ttnn")
 
+from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
+    grouped_output_projection_a,
+    load_attention_projection_weights,
+)
+from models.demos.deepseek_v4_flash.ttnn_decoder_layer import TtDecoderLayer, load_decoder_layer_norm_weights
 from models.demos.deepseek_v4_flash.ttnn_expert_group import (
     TtPlannedRoutedExpertGroup,
     route_weights_by_expert,
     unique_route_expert_ids,
 )
 from models.demos.deepseek_v4_flash.ttnn_moe_block import TtMoEFeedForwardBlock
+from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import load_attention_sink
+from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import load_prefill_compressor_weights
+from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import load_prefill_indexer_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
 
@@ -56,6 +73,21 @@ def tiny_tt_preprocessed_checkpoint(tmp_path_factory: pytest.TempPathFactory) ->
         base = tmp_path_factory.mktemp("deepseek_v4_flash_t3k_expert_plan")
 
     source = generate_tiny_hf_checkpoint(base / "hf_source", num_hidden_layers=1)
+    return convert_hf_checkpoint(source, base / "tt_preprocessed")
+
+
+@pytest.fixture(scope="module")
+def tiny_three_layer_tt_preprocessed_checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    artifact_root = os.environ.get("DSV4_FLASH_ARTIFACT_DIR")
+    if artifact_root:
+        base = Path(artifact_root) / "pytest" / f"deepseek_v4_flash_t3k_decoder_layer_{os.getpid()}"
+        if base.exists():
+            shutil.rmtree(base)
+        base.mkdir(parents=True)
+    else:
+        base = tmp_path_factory.mktemp("deepseek_v4_flash_t3k_decoder_layer")
+
+    source = generate_tiny_hf_checkpoint(base / "hf_source", num_hidden_layers=3)
     return convert_hf_checkpoint(source, base / "tt_preprocessed")
 
 
@@ -278,20 +310,168 @@ def test_t3k_moe_ffn_block_routes_plans_shared_and_host_combines(
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
 
 
-def _load_expert_weights(preprocessed_path: Path, expert_id: int) -> dict[str, torch.Tensor]:
+def test_t3k_decoder_layer_scaffold_attention_moe_residuals_match_torch(
+    tiny_three_layer_tt_preprocessed_checkpoint: Path,
+    t3k_mesh,
+) -> None:
+    """Callable decoder layer smoke; hyperconnection mixing remains intentionally absent."""
+
+    manifest = load_tt_manifest(tiny_three_layer_tt_preprocessed_checkpoint)
+    layer = 2
+    hidden_size = manifest["config"]["hidden_size"]
+    seq_len = 32
+    torch_input = torch.linspace(-0.14, 0.26, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+    input_ids = torch.zeros(1, seq_len, dtype=torch.int64)
+
+    expected = _decoder_layer_reference(
+        tiny_three_layer_tt_preprocessed_checkpoint,
+        manifest,
+        layer=layer,
+        hidden_states=torch_input,
+        input_ids=input_ids,
+    )
+
+    module = TtDecoderLayer.from_preprocessed(
+        tiny_three_layer_tt_preprocessed_checkpoint,
+        mesh_device=t3k_mesh,
+        layer=layer,
+    )
+    torch_output = module(torch_input, input_ids=input_ids)
+
+    assert torch_output.shape == expected.shape
+    passing, pcc_message = comp_pcc(expected.float(), torch_output.float(), pcc=0.98)
+    assert passing, f"Decoder layer output PCC below 0.98: {pcc_message}"
+
+
+def _decoder_layer_reference(
+    preprocessed_path: Path,
+    manifest: dict,
+    *,
+    layer: int,
+    hidden_states: torch.Tensor,
+    input_ids: torch.Tensor,
+) -> torch.Tensor:
+    norm_weights = load_decoder_layer_norm_weights(preprocessed_path, manifest=manifest, layer=layer)
+    projection_weights = load_attention_projection_weights(
+        preprocessed_path,
+        manifest=manifest,
+        layer=layer,
+        include_output_projection=True,
+    )
+    compressor_weights = load_prefill_compressor_weights(preprocessed_path, manifest=manifest, layer=layer)
+    indexer_weights = load_prefill_indexer_weights(preprocessed_path, manifest=manifest, layer=layer)
+    attn_sink = load_attention_sink(preprocessed_path, manifest=manifest, layer=layer)
+
+    num_heads = manifest["config"]["num_attention_heads"]
+    head_dim = manifest["config"]["head_dim"]
+    index_n_heads = manifest["config"]["index_n_heads"]
+    index_head_dim = manifest["config"]["index_head_dim"]
+    compress_ratio = manifest["config"]["compress_ratios"][layer]
+    seq_len = hidden_states.shape[2]
+    norm_eps = float(manifest["config"]["rms_norm_eps"])
+
+    attn_input = rms_norm(hidden_states[:, 0], norm_weights.attn_norm, norm_eps)
+    q_rank = F.linear(attn_input.float(), projection_weights.wq_a.to(torch.bfloat16).float()).to(torch.bfloat16)
+    q_rank = rms_norm(q_rank, projection_weights.q_norm.to(torch.bfloat16), norm_eps)
+    q = F.linear(q_rank.float(), projection_weights.wq_b.to(torch.bfloat16).float()).to(torch.bfloat16)
+    compressed_kv = compressor_prefill(
+        attn_input,
+        compressor_weights.wkv.to(torch.bfloat16),
+        compressor_weights.wgate.to(torch.bfloat16),
+        compressor_weights.ape,
+        compressor_weights.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=head_dim,
+        norm_eps=norm_eps,
+        overlap=True,
+    ).to(torch.bfloat16)
+    index_q = F.linear(q_rank.float(), indexer_weights.wq_b.to(torch.bfloat16).float()).to(torch.bfloat16)
+    index_q = index_q.reshape(1, seq_len, index_n_heads, index_head_dim)
+    index_kv = compressor_prefill(
+        attn_input,
+        indexer_weights.compressor.wkv.to(torch.bfloat16),
+        indexer_weights.compressor.wgate.to(torch.bfloat16),
+        indexer_weights.compressor.ape,
+        indexer_weights.compressor.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=index_head_dim,
+        norm_eps=norm_eps,
+        overlap=True,
+    )
+    index_weights = F.linear(attn_input.float(), indexer_weights.weights_proj.to(torch.bfloat16).float()).to(
+        torch.bfloat16
+    )
+    index_weights = index_weights.float() * (index_head_dim**-0.5 * index_n_heads**-0.5)
+    topk_idxs = indexer_topk(
+        index_q,
+        index_kv,
+        index_weights,
+        index_topk=int(manifest["config"]["index_topk"]),
+        compress_ratio=compress_ratio,
+        start_pos=0,
+        offset=0,
+    )
+    attention_output = sparse_attention(
+        q.reshape(1, seq_len, num_heads, head_dim),
+        compressed_kv,
+        attn_sink,
+        topk_idxs,
+        softmax_scale=head_dim**-0.5,
+    )
+    attention_output = attention_output.reshape(1, seq_len, num_heads * head_dim).to(torch.bfloat16)
+    output_rank = grouped_output_projection_a(
+        attention_output,
+        projection_weights.wo_a,
+        o_groups=int(manifest["config"]["o_groups"]),
+    )
+    attention_output = F.linear(output_rank.float(), projection_weights.wo_b.to(torch.bfloat16).float()).unsqueeze(1)
+    hidden_after_attention = (hidden_states.float() + attention_output.float()).to(hidden_states.dtype)
+
+    ffn_input = rms_norm(hidden_after_attention[:, 0], norm_weights.ffn_norm, norm_eps)
+    router_weights = load_router_weights(preprocessed_path, manifest=manifest, layer=layer)
+    route_weights, route_indices = v4_router(
+        ffn_input,
+        router_weights.gate_weight,
+        topk=int(manifest["config"]["num_experts_per_tok"]),
+        route_scale=float(manifest["config"]["routed_scaling_factor"]),
+        scoring_func=str(manifest["config"]["scoring_func"]),
+        input_ids=input_ids,
+        tid2eid=router_weights.tid2eid,
+    )
+    active_expert_ids = unique_route_expert_ids(route_indices)
+    weights_by_expert = {
+        expert_id: _load_expert_weights(preprocessed_path, expert_id, layer=layer) for expert_id in active_expert_ids
+    }
+    ffn_output = combine_routed_experts(
+        ffn_input,
+        route_weights,
+        route_indices,
+        {expert_id: (weights["w1"], weights["w2"], weights["w3"]) for expert_id, weights in weights_by_expert.items()},
+        shared_expert=_load_shared_expert_weights(preprocessed_path, layer=layer),
+        swiglu_limit=float(manifest["config"]["swiglu_limit"]),
+    ).unsqueeze(1)
+    return (hidden_after_attention.float() + ffn_output.float()).to(hidden_states.dtype)
+
+
+def _load_expert_weights(preprocessed_path: Path, expert_id: int, *, layer: int = 0) -> dict[str, torch.Tensor]:
     return {
         projection: load_packed_expert_weight(
-            preprocessed_path, layer=0, expert=expert_id, projection=projection
+            preprocessed_path, layer=layer, expert=expert_id, projection=projection
         ).dequantize(dtype=torch.bfloat16)
         for projection in ("w1", "w2", "w3")
     }
 
 
-def _load_shared_expert_weights(preprocessed_path: Path) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _load_shared_expert_weights(
+    preprocessed_path: Path, *, layer: int = 0
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     manifest = load_tt_manifest(preprocessed_path)
     non_expert_path = preprocessed_path / manifest["artifacts"]["non_expert_safetensors"][0]
     with safe_open(non_expert_path, framework="pt", device="cpu") as handle:
         return tuple(
-            handle.get_tensor(f"layers.0.ffn.shared_experts.{projection}.weight").to(torch.bfloat16)
+            handle.get_tensor(f"layers.{layer}.ffn.shared_experts.{projection}.weight").to(torch.bfloat16)
             for projection in ("w1", "w2", "w3")
         )

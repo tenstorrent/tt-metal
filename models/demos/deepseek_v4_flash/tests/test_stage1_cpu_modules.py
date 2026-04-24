@@ -29,6 +29,12 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     load_attention_projection_weights,
     validate_attention_projection_weights,
 )
+from models.demos.deepseek_v4_flash.ttnn_decoder_layer import (
+    DecoderLayerNormWeights,
+    load_decoder_layer_norm_weights,
+    validate_decoder_layer_input,
+    validate_decoder_layer_norm_weights,
+)
 from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import (
     load_attention_sink,
     validate_prefill_attention_block_config,
@@ -370,6 +376,53 @@ def test_prefill_attention_block_contract_validation(tmp_path):
             indexer=indexer,
             sparse_attention=sparse_attention,
             attn_sink=attn_sink,
+        )
+
+
+def test_decoder_layer_norm_loading_and_contract_validation(tmp_path):
+    source = generate_tiny_hf_checkpoint(tmp_path / "source", num_hidden_layers=3)
+    output = convert_hf_checkpoint(source, tmp_path / "tt_preprocessed")
+    weights = load_decoder_layer_norm_weights(output, layer=2)
+
+    assert weights.attn_norm.shape == (32,)
+    assert weights.ffn_norm.shape == (32,)
+    torch.testing.assert_close(weights.attn_norm, torch.ones(32))
+    torch.testing.assert_close(weights.ffn_norm, torch.ones(32))
+    validate_decoder_layer_norm_weights(weights, hidden_size=32)
+
+    hidden_states = torch.zeros(1, 1, 8, 32)
+    input_ids = torch.zeros(1, 8, dtype=torch.int64)
+    topk_idxs = torch.zeros(1, 8, 2, dtype=torch.int64)
+    validate_decoder_layer_input(
+        hidden_states,
+        input_ids=input_ids,
+        topk_idxs=topk_idxs,
+        hidden_size=32,
+        compress_ratio=4,
+    )
+
+    with pytest.raises(ValueError, match="Expected attn_norm shape"):
+        validate_decoder_layer_norm_weights(
+            DecoderLayerNormWeights(attn_norm=torch.ones(16), ffn_norm=weights.ffn_norm),
+            hidden_size=32,
+        )
+    with pytest.raises(ValueError, match="hidden_states must have shape"):
+        validate_decoder_layer_input(torch.zeros(2, 1, 8, 32), hidden_size=32, compress_ratio=4)
+    with pytest.raises(ValueError, match="hidden_states tokens"):
+        validate_decoder_layer_input(torch.zeros(1, 1, 3, 32), hidden_size=32, compress_ratio=4)
+    with pytest.raises(ValueError, match="input_ids must have shape"):
+        validate_decoder_layer_input(
+            hidden_states,
+            input_ids=torch.zeros(8, dtype=torch.int64),
+            hidden_size=32,
+            compress_ratio=4,
+        )
+    with pytest.raises(ValueError, match="topk_idxs batch/tokens"):
+        validate_decoder_layer_input(
+            hidden_states,
+            topk_idxs=torch.zeros(1, 7, 2, dtype=torch.int64),
+            hidden_size=32,
+            compress_ratio=4,
         )
 
 
