@@ -102,7 +102,49 @@ def cause_hang_with_app(request):
             print_process_output(proc)
             raise RuntimeError("The application did not hang as expected.")
     else:
-        time.sleep(timeout)
+        # Deterministic wait: poll the app's stdout for the HANG_APP_READY
+        # sentinel that the hang app prints right before calling Finish() on
+        # the (deliberately-stuck) workload. This replaces a fragile
+        # `time.sleep(timeout)` whose value had to grow every time cold
+        # device init / RT profiler sync got slower on CI runners.
+        sentinel = b"HANG_APP_READY"
+        deadline = time.monotonic() + timeout
+        captured = bytearray()
+        # Make stdout non-blocking so we can poll without consuming the pipe
+        # in a way that blocks the writer (the pipe stays attached for the
+        # later print_process_output() call).
+        os.set_blocking(proc.stdout.fileno(), False)
+        sentinel_seen = False
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                # Process exited before reaching the hang point; surface
+                # whatever it printed for debugging.
+                print(f"The application exited (rc={proc.returncode}) before printing the " f"HANG_APP_READY sentinel.")
+                print(f"Captured stdout so far:\n{bytes(captured).decode('utf-8', errors='replace')}")
+                stderr_data = proc.stderr.read() or b""
+                print(f"Captured stderr so far:\n{stderr_data.decode('utf-8', errors='replace')}")
+                raise RuntimeError("The application did not hang as expected (exited early).")
+            chunk = proc.stdout.read(4096)
+            if chunk:
+                captured.extend(chunk)
+                if sentinel in captured:
+                    sentinel_seen = True
+                    break
+            else:
+                time.sleep(0.1)
+        # Restore blocking mode so the later proc.communicate() in
+        # print_process_output() behaves normally.
+        os.set_blocking(proc.stdout.fileno(), True)
+        if not sentinel_seen:
+            print(f"Timed out after {timeout}s waiting for HANG_APP_READY sentinel from {app}.")
+            print(f"Captured stdout so far:\n{bytes(captured).decode('utf-8', errors='replace')}")
+            raise RuntimeError(
+                f"The application did not reach the hang point within {timeout}s "
+                f"(no HANG_APP_READY sentinel observed)."
+            )
+        # Give the kernel a moment to actually be parked on the dispatcher
+        # after Finish() is called by the host.
+        time.sleep(2)
 
     request.cls.app_configuration = app_configuration
     request.cls.expected_results = app_configuration.get("expected_results", {})

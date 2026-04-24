@@ -149,6 +149,13 @@ int main() {
     try {
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        // Print a sentinel BEFORE Finish() so the test harness can wait
+        // deterministically for the app to be parked in the hang instead of
+        // blindly sleeping. Use stdout + flush so the line is visible on the
+        // pipe immediately. Keep this line stable: the triage test fixture
+        // matches it as a substring.
+        fmt::print("HANG_APP_READY\n");
+        std::fflush(stdout);
         distributed::Finish(cq);
     } catch (std::runtime_error& e) {
         std::string error_msg = e.what();
