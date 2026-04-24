@@ -107,6 +107,16 @@ ttsl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
         tensor_args);
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
+AllReduceAsyncDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    (void)args;
+    const auto& input_tensor = tensor_args.input_tensor;
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output_tensors}, 0);
+    return result;
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

@@ -83,6 +83,15 @@ ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
         tensor_args);
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<AllBroadcastDeviceOperation::tensor_return_value_t>
+AllBroadcastDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    (void)args;
+    const auto& input_tensor = tensor_args;
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result({input_tensor}, output_tensors, 0);
+    return result;
+}
+
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
