@@ -15,6 +15,7 @@ from models.experimental.tt_symbiote.core.run_config import (
     get_tensor_run_implementation,
     DistributedTensorConfig,
     DistributedConfig,
+    trace_enabled,
 )
 from models.experimental.tt_symbiote.core.utils import tree_map
 
@@ -219,6 +220,20 @@ class TTNNModule:
         """Forward pass - must be implemented by subclasses."""
         raise NotImplementedError("Forward method must be implemented by subclasses.")
 
+    def pre_trace_execute(self, func_args, func_kwargs):
+        """Hook called before ttnn.execute_trace during trace replay.
+
+        Override to copy trace-sensitive inputs to module-owned persistent
+        buffers (avoiding TTNN trace allocator buffer aliasing).
+        """
+
+    def post_trace_execute(self, func_args, func_kwargs, result):
+        """Hook called after ttnn.execute_trace during trace replay.
+
+        Override to perform post-processing on trace outputs or update
+        module state based on the replayed result.
+        """
+
     def named_modules(self, memo=None, prefix="", remove_duplicate=True):
         """Iterator over all modules in the network, yielding both the name of the module as well as the module itself."""
         if memo is None:
@@ -251,6 +266,51 @@ class TTNNModule:
                 for i, v in enumerate(child):
                     if isinstance(v, (torch.nn.Module, TTNNModule)):
                         yield f"{name}[{i}]", v
+
+
+@trace_enabled
+class TTNNLayerStack(TTNNModule):
+    """A trace-enabled stack of TTNNModule layers.
+
+    Captures the entire sequence of layer operations as a single trace.
+    During replay, only hidden_states (positional arg) and ttnn.Tensor kwargs
+    get ttnn.copy calls — O(1) instead of O(num_layers).
+
+    Calls layer.forward() directly (not layer()) to bypass per-layer
+    module_run and trace management.
+    """
+
+    def __init__(self, layers):
+        super().__init__()
+        self.layers = list(layers)
+        assert all(isinstance(layer, TTNNModule) for layer in self.layers), "All layers must be TTNNModule instances."
+
+    def forward(self, hidden_states, **kwargs):
+        for layer in self.layers:
+            hidden_states = layer.forward(hidden_states, **kwargs)
+        return hidden_states
+
+    def to_device(self, device):
+        super().to_device(device)
+        for layer in self.layers:
+            if isinstance(layer, TTNNModule):
+                layer.to_device(device)
+        return self
+
+    def preprocess_weights_impl(self):
+        for layer in self.layers:
+            if isinstance(layer, TTNNModule):
+                layer.preprocess_weights()
+
+    def move_weights_to_device_impl(self):
+        for layer in self.layers:
+            if isinstance(layer, TTNNModule):
+                layer.move_weights_to_device()
+
+    def deallocate_weights_impl(self):
+        for layer in self.layers:
+            if isinstance(layer, TTNNModule):
+                layer.deallocate_weights()
 
 
 def deallocate_weights_after(func):

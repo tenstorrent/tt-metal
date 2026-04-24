@@ -36,26 +36,57 @@ from models.experimental.tt_symbiote.modules.moe import (
 
 
 class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
-    """Qwen-specific router using softmax activation instead of sigmoid.
+    """Qwen-specific router using simple softmax -> topk -> normalize.
 
-    Qwen3 architecture uses softmax for routing scores, while GLM-4 uses sigmoid.
-    This subclass overrides the forward method to use softmax.
+    Qwen3.5 architecture uses a straightforward routing algorithm:
+        scores = softmax(logits)
+        top_values, top_indices = topk(scores, k)
+        weights = top_values / sum(top_values)
+        weights *= routed_scaling_factor
+
+    No bias, no groups, no group masks -- just simple topk on softmax scores.
 
     Inheritance:
         - from_torch(): Inherited (unchanged)
-        - preprocess_weights_impl(): Inherited (unchanged)
-        - move_weights_to_device_impl(): Inherited (unchanged)
-        - forward(): OVERRIDDEN - uses softmax instead of sigmoid
+        - preprocess_weights_impl(): OVERRIDDEN - only creates scale tensor (no bias/scatter)
+        - move_weights_to_device_impl(): OVERRIDDEN - only moves scale tensor
+        - forward(): OVERRIDDEN - simple softmax -> topk -> normalize -> scale
     """
 
-    def forward(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Forward pass with softmax activation for Qwen3 architecture.
+    def preprocess_weights_impl(self):
+        """Preprocess weights: only the routing scale tensor is needed.
 
-        The only difference from parent is line 22 uses ttnn.softmax instead of ttnn.sigmoid.
-        Also adds epsilon (1e-20) to denominator to match PyTorch reference and prevent division by zero.
+        Qwen3.5 routing has no bias and no group-based selection, so we skip
+        creating the bias, scatter_input, and scatter_src tensors that the
+        parent class creates for GLM4.
+        """
+        r = self._fallback_torch_layer
+        self._scale_torch = torch.full((1, 1, 1, r.top_k), r.routed_scaling_factor, dtype=torch.bfloat16)
+
+    def move_weights_to_device_impl(self):
+        """Move only the scale tensor to device."""
+        self._scale_dev = ttnn.to_device(
+            ttnn.from_torch(self._scale_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+            self.device,
+        )
+
+    def forward(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Forward pass: softmax -> 3-pass centering topk -> gather -> normalize -> scale.
+
+        Implements the actual Qwen3.5 routing algorithm:
+            scores = softmax(logits, dim=-1)
+            top_values, top_indices = topk(scores, k)
+            weights = top_values / sum(top_values)
+            weights *= routed_scaling_factor
+
+        Uses the 3-pass centering technique from the parent class to work around
+        BF16 precision limits in ttnn.topk over 256 experts. The centering shifts
+        scores so the decision boundary sits near zero where BF16 has highest
+        precision, enabling accurate top-k selection.
         """
         r = self._fallback_torch_layer
 
+        # --- Prepare logits as float32 4D tensor ---
         if logits.layout != ttnn.TILE_LAYOUT:
             logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logits = ttnn.reshape(logits, ttnn.Shape((1, 1, logits.shape[0], logits.shape[1])))
@@ -65,115 +96,63 @@ class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
         else:
             logits_f32 = logits
 
-        # KEY DIFFERENCE: Qwen uses softmax activation instead of sigmoid
+        # --- Softmax activation (Qwen uses softmax, NOT sigmoid) ---
         scores_f32 = ttnn.softmax(logits_f32, dim=-1)
 
         T = scores_f32.shape[2]
-        n_experts = scores_f32.shape[3]
-        n_group = r.n_group
-        experts_per_group = n_experts // n_group
-
-        bias_rm = self._bias_dev
-        bias_rep_rm = ttnn.repeat(bias_rm, ttnn.Shape((1, 1, T, 1)))
-        bias = ttnn.to_layout(bias_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # Convert bias to float32 for stable addition
-        if bias.dtype != ttnn.float32:
-            bias_f32 = ttnn.typecast(bias, ttnn.float32)
-            ttnn.deallocate(bias)
-        else:
-            bias_f32 = bias
-
-        scores_with_bias_f32 = ttnn.add(scores_f32, bias_f32)
-        ttnn.deallocate(bias_f32)
-
         top_k = r.top_k
 
-        if n_group <= r.topk_group:
-            # Pass 1: rough BF16 topk(k+1) to find coarse threshold
-            scores_bf16_p1 = ttnn.typecast(scores_with_bias_f32, ttnn.bfloat16)
-            rough_vals, _ = ttnn.topk(scores_bf16_p1, k=top_k + 1, dim=3, largest=True, sorted=True)
-            ttnn.deallocate(scores_bf16_p1)
-            # (k+1)-th value gives coarse threshold.
-            rough_thr_bf16 = ttnn.slice(rough_vals, [0, 0, 0, top_k], [1, 1, T, top_k + 1])
-            ttnn.deallocate(rough_vals)
-            rough_thr_f32 = ttnn.typecast(rough_thr_bf16, ttnn.float32)
-            ttnn.deallocate(rough_thr_bf16)
-            # Center scores around the decision boundary (float32 precision preserved)
-            scores_c1 = ttnn.sub(scores_with_bias_f32, rough_thr_f32)
-            ttnn.deallocate(rough_thr_f32)
-            ttnn.deallocate(scores_with_bias_f32)
+        # --- 3-pass centering topk ---
+        # With 256 experts, softmax scores are clustered near ~1/256 = 0.0039.
+        # BF16 has only ~3 decimal digits of precision, so a naive BF16 topk
+        # cannot reliably distinguish the top-8 from the rest. The centering
+        # technique subtracts a coarse threshold each pass, moving the decision
+        # boundary toward zero where BF16 resolution is highest.
 
-            # Pass 2: refined BF16 topk(k+1) on centered scores
-            scores_bf16_p2 = ttnn.typecast(scores_c1, ttnn.bfloat16)
-            refined_vals, _ = ttnn.topk(scores_bf16_p2, k=top_k + 1, dim=3, largest=True, sorted=True)
-            ttnn.deallocate(scores_bf16_p2)
-            # Second threshold is now near 0 -> BF16 step ~ 0.0001 (very precise)
-            refined_thr_bf16 = ttnn.slice(refined_vals, [0, 0, 0, top_k], [1, 1, T, top_k + 1])
-            ttnn.deallocate(refined_vals)
-            refined_thr_f32 = ttnn.typecast(refined_thr_bf16, ttnn.float32)
-            ttnn.deallocate(refined_thr_bf16)
-            scores_c2 = ttnn.sub(scores_c1, refined_thr_f32)
-            ttnn.deallocate(scores_c1)
-            ttnn.deallocate(refined_thr_f32)
+        # Pass 1: rough BF16 topk(k+1) to find coarse threshold
+        scores_bf16_p1 = ttnn.typecast(scores_f32, ttnn.bfloat16)
+        rough_vals, _ = ttnn.topk(scores_bf16_p1, k=top_k + 1, dim=3, largest=True, sorted=True)
+        ttnn.deallocate(scores_bf16_p1)
+        # (k+1)-th value gives coarse threshold
+        rough_thr_bf16 = ttnn.slice(rough_vals, [0, 0, 0, top_k], [1, 1, T, top_k + 1])
+        ttnn.deallocate(rough_vals)
+        rough_thr_f32 = ttnn.typecast(rough_thr_bf16, ttnn.float32)
+        ttnn.deallocate(rough_thr_bf16)
+        # Center scores around the decision boundary (float32 precision preserved)
+        scores_c1 = ttnn.sub(scores_f32, rough_thr_f32)
+        ttnn.deallocate(rough_thr_f32)
 
-            # Final pass: exact topk(k) on doubly-centered scores
-            scores_bf16_final = ttnn.typecast(scores_c2, ttnn.bfloat16)
-            ttnn.deallocate(scores_c2)
-            _, topk_expert_idx = ttnn.topk(scores_bf16_final, k=top_k, dim=3, largest=True, sorted=True)
-            ttnn.deallocate(scores_bf16_final)
-        else:
-            # Group-based selection: apply same 3-pass centering after masking
-            scores_bf16 = ttnn.typecast(scores_with_bias_f32, ttnn.bfloat16)
-            ttnn.deallocate(scores_with_bias_f32)
+        # Pass 2: refined BF16 topk(k+1) on centered scores
+        scores_bf16_p2 = ttnn.typecast(scores_c1, ttnn.bfloat16)
+        refined_vals, _ = ttnn.topk(scores_bf16_p2, k=top_k + 1, dim=3, largest=True, sorted=True)
+        ttnn.deallocate(scores_bf16_p2)
+        # Second threshold is now near 0 -> BF16 step ~ 0.0001 (very precise)
+        refined_thr_bf16 = ttnn.slice(refined_vals, [0, 0, 0, top_k], [1, 1, T, top_k + 1])
+        ttnn.deallocate(refined_vals)
+        refined_thr_f32 = ttnn.typecast(refined_thr_bf16, ttnn.float32)
+        ttnn.deallocate(refined_thr_bf16)
+        scores_c2 = ttnn.sub(scores_c1, refined_thr_f32)
+        ttnn.deallocate(scores_c1)
+        ttnn.deallocate(refined_thr_f32)
 
-            # group scores
-            grouped = ttnn.reshape(scores_bf16, ttnn.Shape((1, T, n_group, experts_per_group)))
-            top2_scores, _ = ttnn.topk(grouped, k=2, dim=3)
-            ttnn.deallocate(grouped)
-            group_scores = ttnn.sum(top2_scores, dim=3)
-            ttnn.deallocate(top2_scores)
+        # Final pass: exact topk(k) on doubly-centered scores
+        scores_bf16_final = ttnn.typecast(scores_c2, ttnn.bfloat16)
+        ttnn.deallocate(scores_c2)
+        _, topk_expert_idx = ttnn.topk(scores_bf16_final, k=top_k, dim=3, largest=True, sorted=True)
+        ttnn.deallocate(scores_bf16_final)
 
-            # top-k groups
-            _, topk_group_idx = ttnn.topk(group_scores, k=r.topk_group, dim=2)
-            ttnn.deallocate(group_scores)
-
-            # group mask via scatter
-            input_mask_rm = ttnn.repeat(self._scatter_input_dev, ttnn.Shape((1, 1, T, 1)))
-            src_rm = ttnn.repeat(self._scatter_src_dev, ttnn.Shape((1, 1, T, 1)))
-            idx_rm = ttnn.to_layout(topk_group_idx, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(topk_group_idx)
-            idx_4d = ttnn.unsqueeze(idx_rm, dim=1)
-            ttnn.deallocate(idx_rm)
-            active_groups_rm = ttnn.scatter(input=input_mask_rm, index=idx_4d, src=src_rm, dim=3)
-            ttnn.deallocate(idx_4d)
-
-            # expert mask
-            active_groups_rm = ttnn.reshape(active_groups_rm, ttnn.Shape((1, T, n_group, 1)))
-            expert_mask_rm = ttnn.repeat(active_groups_rm, ttnn.Shape((1, 1, 1, experts_per_group)))
-            ttnn.deallocate(active_groups_rm)
-            expert_mask_rm = ttnn.reshape(expert_mask_rm, ttnn.Shape((1, 1, T, n_experts)))
-            expert_mask = ttnn.to_layout(expert_mask_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(expert_mask_rm)
-
-            # top-k active experts
-            masked_scores = ttnn.mul(scores_bf16, expert_mask)
-            ttnn.deallocate(scores_bf16)
-            ttnn.deallocate(expert_mask)
-            _, topk_expert_idx = ttnn.topk(masked_scores, k=top_k, dim=3)
-            ttnn.deallocate(masked_scores)
-
-        # gather raw softmax scores (no bias) for weights
+        # --- Gather raw softmax scores for selected experts ---
         topk_weights = ttnn.gather(scores_f32, dim=3, index=topk_expert_idx)
         ttnn.deallocate(scores_f32)
 
-        # normalise
+        # --- Normalize weights by their sum ---
         denom = ttnn.sum(topk_weights, dim=3, keepdim=True)
-        # KEY DIFFERENCE: Add epsilon to match PyTorch reference and prevent division by zero
+        # Add epsilon to match PyTorch reference and prevent division by zero
         denom = ttnn.add(denom, 1e-20)
         topk_weights = ttnn.div(topk_weights, denom)
         ttnn.deallocate(denom)
 
-        # apply routing scale
+        # --- Apply routing scale ---
         scale_rep_rm = ttnn.repeat(self._scale_dev, ttnn.Shape((1, 1, T, 1)))
         scale_bf16 = ttnn.to_layout(scale_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if scale_bf16.dtype != ttnn.float32:
@@ -184,7 +163,7 @@ class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
         topk_weights = ttnn.mul(topk_weights, scale_f32)
         ttnn.deallocate(scale_f32)
 
-        # Reshape outputs to (T, top_k).
+        # --- Reshape outputs to (T, top_k) ---
         topk_expert_idx = ttnn.reshape(topk_expert_idx, ttnn.Shape((T, r.top_k)))
         topk_weights = ttnn.reshape(topk_weights, ttnn.Shape((T, r.top_k)))
         return topk_expert_idx, topk_weights
@@ -674,12 +653,11 @@ class TTNNQwen3MoE(TTNNMoE):
         # Key difference: num_experts -> n_routed_experts
         config.n_routed_experts = original_config.num_experts
 
-        # Qwen3 doesn't have n_group and topk_group - use defaults that work
-        # For 256 experts with top-8 routing:
-        # n_group=4 means 256/4=64 experts per group
-        # topk_group=2 means select top-2 groups
-        config.n_group = 4
-        config.topk_group = 2
+        # Qwen3 doesn't use group-based routing at all - simple softmax -> topk.
+        # Set n_group=1, topk_group=1 so that group logic is effectively a no-op
+        # (the single group always contains all experts).
+        config.n_group = 1
+        config.topk_group = 1
 
         # Scaling factor - use 1.0 if not specified
         config.routed_scaling_factor = getattr(original_config, "routed_scaling_factor", 1.0)

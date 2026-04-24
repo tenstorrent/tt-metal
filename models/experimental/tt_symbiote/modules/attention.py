@@ -98,6 +98,7 @@ class TTNNPagedAttentionKVCache(Cache):
         self._device = device
         self._seq_lengths: list[int] = [0] * num_layers
         self._seen_tokens = 0
+        self._external_seq_tracking = False
 
         page_table = torch.arange(config.max_num_blocks, dtype=torch.int32)
         self.page_table = page_table.reshape(config.batch_size, config.blocks_per_sequence)
@@ -173,11 +174,17 @@ class TTNNPagedAttentionKVCache(Cache):
         ttnn.experimental.paged_fill_cache(k_cache, key_states, page_table, batch_idx=batch_idx)
         ttnn.experimental.paged_fill_cache(v_cache, value_states, page_table, batch_idx=batch_idx)
 
-        # NOTE: _seq_lengths / _seen_tokens are NO LONGER updated here.
         # During trace replay, execute_trace only replays device ops; Python
-        # statements like counter increments do not execute. The caller
-        # (TTNNGemma4TextModel.call) is responsible for calling
-        # update_seq_length() outside the trace boundary after each layer.
+        # statements like counter increments do not execute. When external seq
+        # tracking is enabled (via update_seq_length()), the caller is
+        # responsible for updating counters outside the trace boundary
+        # (e.g. TTNNGemma4TextModel.call). Otherwise, update counters here
+        # for backward compatibility with callers that do not use
+        # update_seq_length().
+        if not self._external_seq_tracking:
+            self._seq_lengths[layer_idx] += seq_len
+            if layer_idx == 0:
+                self._seen_tokens += seq_len
 
     def paged_update_on_device(
         self,
@@ -206,8 +213,15 @@ class TTNNPagedAttentionKVCache(Cache):
             page_table=page_table,
         )
 
-        # NOTE: _seq_lengths / _seen_tokens are NO LONGER updated here.
-        # See comment in paged_fill_on_device for rationale.
+        # When external seq tracking is enabled (via update_seq_length()),
+        # the caller is responsible for updating counters outside the trace
+        # boundary (see paged_fill_on_device for full rationale). Otherwise,
+        # update counters here for backward compatibility.
+        if not self._external_seq_tracking:
+            seq_len = key_states.shape[0]
+            self._seq_lengths[layer_idx] += seq_len
+            if layer_idx == 0:
+                self._seen_tokens += seq_len
 
     def update_seq_length(self, layer_idx: int, seq_len: int = 1) -> None:
         """Increment Python-side sequence counters for a layer.
@@ -215,7 +229,13 @@ class TTNNPagedAttentionKVCache(Cache):
         This MUST be called outside the trace boundary (i.e. from the model's
         layer loop) so that the counters advance correctly during trace replay,
         warmup, and capture phases alike.
+
+        Calling this method enables external sequence tracking, which disables
+        the automatic counter increments inside paged_fill_on_device() and
+        paged_update_on_device() to prevent double-counting.
         """
+        if not self._external_seq_tracking:
+            self._external_seq_tracking = True
         self._seq_lengths[layer_idx] += seq_len
         if layer_idx == 0:
             self._seen_tokens += seq_len

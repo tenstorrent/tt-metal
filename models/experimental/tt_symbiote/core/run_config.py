@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from models.experimental.tt_symbiote.core.utils import tree_map
+from models.experimental.tt_symbiote.core.utils import tree_map, flat_map_bypass
 from tracy import signpost
 
 import ttnn
@@ -284,6 +284,9 @@ class DispatchManager:
         assert isinstance(file_name, str), "file_name must be a string"
         assert file_name.endswith(".csv"), "file_name must end with .csv"
         df = DispatchManager.get_timing_entries_stats()
+        if df.empty:
+            print(f"[WARN] No timing entries recorded. Skipping save to {file_name}")
+            return
         df.to_csv(file_name, index=True)
         pivot_table = df.pivot_table(
             index=["func_name", "module_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
@@ -432,9 +435,18 @@ def fast_unwrap_to_device(device):
 
 
 def post_process_ttnn_module_output(self, result):
+    post_process_time_begin = time.time()
     result = tree_map(wrap_to_torch_ttnn_tensor, result)
     if self.device_state is not None:
         result = self.set_output_tensors_config(result)
+    post_process_time_end = time.time()
+    DispatchManager.record_timing(
+        "TTNN",
+        self.module_name,
+        self.__class__.__name__ + "_post_process",
+        {},
+        post_process_time_end - post_process_time_begin,
+    )
     return result
 
 
@@ -598,10 +610,11 @@ class NormalRun:
             transform = fast_unwrap_to_device(self.device)
         else:
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
+        _map = flat_map_bypass if bypass else tree_map
+        func_args = _map(transform, args)
         # TODO: fix kwds not being passed correctly
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs = _map(transform, other_kwargs)
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
         begin = time.time()
         self.preprocess_weights()
@@ -950,6 +963,8 @@ class TracedRun(LightweightRun):
     _input_memory_config: Any = None
     _trace_cache: Dict[Tuple, TraceEntry] = {}
     _warmup_keys: Set[Tuple] = set()  # keys that have completed warm-up (run 1)
+    _base_pre_trace_execute: Any = None
+    _base_post_trace_execute: Any = None
 
     @classmethod
     def configure(
@@ -959,11 +974,15 @@ class TracedRun(LightweightRun):
         input_memory_config=None,
     ) -> None:
         """Configure traced run mode."""
+        from models.experimental.tt_symbiote.core.module import TTNNModule
+
         cls._device = device
         cls._cq_id = cq_id
         cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
         cls._trace_cache = {}
         cls._warmup_keys = set()
+        cls._base_pre_trace_execute = TTNNModule.pre_trace_execute
+        cls._base_post_trace_execute = TTNNModule.post_trace_execute
 
     @classmethod
     def cache_size(cls) -> int:
@@ -1007,19 +1026,23 @@ class TracedRun(LightweightRun):
                 continue
 
             if isinstance(arg, ttnn.Tensor):
-                ttnn.copy(arg, trace_input)
+                if arg is not trace_input:
+                    ttnn.copy(arg, trace_input)
                 trace_idx += 1
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
-                ttnn.copy(arg.ttnn_tensor, trace_input)
+                if arg.ttnn_tensor is not trace_input:
+                    ttnn.copy(arg.ttnn_tensor, trace_input)
                 trace_idx += 1
 
     @staticmethod
     def _copy_one_to_trace_buffer(new_val, trace_buf) -> None:
         """Copy a single value into its pre-allocated trace buffer."""
         if isinstance(new_val, ttnn.Tensor):
-            ttnn.copy(new_val, trace_buf)
+            if new_val is not trace_buf:
+                ttnn.copy(new_val, trace_buf)
         elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
-            ttnn.copy(new_val.ttnn_tensor, trace_buf)
+            if new_val.ttnn_tensor is not trace_buf:
+                ttnn.copy(new_val.ttnn_tensor, trace_buf)
 
     @staticmethod
     def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
@@ -1190,9 +1213,10 @@ class TracedRun(LightweightRun):
             transform = fast_unwrap_to_device(self.device)
         else:
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
+        _map = flat_map_bypass if bypass else tree_map
+        func_args = _map(transform, args)
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs = _map(transform, other_kwargs)
         func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
 
         begin = time.time()
@@ -1246,8 +1270,17 @@ class TracedRun(LightweightRun):
             entry = TracedRun._trace_cache[cache_key]
             if NormalRun.verbose:
                 print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            pre_trace_begin = time.time()
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
+            pre_trace_end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                self.module_name,
+                self.__class__.__name__ + "_pre_trace_copy",
+                {},
+                pre_trace_end - pre_trace_begin,
+            )
             # Update module-owned trace-stable buffers BEFORE executing trace.
             # This handles tensors like cache_position whose trace kwarg buffer
             # can be overwritten by another layer's trace intermediates (buffer
@@ -1255,8 +1288,30 @@ class TracedRun(LightweightRun):
             # to its own persistent buffers that are not subject to aliasing.
             if hasattr(self, "update_trace_stable_buffers"):
                 self.update_trace_stable_buffers(func_kwargs)
+            pre_trace_begin = time.time()
+            if type(self).pre_trace_execute is not TracedRun._base_pre_trace_execute:
+                self.pre_trace_execute(func_args, func_kwargs)
+            pre_trace_end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                self.module_name,
+                self.__class__.__name__ + "_pre_trace_execute",
+                {},
+                pre_trace_end - pre_trace_begin,
+            )
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
+            post_trace_begin = time.time()
+            if type(self).post_trace_execute is not TracedRun._base_post_trace_execute:
+                self.post_trace_execute(func_args, func_kwargs, result)
+            post_trace_end = time.time()
+            DispatchManager.record_timing(
+                "TTNN",
+                self.module_name,
+                self.__class__.__name__ + "_post_trace_execute",
+                {},
+                post_trace_end - post_trace_begin,
+            )
         elif cache_key in TracedRun._warmup_keys:
             # === RUN 2: CAPTURE (system already warmed up for this key) ===
             _TRACE_RUNNING = True

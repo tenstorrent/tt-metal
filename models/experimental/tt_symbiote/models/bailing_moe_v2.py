@@ -35,6 +35,20 @@ class TTNNBailingMoeV2Model(TTNNModule):
     def from_torch(model):
         new_model = TTNNBailingMoeV2Model()
         new_model.model = model
+
+        # Bypass tensor wrapping/unwrapping for decoder layers.
+        # These sit under the HF BailingMoeV2Model (nn.Module), so
+        # set_device() would give them _bypass_tensor_wrapping=False.
+        # Bypassing is safe: no PyTorch ops touch hidden_states between
+        # layer calls, and each layer's forward already works with raw
+        # ttnn.Tensor objects.
+        for layer in model.layers:
+            if isinstance(layer, TTNNModule):
+                layer._bypass_tensor_wrapping = True
+        # Also bypass the final norm layer
+        if isinstance(model.norm, TTNNModule):
+            model.norm._bypass_tensor_wrapping = True
+
         return new_model
 
     def call(
@@ -124,6 +138,21 @@ class TTNNBailingMoeV2Model(TTNNModule):
             # 4d mask is passed through the layers
             attention_mask = _prepare_4d_causal_attention_mask(
                 attention_mask, (batch_size, seq_length), inputs_embeds, past_seen_tokens
+            )
+
+        # Pre-convert attention_mask to ttnn.Tensor for bypass-enabled decoder layers.
+        # With _bypass_tensor_wrapping=True, fast_unwrap_to_device passes torch.Tensor
+        # unchanged, but TTNNSDPAAttention needs ttnn.Tensor for on-device SDPA.
+        if attention_mask is not None and isinstance(attention_mask, torch.Tensor):
+            mesh_mapper = (
+                ttnn.ReplicateTensorToMesh(ttnn_object.device) if ttnn_object.device.get_num_devices() > 1 else None
+            )
+            attention_mask = ttnn.from_torch(
+                attention_mask,
+                device=ttnn_object.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
             )
 
         # embed positions

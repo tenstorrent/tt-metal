@@ -291,14 +291,20 @@ class TTNNGemma4Attention(TTNNModule):
         partial_rotary_factor = rope_params.get("partial_rotary_factor", 1.0)  # 1.0 sliding, 0.25 global
         setup_key = (id(self.device), self.head_dim, rope_theta, partial_rotary_factor)
         if setup_key not in TTNNGemma4Attention._shared_rotary_setups:
+            # Gemma4 follows the HuggingFace Gemma3 convention: inv_freq is
+            # computed over the full head_dim and only the first rotary_dim
+            # frequencies are used.  This differs from the standard Phi/Ling
+            # convention where inv_freq is computed over rotary_dim only.
             TTNNGemma4Attention._shared_rotary_setups[setup_key] = BailingRotarySetup(
                 device=self.device,
                 head_dim=self.head_dim,
                 max_seq_len=min(getattr(config, "max_position_embeddings", 8192), 2048),
                 rope_theta=rope_theta,
                 partial_rotary_factor=partial_rotary_factor,
+                use_head_dim_for_freq=True,
             )
         self._rotary_setup = TTNNGemma4Attention._shared_rotary_setups[setup_key]
+        self._rotary_dim = self._rotary_setup.rotary_dim  # 256 sliding, 128 global
 
     @property
     def _is_distributed(self):
@@ -528,18 +534,23 @@ class TTNNGemma4Attention(TTNNModule):
     def _apply_rotary_embedding_llama(
         self, query_states, key_states, cos, sin, trans_mat, is_decode_mode, batch_size=None
     ):
-        """Apply rotary_embedding_llama, splitting for head_dim > 256.
+        """Apply rotary_embedding_llama with partial-RoPE optimization.
 
         The TTNN rotary_embedding_llama kernel requires head_dim <= 256.
-        For global layers with head_dim=512, we split Q/K and cos/sin along the
-        last dimension into 256-dim chunks, apply RoPE to each, and concat back.
-        RoPE operates on independent pairs so the split is mathematically correct.
+        Three paths:
+        1. head_dim <= 256: Direct single kernel call (sliding layers).
+        2. head_dim > 256 AND rotary_dim <= 256: Partial RoPE — slice only the
+           rotary dims (128 for Gemma 4 global), apply one kernel call, concat
+           with untouched pass-through dims. 1.57x decode speedup.
+        3. head_dim > 256 AND rotary_dim > 256: Chunked fallback — split into
+           256-dim chunks and apply RoPE to each (future-proofing).
 
-        In decode mode, the kernel also requires HEIGHT_SHARDED inputs, so each
-        chunk is sharded before RoPE and un-sharded after.
+        In decode mode, the kernel requires HEIGHT_SHARDED inputs, so tensors
+        are sharded before RoPE and un-sharded after.
         """
         max_rope_dim = 256
 
+        # --- Path 1: head_dim fits kernel limit (sliding layers, head_dim=256) ---
         if self.head_dim <= max_rope_dim:
             query_states = ttnn.experimental.rotary_embedding_llama(
                 query_states, cos, sin, trans_mat, is_decode_mode=is_decode_mode
@@ -549,12 +560,59 @@ class TTNNGemma4Attention(TTNNModule):
             )
             return query_states, key_states
 
-        # Split into chunks of max_rope_dim along the last dimension
+        # --- Path 2: Partial RoPE (global layers, rotary_dim=128 <= 256) ---
+        rotary_dim = self._rotary_dim
+        if rotary_dim <= max_rope_dim:
+            # Slice rotary portion and pass-through portion
+            q_rot = query_states[:, :, :, :rotary_dim]
+            q_pass = query_states[:, :, :, rotary_dim:]
+            k_rot = key_states[:, :, :, :rotary_dim]
+            k_pass = key_states[:, :, :, rotary_dim:]
+
+            # Slice cos/sin to actual rotary dims only
+            cos_rot = cos[:, :, :, :rotary_dim]
+            sin_rot = sin[:, :, :, :rotary_dim]
+
+            # For decode mode, shard rotary-dim tensors to L1 (kernel requirement)
+            if is_decode_mode and batch_size is not None:
+                batch_grid = ttnn.num_cores_to_corerangeset(
+                    batch_size, self.device.compute_with_storage_grid_size(), True
+                )
+                shard_mem = ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, rotary_dim),
+                    core_grid=batch_grid,
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                q_rot = ttnn.to_memory_config(q_rot, shard_mem)
+                k_rot = ttnn.to_memory_config(k_rot, shard_mem)
+                cos_rot = ttnn.to_memory_config(cos_rot, shard_mem)
+                sin_rot = ttnn.to_memory_config(sin_rot, shard_mem)
+
+            # Single RoPE kernel call per Q/K (128 dims fits kernel limit)
+            q_rot = ttnn.experimental.rotary_embedding_llama(
+                q_rot, cos_rot, sin_rot, trans_mat, is_decode_mode=is_decode_mode
+            )
+            k_rot = ttnn.experimental.rotary_embedding_llama(
+                k_rot, cos_rot, sin_rot, trans_mat, is_decode_mode=is_decode_mode
+            )
+
+            # Unshard back to DRAM after RoPE
+            if is_decode_mode and batch_size is not None:
+                q_rot = ttnn.to_memory_config(q_rot, ttnn.DRAM_MEMORY_CONFIG)
+                k_rot = ttnn.to_memory_config(k_rot, ttnn.DRAM_MEMORY_CONFIG)
+
+            # Concat rotated portion with untouched pass-through
+            query_states = ttnn.concat([q_rot, q_pass], dim=-1)
+            key_states = ttnn.concat([k_rot, k_pass], dim=-1)
+            return query_states, key_states
+
+        # --- Path 3: Chunked fallback for rotary_dim > 256 (future-proofing) ---
         num_chunks = (self.head_dim + max_rope_dim - 1) // max_rope_dim
         q_chunks = []
         k_chunks = []
 
-        # For decode mode, prepare sharding config (kernel requires HEIGHT_SHARDED)
         shard_mem = None
         if is_decode_mode and batch_size is not None:
             batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)
@@ -747,7 +805,7 @@ class TTNNGemma4Attention(TTNNModule):
 
         # Always resolve position from cache_position kwarg. This ensures
         # _decode_cur_pos is updated during ALL phases (warmup, capture, replay).
-        # During replay, update_trace_stable_buffers pre-copies the correct value
+        # During replay, pre_trace_execute pre-copies the correct value
         # to the trace kwarg buffer before execute_trace, so the baked-in copy
         # (from kwarg buffer to _decode_cur_pos) uses the correct position.
         cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, past_key_values, layer_idx, batch_size)

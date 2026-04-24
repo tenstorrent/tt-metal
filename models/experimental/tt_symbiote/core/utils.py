@@ -126,6 +126,17 @@ def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
     return tensor
 
 
+def flat_map_bypass(func, data):
+    """Fast recursive map for bypass path. No ABC imports, concrete type checks only."""
+    if isinstance(data, dict):
+        return {k: flat_map_bypass(func, v) for k, v in data.items()}
+    elif isinstance(data, tuple):
+        return tuple(flat_map_bypass(func, x) for x in data)
+    elif isinstance(data, list):
+        return [flat_map_bypass(func, x) for x in data]
+    return func(data)
+
+
 def optimized_tree_map_with_only_dict_list(*args, **kwargs):
     # don't use pytorch
     from collections.abc import Mapping, Sequence
