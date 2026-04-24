@@ -120,6 +120,118 @@ DENSE_INTERMEDIATE_SIZE = 18432  # Full dense MLP intermediate size (gate/up row
 
 
 # ============================================================================
+# Helpers: read CB contents back from the uint8 SDPA overlay buffers
+# ============================================================================
+# The SDPA buffers are allocated as uint8 ROW_MAJOR L1-sharded tensors with
+# shape (num_cores_per_device, bytes_per_shard). `MoeOp._overlap_cbs_with_sdpa_buffer`
+# records each CB's (buf, byte_offset, byte_size, data_format, tile_hw) onto
+# `ctx.routed_ctx.cb_overlays` / `ctx.shared_ctx.cb_overlays`. These helpers
+# pull raw bytes for a given CB on a given (device, core) and reinterpret them
+# back to a torch tensor for comparison against torch goldens.
+
+
+def _snapshot_uint8_sdpa_buffer(buf, submesh):
+    """Read a uint8 ROW_MAJOR SDPA buffer back as (num_devices*num_cores, bytes_per_shard) uint8 torch."""
+    return ttnn.to_torch(buf, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+
+def _tile_faces_to_row_major(region_bf16, tile_h, tile_w, num_tiles):
+    """
+    Convert bf16 data stored in tt-metal TILE face layout back to row-major.
+
+    tt-metal pack_tile stores a 32x32 tile as 4 faces of 16x16 (TL, TR, BL, BR),
+    row-major within each face. For "partial" tiles like 8x32 (reduced row face
+    count, 2 horizontal 8x16 face-blocks), a similar swizzle applies to 2 faces.
+    For 1x32 / 1x16 / 16x16 the storage is already a single contiguous block.
+    """
+    elems_per_tile = tile_h * tile_w
+    assert (
+        region_bf16.numel() == num_tiles * elems_per_tile
+    ), f"expected {num_tiles * elems_per_tile} elems, got {region_bf16.numel()}"
+    if (tile_h, tile_w) == (32, 32):
+        # 4 × (16×16) faces: TL, TR, BL, BR.
+        return region_bf16.reshape(num_tiles, 2, 2, 16, 16).permute(0, 1, 3, 2, 4).reshape(num_tiles, 32, 32)
+    if (tile_h, tile_w) == (8, 32):
+        # 2 × (8×16) face-blocks horizontally: TL at [0:128], TR at [128:256].
+        return (
+            region_bf16.reshape(num_tiles, 2, 8, 16)  # (num, face_col, row, col_in_face)
+            .permute(0, 2, 1, 3)  # (num, row, face_col, col_in_face)
+            .reshape(num_tiles, 8, 32)
+        )
+    # 1x32, 1x16, 16x16: stored as a single contiguous row-major block.
+    return region_bf16.reshape(num_tiles, tile_h, tile_w)
+
+
+def _reinterpret_cb_region(region_uint8, data_format, tile_hw, untile):
+    """Given a uint8 byte slice of a single core's CB region, reinterpret it."""
+    if data_format == ttnn.bfloat16:
+        bf16 = region_uint8.view(torch.bfloat16)
+        if not untile or tile_hw is None:
+            return bf16
+        tile_h, tile_w = tile_hw
+        num_tiles = bf16.numel() // (tile_h * tile_w)
+        return _tile_faces_to_row_major(bf16, tile_h, tile_w, num_tiles)
+    if data_format == ttnn.uint16:
+        u16 = region_uint8.view(torch.int16).to(torch.int32) & 0xFFFF
+        if not untile or tile_hw is None:
+            return u16
+        tile_h, tile_w = tile_hw
+        num_tiles = u16.numel() // (tile_h * tile_w)
+        return u16.reshape(num_tiles, tile_h, tile_w)  # no face swizzle for 1x16
+    if data_format == ttnn.uint8:
+        return region_uint8.clone()
+    if data_format == ttnn.bfloat8_b:
+        # Bfp8 is packed: 64 B exponents + 1024 B mantissas per 32x32 tile.
+        # Caller must decode via ttnn._ttnn.bfp_utils.unpack_bfp8 or equivalent.
+        return region_uint8.clone()
+    raise ValueError(f"unsupported data_format for CB readback: {data_format}")
+
+
+def _core_flat_idx(buf_cores_ordered, core_coord):
+    """Resolve a physical CoreCoord to its row index in the readback snapshot."""
+    for i, c in enumerate(buf_cores_ordered):
+        if c == core_coord:
+            return i
+    raise ValueError(f"CoreCoord({core_coord.x},{core_coord.y}) not in buf grid")
+
+
+def read_cb_on_core(raw_snapshot, overlay, device_idx, core_coord, buf_cores_ordered, untile=True):
+    """Read a single core's slice of a CB, reinterpreted per overlay metadata."""
+    num_cores = len(buf_cores_ordered)
+    flat_row = device_idx * num_cores + _core_flat_idx(buf_cores_ordered, core_coord)
+    region = raw_snapshot[flat_row, overlay["offset"] : overlay["offset"] + overlay["size"]].contiguous()
+    return _reinterpret_cb_region(region, overlay["data_format"], overlay["tile_hw"], untile)
+
+
+def read_cb_reassembled(raw_snapshot, overlay, device_idx, buf_cores_ordered, untile=True):
+    """
+    Read a CB's full logical tensor on one device by walking `overlay["producer_cores"]`
+    and reassembling per `overlay["shard_mode"]`.
+
+    Returns:
+      - shard_mode="single":     tensor from the sole producer core
+      - shard_mode="replicated": tensor from the first producer core (all are identical)
+      - shard_mode="sharded":    list of per-core tensors in producer-core order
+    """
+    producer_crs = overlay.get("producer_cores")
+    if producer_crs is None:
+        raise ValueError("overlay has no producer_cores — cannot reassemble; use read_cb_on_core instead")
+    producer_cores = list(ttnn.corerange_to_cores(producer_crs, row_wise=True))
+
+    mode = overlay["shard_mode"]
+    if mode == "single":
+        assert len(producer_cores) == 1, f"shard_mode='single' but {len(producer_cores)} cores"
+        return read_cb_on_core(raw_snapshot, overlay, device_idx, producer_cores[0], buf_cores_ordered, untile)
+    if mode == "replicated":
+        return read_cb_on_core(raw_snapshot, overlay, device_idx, producer_cores[0], buf_cores_ordered, untile)
+    if mode == "sharded":
+        return [
+            read_cb_on_core(raw_snapshot, overlay, device_idx, c, buf_cores_ordered, untile) for c in producer_cores
+        ]
+    raise ValueError(f"unknown shard_mode: {mode}")
+
+
+# ============================================================================
 # Helper: create all shared-expert tensors
 # ============================================================================
 def create_shared_expert_tensors(
@@ -1130,9 +1242,158 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
 
-    # ── Verify results ──
-    # Read gate scores/indices from device
+    # ── Per-CB validation via uint8 SDPA readback ──
+    # Pulls overlay metadata recorded during MoeOp._overlap_cbs_with_sdpa_buffer
+    # (offset + size + producer_cores + shard_mode) and compares intermediate CB
+    # contents against torch goldens. First pass validates the readback
+    # infrastructure on cb0 (sender-only) and cb1 (mcast-replicated).
+    moe_dbg = MoeOp._last_instance
+    r_overlays = moe_dbg.ctx.routed_ctx.cb_overlays
+    s_overlays = moe_dbg.ctx.shared_ctx.cb_overlays
+    kv_buf_cores = moe_dbg.ctx.routed_ctx.kv_buf_cores  # ordered physical cores of the kv buf
+
+    kv_snapshot = _snapshot_uint8_sdpa_buffer(sdpa_kv_cache_buffer, submesh)
+
+    # Torch rmsnorm golden: (x * rsqrt(var + eps)) * gamma
+    _x = r.torch_input.float()
+    _var = (_x * _x).mean(dim=-1, keepdim=True)
+    rmsnorm_golden = ((_x * torch.rsqrt(_var + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16().float().reshape(-1)
+    logger.info(
+        f"[CB-VAL] rmsnorm golden shape={tuple(rmsnorm_golden.shape)} "
+        f"first8={[round(v, 4) for v in rmsnorm_golden[:8].tolist()]}"
+    )
+
+    # cb0: rmsnorm_output — sender-only, storage is 224 contiguous 1x32 tiles.
+    cb0_id = moe_dbg.ctx.routed_ctx.rmsnorm_output_cb
+    cb0_t = read_cb_reassembled(kv_snapshot, r_overlays[cb0_id], device_idx=0, buf_cores_ordered=kv_buf_cores)
+    cb0_flat = cb0_t.reshape(-1).float()
+    logger.info(
+        f"[CB-VAL] cb0 rmsnorm_output (sender={moe_dbg.ctx.routed_ctx.sender_core}) "
+        f"shape={tuple(cb0_t.shape)} flat_first8={[round(v, 4) for v in cb0_flat[:8].tolist()]}"
+    )
+    _, cb0_flat_pcc = comp_pcc(rmsnorm_golden, cb0_flat, 0.99)
+    logger.info(f"[CB-VAL] cb0 flat(7168) vs rmsnorm_golden PCC: {cb0_flat_pcc}")
+
+    # cb1: gate_mm_input — replicated across mcast_grid; read from core (0,0) via reassemble.
+    cb1_id = moe_dbg.ctx.routed_ctx.gate_mm_input_cb
+    cb1_t = read_cb_reassembled(kv_snapshot, r_overlays[cb1_id], device_idx=0, buf_cores_ordered=kv_buf_cores)
+    cb1_flat = cb1_t.reshape(-1).float()
+    logger.info(
+        f"[CB-VAL] cb1 gate_mm_input untiled shape={tuple(cb1_t.shape)} "
+        f"flat_first8={[round(v, 4) for v in cb1_flat[:8].tolist()]}"
+    )
+    _, cb1_flat_pcc = comp_pcc(rmsnorm_golden, cb1_flat, 0.99)
+    logger.info(f"[CB-VAL] cb1 flat(7168) vs rmsnorm_golden PCC: {cb1_flat_pcc}")
+
+    # ── Expert-aware taps: cb11 (gate_proj, silu'd at end), cb12 (up_proj), cb15 (silu*up) ──
+    # Each gate_proj core handles one top-k expert; the mapping comes from the
+    # on-device gate_indices. Validate device 0's slice only.
     device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    dev0_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64).tolist()
+
+    routed_n_per_device_dbg = RoutedExpert.GATE_PROJ_N // num_devices  # 256 for TP8
+    gate_slice_start_dbg, gate_slice_end_dbg = 0, routed_n_per_device_dbg  # device 0
+    rmsnorm_2d = rmsnorm_golden.reshape(1, -1)
+
+    # Per-expert, full-N-per-device (256) goldens. Each expert's output is later
+    # sliced into 32-col chunks for the per-core CB layout.
+    # Keep intermediates in bf16 throughout to match the HW matmul→silu→output
+    # pipeline (matmul accumulates in fp32, silu reads bf16 dst regs, pack_tile
+    # writes bf16 to L1). Float-cast only at the end for PCC compute.
+    rms_bf16 = rmsnorm_golden.reshape(1, -1).bfloat16()
+    gate_out_per_expert = []  # raw gate_proj (no silu)
+    silu_gate_per_expert = []  # silu(gate_proj) — what cb11 holds post fuse_silu
+    up_out_per_expert = []  # up_proj — what cb12 holds
+    mul_out_per_expert = []  # silu(gate) * up — what cb15 holds
+    for expert_id in dev0_top8:
+        W_g_bf16 = r.expert_weights_dict[expert_id][0, 0, :, gate_slice_start_dbg:gate_slice_end_dbg].bfloat16()
+        W_u_bf16 = r.up_proj_weights_dict[expert_id][0, 0, :, gate_slice_start_dbg:gate_slice_end_dbg].bfloat16()
+        g_bf16 = (rms_bf16.float() @ W_g_bf16.float()).reshape(-1).bfloat16()  # matmul in fp32 accum, round to bf16
+        u_bf16 = (rms_bf16.float() @ W_u_bf16.float()).reshape(-1).bfloat16()
+        silu_g_bf16 = torch.nn.functional.silu(g_bf16.float()).bfloat16()
+        gate_out_per_expert.append(g_bf16.float())
+        silu_gate_per_expert.append(silu_g_bf16.float())
+        up_out_per_expert.append(u_bf16.float())
+        mul_out_per_expert.append((silu_g_bf16.float() * u_bf16.float()).bfloat16().float())
+
+    # Per-core CB layout: each gate_proj core holds (num_experts, 1, 32) — 8 experts
+    # stacked vertically, 32-col N-slice = this core's piece of the per-device N.
+    # So to match readback order [core0_allExperts, core1_allExperts, ...] the
+    # golden for core i is: concat_e( expert_e_fullN[i*32 : (i+1)*32] ).
+    def _per_core_expert_major(per_expert_full, n_per_tile, num_cores):
+        out = []
+        for core in range(num_cores):
+            s = slice(core * n_per_tile, (core + 1) * n_per_tile)
+            for e in range(len(per_expert_full)):
+                out.append(per_expert_full[e][s])
+        return torch.cat(out)
+
+    num_gate_proj_cores_dbg = r.num_gate_proj_cores
+    per_core_n_tile = 32
+
+    # cb11 stores silu'd gate_proj output as flat 8×(1×32) tiles. The silu fast-path
+    # via cb_out_silu is commented out in the kernel; silu runs INLINE inside the
+    # matmul pack via `llk_math_eltwise_unary_sfpu_silu` on dst regs before
+    # pack_tile writes to cb_out (cb11) at 1x32 granularity.
+    cb11_id = moe_dbg.ctx.routed_ctx.gate_proj_cb_out
+    cb11_shards = read_cb_reassembled(kv_snapshot, r_overlays[cb11_id], device_idx=0, buf_cores_ordered=kv_buf_cores)
+    cb11_concat = torch.cat([s.reshape(-1) for s in cb11_shards]).float()
+    cb11_raw_golden = _per_core_expert_major(gate_out_per_expert, per_core_n_tile, num_gate_proj_cores_dbg)
+    cb11_silu_golden = _per_core_expert_major(silu_gate_per_expert, per_core_n_tile, num_gate_proj_cores_dbg)
+    logger.info(
+        f"[CB-VAL] cb11 gate_proj_cb_out num_shards={len(cb11_shards)} per_shard_shape={tuple(cb11_shards[0].shape)} "
+        f"total_elems={cb11_concat.numel()} dev0_top8={dev0_top8}"
+    )
+    # First-8 side-by-side to see if it's precision-noise or wildly different values.
+    logger.info(
+        f"[CB-VAL] cb11 first8 hw={[round(v, 4) for v in cb11_concat[:8].tolist()]} "
+        f"silu_golden={[round(v, 4) for v in cb11_silu_golden[:8].tolist()]} "
+        f"raw_golden={[round(v, 4) for v in cb11_raw_golden[:8].tolist()]}"
+    )
+    _, cb11_raw_pcc = comp_pcc(cb11_raw_golden, cb11_concat, 0.95)
+    _, cb11_silu_pcc = comp_pcc(cb11_silu_golden, cb11_concat, 0.95)
+    logger.info(f"[CB-VAL] cb11 vs raw gate_proj PCC: {cb11_raw_pcc}; vs silu(gate_proj) PCC: {cb11_silu_pcc}")
+
+    # cb12: up_proj output (no silu applied).
+    cb12_id = moe_dbg.ctx.routed_ctx.up_proj_cb_mm_out
+    cb12_shards = read_cb_reassembled(kv_snapshot, r_overlays[cb12_id], device_idx=0, buf_cores_ordered=kv_buf_cores)
+    cb12_concat = torch.cat([s.reshape(-1) for s in cb12_shards]).float()
+    cb12_golden = _per_core_expert_major(up_out_per_expert, per_core_n_tile, num_gate_proj_cores_dbg)
+    _, cb12_pcc = comp_pcc(cb12_golden, cb12_concat, 0.95)
+    logger.info(
+        f"[CB-VAL] cb12 up_proj_mm_out num_shards={len(cb12_shards)} total_elems={cb12_concat.numel()} vs up_proj golden PCC: {cb12_pcc}"
+    )
+
+    # Direct cb11 vs cb12 comparison — with gate using up's weights, pipeline
+    # symmetry means cb11 and cb12 should hold the same values.
+    _, cb11_vs_cb12_pcc = comp_pcc(cb12_concat, cb11_concat, 0.99)
+    logger.info(
+        f"[CB-VAL] cb11 vs cb12 DIRECT PCC: {cb11_vs_cb12_pcc} "
+        f"(should be ~1.0 if gate pipeline == up pipeline with same weights)"
+    )
+
+    # cb15: mul output = silu(gate) * up — fused gated output, same layout as cb11/cb12.
+    cb15_id = moe_dbg.ctx.routed_ctx.mul_cb_out
+    cb15_shards = read_cb_reassembled(kv_snapshot, r_overlays[cb15_id], device_idx=0, buf_cores_ordered=kv_buf_cores)
+    cb15_concat = torch.cat([s.reshape(-1) for s in cb15_shards]).float()
+    cb15_golden = _per_core_expert_major(mul_out_per_expert, per_core_n_tile, num_gate_proj_cores_dbg)
+    _, cb15_pcc = comp_pcc(cb15_golden, cb15_concat, 0.95)
+    logger.info(
+        f"[CB-VAL] cb15 mul_cb_out num_shards={len(cb15_shards)} total_elems={cb15_concat.numel()} vs silu*up golden PCC: {cb15_pcc}"
+    )
+
+    # cb29: shared gate/up output (per compute-core slice). Shared-expert golden
+    # is more involved (k_parallel × n_parallel split) — just log shape + first
+    # values here; caller can compare against their own shared golden.
+    cb29_id = moe_dbg.ctx.shared_ctx.gu_out_cb
+    cb29_shards = read_cb_reassembled(kv_snapshot, s_overlays[cb29_id], device_idx=0, buf_cores_ordered=kv_buf_cores)
+    logger.info(
+        f"[CB-VAL] cb29 shared_gu_out num_shards={len(cb29_shards)} "
+        f"per_shard_shape={tuple(cb29_shards[0].shape)} "
+        f"core0_first8={[round(v, 4) for v in cb29_shards[0].reshape(-1)[:8].float().tolist()]}"
+    )
+
+    # ── Verify results ──
     _ = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)

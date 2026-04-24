@@ -319,6 +319,12 @@ struct MatmulExpertCompressedDRAM {
 
             reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
+            // Wait for the index mcast to land in L1 before reading.
+            // Without this, NCRISC races ahead of the index mcast and reads stale
+            // values (e.g. expert_idx=0), fetching the wrong expert's weights.
+            // TRISC has the same wait — NCRISC was missing it.
+            cb_wait_front(CTArgs::cb_index, 1);
+
             for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                 uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 if (is_sram_expert(raw_idx)) {
@@ -501,8 +507,6 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t tiles_per_expert = CTArgs::subblock_k * CTArgs::num_subblocks_k * CTArgs::per_core_n;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
 
-            cb_wait_front(CTArgs::cb_index, 1);
-
             volatile tt_l1_ptr uint16_t* index_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::index_l1_addr);
 
@@ -531,6 +535,8 @@ struct MatmulExpertCompressedDRAM {
             uint32_t in0_base = 0, in0_cb_base = 0;
             UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
             UNPACK(({ in0_base = in0_cb_base + act_k_slice_byte_offset; }));
+
+            cb_wait_front(CTArgs::cb_index, 1);
 
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_dram_experts = 0;
@@ -779,6 +785,10 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t fmt_slot = 0;
                 uint32_t num_dram_pushed = 0;
 
+                if constexpr (CTArgs::fuse_silu) {
+                    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+                }
+
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                     if (is_sram_expert(raw_idx)) {
@@ -836,7 +846,7 @@ struct MatmulExpertCompressedDRAM {
                             PACK(TT_SETC16(
                                 DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                PACK((llk_math_eltwise_unary_sfpu_silu<false, false, 2>(sn, (int)VectorMode::R)));
+                                PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2>(sn, (int)VectorMode::R)));
                             }
                             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                         } else {

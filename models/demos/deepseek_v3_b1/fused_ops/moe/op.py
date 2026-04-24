@@ -3830,6 +3830,56 @@ class MoeOp:
         out_addr = _fused_base_addr(out_buf)
         out_offset = 0
 
+        # Overlay metadata: cb_id → {buf, offset, size, data_format, tile_hw,
+        # producer_cores (CoreRangeSet of cores with valid data),
+        # shard_mode ("single" / "replicated" / "sharded")}.
+        # Populated alongside each CB descriptor so tests can slice the uint8
+        # readback of the SDPA buffer into per-CB byte ranges and reassemble
+        # the logical tensor without duplicating offset or layout arithmetic.
+        routed_ctx.cb_overlays = {}
+        shared_ctx.cb_overlays = {}
+
+        # Buffer-level metadata: the shard_spec (grid + orientation) pins the
+        # per-core iteration order that `ttnn.to_torch` uses when flattening
+        # shards into rows. Derive `row_wise` from `orientation` so the result
+        # stays correct if the orientation flips. Tests use these to resolve
+        # (buf, CoreCoord) → flat_row_idx.
+        def _ordered_cores(buf):
+            spec = buf.memory_config().shard_spec
+            row_wise = spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+            cores = list(ttnn.corerange_to_cores(spec.grid, row_wise=row_wise))
+            # Sanity: grid core count must equal derived core count, else the
+            # allocator placed shards in a different order than we derive.
+            assert spec.grid.num_cores() == len(cores), (
+                f"shard_spec.grid.num_cores()={spec.grid.num_cores()} disagrees with "
+                f"corerange_to_cores count={len(cores)} — shard ordering would be ambiguous"
+            )
+            return cores
+
+        routed_ctx.kv_buf_cores = _ordered_cores(kv_buf)
+        routed_ctx.out_buf_cores = _ordered_cores(out_buf)
+
+        def _record(ctx, cb_id, buf_name, offset, size, data_format, tile_hw, producer_cores=None, shard_mode="single"):
+            ctx.cb_overlays[cb_id] = {
+                "buf": buf_name,
+                "offset": offset,
+                "size": size,
+                "data_format": data_format,
+                "tile_hw": tile_hw,
+                "producer_cores": producer_cores,
+                "shard_mode": shard_mode,
+            }
+
+        # Pre-built CoreRangeSets for common producer-core patterns.
+        _sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(routed_ctx.sender_core, routed_ctx.sender_core)])
+        _mcast_crs = routed_ctx.mcast_grid  # all mcast destination cores
+        _gate_proj_crs = routed_ctx.gate_proj_core_ranges  # also the down-proj compute cores
+        _shared_compute_crs = shared_ctx.compute_core_grid  # shared-expert gate/up compute cores
+        _shared_matmul_crs = shared_ctx.matmul_core_grid  # shared-expert down matmul cores
+        _shared_gather_dest_crs = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(shared_ctx.gather_dest_noc_core, shared_ctx.gather_dest_noc_core)]
+        )
+
         # ── Routed Expert CBs → sdpa_kv_cache_buffer ──
 
         # CB 0: rmsnorm_output (total_size=14336, page_size=2048, tile=32x32, bfloat16)
@@ -3849,6 +3899,11 @@ class MoeOp:
         )
         cb0_desc.format_descriptors = [cb0_fmt]
         routed_ctx.rmsnorm_output_cb_descriptor = cb0_desc
+        # Storage is 224 contiguous 1x32 tiles even though the CB descriptor claims
+        # a reinterpreted 32x32 tile (the rmsnorm kernel pack_tiles at 1x32
+        # granularity and only the descriptor is reinterpreted for downstream).
+        # Record the *storage* layout so readback skips the face un-swizzle.
+        _record(routed_ctx, cb0_cb_id, "kv", kv_offset, cb0_total_size, ttnn.bfloat16, (1, 32), _sender_crs, "single")
         kv_offset += cb0_total_size
 
         # CB 1: gate_mm_input (total_size=14336, page_size=64, tile=1x32, bfloat16)
@@ -3868,6 +3923,9 @@ class MoeOp:
         )
         cb1_desc.format_descriptors = [cb1_fmt]
         routed_ctx.gate_mm_input_cb_descriptor = cb1_desc
+        _record(
+            routed_ctx, cb1_cb_id, "kv", kv_offset, cb1_total_size, ttnn.bfloat16, (1, 32), _mcast_crs, "replicated"
+        )
         kv_offset += cb1_total_size
 
         # Routing-only CBs (gate_mm_output, gate_input, expert_index)
@@ -3889,6 +3947,9 @@ class MoeOp:
             )
             cb3_desc.format_descriptors = [cb3_fmt]
             routed_ctx.gate_mm_params["output_cb_descriptor"] = cb3_desc
+            _record(
+                routed_ctx, cb3_cb_id, "kv", kv_offset, cb3_total_size, ttnn.bfloat16, (1, 32), _sender_crs, "single"
+            )
             kv_offset += cb3_total_size
 
             # CB 4: gate_input (total_size=512, page_size=512, tile=16x16, bfloat16)
@@ -3909,6 +3970,9 @@ class MoeOp:
             )
             cb4_desc.format_descriptors = [cb4_fmt]
             routed_ctx.gate_params["input_cb_descriptor"] = cb4_desc
+            _record(
+                routed_ctx, cb4_cb_id, "kv", cb4_offset, cb4_total_size, ttnn.bfloat16, (16, 16), _sender_crs, "single"
+            )
             kv_offset += cb4_total_size
             routed_ctx.gate_mm_gather_params["receiver_data_addr"] = kv_addr + cb4_offset
 
@@ -3934,6 +3998,12 @@ class MoeOp:
             routed_ctx.gate_proj_params["index_l1_addr"] = kv_addr + cb10_offset
             routed_ctx.up_proj_params["index_l1_addr"] = kv_addr + cb10_offset
             routed_ctx.down_proj_params["index_l1_addr"] = kv_addr + cb10_offset
+            # cb10 data_format in the CB descriptor claims bfloat16 but bytes are
+            # packed topk expert INDICES (uint16). Record the true storage dtype
+            # so readback does not reinterpret indices as floats.
+            _record(
+                routed_ctx, cb10_cb_id, "kv", cb10_offset, cb10_total_size, ttnn.uint16, (1, 16), _sender_crs, "single"
+            )
             kv_offset += cb10_total_size
 
         # CB 11: gate_proj_output (aliases CB 14) — hardcoded descriptor
@@ -3974,6 +4044,28 @@ class MoeOp:
         )
         cb_out_silu_desc.format_descriptors = [cb_out_silu_fmt]
         routed_ctx.gate_proj_params["cb_out_silu_descriptor"] = cb_out_silu_desc
+        _record(
+            routed_ctx,
+            cb11_cb_id,
+            "kv",
+            cb11_offset,
+            cb11_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
+        _record(
+            routed_ctx,
+            cb_out_silu_cb_id,
+            "kv",
+            cb11_offset,
+            cb11_total_size,
+            ttnn.bfloat16,
+            (silu_tile_h, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
         kv_offset += cb11_total_size
 
         # CB 12: up_proj_mm_out (aliases CB 13) — hardcoded descriptor
@@ -3994,6 +4086,17 @@ class MoeOp:
         )
         cb12_desc.format_descriptors = [cb12_fmt]
         routed_ctx.up_proj_params["cb_out_descriptor"] = cb12_desc
+        _record(
+            routed_ctx,
+            cb12_cb_id,
+            "kv",
+            cb12_offset,
+            cb12_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
         kv_offset += cb12_total_size
 
         # CB 15: mul_out (fused output) — hardcoded descriptor
@@ -4013,6 +4116,9 @@ class MoeOp:
         )
         cb15_desc.format_descriptors = [cb15_fmt]
         routed_ctx.mul_params["cb_out_descriptor"] = cb15_desc
+        _record(
+            routed_ctx, cb15_cb_id, "kv", kv_offset, cb15_total_size, ttnn.bfloat16, (1, 32), _gate_proj_crs, "sharded"
+        )
         kv_offset += cb15_total_size
 
         # CB 16: down_proj_gather_dst (total_size=4096, page_size=64, tile=1x32, bfloat16)
@@ -4033,6 +4139,17 @@ class MoeOp:
         )
         cb16_desc.format_descriptors = [cb16_fmt]
         routed_ctx.down_proj_gather_params["dst_cb_descriptor"] = cb16_desc
+        _record(
+            routed_ctx,
+            cb16_cb_id,
+            "kv",
+            cb16_offset,
+            cb16_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
         kv_offset += cb16_total_size
         routed_ctx.down_proj_gather_params["receiver_data_addr"] = kv_addr + cb16_offset
 
@@ -4053,6 +4170,9 @@ class MoeOp:
         )
         cb17_desc.format_descriptors = [cb17_fmt]
         routed_ctx.down_proj_mcast_params["dst_cb_descriptor"] = cb17_desc
+        _record(
+            routed_ctx, cb17_cb_id, "kv", kv_offset, cb17_total_size, ttnn.bfloat16, (1, 32), _gate_proj_crs, "sharded"
+        )
         kv_offset += cb17_total_size
 
         # CB 19: down_proj_output (total_size=1792, page_size=64, tile=1x32, bfloat16)
@@ -4073,6 +4193,17 @@ class MoeOp:
         )
         cb19_desc.format_descriptors = [cb19_fmt]
         routed_ctx.down_proj_params["cb_out_descriptor"] = cb19_desc
+        _record(
+            routed_ctx,
+            cb19_cb_id,
+            "kv",
+            cb19_offset,
+            cb19_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
         kv_offset += cb19_total_size
 
         # Routing-only CBs (expert_scale, scalar working buffer)
@@ -4094,6 +4225,9 @@ class MoeOp:
             )
             cb20_desc.format_descriptors = [cb20_fmt]
             routed_ctx.mul_params["cb_scalar_src_descriptor"] = cb20_desc
+            _record(
+                routed_ctx, cb20_cb_id, "kv", kv_offset, cb20_total_size, ttnn.bfloat16, (1, 16), _sender_crs, "single"
+            )
             kv_offset += cb20_total_size
 
             # CB 21: scalar working buffer (1x32 tile to match mul in0/in1; only [0,0] used via SCALAR bcast)
@@ -4118,6 +4252,17 @@ class MoeOp:
             )
             cb21_desc.format_descriptors = [cb21_fmt]
             routed_ctx.mul_params["cb_scalar_descriptor"] = cb21_desc
+            _record(
+                routed_ctx,
+                routed_ctx.mul_cb_scalar,
+                "kv",
+                kv_offset,
+                scalar_total_size,
+                ttnn.bfloat16,
+                (1, 32),
+                _gate_proj_crs,
+                "replicated",
+            )
             kv_offset += scalar_total_size
 
         # CB 23: add_cb_in1 (total_size=14336, page_size=1792, tile=32x32, bfloat16)
@@ -4137,6 +4282,20 @@ class MoeOp:
         )
         cb23_desc.format_descriptors = [cb23_fmt]
         routed_ctx.add_params["cb_in1_descriptor"] = cb23_desc
+        # Descriptor claims 32x32 but page_size=1792 = 28 × 64 B = 28 × (1x32)
+        # bf16 per page. 8 pages total = 224 × (1x32) flat, matching down_proj
+        # output width per core × num_experts_per_core, stored in 1x32 granules.
+        _record(
+            routed_ctx,
+            cb23_cb_id,
+            "kv",
+            kv_offset,
+            cb23_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _gate_proj_crs,
+            "replicated",
+        )
         kv_offset += cb23_total_size
 
         # ── cb_fmt for gate/up/down matmul_expert: allocate in SDPA before cb_in1 so the
@@ -4167,6 +4326,7 @@ class MoeOp:
             ]
             params["fmt_cb_l1_addr"] = kv_addr + fmt_offset
             params["cb_fmt_descriptor_override"] = desc
+            _record(routed_ctx, cb_id, "kv", fmt_offset, fmt_region, ttnn.uint8, None, _gate_proj_crs, "sharded")
             kv_offset += fmt_region
             logger.info(
                 f"  cb_fmt[{proj_label}] overlay: offset={fmt_offset} size={fmt_region} "
@@ -4232,6 +4392,28 @@ class MoeOp:
         cb18_desc.format_descriptors = [cb18_fmt]
         down_proj_params["cb_in1_descriptor"] = cb18_desc
         down_proj_params["in1_buf_addr"] = kv_addr + cb9_offset
+        _record(
+            routed_ctx,
+            routed_ctx.gate_proj_cb_in1,
+            "kv",
+            cb9_offset,
+            cb9_total_size,
+            gate_cb_data_format,
+            (32, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
+        _record(
+            routed_ctx,
+            routed_ctx.down_proj_cb_in1,
+            "kv",
+            cb9_offset,
+            cb18_total_size,
+            down_cb_data_format,
+            (32, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
 
         kv_offset += shared_in1_size
 
@@ -4254,6 +4436,17 @@ class MoeOp:
         )
         cb29_desc.format_descriptors = [cb29_fmt]
         shared_ctx.gu_matmul_params["cb_out_descriptor"] = cb29_desc
+        _record(
+            shared_ctx,
+            cb29_cb_id,
+            "kv",
+            kv_offset,
+            cb29_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _shared_compute_crs,
+            "sharded",
+        )
         kv_offset += cb29_total_size
 
         # CB 32: shared_intermed (total_size=1024, page_size=512, face tile 16x16, bfloat16)
@@ -4274,6 +4467,17 @@ class MoeOp:
         )
         cb32_desc.format_descriptors = [cb32_fmt]
         shared_ctx.gated_reduce_params["cb_intermed_descriptor"] = cb32_desc
+        _record(
+            shared_ctx,
+            cb32_cb_id,
+            "kv",
+            kv_offset,
+            cb32_total_size,
+            ttnn.bfloat16,
+            (16, 16),
+            _shared_gather_dest_crs,
+            "single",
+        )
         kv_offset += cb32_total_size
 
         # CB 33: shared_mcast_src (total_size=512, page_size=512, face tile 16x16, bfloat16)
@@ -4294,6 +4498,17 @@ class MoeOp:
         )
         cb33_desc.format_descriptors = [cb33_fmt]
         shared_ctx.gated_reduce_params["cb_out_descriptor"] = cb33_desc
+        _record(
+            shared_ctx,
+            cb33_cb_id,
+            "kv",
+            kv_offset,
+            cb33_total_size,
+            ttnn.bfloat16,
+            (16, 16),
+            _shared_gather_dest_crs,
+            "single",
+        )
         kv_offset += cb33_total_size
 
         # CB 34: shared_down_mcast_dst (total_size=512, page_size=64, tile=1x32, bfloat16)
@@ -4313,6 +4528,17 @@ class MoeOp:
         )
         cb34_desc.format_descriptors = [cb34_fmt]
         shared_ctx.down_mcast_params["dst_cb_descriptor"] = cb34_desc
+        _record(
+            shared_ctx,
+            cb34_cb_id,
+            "kv",
+            kv_offset,
+            cb34_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _shared_matmul_crs,
+            "replicated",
+        )
         kv_offset += cb34_total_size
 
         # CB 36: shared_down_matmul_out (total_size=128, page_size=64, tile=1x32, bfloat16)
@@ -4332,6 +4558,17 @@ class MoeOp:
         )
         cb36_desc.format_descriptors = [cb36_fmt]
         shared_ctx.down_matmul_params["output_cb_descriptor"] = cb36_desc
+        _record(
+            shared_ctx,
+            cb36_cb_id,
+            "kv",
+            kv_offset,
+            cb36_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _shared_matmul_crs,
+            "sharded",
+        )
         kv_offset += cb36_total_size
 
         # CB 37: shared_residual_add_out (total_size=128, page_size=64, tile=1x32, bfloat16)
@@ -4352,6 +4589,17 @@ class MoeOp:
         )
         cb37_desc.format_descriptors = [cb37_fmt]
         shared_ctx.residual_add_params["cb_out_descriptor"] = cb37_desc
+        _record(
+            shared_ctx,
+            cb37_cb_id,
+            "kv",
+            kv_offset,
+            cb37_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _shared_gather_dest_crs,
+            "single",
+        )
         kv_offset += cb37_total_size
 
         # ── Aliased CBs (share offset with source) → sdpa_kv_cache_buffer ──
@@ -4373,6 +4621,20 @@ class MoeOp:
         )
         cb22_desc.format_descriptors = [cb22_fmt]
         routed_ctx.add_params["cb_in0_descriptor"] = cb22_desc
+        # Aliases cb19's bytes (down_proj_cb_out). The residual_add kernel reads
+        # it with a "32x32 tile" view for compute semantics, but the bytes were
+        # produced by down_proj's 1x32 pack_tile. Storage is flat 1x32 tiles.
+        _record(
+            routed_ctx,
+            cb22_cb_id,
+            "kv",
+            cb19_offset,
+            cb22_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _gate_proj_crs,
+            "sharded",
+        )
 
         # ── CBs → sdpa_out_interm_buffer ──
 
@@ -4393,6 +4655,9 @@ class MoeOp:
         )
         cb26_desc.format_descriptors = [cb26_fmt]
         routed_ctx.residual_mcast_params["dst_cb_descriptor"] = cb26_desc
+        _record(
+            routed_ctx, cb26_cb_id, "out", out_offset, cb26_total_size, ttnn.bfloat16, (1, 32), _mcast_crs, "replicated"
+        )
         out_offset += cb26_total_size
 
         # Sender-core-only region starts here (CB 30, 31, 38 are only on sender core).
@@ -4420,6 +4685,17 @@ class MoeOp:
         cb30_desc.format_descriptors = [cb30_fmt]
         shared_ctx.gated_reduce_params["cb_group1_descriptor"] = cb30_desc
         shared_ctx.ag_receiver_data_addr = out_addr + out_offset
+        _record(
+            shared_ctx,
+            cb30_cb_id,
+            "out",
+            out_offset,
+            cb30_total_size,
+            ttnn.bfloat16,
+            (16, 16),
+            _shared_gather_dest_crs,
+            "single",
+        )
         out_offset += cb30_total_size
 
         shared_ctx.bg_receiver_data_addr = shared_ctx.ag_receiver_data_addr + 4096
@@ -4443,6 +4719,17 @@ class MoeOp:
         cb38_desc.format_descriptors = [cb38_fmt]
         shared_ctx.output_gather_params["dst_cb_descriptor"] = cb38_desc
         shared_ctx.output_gather_params["receiver_data_addr"] = out_addr + cb38_offset
+        _record(
+            shared_ctx,
+            cb38_cb_id,
+            "out",
+            cb38_offset,
+            cb38_total_size,
+            ttnn.bfloat16,
+            (1, 32),
+            _shared_gather_dest_crs,
+            "single",
+        )
         out_offset += cb38_total_size
 
         # ── Reduce: CB 24 (add_cb_out / reduce_local_cb) → sdpa_out_interm_buffer ──
@@ -4465,6 +4752,21 @@ class MoeOp:
             )
             cb24_desc.format_descriptors = [cb24_fmt]
             routed_ctx.add_params["cb_out_descriptor"] = cb24_desc
+            # Descriptor says "1 tile of 32x32 bf16" (total 2048 B), but the
+            # residual_add kernel pack_tiles at 1x32 granularity like every other
+            # M=1 op in this pipeline. Storage is 32 × (1x32) flat. SUSPECT —
+            # re-verify once we have a readback probe on this CB.
+            _record(
+                routed_ctx,
+                cb24_cb_id,
+                "out",
+                out_offset,
+                cb24_total_size,
+                ttnn.bfloat16,
+                (1, 32),
+                _gate_proj_crs,
+                "sharded",
+            )
             out_offset += cb24_total_size
 
         # ── Reduce scratch CBs (43-45) → reuse sender-core-only offsets ──
@@ -5685,6 +5987,10 @@ class MoeOp:
         # Build descriptors
         # ==================================================================
         moe._build_descriptors()
+
+        # Expose the instance so tests can reach ctx.routed_ctx.cb_overlays /
+        # ctx.shared_ctx.cb_overlays for per-tap validation after the op runs.
+        MoeOp._last_instance = moe
 
         # ==================================================================
         # Create per-device programs (mesh loop)
