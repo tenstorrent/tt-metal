@@ -3,6 +3,12 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+#   allocation: (Optional) Configuration for TTOP allocation
+#     type: "Count" or "MGD"
+#     count: Number of nodes (for Count type)
+#     match_labels: Dictionary of Kubernetes labels
+#     topology_keys: List of topology keys (for MGD type)
+#   mgd: (Optional) MGD configuration text for runtime topology
 skus:
   wh_llmbox:
     runs_on:
@@ -207,6 +213,12 @@ skus:
   bh_sp1:
     runs_on:
       - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      match_labels:
+        exabox.tenstorrent.com/purpose: ci-metal
+      topology_keys:
+        - exabox.tenstorrent.com/quad
     mgd: |
       mesh_descriptors {
         name: \"M0\"
@@ -216,3 +228,14 @@ skus:
         channels { count: 2 policy: RELAXED }
       }
       top_level_instance { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }
+
+  bh_sp4:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: Count
+      count: 16
+      match_labels:
+        exabox.tenstorrent.com/purpose: ci-metal
+        exabox.tenstorrent.com/superpod: sp4_works
+        exabox.tenstorrent.com/SP5: C110
