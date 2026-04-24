@@ -730,12 +730,46 @@ on UNPACK thread, wrapped in `UNPACK(...)` macro. Reading only 8 words fails;
 | 32768  |   256    | 0.9995 |
 | 131072 |  1024    | 0.9983 |
 
-**2. Paged cache support for indices + norms**
-- Current `TTNNTurboQuantCache` uses `[1, max_seq, n_heads, head_dim]` interleaved
-- Refactor to paged: `[max_num_blocks, n_heads, block_size, head_dim]` for indices
-- Norms are tiny (per-vector, not per-element) — could stay non-paged or be paged
-- Update reader kernel to take page_table and do paged reads
-- Effort: 1-2 days
+**2. Paged cache support for indices + norms** — **IN PROGRESS (2026-04-24)**
+
+Current state (from post-Step-1 inspection):
+- `TTNNTurboQuantCache` allocates `k/v_indices_dev` as `[B, NKH, max_seq_padded, DH]`
+  BFP4, and `k/v_norms_dev` as `[B, NKH, max_seq_padded, 1]` BF16 — **contiguous, NOT paged**
+- Model's standard `layer_past` is paged `[max_num_blocks, NKH, block_size=32, DH]`
+  with a separate page_table
+- TQ cache + standard paged cache both allocated — not unified
+- `fused_sdpa_decode()` passes a dummy page_table (unused by current reader)
+- `sdpa_tq_device_operation` has `page_table` field in tensor_args but reader
+  kernel ignores it
+
+Sub-phases:
+
+**2A.** Refactor `TTNNTurboQuantCache` to paged layout:
+   - Indices: `[max_num_blocks, NKH, block_size, DH]` BFP4
+   - Norms: `[max_num_blocks, NKH, block_size, 1]` BF16
+   - Accept `paged_attention_config` + `page_table` in `__init__` / `update_cache`
+   - Reuse existing `ttnn.experimental.paged_update_cache` with `page_table=` arg
+     (already supported — just need paged tensor shapes)
+
+**2B.** Thread page_table through `fused_sdpa_decode()`:
+   - Accept real page_table argument (no more dummy)
+   - Pass to TQ SDPA op via tensor_args
+
+**2C.** Update reader kernel (`reader_tq_decode.cpp`) for paged reads:
+   - Mirror `reader_decode_all.cpp` pattern: read page_table,
+     use `virtual_seq_tile_id_to_physical_tile_id` to translate chunk start → physical tile
+   - Keep index-vs-value CB routing logic for pre_rescaled mode
+
+**2D.** Update program factory (`sdpa_tq_program_factory.cpp`):
+   - Pass page_table buffer address to reader runtime args
+   - Add compile args (is_page_table_sharded, block_size_t)
+   - Increase kernel CT args count
+
+**2E.** Update `eval_e2e.py` to use unified paging:
+   - Pass shared page_table to both standard layer_past and TQ cache
+   - Remove separate TQ cache allocation (or make it use same page_table)
+
+Effort: 1-2 days
 
 **3. Multi-device / T3K support**
 - Replicate centroids across devices, shard indices/norms by heads
