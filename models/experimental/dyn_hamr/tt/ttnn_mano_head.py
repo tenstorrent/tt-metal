@@ -129,7 +129,7 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     for blk in td.layers:
         params["layers"].append({
             "norm_sa": {"weight": _t(blk.norm_sa.weight, device), "bias": _t(blk.norm_sa.bias, device)},
-            "sa_v_w": _t(blk.sa.to_qkv.weight.t()[:, 2 * INNER_DIM:], device),  # (1024, 512) — V-only
+            "sa_qkv_w": _t(blk.sa.to_qkv.weight.t(), device),        # (1024, 3*512)
             "sa_out_w": _t(blk.sa.to_out.weight.t(), device),        # (512, 1024)
             "sa_out_b": _t_bias(blk.sa.to_out.bias, device),
             "norm_ca": {"weight": _t(blk.norm_ca.weight, device), "bias": _t(blk.norm_ca.bias, device)},
@@ -173,15 +173,18 @@ def _decoder_block(x, context, p: Dict[str, Any]):
     ckcfg = _fused_compute_config(dev)
     _L1 = ttnn.L1_MEMORY_CONFIG
 
-    # SA: N=1 → attention output == V (all tokens attend only to themselves).
-    # Compute only the V projection and skip split/concat entirely.
+    # SA: N=1, so attn output == V; skip SDPA entirely.
     h = ttnn.layer_norm(x, weight=p["norm_sa"]["weight"], bias=p["norm_sa"]["bias"], memory_config=_L1)
-    v = ttnn.experimental.minimal_matmul(
-        h, p["sa_v_w"],
-        config=_mm_cfg(1, 1024, INNER_DIM, dev),
+    qkv = ttnn.experimental.minimal_matmul(
+        h, p["sa_qkv_w"],
+        config=_mm_cfg(1, 1024, 1536, dev),
         compute_kernel_config=ckcfg,
         memory_config=_L1,
     )
+    _, _, v = ttnn.transformer.split_query_key_value_and_split_heads(
+        qkv, num_heads=NUM_HEADS, transpose_key=False, memory_config=_L1,
+    )
+    v = ttnn.transformer.concatenate_heads(v, memory_config=_L1)
     sa = ttnn.experimental.minimal_matmul(
         v, p["sa_out_w"],
         bias_tensor=p["sa_out_b"],
