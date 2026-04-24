@@ -335,7 +335,6 @@ void kernel_main() {
     dispatch_s_atomic_cmd_buf_init();
 
     constexpr uint8_t kDispatchDProc = 0; // brisc
-    uint32_t dispatch_d_shutdown_sem_start = 0;
     if constexpr (!distributed_dispatcher) {
         volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
@@ -343,7 +342,6 @@ void kernel_main() {
 
         DPRINT << "DBG18881 dispatch_s: snapshot at start"
                << " my_noc_index=" << (uint32_t)my_noc_index
-               << " shutdown_sem_start=" << dispatch_d_shutdown_sem_start
                << " reads=" << noc_reads_num_issued[my_noc_index]
                << " nonposted_writes=" << noc_nonposted_writes_num_issued[my_noc_index]
                << " nonposted_writes_acked=" << noc_nonposted_writes_acked[my_noc_index]
@@ -410,7 +408,7 @@ void kernel_main() {
         }
         volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
-        noc_semaphore_wait_min(shutdown_sem_addr, dispatch_d_shutdown_sem_start + 1);
+        noc_semaphore_wait_min(shutdown_sem_addr, 1);
         DPRINT << "DBG18881 dispatch_s: received shutdown semaphore signal, sem_val="
                << *shutdown_sem_addr << ENDL();
         invalidate_l1_cache();

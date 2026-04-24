@@ -1432,7 +1432,7 @@ void kernel_main() {
     uint32_t dispatch_d_nonposted_writes_acked_start = 0;
     uint32_t dispatch_d_nonposted_atomics_acked_start = 0;
     uint32_t dispatch_d_posted_writes_num_issued_start = 0;
-    if constexpr (is_d_variant && !distributed_dispatcher) {
+    if constexpr (!distributed_dispatcher) {
         dispatch_d_reads_num_issued_start = noc_reads_num_issued[upstream_noc_index];
         dispatch_d_nonposted_writes_num_issued_start = noc_nonposted_writes_num_issued[upstream_noc_index];
         dispatch_d_nonposted_writes_acked_start = noc_nonposted_writes_acked[upstream_noc_index];
@@ -1545,7 +1545,7 @@ void kernel_main() {
     // Issue #18881: dispatch_d and dispatch_s share this core, so dispatch_s cannot see the NOC 1
     // transactions dispatch_d issued. Publish dispatch_d's NOC 1 deltas into dispatch_d's normal
     // counter slots, then signal dispatch_s that the handoff payload is ready.
-    if constexpr (is_d_variant && !distributed_dispatcher) {
+    if constexpr (!distributed_dispatcher) {
         const uint32_t reads_delta = noc_reads_num_issued[upstream_noc_index] - dispatch_d_reads_num_issued_start;
         const uint32_t nonposted_writes_delta =
             noc_nonposted_writes_num_issued[upstream_noc_index] - dispatch_d_nonposted_writes_num_issued_start;
