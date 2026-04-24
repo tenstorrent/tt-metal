@@ -1250,13 +1250,8 @@ ALWI void matmul_blocks(
         in1_cb,
         out_cb,
         in0_cb,
-        in0_block_w,
-        in0_num_subblocks,
-        in1_num_subblocks,
-        num_blocks,
-        subblock_h,
-        subblock_w,
-        1,
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, subblock_h, subblock_w, in0_block_w, num_blocks, /*batch=*/1),
         OptionalMaskPostCompute{
             mask_cb, zero_cb, in0_cb, in1_cb, subblock_h, subblock_w, in0_block_w, transpose, add_mask},
         compute_kernel_lib::NoPreKBlock{},

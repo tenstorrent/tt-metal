@@ -42,12 +42,13 @@ void kernel_main() {
             cb_in1,
             cb_out,
             cb_intermed0,
-            in0_block_w,
-            in0_num_subblocks,
-            in1_num_subblocks,
-            num_k_blocks,
-            out_subblock_h,
-            out_subblock_w,
-            1);
+            compute_kernel_lib::MatmulBlockShape::of(
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_h,
+                out_subblock_w,
+                in0_block_w,
+                num_k_blocks,
+                /*batch=*/1));
     }
 }

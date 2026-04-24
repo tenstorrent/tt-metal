@@ -28,6 +28,42 @@ namespace compute_kernel_lib {
  */
 enum class OutputLayout { SubblockMajor, RowMajor };
 
+/**
+ * Block-shape specification for matmul_block.
+ *
+ * Groups the dimensional params — subblock counts, subblock size, K-blocking,
+ * batch — into one struct so callers pass intent instead of seven positional
+ * integers. Optional strides (in1_per_core_w / out_row_width) stay on the
+ * function signature because they're advanced layout overrides only a few
+ * factories need.
+ *
+ * Usage:
+ *   matmul_block<...>(
+ *       in0_cb, in1_cb, out_cb, interm_cb,
+ *       MatmulBlockShape::of(in0_sb, in1_sb, h, w, in0_block_w, num_k_blocks),
+ *       ...);
+ */
+struct MatmulBlockShape {
+    uint32_t in0_num_subblocks;  // Output subblock count along M.
+    uint32_t in1_num_subblocks;  // Output subblock count along N.
+    uint32_t out_subblock_h;     // Output subblock height in tiles.
+    uint32_t out_subblock_w;     // Output subblock width in tiles.
+    uint32_t in0_block_w;        // K per K-block in tiles (= A's "per_core_K_block").
+    uint32_t num_k_blocks;       // Number of K-blocks along the K dimension.
+    uint32_t batch = 1;          // Independent batch slices.
+
+    static constexpr MatmulBlockShape of(
+        uint32_t in0_num_subblocks,
+        uint32_t in1_num_subblocks,
+        uint32_t out_subblock_h,
+        uint32_t out_subblock_w,
+        uint32_t in0_block_w,
+        uint32_t num_k_blocks,
+        uint32_t batch = 1) {
+        return {in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch};
+    }
+};
+
 // Default no-op post-compute functor.
 // Called per output sub-block on the last K-block, before packing.
 // Receives out_subblock_num_tiles. Tiles are in DST[0..num_tiles-1].
@@ -92,13 +128,8 @@ struct NoPreKBlock {
  *   out_cb             Output CB for the final result.
  *   interm_cb          Intermediate CB for K-blocking spill/reload or L1-ACC FIFO.
  *                      When num_k_blocks == 1 it is never read; pass any non-output CB.
- *   block_w            Inner block dimension in tiles (K-dimension block size).
- *   in0_num_subblocks  Number of sub-blocks along the M dimension.
- *   in1_num_subblocks  Number of sub-blocks along the N dimension.
- *   num_k_blocks       Number of blocks along the K dimension.
- *   out_subblock_h     Output sub-block height in tiles.
- *   out_subblock_w     Output sub-block width in tiles.
- *   batch              Number of independent batch slices (default: 1).
+ *   shape              MatmulBlockShape (see above) — subblock counts, subblock size,
+ *                      K-blocking, batch. Build with MatmulBlockShape::of(...).
  *   post_compute       PostComputeFn instance (default: {}).
  *   pre_k_block        PreKBlockFn instance (default: {}).
  *   retain_in0         When true, skip popping in0 on the last K-block so the caller
@@ -129,13 +160,7 @@ ALWI void matmul_block(
     uint32_t in1_cb,
     uint32_t out_cb,
     uint32_t interm_cb,
-    uint32_t block_w,
-    uint32_t in0_num_subblocks,
-    uint32_t in1_num_subblocks,
-    uint32_t num_k_blocks,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t batch = 1,
+    MatmulBlockShape shape,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
     bool retain_in0 = false,

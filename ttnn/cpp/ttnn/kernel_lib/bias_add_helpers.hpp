@@ -25,6 +25,33 @@ namespace compute_kernel_lib {
  */
 enum class BiasBroadcast { RowBroadcast, Elementwise };
 
+/**
+ * Subblock-grid and row-stride specification for add_bias_bcast_rows.
+ *
+ * Groups the 4 subblock dims + the row-major row stride into one struct that
+ * callers build with BiasAddShape::of(...). Mirrors MatmulBlockShape so the
+ * surrounding call site reads consistently when the bias phase follows matmul.
+ *
+ * out_row_width is only consulted when output_layout == OutputLayout::RowMajor;
+ * when 0 (default) the helper derives it from out_subblock_w * in1_num_subblocks.
+ */
+struct BiasAddShape {
+    uint32_t in0_num_subblocks;
+    uint32_t in1_num_subblocks;
+    uint32_t out_subblock_h;
+    uint32_t out_subblock_w;
+    uint32_t out_row_width = 0;
+
+    static constexpr BiasAddShape of(
+        uint32_t in0_num_subblocks,
+        uint32_t in1_num_subblocks,
+        uint32_t out_subblock_h,
+        uint32_t out_subblock_w,
+        uint32_t out_row_width = 0) {
+        return {in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, out_row_width};
+    }
+};
+
 namespace bias_add_config {
 
 // Default no-op post-bias functor.
@@ -83,14 +110,9 @@ struct NoPostBias {
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
- *   in0_num_subblocks  Number of sub-blocks along M dimension.
- *   in1_num_subblocks  Number of sub-blocks along N dimension.
- *   out_subblock_h     Output sub-block height in tiles.
- *   out_subblock_w     Output sub-block width in tiles.
- *   post_bias          PostBiasFn instance (default: {}).
- *   out_row_width      N-tiles per row of the row-major CB layout. Ignored when
- *                      output_layout == SubblockMajor. Default 0 derives from
- *                      out_subblock_w * in1_num_subblocks.
+ *   shape      BiasAddShape — subblock counts, subblock size, row stride.
+ *              Build with BiasAddShape::of(...).
+ *   post_bias  PostBiasFn instance (default: {}).
  */
 template <
     uint32_t partials_cb,
@@ -99,13 +121,7 @@ template <
     BiasBroadcast broadcast = BiasBroadcast::RowBroadcast,
     OutputLayout output_layout = OutputLayout::SubblockMajor,
     typename PostBiasFn = bias_add_config::NoPostBias>
-ALWI void add_bias_bcast_rows(
-    uint32_t in0_num_subblocks,
-    uint32_t in1_num_subblocks,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    PostBiasFn post_bias = {},
-    uint32_t out_row_width = 0);
+ALWI void add_bias_bcast_rows(BiasAddShape shape, PostBiasFn post_bias = {});
 
 }  // namespace compute_kernel_lib
 
