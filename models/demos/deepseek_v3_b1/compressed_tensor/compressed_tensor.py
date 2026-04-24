@@ -511,6 +511,19 @@ class CompressedTensor:
         data_np = self._to_2d(tensor)
         shard_mapping = compute_shard_page_mapping(tensor.shape, memory_config, self.tile_hw)
 
+        # Per-device geometry. On single device the full tensor IS the per-device slice,
+        # so mirror _pack_multi_device's tile-count math (line 737-745) rather than leaving
+        # _per_device_tiles_{h,w} at the __init__ default of 0 — downstream consumers
+        # (e.g. MoeOp.setup_matmul_expert_dram → create_dram_expert_tensors_multi_device)
+        # divide by these and crash with "shard shape volume=0" when unset.
+        per_device_shape = tuple(tensor.shape)
+        per_device_2d_h = 1
+        for d in per_device_shape[:-1]:
+            per_device_2d_h *= d
+        self._per_device_tiles_h = per_device_2d_h // self.tile_hw
+        self._per_device_tiles_w = per_device_shape[-1] // self.tile_hw
+        self._per_device_shape = per_device_shape
+
         self._per_device_shard_mapping[coord0] = shard_mapping
         self._per_device_core_assignment[coord0] = self._build_core_assignment_from(
             shard_mapping, self._assignment_flat

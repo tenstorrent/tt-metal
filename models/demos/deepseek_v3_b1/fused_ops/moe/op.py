@@ -23,6 +23,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from loguru import logger
+
 import ttnn
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
@@ -528,6 +530,12 @@ class MoeRoutedExpertOp:
         Kt = ct0._per_device_tiles_h
         num_banks = mesh_device.dram_grid_size().x
         per_core_n = ct0._per_device_tiles_w // (num_banks * cores_per_dram_bank)
+        logger.info(
+            f"DIAG setup_matmul_expert_dram: mesh_shape={mesh_device.shape} num_devices={mesh_device.get_num_devices()} "
+            f"num_banks={num_banks} cores_per_dram_bank={cores_per_dram_bank} "
+            f"Kt={Kt} ct_tiles_w={ct0._per_device_tiles_w} per_core_n={per_core_n} "
+            f"num_subblocks_k={num_subblocks_k} subblock_k={Kt // num_subblocks_k if num_subblocks_k else 0}"
+        )
         assert (
             ct0._per_device_tiles_w % (num_banks * cores_per_dram_bank) == 0
         ), f"per_device_tiles_w ({ct0._per_device_tiles_w}) must divide num_banks*cores_per_bank ({num_banks * cores_per_dram_bank})"
@@ -583,6 +591,16 @@ class MoeRoutedExpertOp:
         # Per-device compute cores list (same list across devices; from first device's per_core_values).
         first_coord_for_cores = next(iter(per_core_values_per_device))
         compute_cores_list = [c for (c, _) in per_core_values_per_device[first_coord_for_cores]["bank_id"]]
+
+        # Diagnostic: compare pinned list (used by MoE for gate_proj_core_ranges + bank_id/vc)
+        # against canonical helper list (used for meta/fmt tensor placement). If these
+        # diverge, per-core CT descriptors land on different cores than the L1 meta tables.
+        pinned_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
+        logger.info(
+            f"DRAM_CORES pinned={[(c.x, c.y) for c in pinned_cores]} "
+            f"canonical={[(c.x, c.y) for c in compute_cores_list]} "
+            f"match={[(c.x, c.y) for c in pinned_cores] == [(c.x, c.y) for c in compute_cores_list]}"
+        )
 
         # Fmt DRAM sizing: recompute here (matches helper's internals).
         # Phase 1C: k_parallel_per_bank=1, subblock_n=1 (matches setup), so

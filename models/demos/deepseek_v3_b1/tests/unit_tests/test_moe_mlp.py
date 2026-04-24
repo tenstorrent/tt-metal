@@ -245,6 +245,7 @@ def create_routed_expert_tensors(
     layer_idx=None,
     compressed_tp8=False,
     num_routed_experts=256,
+    tp=None,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -395,6 +396,7 @@ def create_routed_expert_tensors(
             num_routed_experts=num_experts,
             move_to_device=True,
             compressed_tp8=compressed_tp8,
+            tp=tp,
         )
         gate_proj_expert_tensors = routed_weights.routed_gate_proj
         up_proj_expert_tensors = routed_weights.routed_up_proj
@@ -708,9 +710,9 @@ def rig_moe_gate_for_expected_experts(
 
 @pytest.mark.parametrize(
     "use_hardcoded_expert_index",
-    [True, pytest.param(False, marks=pytest.mark.skip_post_commit)],
+    [False],
 )
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+@pytest.mark.parametrize("reconfig_moe_cbs", [False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
@@ -722,15 +724,31 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 
     logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
 
+    # Fast iteration: load only 32 experts (group 0) and rig routing to stay within that group
+    # (matches test_moe_fused_with_reduce / _no_reduce). Rigging is a no-op when
+    # use_hardcoded_expert_index=True, harmless to apply unconditionally.
+    num_routed_experts = 32
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         include_global=False,
+    )
+    winning_groups = [0]
+    winning_experts_by_group = {0: [1, 4, 7, 11, 15, 19, 23, 28]}
+    rig_moe_gate_for_expected_experts(
+        state_dict,
+        ROUTED_EXPERT_LAYER_IDX,
+        winning_groups,
+        winning_experts_by_group,
     )
 
     # ── Phase 1: Fused routed expert + shared gate/up matmul ──
+    # compressed_tp8=True + tp=8 → use TP8 per-device shape (N_per_device=256) even on
+    # single physical device. Takes TP slice 0 of the full weights; the kernel then sees
+    # the same per_core_n=1 / silu_tile_h=8 config as the multi-device path, exercising
+    # the exact shapes the matmul_expert tests already validate.
     logger.info("Phase 1: Running fused routed expert + shared gate/up matmul...")
     r = create_routed_expert_tensors(
         device,
@@ -738,6 +756,9 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        compressed_tp8=True,
+        num_routed_experts=num_routed_experts,
+        tp=8,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])

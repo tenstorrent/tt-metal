@@ -118,6 +118,9 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t num_tiles_k = num_tiles_k_;
         static constexpr uint32_t subblock_k = subblock_k_;
         static constexpr uint32_t subblock_n = subblock_n_;
+        // LLK `compressed_custom_mm_block`'s ct_dim is clamped to 1..16; exceeding
+        // it silently corrupts dst (see compute_kernel_api/compressed_custom_mm.h).
+        static_assert(subblock_n >= 1 && subblock_n <= 16, "subblock_n must be in [1, 16] (LLK ct_dim limit)");
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t bank_id = bank_id_;
@@ -198,6 +201,9 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t num_tiles_k = num_tiles_k_;
         static constexpr uint32_t subblock_k = subblock_k_;
         static constexpr uint32_t subblock_n = subblock_n_;
+        // LLK `compressed_custom_mm_block`'s ct_dim is clamped to 1..16; exceeding
+        // it silently corrupts dst (see compute_kernel_api/compressed_custom_mm.h).
+        static_assert(subblock_n >= 1 && subblock_n <= 16, "subblock_n must be in [1, 16] (LLK ct_dim limit)");
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t per_core_n = per_core_n_;
         static constexpr uint32_t fmt_l1_addr = fmt_l1_addr_;

@@ -916,13 +916,20 @@ def create_dram_expert_tensors_multi_device(
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
                           l1_addrs, per_core_values, num_in1_buffers)}
     """
+    from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     mesh_shape = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    # Use the pinned (harvest-agnostic) DRAM→worker assignment so meta/fmt tensor
+    # placement matches callers that rig their compute-core mask + per-core descriptors
+    # on the pinned list (e.g. fused MoE). The device's dynamic optimal assignment
+    # can return different cores under harvesting, leaving compute cores with
+    # expert_offsets_l1_addr=0 and hanging the kernel.
+    primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):

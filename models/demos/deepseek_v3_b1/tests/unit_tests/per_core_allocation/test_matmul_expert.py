@@ -669,7 +669,11 @@ def _setup_core_grids(mesh_device, cores_per_dram_bank, num_sram_cores, sram_cor
 
     DRAM cores are always included. SRAM cores are included only when has_sram is True.
     """
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+
+    # Match create_dram_expert_tensors_multi_device — both must agree on the 8
+    # primary cores so meta/fmt tensors land on the same cores this grid targets.
+    primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
     dram_cores_list = []
     for pc in primary_cores_list:
         for offset in range(cores_per_dram_bank):
@@ -858,6 +862,15 @@ def _compute_dram_matmul_params(
         dram_per_core_N % num_subblocks_n == 0
     ), f"dram_per_core_N ({dram_per_core_N}) must be divisible by num_subblocks_n ({num_subblocks_n})"
     subblock_n = dram_per_core_N // num_subblocks_n
+    # LLK `compressed_custom_mm_block`'s ct_dim is clamped to 1..16 (see
+    # kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h).
+    # Exceeding it silently corrupts dst (manifests as low PCC, e.g. 0.44).
+    assert subblock_n <= 16, (
+        f"subblock_n ({subblock_n}) exceeds LLK ct_dim limit of 16. "
+        f"dram_per_core_N={dram_per_core_N}, num_subblocks_n={num_subblocks_n}. "
+        f"Increase num_subblocks_n (e.g. to dram_per_core_N for subblock_n=1) or "
+        f"raise n_parallel_per_bank to shrink dram_per_core_N."
+    )
 
     assert (
         num_subblocks_k % k_parallel_per_bank == 0
@@ -2251,6 +2264,107 @@ def test_hybrid_expert_irregular_sram_down_grid_multi_device(bh_2d_mesh_device):
         k_parallel_per_bank=1,
         fmt_distribution="uniform",
         num_loop_iters=100,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fused-MoE config tests — DRAM-only, uniform bfp4, matches `fused_ops/moe/op.py::setup_matmul_expert_dram`
+# cores_per_bank=1 (each of 8 DRAM streamer cores owns a full bank), 4x2 mesh.
+# Used to isolate matmul_expert behavior from the fused MoE kernel when
+# `test_moe_fused_with_reduce` hangs or regresses.
+# ---------------------------------------------------------------------------
+
+_MOE_ACTIVE_EXPERT_IDS = [1, 4, 7, 11, 15, 19, 23, 28]
+_MOE_UNIFORM_BFP4_FORMATS = [["bfp4"]] * 8
+
+
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_moe_gate_proj(device):
+    """Matches MoE gate_proj: 256 experts, topk=8, K=7168, N_per_device=256, DRAM-only, fuse_silu=True.
+
+    Mirrors `fused_ops/moe/op.py::setup_matmul_expert_dram` call for gate_proj
+    (num_subblocks_k=8, num_active_experts=8, cores_per_bank=1, fuse_silu).
+    """
+
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=32,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(32)),
+        active_expert_ids=_MOE_ACTIVE_EXPERT_IDS,
+        formats_per_device=[["bfp4"]],
+        dram_fuse_silu=True,
+        num_subblocks_k=8,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
+        num_loop_iters=1,
+    )
+
+
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_moe_up_proj(bh_2d_mesh_device):
+    """Matches MoE up_proj: 256 experts, topk=8, K=7168, N_per_device=256, DRAM-only, no fuse_silu.
+
+    Mirrors `fused_ops/moe/op.py::setup_matmul_expert_dram` call for up_proj
+    (num_subblocks_k=8, num_active_experts=8, cores_per_bank=1, accum=False).
+    """
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    _run_hybrid_expert_multi_device(
+        mesh,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=32,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(32)),
+        active_expert_ids=_MOE_ACTIVE_EXPERT_IDS,
+        formats_per_device=_MOE_UNIFORM_BFP4_FORMATS,
+        num_subblocks_k=8,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
+        num_loop_iters=1,
+    )
+
+
+@pytest.mark.requires_grid_size((12, 10))
+def test_matmul_expert_moe_down_proj(bh_2d_mesh_device):
+    """Matches MoE down_proj: 256 experts, topk=8, K_per_device=256, N=7168, DRAM-only, accum_experts=True.
+
+    Mirrors `fused_ops/moe/op.py::setup_matmul_expert_dram` call for down_proj
+    (num_subblocks_k=2, num_active_experts=8, cores_per_bank=1, accum=True). DRAM
+    accum path must reconfigure L1_ACC per-expert to accumulate all 8 topk experts.
+    """
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
+        pytest.skip("Test requires at least 8 devices (4x2 mesh)")
+    mesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(4, 2))
+    # num_subblocks_n omitted → defaults to dram_per_core_N=28, giving subblock_n=1
+    # exactly as `fused_ops/moe/op.py:590` hardcodes. num_subblocks_k=2 matches
+    # `fused_ops/moe/op.py:1499`.
+    _run_hybrid_expert_multi_device(
+        mesh,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=32,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(32)),
+        active_expert_ids=_MOE_ACTIVE_EXPERT_IDS,
+        formats_per_device=_MOE_UNIFORM_BFP4_FORMATS,
+        accum_experts=True,
+        num_subblocks_k=2,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
+        num_loop_iters=1,
     )
 
 

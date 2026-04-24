@@ -1209,6 +1209,7 @@ def prepare_moe_routed_experts_compressed_tp8(
     mesh_shape: tuple[int, int],
     *,
     move_to_device: bool,
+    tp: int | None = None,
 ) -> MoERoutedExpertWeights:
     """Upload MoE routed experts as uniform-bfp4_b CompressedTensor objects, TP8-sharded.
 
@@ -1228,7 +1229,9 @@ def prepare_moe_routed_experts_compressed_tp8(
     ]
 
     mesh_rows, mesh_cols = mesh_shape
-    tp = mesh_rows * mesh_cols
+    if tp is None:
+        tp = mesh_rows * mesh_cols
+    assert tp >= mesh_rows * mesh_cols, f"tp ({tp}) must be >= mesh_devices ({mesh_rows * mesh_cols})"
 
     dram_grid = ttnn.CoreRangeSet(
         {
@@ -1258,7 +1261,7 @@ def prepare_moe_routed_experts_compressed_tp8(
         keys = [_key(layer_idx, f"mlp.experts.{e}.{proj_name}.weight") for e in range(num_routed_experts)]
         for e, key in enumerate(keys):
             w = state_dict[key].T.contiguous()
-            stacked = moe_routed_expert_tp8_torch_for_cache(w, num_banks, mesh_shape, shard_dim=shard_dim)
+            stacked = moe_routed_expert_tp8_torch_for_cache(w, num_banks, mesh_shape, shard_dim=shard_dim, tp=tp)
             ct = CompressedTensor.from_torch(
                 stacked.float(),
                 assigner,
@@ -1290,6 +1293,7 @@ def prepare_routed_expert_weights(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    tp: int | None = None,
     bspm_dir: Path | None = None,
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
@@ -1350,6 +1354,7 @@ def prepare_routed_expert_weights(
                 num_banks=num_banks,
                 mesh_shape=mesh_shape,
                 move_to_device=move_to_device,
+                tp=tp,
             )
 
         # --- Uniform bfloat4_b path (TensorCache-backed) ---
