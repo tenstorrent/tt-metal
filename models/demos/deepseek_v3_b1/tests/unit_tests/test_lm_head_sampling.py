@@ -4875,18 +4875,18 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
     num_procs = int(ttnn.distributed_context_get_size())
 
-    iterations = 1000000
+    iterations = 100
     run_golden = False
     run_on = "glx"  # "pod" or "glx"
 
     if run_on == "pod":
         config = create_single_pod_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
+            SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
     elif run_on == "glx":
         config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
+            SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
     else:

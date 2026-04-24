@@ -280,7 +280,7 @@ class DeepSeekV3LMHeadWeights:
     """Weights for the LM head and final RMSNorm."""
 
     lm_head: ttnn.Tensor
-    final_norm: ttnn.Tensor  # model.norm.weight, (1, 7168)
+    final_norm: ttnn.Tensor | None  # model.norm.weight, (1, 7168); None when folded into lm_head
 
 
 @dataclass
@@ -289,18 +289,28 @@ class DeepSeekV3MTPWeights:
 
     HF state dict keys live under ``model.layers.{mtp_layer_idx}.*`` (layer 61 for DeepSeek V3).
     The MTP decoder block (layer 61) is a regular MoE layer loaded separately.
+
+    When ``fold_rmsnorm_weights`` was used, ``h_gamma`` and ``e_gamma`` are None
+    (folded into ``eh_projection``).
     """
 
-    h_gamma: ttnn.Tensor  # model.layers.61.hnorm.weight
-    e_gamma: ttnn.Tensor  # model.layers.61.enorm.weight
+    h_gamma: ttnn.Tensor | None  # model.layers.61.hnorm.weight; None when folded into eh_projection
+    e_gamma: ttnn.Tensor | None  # model.layers.61.enorm.weight; None when folded into eh_projection
     eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
 
 
 @dataclass
 class DeepSeekV3SpecWeights:
-    """Weights used only by the speculative verify LM-head stage."""
+    """Weights used only by the speculative verify LM-head stage.
 
-    shared_head_norm: ttnn.Tensor  # model.layers.61.shared_head.norm.weight
+    Always contains the LM head projection (``lm_head``).  When
+    ``fold_rmsnorm_weights`` was used, ``shared_head_norm`` is folded into
+    ``lm_head`` and set to None.  Otherwise ``shared_head_norm`` is the
+    separate gamma tensor applied at runtime.
+    """
+
+    shared_head_norm: ttnn.Tensor | None  # model.layers.61.shared_head.norm.weight; None when folded
+    lm_head: ttnn.Tensor  # LM head projection (with shared_head_norm folded in when applicable)
 
 
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
@@ -367,18 +377,27 @@ _EMBEDDING_TARGET = TensorTarget(
     transform_version=1,
 )
 
-_LM_HEAD_TARGET = TensorTarget(
-    name="lm_head",
-    dtype=ttnn.bfloat8_b,
-    layout=ttnn.TILE_LAYOUT,
-    memory_config=ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(_LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
-    ),
-    mesh_mapper_config=ShardMeshMapper(dim=1),
-    transform_version=1,
-)
+
+def _lm_head_target(name: str) -> TensorTarget:
+    return TensorTarget(
+        name=name,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                _LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR
+            ),
+        ),
+        mesh_mapper_config=ShardMeshMapper(dim=1),
+        transform_version=1,
+    )
+
+
+_LM_HEAD_TARGET = _lm_head_target("lm_head")
+_LM_HEAD_FOLDED_NORM_TARGET = _lm_head_target("lm_head_folded_norm")
+_LM_HEAD_FOLDED_SPEC_NORM_TARGET = _lm_head_target("lm_head_folded_shared_head_norm")
 
 _FINAL_NORM_TARGET = TensorTarget(
     name="final_norm",
@@ -401,14 +420,14 @@ def _mtp_norm_target(name: str) -> TensorTarget:
     )
 
 
-def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
+def _mtp_eh_proj_target(K: int, N: int, fold_rmsnorm_weights: bool = False) -> TensorTarget:
     k_per_device = K // 8
     n_per_bank = N // _MTP_NUM_DRAM_BANKS
     eh_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0))}
     )
     return TensorTarget(
-        name="mtp_eh_projection",
+        name="mtp_eh_projection" + ("_folded_eh_gamma" if fold_rmsnorm_weights else ""),
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
@@ -1553,17 +1572,25 @@ def prepare_lm_head_weights(
     *,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    fold_rmsnorm_weights: bool = False,
 ) -> DeepSeekV3LMHeadWeights:
     """Prepare LM head and final norm weights from state dict.
 
     device must be the mesh device (e.g. 4x2 submesh). The LM head weight matrix is sharded
     along the vocabulary dimension (TP = mesh size). Per-device layout matches the LM head
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
+
+    When ``fold_rmsnorm_weights`` is True the final RMSNorm gamma is pre-multiplied into the
+    LM head weight matrix (``W_folded = W * gamma``), eliminating the runtime gamma multiply.
+    In this case ``final_norm`` on the returned struct is None.
     """
     if cache_config is None:
         cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
-    logger.info("Preparing LM head weights...")
+    logger.info("Preparing LM head weights (fold_rmsnorm={})...", fold_rmsnorm_weights)
     _lm_key = "lm_head.weight"
+    _norm_key = "model.norm.weight"
+    lm_target = _LM_HEAD_FOLDED_NORM_TARGET if fold_rmsnorm_weights else _LM_HEAD_TARGET
+    src_names = (_lm_key, _norm_key) if fold_rmsnorm_weights else (_lm_key,)
 
     def _preprocess_lm_head(t):
         lm_w = t[_lm_key]
@@ -1571,36 +1598,40 @@ def prepare_lm_head_weights(
             _LM_HEAD_VOCAB_SIZE,
             _LM_HEAD_K,
         ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
-        return {"lm_head": lm_w.T.contiguous()}
+        if fold_rmsnorm_weights:
+            lm_w = lm_w * t[_norm_key]
+        return {lm_target.name: lm_w.T.contiguous()}
 
     lm_fingerprint = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(_lm_key,)),
-        target=_LM_HEAD_TARGET,
+        source=SourceTensorSelection(names=src_names),
+        target=lm_target,
     )
+    raw = lambda: {k: state_dict[k] for k in src_names}
     lm_head_tt = cache_config.cache.get_or_create(
         lm_fingerprint,
         device,
         preprocess=_preprocess_lm_head,
-        raw_tensors=lambda: {_lm_key: state_dict[_lm_key]},
+        raw_tensors=raw,
     )
 
-    _norm_key = "model.norm.weight"
+    final_norm_tt = None
+    if not fold_rmsnorm_weights:
 
-    def _preprocess_final_norm(t):
-        norm_w = t[_norm_key]
-        assert norm_w.shape == (D.HIDDEN_SIZE,), f"Expected final norm shape ({D.HIDDEN_SIZE},), got {norm_w.shape}"
-        return {"final_norm": norm_w.unsqueeze(0).contiguous()}
+        def _preprocess_final_norm(t):
+            norm_w = t[_norm_key]
+            assert norm_w.shape == (D.HIDDEN_SIZE,), f"Expected final norm shape ({D.HIDDEN_SIZE},), got {norm_w.shape}"
+            return {"final_norm": norm_w.unsqueeze(0).contiguous()}
 
-    norm_fingerprint = cache_config.context.fingerprint(
-        source=SourceTensorSelection(names=(_norm_key,)),
-        target=_FINAL_NORM_TARGET,
-    )
-    final_norm_tt = cache_config.cache.get_or_create(
-        norm_fingerprint,
-        device,
-        preprocess=_preprocess_final_norm,
-        raw_tensors=lambda: {_norm_key: state_dict[_norm_key]},
-    )
+        norm_fingerprint = cache_config.context.fingerprint(
+            source=SourceTensorSelection(names=(_norm_key,)),
+            target=_FINAL_NORM_TARGET,
+        )
+        final_norm_tt = cache_config.cache.get_or_create(
+            norm_fingerprint,
+            device,
+            preprocess=_preprocess_final_norm,
+            raw_tensors=lambda: {_norm_key: state_dict[_norm_key]},
+        )
 
     return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
 
@@ -1623,9 +1654,21 @@ def _transform_eh_proj(eh_proj_weight_T: torch.Tensor) -> torch.Tensor:
     return torch.cat(device_slices, dim=0).contiguous()
 
 
-def _mtp_eh_proj_preprocess(raw: dict[str, torch.Tensor], src_key: str, target_name: str) -> dict[str, torch.Tensor]:
-    """Preprocess eh_proj for cache: transpose, pad to DRAM bank alignment, tile-shuffle."""
-    return {target_name: _transform_eh_proj(raw[src_key].T.contiguous())}
+def _mtp_eh_proj_preprocess(
+    raw: dict[str, torch.Tensor],
+    src_key: str,
+    h_key: str,
+    e_key: str,
+    target_name: str,
+    *,
+    fold_rmsnorm_weights: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Preprocess eh_proj for cache: transpose, optionally fold gammas, pad, tile-shuffle."""
+    proj_t = raw[src_key].T.contiguous()
+    if fold_rmsnorm_weights:
+        gamma = torch.cat([raw[e_key], raw[h_key]], dim=0).unsqueeze(1)
+        proj_t = proj_t * gamma
+    return {target_name: _transform_eh_proj(proj_t)}
 
 
 def prepare_shared_head_norm(
@@ -1667,17 +1710,55 @@ def prepare_spec_weights(
     mtp_layer_idx: int = _MTP_LAYER_IDX,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    fold_rmsnorm_weights: bool = False,
 ) -> DeepSeekV3SpecWeights:
-    """Prepare weights used only by the speculative verify stage."""
-    return DeepSeekV3SpecWeights(
-        shared_head_norm=prepare_shared_head_norm(
+    """Prepare weights used only by the speculative verify stage.
+
+    Always prepares the LM head projection for the spec stage.  When
+    ``fold_rmsnorm_weights`` is True the shared_head_norm gamma is pre-multiplied
+    into the weight matrix and ``shared_head_norm`` is None.  Otherwise the
+    unfolded LM head and a separate ``shared_head_norm`` gamma are returned.
+    """
+    if cache_config is None:
+        cache_config = CacheConfig.ephemeral(move_to_device=move_to_device)
+
+    _lm_key = "lm_head.weight"
+    _norm_key = _key(mtp_layer_idx, "shared_head.norm.weight")
+    lm_target = _LM_HEAD_FOLDED_SPEC_NORM_TARGET if fold_rmsnorm_weights else _LM_HEAD_TARGET
+    src_names = (_lm_key, _norm_key) if fold_rmsnorm_weights else (_lm_key,)
+
+    def _preprocess_spec_lm_head(t):
+        lm_w = t[_lm_key]
+        assert lm_w.shape == (
+            _LM_HEAD_VOCAB_SIZE,
+            _LM_HEAD_K,
+        ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
+        if fold_rmsnorm_weights:
+            lm_w = lm_w * t[_norm_key]
+        return {lm_target.name: lm_w.T.contiguous()}
+
+    fingerprint = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=src_names),
+        target=lm_target,
+    )
+    spec_lm_head_tt = cache_config.cache.get_or_create(
+        fingerprint,
+        device,
+        preprocess=_preprocess_spec_lm_head,
+        raw_tensors=lambda: {k: state_dict[k] for k in src_names},
+    )
+
+    shared_norm_tt = None
+    if not fold_rmsnorm_weights:
+        shared_norm_tt = prepare_shared_head_norm(
             state_dict,
             device,
             mtp_layer_idx=mtp_layer_idx,
             move_to_device=move_to_device,
             cache_config=cache_config,
         )
-    )
+
+    return DeepSeekV3SpecWeights(shared_head_norm=shared_norm_tt, lm_head=spec_lm_head_tt)
 
 
 def prepare_mtp_weights(
@@ -1687,6 +1768,7 @@ def prepare_mtp_weights(
     mtp_layer_idx: int = _MTP_LAYER_IDX,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    fold_rmsnorm_weights: bool = False,
 ) -> DeepSeekV3MTPWeights:
     """Prepare lightweight MTP projection/norm weights from state dict.
 
@@ -1700,34 +1782,42 @@ def prepare_mtp_weights(
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
 
+    h_gamma_tt = None
+    e_gamma_tt = None
     _h_key = _key(mtp_layer_idx, "hnorm.weight")
-    h_target = _mtp_norm_target("mtp_h_gamma")
-    h_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_h_key,)), target=h_target)
-    h_gamma_tt = cache_config.cache.get_or_create(
-        h_fingerprint,
-        device,
-        preprocess=lambda t: {h_target.name: t[_h_key].unsqueeze(0).contiguous()},
-        raw_tensors=lambda: {_h_key: state_dict[_h_key]},
-    )
-
     _e_key = _key(mtp_layer_idx, "enorm.weight")
-    e_target = _mtp_norm_target("mtp_e_gamma")
-    e_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_e_key,)), target=e_target)
-    e_gamma_tt = cache_config.cache.get_or_create(
-        e_fingerprint,
-        device,
-        preprocess=lambda t: {e_target.name: t[_e_key].unsqueeze(0).contiguous()},
-        raw_tensors=lambda: {_e_key: state_dict[_e_key]},
-    )
-
     _eh_key = _key(mtp_layer_idx, "eh_proj.weight")
-    eh_target = _mtp_eh_proj_target(K=2 * _LM_HEAD_K, N=_LM_HEAD_K)
-    eh_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_eh_key,)), target=eh_target)
+
+    if not fold_rmsnorm_weights:
+        h_target = _mtp_norm_target("mtp_h_gamma")
+        h_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_h_key,)), target=h_target)
+        h_gamma_tt = cache_config.cache.get_or_create(
+            h_fingerprint,
+            device,
+            preprocess=lambda t: {h_target.name: t[_h_key].unsqueeze(0).contiguous()},
+            raw_tensors=lambda: {_h_key: state_dict[_h_key]},
+        )
+        e_target = _mtp_norm_target("mtp_e_gamma")
+        e_fingerprint = cache_config.context.fingerprint(source=SourceTensorSelection(names=(_e_key,)), target=e_target)
+        e_gamma_tt = cache_config.cache.get_or_create(
+            e_fingerprint,
+            device,
+            preprocess=lambda t: {e_target.name: t[_e_key].unsqueeze(0).contiguous()},
+            raw_tensors=lambda: {_e_key: state_dict[_e_key]},
+        )
+
+    eh_target = _mtp_eh_proj_target(K=2 * _LM_HEAD_K, N=_LM_HEAD_K, fold_rmsnorm_weights=fold_rmsnorm_weights)
+    eh_src_names = (_eh_key, _e_key, _h_key) if fold_rmsnorm_weights else (_eh_key,)
+    eh_fingerprint = cache_config.context.fingerprint(
+        source=SourceTensorSelection(names=eh_src_names), target=eh_target
+    )
     eh_proj_tt = cache_config.cache.get_or_create(
         eh_fingerprint,
         device,
-        preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
-        raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
+        preprocess=lambda t: _mtp_eh_proj_preprocess(
+            t, _eh_key, _h_key, _e_key, eh_target.name, fold_rmsnorm_weights=fold_rmsnorm_weights
+        ),
+        raw_tensors=lambda: {k: state_dict[k] for k in eh_src_names},
     )
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(

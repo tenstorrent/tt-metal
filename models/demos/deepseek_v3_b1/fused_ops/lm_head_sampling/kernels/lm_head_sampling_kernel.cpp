@@ -102,6 +102,9 @@ struct Core {
     static constexpr bool bcast_use_socket_input = input_socket_mode == input_socket_mode_d2d;
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 
+    // ── RMSNorm folding (gamma pre-multiplied into weight matrices) ─
+    static constexpr bool fold_rmsnorm = get_named_compile_time_arg_val("fold_rmsnorm") == 1;
+
     // ── MTP (Multi-Token Prediction) ────────────────────────────────
     static constexpr bool enable_mtp = get_named_compile_time_arg_val("enable_mtp") == 1;
     static constexpr bool is_base_stage = get_named_compile_time_arg_val("is_mtp_base_stage") == 1;
@@ -252,18 +255,18 @@ void kernel_main() {
     //   input_core:  CB 0 (rmsnorm_input), CB 7 (rmsnorm_gamma)
     //                CB 11 (h_gamma), CB 12 (e_gamma)  [MTP only]
     //   matmul_core: CB 2 (matmul_in1 / vocab weights)
-    if constexpr (Core::is_input_core) {
+    if constexpr (Core::is_input_core && !Core::fold_rmsnorm) {
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
         constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
     }
-    if constexpr (Core::enable_mtp && Core::is_input_core && !Core::is_e_norm_device) {
+    if constexpr (Core::enable_mtp && Core::is_input_core && !Core::is_e_norm_device && !Core::fold_rmsnorm) {
         constexpr uint32_t h_gamma_cb = get_named_compile_time_arg_val("h_gamma_cb");
         constexpr uint32_t rmsnorm_h_num_tiles = get_named_compile_time_arg_val("rmsnorm_h_num_tiles");
         unified_kernels::setup_sharded_buffer(h_gamma_cb, rmsnorm_h_num_tiles);
     }
-    if constexpr (Core::enable_mtp && Core::is_input_core && Core::is_e_norm_device) {
+    if constexpr (Core::enable_mtp && Core::is_input_core && Core::is_e_norm_device && !Core::fold_rmsnorm) {
         constexpr uint32_t e_gamma_cb = get_named_compile_time_arg_val("e_gamma_cb");
         constexpr uint32_t rmsnorm_e_num_tiles = get_named_compile_time_arg_val("rmsnorm_e_num_tiles");
         unified_kernels::setup_sharded_buffer(e_gamma_cb, rmsnorm_e_num_tiles);
@@ -572,7 +575,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_output_cb")>;
+        get_named_compile_time_arg_val("rmsnorm_output_cb"),
+        !Core::fold_rmsnorm>;
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_common_arg_val<uint32_t>(0),  // epsilon
         get_common_arg_val<float>(1),     // scalar (1/sqrt(numel))
@@ -585,7 +589,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_h_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_h_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_h_output_cb")>;
+        get_named_compile_time_arg_val("rmsnorm_h_output_cb"),
+        !Core::fold_rmsnorm>;
 
     using ERMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
@@ -593,7 +598,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1,
         get_named_compile_time_arg_val("rmsnorm_e_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_e_gamma_cb"),
-        get_named_compile_time_arg_val("rmsnorm_e_output_cb")>;
+        get_named_compile_time_arg_val("rmsnorm_e_output_cb"),
+        !Core::fold_rmsnorm>;
 
     // ── Matmul compute (matmul_core) ────────────────────────────────
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w")>;

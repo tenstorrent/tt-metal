@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 
 import torch
 

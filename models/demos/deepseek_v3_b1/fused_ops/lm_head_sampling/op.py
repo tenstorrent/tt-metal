@@ -140,8 +140,6 @@ class LMHeadSampling:
 
         if fuse_mtp:
             assert embedding_tensor is not None, "embedding_tensor is required for fused MTP"
-            assert h_gamma_tensor is not None, "h_gamma_tensor is required for fused MTP"
-            assert e_gamma_tensor is not None, "e_gamma_tensor is required for fused MTP"
             assert eh_projection_tensor is not None, "eh_projection_tensor is required for fused MTP"
 
         if fuse_mtp_verification:
@@ -150,7 +148,7 @@ class LMHeadSampling:
         # Step 1: RMSNorm on input hidden states for LM head
         variance = input_tensor.pow(2).mean(-1, keepdim=True)
         normalized = input_tensor * torch.rsqrt(variance + epsilon)
-        rmsnorm_out = normalized * gamma_tensor
+        rmsnorm_out = normalized * gamma_tensor if gamma_tensor is not None else normalized
 
         # Step 2: Matmul with vocab tensor to get logits
         scores = rmsnorm_out @ vocab_tensor
@@ -186,15 +184,15 @@ class LMHeadSampling:
         token_id = selected_index.to(torch.int64).item()
         token_embedding = embedding_tensor[token_id, :].unsqueeze(0)  # [1, embedding_dim]
 
-        # Step 5: RMSNorm on hidden states using h_gamma_tensor
+        # Step 5: RMSNorm on hidden states using h_gamma_tensor (skip gamma if folded)
         h_variance = input_tensor.pow(2).mean(-1, keepdim=True)
         h_normalized = input_tensor * torch.rsqrt(h_variance + epsilon)
-        h_rmsnorm_out = h_normalized * h_gamma_tensor  # [1, hidden_dim]
+        h_rmsnorm_out = h_normalized * h_gamma_tensor if h_gamma_tensor is not None else h_normalized
 
-        # Step 6: RMSNorm on token embedding using e_gamma_tensor
+        # Step 6: RMSNorm on token embedding using e_gamma_tensor (skip gamma if folded)
         e_variance = token_embedding.pow(2).mean(-1, keepdim=True)
         e_normalized = token_embedding * torch.rsqrt(e_variance + epsilon)
-        e_rmsnorm_out = e_normalized * e_gamma_tensor  # [1, embedding_dim]
+        e_rmsnorm_out = e_normalized * e_gamma_tensor if e_gamma_tensor is not None else e_normalized
 
         # Step 7: Concatenate normalized embedding then hidden states.
         # The MTP checkpoint projection expects the [e_norm | h_norm] layout.
@@ -334,13 +332,14 @@ class LMHeadSampling:
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
 
         enable_argmax = True
-        # MTP Base stage is enabled if all MTP base stage tensors are provided
+        # When fold_rmsnorm is enabled, gamma weights are pre-multiplied into the
+        # matmul weight matrices so the kernel skips the gamma multiply step.
+        # All gammas (base, h, e) are folded together.
+        fold_rmsnorm = gamma_tensor is None
         is_mtp_base_stage = (
             is_mtp_base_stage
             and eh_mm_fused_buffer is not None
             and embedding_tensor is not None
-            and h_gamma_tensor is not None
-            and e_gamma_tensor is not None
             and eh_projection_tensor is not None
         )
         # Reduce is always on for MTP (ReduceToOneB1 replaces the old single-device Gather)
@@ -409,18 +408,23 @@ class LMHeadSampling:
             if len(active_socket_cores) != 1:
                 raise ValueError("socket output for lm_head_sampling must have exactly one active core")
             socket_core = active_socket_cores[0]
+
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
-        gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor)
+        gamma_tensors_per_device = ttnn.get_device_tensors(gamma_tensor) if gamma_tensor is not None else None
         vocab_tensors_per_device = ttnn.get_device_tensors(vocab_tensor)
         output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         indices_tensors_per_device = ttnn.get_device_tensors(indices_tensor) if enable_argmax else None
         output_index_tensors_per_device = ttnn.get_device_tensors(output_index_tensor) if enable_argmax else None
         eh_mm_fused_per_device = ttnn.get_device_tensors(eh_mm_fused_buffer) if is_mtp_base_stage else None
         embedding_tensors_per_device = ttnn.get_device_tensors(embedding_tensor) if is_mtp_base_stage else None
-        h_gamma_tensors_per_device = ttnn.get_device_tensors(h_gamma_tensor) if is_mtp_base_stage else None
-        e_gamma_tensors_per_device = ttnn.get_device_tensors(e_gamma_tensor) if is_mtp_base_stage else None
+        h_gamma_tensors_per_device = (
+            ttnn.get_device_tensors(h_gamma_tensor) if is_mtp_base_stage and h_gamma_tensor is not None else None
+        )
+        e_gamma_tensors_per_device = (
+            ttnn.get_device_tensors(e_gamma_tensor) if is_mtp_base_stage and e_gamma_tensor is not None else None
+        )
         eh_proj_tensors_per_device = ttnn.get_device_tensors(eh_projection_tensor) if is_mtp_base_stage else None
         base_token_tensors_per_device = (
             ttnn.get_device_tensors(base_token_buffer)
@@ -527,9 +531,9 @@ class LMHeadSampling:
             eh_dtype = eh_projection_tensor_sample.dtype
             eh_proj_tile = eh_projection_tensor_sample.get_tile()
             eh_proj_tile_size = eh_proj_tile.get_tile_size(eh_dtype)
-            eh_subblock_k = 28  # 14336 / 8 / 32 = 28
+            eh_subblock_k = 28
             eh_num_subblocks_k = 2
-            eh_out_num_tiles = eh_out_w_per_core  # M=1, so out tiles = per_core_n
+            eh_out_num_tiles = eh_out_w_per_core
 
             # Compute subblock_w: max dest tiles that evenly divide per_core_n
             # With fp32_dest_acc_en: max_dest=4 (half sync), else max_dest=8
@@ -572,9 +576,7 @@ class LMHeadSampling:
         argmax_socket_cb = 6
         matmul_out_cb = 16  # Matmul output on matmul cores (tensor-backed)
         matmul_out_eh_cb = 17  # [MTP] EH matmul output on matmul cores (tensor-backed)
-        mcast_eh_dst_cb = (
-            18  # [MTP] Second mcast destination (concat [h_norm|e_norm]) on all mcast cores (intermediate)
-        )
+        mcast_eh_dst_cb = 18  # [MTP] Second mcast destination
         eh_gather_dst_cb = 19  # [MTP] EH output gather destination on argmax_final_core
         # [Reduce] CB indices — reuse existing CBs where possible to save L1
         reduce_local_cb = 21  # Aliased to CB17's L1 but with payload_size page_size for reduce
@@ -651,14 +653,12 @@ class LMHeadSampling:
         if enable_reduce_to_one:
             reduce_root_coord = argmax_final_mesh_coord
             reduce_sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in reduce_semaphores]
-
             reduce_shard_shape = [1, eh_n_per_core]
             reduce_element_size = 2  # bfloat16
             reduce_shard_elements = reduce_shard_shape[0] * reduce_shard_shape[1]
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
             reduce_compute_tile_size = 32 * 32 * reduce_element_size
             reduce_num_tiles = (reduce_shard_elements + 32 * 32 - 1) // (32 * 32)
-
             reduce_packet_header_size = 96
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
@@ -763,7 +763,9 @@ class LMHeadSampling:
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
                 intermediate_tensor_device = intermediate_tensors_per_device[device_idx]
-                gamma_tensor_device = gamma_tensors_per_device[device_idx]
+                gamma_tensor_device = (
+                    gamma_tensors_per_device[device_idx] if gamma_tensors_per_device is not None else None
+                )
                 vocab_tensor_device = vocab_tensors_per_device[device_idx]
                 output_tensor_device = output_tensors_per_device[device_idx]
                 indices_tensor_device = indices_tensors_per_device[device_idx] if enable_argmax else None
@@ -1462,12 +1464,14 @@ class LMHeadSampling:
                 rmsnorm_input_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
                 rmsnorm_input_cb_descriptor.total_size = (rms_num_tiles) * rms_tile_size
 
-                # CB 7: RMSNorm gamma — tensor-backed on sender core.
-                rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    rmsnorm_gamma_cb, gamma_tensor_device
-                )
-                rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
-                rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+                # CB 7: RMSNorm gamma — tensor-backed on sender core (None when folded into vocab weights).
+                rmsnorm_gamma_cb_descriptor = None
+                if gamma_tensor_device is not None:
+                    rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        rmsnorm_gamma_cb, gamma_tensor_device
+                    )
+                    rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
+                    rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
 
                 # CB 8: RMSNorm output on sender core (mcast source)
                 rms_out_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
@@ -1480,24 +1484,16 @@ class LMHeadSampling:
                 fused_buffer_device = (
                     fused_buffer_tensors_per_device[device_idx] if fused_buffer_tensors_per_device else None
                 )
-                if fused_buffer_device is not None:
-                    rmsnorm_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        mcast_src_cb,
-                        fused_buffer_device,
-                        address_offset=0,
-                        total_size=rms_num_tiles * rms_tile_size,
-                        core_ranges=mcast_sender_core_grid,
-                    )
-                    rmsnorm_out_cb_descriptor.format_descriptors = [rmsnorm_out_cb_format]
-                else:
-                    rmsnorm_out_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=rms_num_tiles * rms_tile_size,
-                        core_ranges=mcast_sender_core_grid,
-                        format_descriptors=[rmsnorm_out_cb_format],
-                    )
+                rmsnorm_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    mcast_src_cb,
+                    fused_buffer_device,
+                    address_offset=0,
+                    total_size=rms_num_tiles * rms_tile_size,
+                    core_ranges=mcast_sender_core_grid,
+                )
+                rmsnorm_out_cb_descriptor.format_descriptors = [rmsnorm_out_cb_format]
 
                 # CB 1: Mcast destination — on receiver cores this is the matmul in0 buffer.
-
                 mcast_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
                 mcast_dst_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=mcast_dst_cb,
@@ -1505,21 +1501,14 @@ class LMHeadSampling:
                     page_size=input_tile_size,
                     tile=mcast_dst_tile_descriptor,
                 )
-                if fused_buffer_device is not None:
-                    mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                        mcast_dst_cb,
-                        fused_buffer_device,
-                        address_offset=0,
-                        total_size=num_tiles_k * input_tile_size,
-                        core_ranges=all_cores,
-                    )
-                    mcast_dst_cb_descriptor.format_descriptors = [mcast_dst_cb_format]
-                else:
-                    mcast_dst_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=num_tiles_k * input_tile_size,
-                        core_ranges=all_cores,
-                        format_descriptors=[mcast_dst_cb_format],
-                    )
+                mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    mcast_dst_cb,
+                    fused_buffer_device,
+                    address_offset=0,
+                    total_size=num_tiles_k * input_tile_size,
+                    core_ranges=all_cores,
+                )
+                mcast_dst_cb_descriptor.format_descriptors = [mcast_dst_cb_format]
 
                 # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
                 matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor_device)
@@ -1536,26 +1525,27 @@ class LMHeadSampling:
                 # [MTP] CB descriptors (only if is_mtp_base_stage)
                 mtp_cb_descriptors = []
                 if enable_mtp_on_device:
-                    # CB 11: h_gamma - tensor-backed on sender core (h_norm devices only)
+                    # CB 11: h_gamma - tensor-backed on sender core (h_norm devices only, None when folded)
                     h_gamma_cb_descriptor = None
-                    if not is_e_norm_device:
+                    if not is_e_norm_device and h_gamma_tensors_per_device is not None:
                         h_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                             h_gamma_cb, h_gamma_tensors_per_device[device_idx]
                         )
                         h_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
                         h_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
 
-                    # CB 12: e_gamma - tensor-backed on sender core (e_norm devices only)
+                    # CB 12: e_gamma - tensor-backed on sender core (e_norm devices only, None when folded)
                     e_gamma_cb_descriptor = None
-                    embedding_cb_descriptor = None
-                    if is_e_norm_device:
+                    if is_e_norm_device and e_gamma_tensors_per_device is not None:
                         e_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                             e_gamma_cb, e_gamma_tensors_per_device[device_idx]
                         )
                         e_gamma_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
                         e_gamma_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
 
-                        # CB 10: Embedding — overlapped onto fused buffer on sender core
+                    # CB 10: Embedding — overlapped onto fused buffer on sender core
+                    embedding_cb_descriptor = None
+                    if is_e_norm_device:
                         embedding_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
                         embedding_cb_format = ttnn.CBFormatDescriptor(
                             buffer_index=embedding_cb,
@@ -1563,21 +1553,14 @@ class LMHeadSampling:
                             page_size=rms_tile_size,
                             tile=embedding_tile_descriptor,
                         )
-                        if fused_buffer_device is not None:
-                            embedding_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                                embedding_cb,
-                                fused_buffer_device,
-                                address_offset=0,
-                                total_size=rms_num_tiles * rms_tile_size,
-                                core_ranges=mcast_sender_core_grid,
-                            )
-                            embedding_cb_descriptor.format_descriptors = [embedding_cb_format]
-                        else:
-                            embedding_cb_descriptor = ttnn.CBDescriptor(
-                                total_size=rms_num_tiles * rms_tile_size,
-                                core_ranges=mcast_sender_core_grid,
-                                format_descriptors=[embedding_cb_format],
-                            )
+                        embedding_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            embedding_cb,
+                            fused_buffer_device,
+                            address_offset=0,
+                            total_size=rms_num_tiles * rms_tile_size,
+                            core_ranges=mcast_sender_core_grid,
+                        )
+                        embedding_cb_descriptor.format_descriptors = [embedding_cb_format]
 
                     # CB 15: mcast_eh_src — overlapped onto fused buffer on sender core.
                     # Sized for 7 tiles of 32x32; mcast sends a 1792-datum slice via byte offset.
@@ -1588,21 +1571,14 @@ class LMHeadSampling:
                         page_size=rms_tile_size,
                         tile=mcast_eh_tile_descriptor,
                     )
-                    if fused_buffer_device is not None:
-                        mcast_eh_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            mcast_eh_src_cb,
-                            fused_buffer_device,
-                            address_offset=0,
-                            total_size=rms_num_tiles * rms_tile_size,
-                            core_ranges=mcast_sender_core_grid,
-                        )
-                        mcast_eh_src_cb_descriptor.format_descriptors = [mcast_eh_src_cb_format]
-                    else:
-                        mcast_eh_src_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=rms_num_tiles * rms_tile_size,
-                            core_ranges=mcast_sender_core_grid,
-                            format_descriptors=[mcast_eh_src_cb_format],
-                        )
+                    mcast_eh_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        mcast_eh_src_cb,
+                        fused_buffer_device,
+                        address_offset=0,
+                        total_size=rms_num_tiles * rms_tile_size,
+                        core_ranges=mcast_sender_core_grid,
+                    )
+                    mcast_eh_src_cb_descriptor.format_descriptors = [mcast_eh_src_cb_format]
 
                     # CB 18: mcast_eh_dst — overlapped onto fused buffer on sender core,
                     # normal intermediate on receiver cores.
@@ -1613,24 +1589,14 @@ class LMHeadSampling:
                         page_size=input_tile_size,
                         tile=eh_dst_tile_descriptor,
                     )
-                    if fused_buffer_device is not None:
-                        mcast_eh_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            mcast_eh_dst_cb,
-                            fused_buffer_device,
-                            address_offset=0,
-                            total_size=eh_num_tiles_k * input_tile_size,
-                            core_ranges=all_cores,
-                        )
-                        mcast_eh_dst_cb_descriptor.format_descriptors = [mcast_eh_dst_cb_format]
-                    else:
-                        mcast_eh_dst_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=eh_num_tiles_k * input_tile_size,
-                            core_ranges=all_cores,
-                            format_descriptors=[mcast_eh_dst_cb_format],
-                        )
-                    print(f"[lm_head_sampling] eh_dst_tile_descriptor={eh_dst_tile_descriptor}", flush=True)
-                    print(f"[lm_head_sampling] eh_dst_tile page size={input_tile_size}", flush=True)
-                    print(f"[lm_head_sampling] eh_dst_tile total size={eh_num_tiles_k * input_tile_size}", flush=True)
+                    mcast_eh_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        mcast_eh_dst_cb,
+                        fused_buffer_device,
+                        address_offset=0,
+                        total_size=eh_num_tiles_k * input_tile_size,
+                        core_ranges=all_cores,
+                    )
+                    mcast_eh_dst_cb_descriptor.format_descriptors = [mcast_eh_dst_cb_format]
 
                     # CB 9: EH projection weights (in1) buffer - CB-backed working buffer for DRAM streaming
                     eh_cb_format = ttnn.CBFormatDescriptor(
@@ -1679,11 +1645,12 @@ class LMHeadSampling:
                 cbs_list = [
                     rmsnorm_input_cb_descriptor,
                     matmul_in1_cb_descriptor,
-                    rmsnorm_gamma_cb_descriptor,
                     rmsnorm_out_cb_descriptor,
                     matmul_out_cb_descriptor,
                     mcast_dst_cb_descriptor,
                 ]
+                if rmsnorm_gamma_cb_descriptor is not None:
+                    cbs_list.append(rmsnorm_gamma_cb_descriptor)
                 if enable_mtp_on_device:
                     cbs_list.extend(mtp_cb_descriptors)
                 if enable_argmax:
@@ -1985,6 +1952,12 @@ class LMHeadSampling:
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="fold_rmsnorm",
+                            core_range=all_cores,
+                            value=1 if fold_rmsnorm else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="is_mtp_base_stage",
                             core_range=all_cores,
                             value=1 if is_mtp_base_stage else 0,
@@ -2217,12 +2190,16 @@ class LMHeadSampling:
 
         for dp_coord, dp_program in device_programs:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(dp_coord, dp_coord)] = dp_program
-        io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, gamma_tensor, vocab_tensor, output_tensor]
+        io_tensors = [input_tensor_mesh, intermediate_tensor_mesh, vocab_tensor, output_tensor]
+        if gamma_tensor is not None:
+            io_tensors.append(gamma_tensor)
         io_tensors.extend([indices_tensor, output_index_tensor])
         if is_mtp_base_stage:
-            io_tensors.extend(
-                [eh_mm_fused_buffer, embedding_tensor, h_gamma_tensor, e_gamma_tensor, eh_projection_tensor]
-            )
+            io_tensors.extend([eh_mm_fused_buffer, embedding_tensor, eh_projection_tensor])
+            if h_gamma_tensor is not None:
+                io_tensors.append(h_gamma_tensor)
+            if e_gamma_tensor is not None:
+                io_tensors.append(e_gamma_tensor)
         if metadata_tensor is not None:
             io_tensors.append(metadata_tensor)
         if not skip_ccl:

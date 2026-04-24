@@ -429,12 +429,35 @@ class SpecLMHeadStage(StageKind):
             }
         )
 
-        spec_gamma = self._spec_weights.shared_head_norm if self._spec_weights is not None else self._weights.final_norm
+        fused_buf_grid = matmul_core_grid.merge(mcast_core_grid)
+        num_fused_buf_cores = fused_buf_grid.num_cores()
+        fused_buf_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(fused_buf_grid, (SpecLMHeadStage.M, SpecLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        input_core_fused_buffer = ttnn.from_torch(
+            torch.zeros((num_fused_buf_cores, SpecLMHeadStage.K), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=fused_buf_mem_config,
+            tile=SpecLMHeadStage.A_TILE,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        if self._spec_weights is not None:
+            spec_gamma = self._spec_weights.shared_head_norm
+            spec_b = self._spec_weights.lm_head
+        else:
+            spec_gamma = self._weights.final_norm
+            spec_b = self._weights.lm_head
+
         self._state = {
             "input_tensor_mesh": input_tensor_mesh,
             "intermediate_tensor_mesh": intermediate_tensor_mesh,
             "ttnn_gamma": spec_gamma,
-            "ttnn_b": self._weights.lm_head,
+            "ttnn_b": spec_b,
             "ttnn_scores": ttnn_scores,
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
@@ -445,6 +468,7 @@ class SpecLMHeadStage(StageKind):
             "bcast_semaphores": bcast_inputs.semaphores,
             "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
             "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
+            "input_core_fused_buffer": input_core_fused_buffer,
         }
         if self._persistent_mode:
             self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
@@ -460,7 +484,7 @@ class SpecLMHeadStage(StageKind):
         LMHeadSampling.op(
             d["input_tensor_mesh"],
             d["intermediate_tensor_mesh"],
-            d["ttnn_gamma"],
+            d["ttnn_gamma"],  # if folded returns None
             d["ttnn_b"],
             d["ttnn_scores"],
             sender_coord=self._get_sender_coord(ctx, pipeline_block),
@@ -481,6 +505,7 @@ class SpecLMHeadStage(StageKind):
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
+            input_core_fused_buffer=d["input_core_fused_buffer"],
         )
 
 
@@ -828,8 +853,12 @@ class BaseLMHeadStage(StageKind):
         if self._enable_mtp:
             self._lmhead_state["eh_mm_fused_buffer"] = eh_mm_fused_buffer
             self._lmhead_state["ttnn_embedding"] = self._embedding_weights.embedding  # replicated on each device
-            self._lmhead_state["ttnn_h_gamma"] = self._mtp_weights.h_gamma  # replicated on each device
-            self._lmhead_state["ttnn_e_gamma"] = self._mtp_weights.e_gamma  # replicated on each device
+            self._lmhead_state[
+                "ttnn_h_gamma"
+            ] = self._mtp_weights.h_gamma  # replicated on each device, if folded returns None
+            self._lmhead_state[
+                "ttnn_e_gamma"
+            ] = self._mtp_weights.e_gamma  # replicated on each device, if folded returns None
             self._lmhead_state["ttnn_eh_proj"] = self._mtp_weights.eh_projection  # width sharded on each device
             self._lmhead_state["reduce_semaphores"] = reduce_semaphores
             compute_grid_size = mesh_device.compute_with_storage_grid_size()
