@@ -31,6 +31,28 @@ class TTNNEmbedding(TTNNModule):
         new_layer._scale_factor = scale_factor
         return new_layer
 
+    def call(self, *args, **kwargs):
+        import torch
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        if (
+            args
+            and isinstance(args[0], (torch.Tensor, TorchTTNNTensor))
+            and self.device is not None
+            and hasattr(self.device, "get_num_devices")
+            and self.device.get_num_devices() > 1
+        ):
+            input_ids = args[0]
+            if not isinstance(input_ids, TorchTTNNTensor):
+                input_ids = TorchTTNNTensor(input_ids)
+            replicated_config = DistributedTensorConfig(
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+            )
+            input_ids.set_distributed_tensor_config(replicated_config)
+            args = (input_ids,) + args[1:]
+        return super().call(*args, **kwargs)
+
     def preprocess_weights_impl(self):
         self.tt_weight_host = ttnn.from_torch(
             self.torch_layer.weight.data,
@@ -55,6 +77,27 @@ class TTNNEmbedding(TTNNModule):
         super().deallocate_weights_impl()
 
     def forward(self, tt_indices):
+        # Embedding op requires UINT32 input; tokenizer ids arrive as INT32.
+        # Typecast requires last dim to be a multiple of 32 for row-major, so
+        # pad -> typecast -> slice back if needed.
+        if tt_indices.dtype != ttnn.uint32:
+            seq_len = tt_indices.shape[-1]
+            pad_to = ((seq_len + 31) // 32) * 32
+            if seq_len != pad_to:
+                tt_indices = ttnn.pad(
+                    tt_indices,
+                    padding=tuple(
+                        (0, pad_to - seq_len if i == len(tt_indices.shape) - 1 else 0)
+                        for i in range(len(tt_indices.shape))
+                    ),
+                    value=0,
+                )
+            tt_indices = ttnn.typecast(tt_indices, ttnn.uint32)
+            if seq_len != pad_to:
+                starts = [0] * len(tt_indices.shape)
+                ends = list(tt_indices.shape)
+                ends[-1] = seq_len
+                tt_indices = ttnn.slice(tt_indices, starts, ends)
         out = ttnn.embedding(
             tt_indices,
             self.tt_weight,

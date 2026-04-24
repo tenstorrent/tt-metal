@@ -14,9 +14,9 @@ class TTNNDotsOCRMLP(TTNNModule):
     def from_torch(cls, torch_mlp):
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_mlp
-        tt_module.gate_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.gate_proj)
-        tt_module.up_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.up_proj)
-        tt_module.down_proj = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.down_proj)
+        tt_module.gate_proj = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.gate_proj)
+        tt_module.up_proj = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.up_proj)
+        tt_module.down_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.down_proj)
         return tt_module
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:

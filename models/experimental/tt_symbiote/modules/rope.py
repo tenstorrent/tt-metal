@@ -326,6 +326,42 @@ def _compute_cos_sin_cache(
     return cos, sin
 
 
+def _compute_cos_sin_cache_half_half(
+    head_dim: int,
+    max_seq_len: int,
+    rope_theta: float,
+    partial_rotary_factor: float = 1.0,
+    use_head_dim_for_freq: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute cos/sin cache in HuggingFace half-half format (no interleaving).
+
+    Same frequency computation as _compute_cos_sin_cache but without the
+    pair-interleave step.  Used with ttnn.experimental.rotary_embedding
+    (non-llama) which natively implements the half-half convention.
+    """
+    rotary_dim = int(head_dim * partial_rotary_factor)
+    freq_dim = head_dim if use_head_dim_for_freq else rotary_dim
+    inv_freq = 1.0 / (rope_theta ** (torch.arange(0, rotary_dim, 2).float() / freq_dim))
+    t = torch.arange(max_seq_len, dtype=inv_freq.dtype)
+    freqs = torch.outer(t, inv_freq)
+
+    emb = torch.cat((freqs, freqs), dim=-1)
+    cos = emb.cos()
+    sin = emb.sin()
+
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+
+    if partial_rotary_factor < 1.0:
+        pad_width = head_dim - rotary_dim
+        cos_pad = torch.ones(cos.shape[0], cos.shape[1], cos.shape[2], pad_width)
+        sin_pad = torch.zeros(sin.shape[0], sin.shape[1], sin.shape[2], pad_width)
+        cos = torch.cat([cos, cos_pad], dim=-1)
+        sin = torch.cat([sin, sin_pad], dim=-1)
+
+    return cos, sin
+
+
 class BailingRotarySetup:
     """Pre-computed RoPE cos/sin and transformation matrices with replicated topology."""
 
@@ -338,11 +374,13 @@ class BailingRotarySetup:
         partial_rotary_factor: float = 1.0,
         datatype: ttnn.DataType = ttnn.bfloat16,
         use_head_dim_for_freq: bool = False,
+        rope_convention: str = "interleaved",
     ) -> None:
         """Initialize with pre-computed cos/sin cache and transformation matrices.
 
         Args:
             use_head_dim_for_freq: See _compute_cos_sin_cache docstring.
+            rope_convention: "interleaved" (Meta/Llama) or "half_half" (HF/Qwen2).
         """
         self.device = device
         self.head_dim = head_dim
@@ -350,11 +388,13 @@ class BailingRotarySetup:
         self.max_seq_len = max_seq_len
         self.partial_rotary_factor = partial_rotary_factor
         self.datatype = datatype
+        self.rope_convention = rope_convention
 
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
 
-        cos_cache_torch, sin_cache_torch = _compute_cos_sin_cache(
+        cache_fn = _compute_cos_sin_cache_half_half if rope_convention == "half_half" else _compute_cos_sin_cache
+        cos_cache_torch, sin_cache_torch = cache_fn(
             head_dim=head_dim,
             max_seq_len=max_seq_len,
             rope_theta=rope_theta,
@@ -400,22 +440,8 @@ class BailingRotarySetup:
             mesh_mapper=mesh_mapper,
         )
 
-        # Transformation matrices (TILE_SIZE x TILE_SIZE)
-        trans_mat_decode_torch = _get_rotation_transformation_mat(ttnn.TILE_SIZE)
-        self.trans_mat_decode = ttnn.from_torch(
-            trans_mat_decode_torch.to(torch.bfloat16),
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        self._trans_mat_decode_torch = trans_mat_decode_torch.to(torch.bfloat16)
-        self._trans_mat_decode_sharded_cache = {}
-
         # Pre-allocate typecast padding buffer for trace-safe decode path.
-        # batch_size=1 during decode -> pad_amount = 31 (32 - 1 % 32).
-        pad_amount = 32 - 1  # = 31
+        pad_amount = 32 - 1
         pad_torch = torch.zeros(pad_amount, dtype=torch.int32)
         self._typecast_pad_buffer = ttnn.from_torch(
             pad_torch,
@@ -426,19 +452,34 @@ class BailingRotarySetup:
             mesh_mapper=mesh_mapper,
         )
 
-        # Pre-populate sharded trans_mat for decode (batch_size=1) to avoid
-        # lazy ttnn.from_torch during trace capture.
-        self.get_trans_mat_decode_sharded(1)
+        # Transformation matrices only needed for interleaved (llama) convention
+        self._trans_mat_decode_sharded_cache = {}
+        if rope_convention == "interleaved":
+            trans_mat_decode_torch = _get_rotation_transformation_mat(ttnn.TILE_SIZE)
+            self.trans_mat_decode = ttnn.from_torch(
+                trans_mat_decode_torch.to(torch.bfloat16),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=datatype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            self._trans_mat_decode_torch = trans_mat_decode_torch.to(torch.bfloat16)
+            self.get_trans_mat_decode_sharded(1)
 
-        trans_mat_prefill_torch = _get_rotation_transformation_mat(ttnn.TILE_SIZE)
-        self.trans_mat_prefill = ttnn.from_torch(
-            trans_mat_prefill_torch.to(torch.bfloat16),
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+            trans_mat_prefill_torch = _get_rotation_transformation_mat(ttnn.TILE_SIZE)
+            self.trans_mat_prefill = ttnn.from_torch(
+                trans_mat_prefill_torch.to(torch.bfloat16),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=datatype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+        else:
+            self.trans_mat_decode = None
+            self.trans_mat_prefill = None
+            self._trans_mat_decode_torch = None
 
     def get_cos_sin_for_prefill(
         self,

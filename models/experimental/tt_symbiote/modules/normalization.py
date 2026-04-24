@@ -195,8 +195,14 @@ class TTNNDistributedRMSNorm(TTNNModule):
             mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
     def forward(self, inp):
         original_shape = inp.shape
         if len(original_shape) == 3:
@@ -204,7 +210,9 @@ class TTNNDistributedRMSNorm(TTNNModule):
         if inp.layout != ttnn.TILE_LAYOUT:
             inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            inp, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config
+        )
         # AllGather stats — use Ring topology for trace compatibility.
         # Linear topology may allocate dynamic intermediates not pinned by trace.
         tt_stats = ttnn.all_gather(
@@ -220,6 +228,7 @@ class TTNNDistributedRMSNorm(TTNNModule):
             tt_stats,
             epsilon=eps,
             weight=self.weight_distributed,
+            compute_kernel_config=self.compute_kernel_config,
         )
         tt_stats.deallocate(True)
 

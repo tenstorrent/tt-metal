@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for dots.ocr model on N300 (1x2 Wormhole mesh) with tensor-parallel MLP.
+"""Test for dots.ocr model on N300 (1x2 Wormhole mesh) with col-sharded residual flow.
 
-Phase 2: Tensor-parallel MLP using column-parallel gate/up + row-parallel down.
-MLP weights are sharded across 2 devices, residual stream stays replicated.
-Attention and normalization remain non-distributed (replicated weights).
+Phase 3+4: Full col-sharded pipeline. Residual stream is sharded [B, S, 768] per device.
 """
 
 import os
@@ -20,18 +17,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import (
     DispatchManager,
-    DistributedConfig,
-    DistributedTensorConfig,
     TracedRun,
 )
-from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
+from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import TTNNDotsOCRDecoderLayer
+from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.attention import (
-    LlamaAttention,
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
 )
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
-from models.experimental.tt_symbiote.modules.normalization import TTNNRMSNorm
+from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 from models.experimental.tt_symbiote.utils.device_management import (
     DeviceInit,
     set_device,
@@ -54,9 +49,6 @@ MESH_DEVICE_MAP = {
     "BHGLX": (8, 4),
 }
 
-# Load from local HF cache to avoid Python import failure caused by the dot
-# in "dots.ocr" — transformers' dynamic module loader creates a module path
-# where Python interprets the dot as a package separator.
 DOTS_OCR_LOCAL_PATH = "/home/salnahari/.cache/huggingface/hub/models--rednote-hilab--dots.ocr/snapshots/c0111ce6bc07803dbc267932ffef0ae3a51dc951"
 
 
@@ -76,50 +68,6 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
     ).to_device(device)
 
 
-class ReplicatedDeviceInit(DeviceInit):
-    """DeviceInit that uses replication (not sharding) for all tensors.
-
-    The default DeviceInit creates a DistributedConfig whose tensor_config uses
-    ShardTensor2dMesh for mapping and ConcatMesh2dToTensor for composing.
-    When all data is replicated (Phase 1), the sharding composer produces wrong
-    shapes on to_torch (doubles the hidden dim or batch dim).
-
-    This subclass forces:
-    - mesh_mapper: ReplicateTensorToMesh (send same data to all devices)
-    - mesh_composer: single-device composer via MeshComposerConfig with
-      mesh_shape_override=MeshShape(1,1), so to_torch reads from device 0
-      and preserves the original tensor shape.
-    """
-
-    DEVICE_TO_STATE_DICT = {}
-
-    @classmethod
-    def init_state_impl(cls, device) -> DistributedConfig:
-        num_devices = device.get_num_devices()
-        if num_devices <= 1:
-            return DistributedConfig(device)
-
-        single_device_composer = ttnn.create_mesh_composer(
-            device,
-            ttnn.MeshComposerConfig(
-                dims=[0, 0],
-                mesh_shape_override=ttnn.MeshShape(1, 1),
-            ),
-        )
-
-        tensor_config = DistributedTensorConfig(
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            mesh_composer=single_device_composer,
-            logical_shape_fn=lambda shape: shape,
-        )
-
-        config = object.__new__(DistributedConfig)
-        config.mesh_device = device
-        config.tensor_config = tensor_config
-        config.ccl_manager = None
-        return config
-
-
 @pytest.mark.parametrize(
     "device_params",
     [{"trace_region_size": 200000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
@@ -131,7 +79,7 @@ class ReplicatedDeviceInit(DeviceInit):
     indirect=True,
 )
 def test_dots_ocr_n300(mesh_device):
-    """Test dots.ocr on N300 (1x2 mesh) with tensor-parallel MLP."""
+    """Test dots.ocr on N300 (1x2 mesh) with col-sharded residual flow."""
     model_name = DOTS_OCR_LOCAL_PATH
 
     print("Loading dots.ocr from local cache...")
@@ -142,31 +90,34 @@ def test_dots_ocr_n300(mesh_device):
         torch_dtype=torch.bfloat16,
     )
 
-    # Pass 1: Replace MLP with tensor-parallel TTNNDotsOCRMLP
-    nn_to_ttnn_mlp = {
-        model.model.layers[0].mlp.__class__: TTNNDotsOCRMLP,
-    }
-    modules_mlp = register_module_replacement_dict(model, nn_to_ttnn_mlp, model_config=None)
+    decoder_class = model.model.layers[0].__class__
+    norm_class = model.model.layers[0].input_layernorm.__class__
+    embed_class = model.model.embed_tokens.__class__
 
-    # Pass 2: Replace attention and normalization (nn-to-ttnn)
+    # Pass 1: Replace decoder layers, final norm, and embedding
     nn_to_ttnn = {
-        model.model.layers[0].self_attn.__class__: LlamaAttention,
-        model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
+        decoder_class: TTNNDotsOCRDecoderLayer,
+        norm_class: TTNNDistributedRMSNorm,
+        embed_class: TTNNEmbedding,
     }
-    modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
+    modules = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
 
-    # Pass 3: Replace remaining Linear layers (lm_head, etc.) with replicated TTNNLinear
+    # Convert ModuleList to plain list — Qwen2Model.forward slices self.layers[:n],
+    # which constructs a new ModuleList and fails isinstance(TTNNModule, nn.Module).
+    layers_list = list(model.model.layers)
+    del model.model._modules["layers"]
+    model.model.layers = layers_list
+
+    # Pass 2: Replace lm_head
     nn_to_ttnn2 = {
-        nn.Linear: TTNNLinear,
+        nn.Linear: TTNNLinearIColShardedWRowSharded,
     }
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
 
-    # Prepare text-only input (no vision)
+    type(model).device = property(lambda self: torch.device("cpu"))
+
     messages = [
-        {
-            "role": "user",
-            "content": "What is optical character recognition and how does it work?",
-        },
+        {"role": "user", "content": "What is optical character recognition and how does it work?"},
     ]
     inputs = tokenizer.apply_chat_template(
         messages,
@@ -179,11 +130,9 @@ def test_dots_ocr_n300(mesh_device):
     if "token_type_ids" in inputs:
         del inputs["token_type_ids"]
 
-    type(model).device = property(lambda self: torch.device("cpu"))
+    set_device(model, mesh_device, device_init=DeviceInit)
 
-    set_device(model, mesh_device, device_init=ReplicatedDeviceInit)
-
-    all_modules = {**modules_mlp, **modules1, **modules2}
+    all_modules = {**modules, **modules2}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
