@@ -332,14 +332,22 @@ def test_deepseek_ocr(mesh_device):
             if isinstance(mod, TTNNModule):
                 _clear_device_caches_on_ttnn_module(mod, visited)
 
+    _is_multi_device = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+
+    from models.experimental.tt_symbiote.modules.decoder_layer import TTNNDeepseekV2DecoderLayer
+
     def _reset_between_runs():
         ttnn.synchronize_device(device)
         paged_cache.reset()
+        for layer in model.model.layers:
+            if isinstance(layer, TTNNDeepseekV2DecoderLayer):
+                layer._cpu_kv_cache = None
         if not use_traced:
-            TTNNConv2dNHWC.CACHED_TTCNN.clear()
             _clear_all_device_caches()
-            device.disable_and_clear_program_cache()
-            device.enable_program_cache()
+            if not _is_multi_device:
+                TTNNConv2dNHWC.CACHED_TTCNN.clear()
+                device.disable_and_clear_program_cache()
+                device.enable_program_cache()
 
     # Warmup runs fill the program cache and populate vision cache.
     # In TRACED mode the TracedRun lifecycle also progresses:

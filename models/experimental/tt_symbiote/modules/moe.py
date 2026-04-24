@@ -1768,10 +1768,84 @@ def _to_torch_for_fallback(tensor):
     return tensor
 
 
-# @trace_disabled
+@trace_enabled
+class _TTNNDeepseekV2MoEKernel(TTNNModule):
+    """Pure-TTNN kernel for DeepSeek V2 MoE — only used on multi-device.
+
+    This is the trace-eligible inner module. It contains gate, experts, and
+    shared_experts but NO CPU fallback path, making it safe to trace.
+    Seq is padded to the next power-of-2 so T is invariant across capture/replay.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.num_experts_per_tok = config.num_experts_per_tok
+
+    def preprocess_weights_impl(self):
+        if hasattr(self.gate, "init_parameters"):
+            self.gate.init_parameters()
+        self.gate.preprocess_weights()
+        self.experts.preprocess_weights()
+        if self.shared_experts is not None:
+            self.shared_experts.preprocess_weights()
+
+    @staticmethod
+    def _pad_seq(t, seq_dim, seq_len):
+        """Pad seq_dim to the next power-of-2 (>=32). Returns (padded, pad_amount)."""
+        target = max(32, 1 << ((seq_len - 1).bit_length())) if seq_len > 1 else 32
+        pad = target - seq_len
+        if pad == 0:
+            return t, 0
+        rank = len(t.shape)
+        padding = tuple((0, pad if i == seq_dim else 0) for i in range(rank))
+        return ttnn.pad(t, padding=padding, value=0.0), pad
+
+    def forward(self, hidden_states):
+        hidden_states = _unwrap_ttnn(hidden_states)
+        orig_shape = list(hidden_states.shape)
+        if len(orig_shape) == 3:
+            batch, seq, hidden = orig_shape
+            hs4d = ttnn.reshape(hidden_states, (batch, 1, seq, hidden))
+        else:
+            hs4d = hidden_states
+            batch, _, seq, hidden = hs4d.shape
+            orig_shape = [batch, seq, hidden]
+
+        orig_seq = seq
+        hs4d, pad_amount = self._pad_seq(hs4d, seq_dim=2, seq_len=seq)
+        padded_seq = orig_seq + pad_amount
+
+        # Gate expects 3D input
+        hs3d_padded = ttnn.reshape(hs4d, (batch, padded_seq, hidden))
+        topk_idx, topk_weight, _ = self.gate(hs3d_padded)
+
+        T = batch * padded_seq
+        topk_idx = ttnn.reshape(topk_idx, (T, self.num_experts_per_tok))
+        topk_weight = ttnn.reshape(topk_weight, (T, self.num_experts_per_tok))
+
+        routed_output = self.experts(hs4d, topk_idx, topk_weight)
+        routed_output = _unwrap_ttnn(routed_output)
+
+        if self.shared_experts is not None:
+            shared_out = _unwrap_ttnn(self.shared_experts(hs4d))
+            routed_output = ttnn.add(routed_output, shared_out)
+
+        if pad_amount > 0:
+            routed_output = ttnn.slice(routed_output, (0, 0, 0, 0), (batch, 1, orig_seq, hidden))
+
+        return ttnn.reshape(routed_output, orig_shape)
+
+
 class TTNNDeepseekV2MoE(TTNNModule):
     """TTNN symbiote for DeepSeek V2 MoE.
-    Uses TTNNDeepseekOCRMoEGate, reuses TTNNExperts for moe_infer, and TTNNGlm4MoeMLP for shared expert.
+
+    On multi-device (1×8): delegates to _TTNNDeepseekV2MoEKernel which is
+    @trace_enabled and performs gate + all-to-all experts + shared experts
+    entirely on device with seq padded to a constant power-of-2.
+
+    On single-device (N150): falls back to the HF torch reference.
     """
 
     def __init__(self, config):
@@ -1780,22 +1854,26 @@ class TTNNDeepseekV2MoE(TTNNModule):
         self.hidden_size = config.hidden_size
         self.num_experts_per_tok = config.num_experts_per_tok
         self.n_routed_experts = config.n_routed_experts
+        self.kernel = None
 
     @classmethod
     def from_torch(cls, torch_moe):
         module = cls(torch_moe.config)
         module._fallback_torch_layer = torch_moe
 
-        module.gate = TTNNDeepseekOCRMoEGate.from_torch(torch_moe.gate)
+        kernel = _TTNNDeepseekV2MoEKernel(torch_moe.config)
+        kernel._fallback_torch_layer = torch_moe
+        kernel.gate = TTNNDeepseekOCRMoEGate.from_torch(torch_moe.gate)
 
         stacked_experts = cls._stack_deepseek_v2_experts(torch_moe.experts, torch_moe.config)
-        module.experts = TTNNExperts.from_torch(stacked_experts)
+        kernel.experts = TTNNExperts.from_torch(stacked_experts)
 
         if getattr(torch_moe, "shared_experts", None) is not None:
-            module.shared_experts = TTNNDeepseekV2DenseMLP.from_torch(torch_moe.shared_experts)
+            kernel.shared_experts = TTNNDeepseekV2DenseMLP.from_torch(torch_moe.shared_experts)
         else:
-            module.shared_experts = None
+            kernel.shared_experts = None
 
+        module.kernel = kernel
         return module
 
     @staticmethod
@@ -1824,68 +1902,36 @@ class TTNNDeepseekV2MoE(TTNNModule):
         return out
 
     def preprocess_weights_impl(self):
-        if hasattr(self.gate, "init_parameters"):
-            self.gate.init_parameters()
-        self.gate.preprocess_weights()
-        self.experts.preprocess_weights()
-        if self.shared_experts is not None:
-            self.shared_experts.preprocess_weights()
+        if self.kernel is not None:
+            self.kernel.preprocess_weights()
 
-    def _forward_ttnn(self, hidden_states):
-        hidden_states = _unwrap_ttnn(hidden_states)
-        orig_shape = list(hidden_states.shape)
-        if len(orig_shape) == 3:
-            batch, seq, hidden = orig_shape
-            hidden_states_4d = ttnn.reshape(hidden_states, (batch, 1, seq, hidden))
-        else:
-            hidden_states_4d = hidden_states
-            batch, _, seq, hidden = hidden_states_4d.shape
-            orig_shape = [batch, seq, hidden]
-
-        topk_idx, topk_weight, _ = self.gate(hidden_states)
-
-        # Gate outputs 4D (1, 1, T, top_k); TTNNExperts expects 2D (T, top_k)
-        T = batch * seq
-        topk_idx = ttnn.reshape(topk_idx, (T, self.num_experts_per_tok))
-        topk_weight = ttnn.reshape(topk_weight, (T, self.num_experts_per_tok))
-
-        routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
-        routed_output = _unwrap_ttnn(routed_output)
-
-        if self.shared_experts is not None:
-            shared_out = _unwrap_ttnn(self.shared_experts(hidden_states_4d))
-            routed_output = ttnn.add(routed_output, shared_out)
-
-        return ttnn.reshape(routed_output, orig_shape)
+    def move_weights_to_device_impl(self):
+        if self.kernel is not None and self.device is not None:
+            self.kernel.to_device(self.device)
+            self.kernel.move_weights_to_device()
 
     def forward(self, hidden_states):
         self._used_fallback = False
         device = getattr(self, "device", None)
-        if device is None:
-            self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
-            with torch.no_grad():
-                return self._fallback_torch_layer(inp)
         n_mesh = _mesh_device_count(device)
-        if n_mesh is not None and n_mesh <= 1:
-            self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
-            with torch.no_grad():
-                out = self._fallback_torch_layer(inp)
-            return ttnn.from_torch(
-                out.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        try:
-            return self._forward_ttnn(hidden_states)
-        except Exception:
-            self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
-            with torch.no_grad():
-                return self._fallback_torch_layer(inp)
+        use_ttnn = device is not None and (n_mesh is None or n_mesh > 1)
+
+        if use_ttnn:
+            return self.kernel(hidden_states)
+
+        self._used_fallback = True
+        inp = _to_torch_for_fallback(hidden_states)
+        with torch.no_grad():
+            out = self._fallback_torch_layer(inp)
+        if device is None:
+            return out
+        return ttnn.from_torch(
+            out.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
 
 # @trace_enabled

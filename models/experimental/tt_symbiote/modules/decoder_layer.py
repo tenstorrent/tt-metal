@@ -14,9 +14,21 @@ import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
-from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention, LlamaAttention
+from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE, TTNNDeepseekV2MoE, TTNNDeepseekV2DenseMLP
-from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm, TTNNRMSNorm
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
+
+
+def _ttnn_to_torch(t):
+    """Convert ttnn.Tensor to torch.Tensor on CPU (bfloat16)."""
+    if isinstance(t, ttnn.Tensor):
+        dev = t.device()
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).to(torch.bfloat16)
+        return ttnn.to_torch(t).to(torch.bfloat16)
+    if isinstance(t, torch.Tensor):
+        return t.to(torch.bfloat16)
+    return t
 
 
 @trace_enabled
@@ -159,21 +171,15 @@ class TTNNDeepseekV2DecoderLayer(TTNNModule):
 
     def __init__(self):
         super().__init__()
-        self.input_layernorm = None
-        self.post_attention_layernorm = None
-        self.self_attn = None
         self.mlp = None
         self._is_dense_layer = False
+        self._cpu_kv_cache = None
 
     @classmethod
     def from_torch(cls, torch_layer):
         """Create from HuggingFace DeepseekV2DecoderLayer."""
         new_layer = cls()
         new_layer._fallback_torch_layer = torch_layer
-
-        new_layer.input_layernorm = TTNNRMSNorm.from_torch(torch_layer.input_layernorm)
-        new_layer.post_attention_layernorm = TTNNRMSNorm.from_torch(torch_layer.post_attention_layernorm)
-        new_layer.self_attn = LlamaAttention.from_torch(torch_layer.self_attn)
 
         config = torch_layer.self_attn.config
         layer_idx = torch_layer.self_attn.layer_idx
@@ -221,32 +227,44 @@ class TTNNDeepseekV2DecoderLayer(TTNNModule):
         cache_position=None,
         **kwargs,
     ):
-        hs = hidden_states
-        hs = self._ensure_ttnn(hs)
+        # Run the full HF decoder layer to get post-attention hidden states.
+        # DeepseekV2 uses MLA (Multi-head Latent Attention) which is not
+        # compatible with LlamaAttention, so we delegate the attention +
+        # input_layernorm + residual add to the original torch layer.
+        hs_in = hidden_states
+        if isinstance(hs_in, ttnn.Tensor):
+            hs_in = _ttnn_to_torch(hs_in)
 
-        residual = hs
+        torch_layer = self._fallback_torch_layer
 
-        hs = self.input_layernorm(hs)
+        # The paged KV cache is for TTNN ops only; HF MLA attention needs a
+        # standard DynamicCache that accumulates K/V across decode steps.
+        from transformers import DynamicCache
 
-        attn_cache_position = cache_position if cache_position is not None else position_ids
-        attn_out, self_attn_weights, present_key_value = self.self_attn(
-            hidden_states=hs,
+        if self._cpu_kv_cache is None:
+            self._cpu_kv_cache = DynamicCache()
+
+        # Run input_layernorm + attention + residual (first half of HF layer).
+        residual_torch = hs_in
+        hs_normed_attn = torch_layer.input_layernorm(hs_in)
+        attn_out, self_attn_weights, present_key_value = torch_layer.self_attn(
+            hidden_states=hs_normed_attn,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_values=past_key_value,
+            past_key_value=self._cpu_kv_cache,
             output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=attn_cache_position,
+            use_cache=True,
         )
+        # Residual add → post-attention hidden state
+        hs_post_attn = residual_torch + attn_out
 
-        attn_out = self._ensure_ttnn(attn_out)
-        hs = ttnn.add(residual, attn_out)
+        # post_attention_layernorm on CPU, then hand off to TTNN MoE/MLP.
+        hs_normed_mlp = torch_layer.post_attention_layernorm(hs_post_attn)
 
-        residual = hs
+        residual = self._ensure_ttnn(hs_post_attn)
+        hs_normed_mlp_tt = self._ensure_ttnn(hs_normed_mlp)
 
-        hs_normed = self.post_attention_layernorm(hs)
-
-        mlp_out = self.mlp(hs_normed)
+        mlp_out = self.mlp(hs_normed_mlp_tt)
         mlp_out = self._ensure_ttnn(mlp_out)
 
         hs = ttnn.add(residual, mlp_out)
