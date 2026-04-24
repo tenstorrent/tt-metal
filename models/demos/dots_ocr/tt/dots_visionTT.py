@@ -7,8 +7,8 @@ Reuses ttnn patterns from Qwen2.5-VL / Qwen3-VL (RMSNorm, SwiGLU MLP, LayerNorm+
 for norms/MLP. Rotary position + scaled dot-product attention run in torch with the
 same numerics as `reference/dots_ocr/modeling_dots_vision` (QKV/Proj in ttnn where noted).
 
-The reference `DotsVisionTransformer.rot_pos_emb` is used for RoPE indices so unpooled
-geometry matches the PyTorch model.
+RoPE indices/frequencies are generated via a Pi0 helper that matches
+`DotsVisionTransformer.rot_pos_emb` geometry.
 
 Typical `state_dict` prefix: ``"vision_tower."`` (keys like ``vision_tower.blocks.0...``).
 """
@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -26,10 +27,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm as TtRmsNorm
 from models.demos.dots_ocr.reference.dots_ocr.configuration_dots import DotsVisionConfig
-from models.demos.dots_ocr.reference.dots_ocr.modeling_dots_vision import (
-    DotsVisionTransformer,
-    apply_rotary_pos_emb_vision,
-)
+from models.demos.dots_ocr.reference.dots_ocr.modeling_dots_vision import apply_rotary_pos_emb_vision
 from models.demos.qwen3_vl.tt.vision_layernorm import LayerNorm as TtLayerNorm
 from models.tt_transformers.tt.common import Mode
 
@@ -78,6 +76,39 @@ def _qkv_from_state(state_dict: Dict[str, torch.Tensor], key: str) -> torch.Tens
 
 def _wo_from_state(state_dict: Dict[str, torch.Tensor], key: str) -> torch.Tensor:
     return state_dict[key].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+
+
+class VisionRotaryEmbeddingTt(LightweightModule):
+    """Path-A TTNN rotary frequencies (raw freqs, not precomputed cos/sin)."""
+
+    def __init__(self, mesh_device: Any, dim: int, theta: float = 10000.0):
+        super().__init__()
+        self.mesh = mesh_device
+        self.dim = dim
+        self.theta = theta
+
+        # pi0-style TTNN math:
+        # inv_freq = 1 / (theta ** (arange(0, dim, 2) / dim))
+        idx = ttnn.arange(0, dim, 2, dtype=ttnn.float32, device=mesh_device)
+        idx = ttnn.to_layout(idx, ttnn.TILE_LAYOUT)
+        exponent = ttnn.multiply(idx, 1.0 / dim)
+        ttnn.deallocate(idx)
+        theta_pow = ttnn.pow(theta, exponent)
+        ttnn.deallocate(exponent)
+        self.inv_freq = ttnn.reciprocal(theta_pow)
+        ttnn.deallocate(theta_pow)
+
+    def forward(self, seqlen: int) -> ttnn.Tensor:
+        # freqs = outer(arange(seqlen), inv_freq)
+        seq = ttnn.arange(0, seqlen, 1, dtype=ttnn.float32, device=self.mesh)
+        seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT)
+        seq_col = ttnn.reshape(seq, (seqlen, 1))
+        ttnn.deallocate(seq)
+        inv_row = ttnn.reshape(self.inv_freq, (1, self.inv_freq.shape[-1]))
+        freqs = ttnn.multiply(seq_col, inv_row)
+        ttnn.deallocate(seq_col)
+        ttnn.deallocate(inv_row)
+        return freqs
 
 
 class DotsPatchEmbedTt(LightweightModule):
@@ -560,8 +591,7 @@ class DotsVisionBlockTt(LightweightModule):
 
 class DotsVisionTransformerTT(LightweightModule):
     """
-    ttnn Dots vision trunk + merger. RoPE uses the reference (torch) for bit-exact
-    indices; patch/trunk norms/attn/MLP/post/merger use ttnn.
+    ttnn Dots vision trunk + merger. RoPE and patch/trunk norms/attn/MLP/post/merger use ttnn.
     """
 
     def __init__(
@@ -608,9 +638,9 @@ class DotsVisionTransformerTT(LightweightModule):
             self.cfg,
             weight_cache_path,
         )
-        # Reference geometry + rope (untrained) for `rot_pos_emb` (buffers only, deterministic).
-        self._ref = DotsVisionTransformer(self.dots_cfg)
-        self._ref.eval()
+        head_dim = self.cfg.embed_dim // self.cfg.num_attention_heads
+        self.rotary_dim = head_dim // 2
+        self.rotary_pos_emb = VisionRotaryEmbeddingTt(mesh_device, self.rotary_dim, theta=10000.0)
         if self.dots_cfg.post_norm:
             self.post_norm = TtRmsNorm(
                 device=mesh_device,
@@ -634,9 +664,67 @@ class DotsVisionTransformerTT(LightweightModule):
     def _patchify(self, hidden_states: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         return self.patch_embed(hidden_states, grid_thw)
 
+    def _get_pos_ids_by_grid_ttnn(self, grid_thw_list: list[tuple[int, int, int]]) -> tuple[list[int], list[int]]:
+        h_all: list[int] = []
+        w_all: list[int] = []
+        sm = self.cfg.spatial_merge_size
+        for t, h, w in grid_thw_list:
+            h_block: list[int] = []
+            w_block: list[int] = []
+            for hb in range(0, h, sm):
+                for wb in range(0, w, sm):
+                    for hi in range(sm):
+                        for wi in range(sm):
+                            h_block.append(hb + hi)
+                            w_block.append(wb + wi)
+            for _ in range(t):
+                h_all.extend(h_block)
+                w_all.extend(w_block)
+        return h_all, w_all
+
+    def _rot_pos_ttnn(self, grid_thw_list: list[tuple[int, int, int]]) -> ttnn.Tensor:
+        h_ids, w_ids = self._get_pos_ids_by_grid_ttnn(grid_thw_list)
+        max_grid_size = max(max(h, w) for _, h, w in grid_thw_list)
+        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+        # ttnn.embedding currently requires BF16 weight tensors.
+        rotary_pos_emb_full = ttnn.typecast(rotary_pos_emb_full, ttnn.bfloat16)
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh)
+        h_idx_tt = ttnn.as_tensor(
+            np.asarray(h_ids, dtype=np.uint32).reshape(1, -1),
+            dtype=ttnn.uint32,
+            device=self.mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        w_idx_tt = ttnn.as_tensor(
+            np.asarray(w_ids, dtype=np.uint32).reshape(1, -1),
+            dtype=ttnn.uint32,
+            device=self.mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        h_freqs = ttnn.embedding(h_idx_tt, rotary_pos_emb_full, layout=ttnn.TILE_LAYOUT)
+        w_freqs = ttnn.embedding(w_idx_tt, rotary_pos_emb_full, layout=ttnn.TILE_LAYOUT)
+        ttnn.deallocate(h_idx_tt)
+        ttnn.deallocate(w_idx_tt)
+        ttnn.deallocate(rotary_pos_emb_full)
+        token_count = len(h_ids)
+        h_freqs = ttnn.reshape(h_freqs, (token_count, h_freqs.shape[-1]))
+        w_freqs = ttnn.reshape(w_freqs, (token_count, w_freqs.shape[-1]))
+        rotary = ttnn.concat([h_freqs, w_freqs], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(h_freqs)
+        ttnn.deallocate(w_freqs)
+        return rotary
+
     @torch.inference_mode()
     def _rot_pos(self, grid_thw: torch.Tensor) -> torch.Tensor:
-        return self._ref.rot_pos_emb(grid_thw)
+        grid_thw_list = [tuple(int(v) for v in row) for row in grid_thw.tolist()]
+        rotary_tt = self._rot_pos_ttnn(grid_thw_list)
+        rotary = ttnn.to_torch(rotary_tt)
+        ttnn.deallocate(rotary_tt)
+        return rotary
 
     def _prepare_ttnn(self, emb: torch.Tensor, mesh_device: Any) -> Tuple[ttnn.Tensor, int, int]:
         s, d = emb.shape[0], emb.shape[1]
