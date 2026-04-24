@@ -35,7 +35,8 @@ void bind_experimental_subgroup_gather_histograms_operation(nb::module_& mod) {
                 num_links: number of ethernet links for fabric (0 = auto).
                 memory_config: output memory config.
                 subdevice_id: optional subdevice for worker cores.
-                topology: fabric topology (Linear or Ring).
+                topology: fabric topology (Linear, Ring, Mesh, or Torus). If None, uses
+                    the active fabric's topology.
         )doc",
         &subgroup_gather_histograms,
         nb::arg("input_tensor").noconvert(),
@@ -44,7 +45,7 @@ void bind_experimental_subgroup_gather_histograms_operation(nb::module_& mod) {
         nb::arg("num_links"),
         nb::arg("memory_config"),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear));
+        nb::arg("topology") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::subgroup_gather_histograms::detail
