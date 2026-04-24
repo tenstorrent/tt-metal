@@ -126,11 +126,21 @@ def run(
     # If the vector has arg1/arg2/arg3, call positionally to match the trace.
     use_positional = arg1 is not None and kwargs.get("starts") is None
 
+    # Check if arg3 (steps) was actually present in the vector or is just a default.
+    has_steps_arg = arg3 is not None and arg3 != "__ABSENT__"
+    has_steps_kwarg = kwargs.get("steps") is not None
+
     start_time = start_measuring_time()
     if use_positional:
-        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+        if has_steps_arg:
+            output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+        else:
+            output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)
     else:
-        output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs)
+        if has_steps_kwarg:
+            output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs)
+        else:
+            output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
