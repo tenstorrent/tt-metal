@@ -19,11 +19,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
 
-    LLK_ASSERT(
-        cb_wait_front_validate(input, (std::uint32_t)num_tiles),
-        "cb_wait_front: successive calls must request strictly increasing num_tiles "
-        "with a constant step size between calls (until cb_pop_front resets the sequence)");
-
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
@@ -40,10 +35,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
     std::uint32_t input = operand;
-
-#ifdef ENABLE_LLK_ASSERT
-    cb_wait_front_validate(input, /*num_tiles=*/0, /*reset=*/true);
-#endif
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr =
         (volatile std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);

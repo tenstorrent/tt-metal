@@ -192,8 +192,9 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * internal write pointer wraps correctly. Individual push amounts do not need
  * to evenly divide the CB size. Example: on a CB of size 12,
  * cb_push_back(5) followed by cb_push_back(7) is correct (total 12 = CB
- * size). Out-of-bounds pointer advancement is detected at runtime when
- * watcher or lightweight kernel asserts are enabled.
+ * size). However, cb_push_back(7) followed by cb_push_back(7) on the same
+ * CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is
+ * detected at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
@@ -242,8 +243,9 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  * internal read pointer wraps correctly. Individual pop amounts do not need
  * to evenly divide the CB size. Example: on a CB of size 12,
  * cb_pop_front(5) followed by cb_pop_front(7) is correct (total 12 = CB
- * size). Out-of-bounds pointer advancement is detected at runtime when
- * watcher or lightweight kernel asserts are enabled.
+ * size). However, cb_pop_front(7) followed by cb_pop_front(7) on the same
+ * CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is
+ * detected at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
@@ -255,9 +257,6 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
-#if ASSERT_ENABLED
-    cb_wait_front_validate(operand, /*num_tiles=*/0, /*reset=*/true);
-#endif
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -456,16 +455,12 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
  * 4 calls of cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of
  * cb_wait_front() waiting on 8, 16, 24, 32 tiles should be issued.
  *
- * Important note: within a single cumulative wait sequence (between cb_pop_front calls), the step size between
- * consecutive cb_wait_front calls should be consistent. Example: cb_wait_front(8), cb_wait_front(16),
- * cb_wait_front(24), cb_pop_front(24) is correct (consistent step of 8). Different step sizes may be used in
- * separate wait/pop sequences on the same CB.
- *
  * Important note: the total number of tiles passed to cb_pop_front/cb_push_back calls within one complete cycle of
  * the CB must sum to exactly the CB size (fifo_num_pages) so that the internal pointer wraps correctly. Individual
  * pop or push amounts do not need to evenly divide the CB size. Example: on a CB of size 12, cb_pop_front(5)
- * followed by cb_pop_front(7) is correct (total 12 = CB size). Out-of-bounds pointer advancement is detected at
- * runtime when watcher or lightweight kernel asserts are enabled.
+ * followed by cb_pop_front(7) is correct (total 12 = CB size). However, cb_pop_front(7) followed by
+ * cb_pop_front(7) on the same CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is detected
+ * at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
@@ -477,7 +472,6 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
-    ASSERT(cb_wait_front_validate(operand, (uint32_t)num_pages));
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
     uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 

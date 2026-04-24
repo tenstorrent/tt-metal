@@ -26,16 +26,12 @@ namespace ckernel {
  * cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of cb_wait_front()
  * waiting on 8, 16, 24, 32 tiles should be issued.
  *
- * Important note: within a single cumulative wait sequence (between cb_pop_front calls), the step size between
- * consecutive cb_wait_front calls should be consistent. Example: cb_wait_front(8), cb_wait_front(16),
- * cb_wait_front(24), cb_pop_front(24) is correct (consistent step of 8). Different step sizes may be used in
- * separate wait/pop sequences on the same CB.
- *
  * Important note: the total number of tiles passed to cb_pop_front/cb_push_back calls within one complete cycle of
  * the CB must sum to exactly the CB size (fifo_num_pages) so that the internal pointer wraps correctly. Individual
  * pop or push amounts do not need to evenly divide the CB size. Example: on a CB of size 12, cb_pop_front(5)
- * followed by cb_pop_front(7) is correct (total 12 = CB size). Out-of-bounds pointer advancement is detected at
- * runtime when watcher or lightweight kernel asserts are enabled.
+ * followed by cb_pop_front(7) is correct (total 12 = CB size). However, cb_pop_front(7) followed by
+ * cb_pop_front(7) on the same CB is incorrect (total 14 != 12). Out-of-bounds pointer advancement is detected
+ * at runtime when watcher or lightweight kernel asserts are enabled.
  *
  * Return value: None
  *
