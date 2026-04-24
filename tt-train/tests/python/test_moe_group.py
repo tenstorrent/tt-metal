@@ -53,6 +53,7 @@ def moe_group_torch_reference(
     *,
     k: int,
     num_total_cores: int = 64,  # parallel scan splits rows across this many cores
+    t_cap: int = 0,  # if nonzero, use this as allocated T_cap (match device)
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Reference implementation of the group op.
 
@@ -75,7 +76,7 @@ def moe_group_torch_reference(
     assert metadata.shape[:3] == (D, B, S)
     assert metadata.shape[3] == k, f"metadata last dim {metadata.shape[3]} != k {k}"
     E_local = int(local_expert_ids.numel())
-    T_cap = moe_group_t_cap(E_local, k, D, B, S, num_total_cores=num_total_cores)
+    T_cap = t_cap if t_cap > 0 else moe_group_t_cap(E_local, k, D, B, S, num_total_cores=num_total_cores)
 
     # Flatten (d, b, s) to a single axis for easier indexing.
     total_rows = D * B * S
@@ -367,10 +368,22 @@ class TestMoeGroupDevice:
         assert list(plan.shape) == [1, 1, 1, T_cap], f"plan shape {plan.shape}"
 
     @staticmethod
-    def _device_num_total_cores() -> int:
+    def _device_grid_size() -> int:
         device = ttml.autograd.AutoContext.get_instance().get_device()
         grid = device.compute_with_storage_grid_size()
         return int(grid.x) * int(grid.y)
+
+    @staticmethod
+    def _device_num_total_cores(e_local: int = 0, k: int = 0, d: int = 0, b: int = 0, s: int = 0) -> int:
+        # Mirror the kernel's split_work_to_cores(grid, total_tiles) logic:
+        # num_workers = min(total_tiles, grid_size). t_cap is sized with the
+        # full grid, so we compute total_tiles from the same t_cap formula.
+        grid_size = TestMoeGroupDevice._device_grid_size()
+        if e_local == 0:
+            return grid_size
+        t_cap = moe_group_t_cap(e_local, k, d, b, s, num_total_cores=grid_size)
+        total_tiles = t_cap // 32
+        return min(total_tiles, grid_size)
 
     @staticmethod
     def _check_correctness(
@@ -381,13 +394,19 @@ class TestMoeGroupDevice:
         label: str = "",
     ):
         """Run op + reference, compare every active row content, counts, offsets, plan."""
-        num_total_cores = TestMoeGroupDevice._device_num_total_cores()
+        D, B, S, _H = dispatched.shape
+        E_local = int(local_expert_ids.numel())
+        num_total_cores = TestMoeGroupDevice._device_num_total_cores(E_local, k, D, B, S)
+        # T_cap is sized with the full grid (matches host moe_group_device_operation.cpp).
+        grid_size = TestMoeGroupDevice._device_grid_size()
+        device_t_cap = moe_group_t_cap(E_local, k, D, B, S, num_total_cores=grid_size)
         ref_grouped, ref_counts, ref_offsets, ref_plan = moe_group_torch_reference(
             dispatched,
             metadata,
             local_expert_ids,
             k=k,
             num_total_cores=num_total_cores,
+            t_cap=device_t_cap,
         )
         print(
             f"\n[{label}] dispatched={dispatched.shape} metadata={metadata.shape} k={k} E_local={local_expert_ids.numel()}"
@@ -398,8 +417,6 @@ class TestMoeGroupDevice:
             dispatched, metadata, local_expert_ids, k
         )
         print(f"[{label}] device op returned", flush=True)
-
-        E_local = local_expert_ids.numel()
 
         # -- counts --
         print(f"[{label}] reading counts...", flush=True)
@@ -528,6 +545,23 @@ class TestMoeGroupDevice:
         metadata = TestMoeGroupReference._make_metadata(D, B, S, K, E, seed=42)
         self._check_correctness(dispatched, metadata, local_expert_ids, K, "roofline")
 
+    def test_all_tokens_local_routing(self):
+        """Worst-case T_active: every token's top-K picks only local experts.
+        Exercises the `min(E_local, K) · T_total` upper bound used in T_cap —
+        T_active equals that bound exactly, so `grouped` fills to capacity
+        (modulo padding) and no tile is tail-skipped.
+        """
+        D, B, S, H = 4, 1, 512, 1024
+        E, K = 16, 4
+        E_local = 4
+        local_expert_ids = torch.arange(E_local, dtype=torch.int32)
+        dispatched = TestMoeGroupReference._make_dispatched(D, B, S, H, seed=23)
+        # Force every token's top-K to be exactly the local experts.
+        md = torch.zeros(D, B, S, K, dtype=torch.int32)
+        for ki in range(K):
+            md[..., ki] = int(local_expert_ids[ki % E_local])
+        self._check_correctness(dispatched, md, local_expert_ids, K, "all_local")
+
 
 # ---------------------------------------------------------------------------
 # Device-time profiling (Tracy).
@@ -615,68 +649,64 @@ class TestMoeGroupProfile:
     """Run the op under Tracy, filter ops log by signposts, print device time."""
 
     @staticmethod
-    def _run_and_report(label, D, B, S, H, E, K, E_local, seed=0, num_iters=10, warmup=2):
+    def _run_and_report(label, D, B, S, H, E, K, E_local, seed=0, num_iters=10, warmup=2, all_local=False):
         local_expert_ids = torch.arange(E_local, dtype=torch.int32)
         dispatched = TestMoeGroupReference._make_dispatched(D, B, S, H, seed=seed)
-        metadata = TestMoeGroupReference._make_metadata(D, B, S, K, E, seed=seed)
+        if all_local:
+            # Worst-case routing: every token's top-K is entirely local.
+            # T_active = min(E_local, K) · T_total = the hard upper bound
+            # the op's T_cap is sized for.
+            metadata = torch.zeros(D, B, S, K, dtype=torch.int32)
+            for ki in range(K):
+                metadata[..., ki] = int(local_expert_ids[ki % E_local])
+        else:
+            metadata = TestMoeGroupReference._make_metadata(D, B, S, K, E, seed=seed)
 
         d_tt = _to_device_tensor(dispatched.float(), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
         md_tt = _to_device_tensor(metadata.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
         le_tt = _to_device_tensor(local_expert_ids.to(torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint16)
+
+        # Tracy signposts tag op rows in the CSV with a routing label so the
+        # summary table can split "balanced" vs "fully_skewed" runs even at
+        # identical shapes (op ATTRIBUTES don't carry routing info). Emit the
+        # start signpost BEFORE the correctness check and warmup too so those
+        # launches aren't tagged with an empty "-" routing in the table.
+        try:
+            from tracy import signpost as _signpost
+        except Exception:
+            _signpost = lambda _name: None
+        routing = "fully_skewed" if all_local else "balanced"
+        _signpost(f"moe_group_start_{routing}")
+
+        # Correctness sanity — run one op invocation and compare against the
+        # torch reference before starting timed iters. Catches silent shape /
+        # routing regressions that the correctness suite might not cover.
+        TestMoeGroupDevice._check_correctness(
+            dispatched, metadata, local_expert_ids, int(K), label=f"{label}[correctness]"
+        )
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         for _ in range(warmup):
             ttml.ops.metal_ops.moe_group(d_tt, md_tt, le_tt, int(E_local), int(K))
         ttnn.synchronize_device(device)
 
-        # Simple host-wall timing per op + per-iter profiler flush.
-        # nano_gpt main.cpp calls read_results after every major phase; we mirror
-        # that pattern — without per-iter flush, cpp_device_perf_report.csv stays empty.
-        import time as _time
-
-        durations_ns = []
+        # Run N iters with per-iter profiler flush so the Tracy device CSV gets
+        # one row per launch. Host-wall timing is intentionally NOT reported —
+        # it conflates python overhead + synchronize + device kernel and was
+        # misleading next to the DRAM roofline. The summary table produced by
+        # parse_profile_results.py uses device-kernel-only times from the CSV.
         for _ in range(num_iters):
-            t0 = _time.perf_counter_ns()
             ttml.ops.metal_ops.moe_group(d_tt, md_tt, le_tt, int(E_local), int(K))
             ttnn.synchronize_device(device)
             ttnn.ReadDeviceProfiler(device)  # flush device zones for this op
-            t1 = _time.perf_counter_ns()
-            durations_ns.append(t1 - t0)
-
-        import numpy as _np
-
-        arr = _np.asarray(durations_ns, dtype=float)
-        avg_ns = arr.mean()
-        med_ns = _np.median(arr)
-        min_ns = arr.min()
-        max_ns = arr.max()
+        _signpost(f"moe_group_end_{routing}")
 
         T_total = D * B * S
         T_cap = moe_group_t_cap(E_local, K, D, B, S, num_total_cores=TestMoeGroupDevice._device_num_total_cores())
-
-        # Roofline: DRAM-bound. Op reads T_active rows from dispatched and writes
-        # them to grouped (both bf16, 2B/elem). Expected T_active under random
-        # routing: E_local * T_total * K / E (capped by min(E_local, K) * T_total).
-        # WH DRAM BW ≈ 288 GB/s per chip.
-        t_active_upper = min(E_local, K) * T_total
-        t_active_expected = min(E_local * T_total * K / E, t_active_upper)
-        bytes_per_op = 4 * t_active_expected * H  # 2×read + 2×write of bf16
-        wh_dram_bw_bytes_per_sec = 288e9
-        roofline_ns = bytes_per_op / wh_dram_bw_bytes_per_sec * 1e9
-
-        util_pct = 100.0 * roofline_ns / avg_ns if avg_ns > 0 else 0.0
         print(
             f"\n[{label}] D={D} B={B} S={S} T_total={T_total} H={H} "
-            f"E={E} K={K} E_local={E_local} T_cap={T_cap}\n"
-            f"  iters={len(arr)}  (host-wall incl. synchronize)\n"
-            f"  avg    = {avg_ns:>12.0f} ns  {avg_ns/1e3:>10.2f} µs  {avg_ns/1e6:>9.4f} ms\n"
-            f"  median = {med_ns:>12.0f} ns  {med_ns/1e3:>10.2f} µs  {med_ns/1e6:>9.4f} ms\n"
-            f"  min    = {min_ns:>12.0f} ns  {min_ns/1e3:>10.2f} µs  {min_ns/1e6:>9.4f} ms\n"
-            f"  max    = {max_ns:>12.0f} ns  {max_ns/1e3:>10.2f} µs  {max_ns/1e6:>9.4f} ms\n"
-            f"  roofline (DRAM @ 288 GB/s, T_active={t_active_expected:.0f}, "
-            f"{bytes_per_op/1e6:.1f} MB):\n"
-            f"    ideal  = {roofline_ns:>12.0f} ns  {roofline_ns/1e3:>10.2f} µs  "
-            f"{roofline_ns/1e6:>9.4f} ms   ({util_pct:.1f}% of measured)"
+            f"E={E} K={K} E_local={E_local} T_cap={T_cap}  iters={num_iters}  "
+            f"(device-kernel times: see summary table from parse_profile_results.py)"
         )
 
     # -------- parametrized shape sweeps --------
@@ -756,6 +786,29 @@ class TestMoeGroupProfile:
             seed=42,
             num_iters=10,
             warmup=2,
+        )
+
+    def test_profile_all_local_routing(self):
+        """Worst-case routing: every token's top-K is entirely local experts.
+        Max T_active = min(E_local, K) · T_total. Stress-tests the full
+        allocation path and the scatter at peak load.
+        Uses the same shape as the balanced roofline test — the Tracy
+        signpost label "fully_skewed" vs "balanced" lets the parser
+        separate the two routing patterns in the summary table.
+        """
+        self._run_and_report(
+            label="all_local",
+            D=8,
+            B=1,
+            S=4096,
+            H=4096,
+            E=96,
+            K=8,
+            E_local=12,
+            seed=42,
+            num_iters=10,
+            warmup=2,
+            all_local=True,
         )
 
 
