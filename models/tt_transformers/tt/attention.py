@@ -786,10 +786,17 @@ class Attention(LightweightModule):
 
             # Paged TQ cache: forward the shared page_table so the TQ cache writes
             # land in the same physical blocks the model's standard cache uses.
+            # When a single shared cache is attached, eval_e2e sets tq_layer_idx
+            # per layer; fall back to 0 for single-layer caches.
             _tq_is_paged = getattr(turbo_quant_cache, "paged_config", None) is not None
             _tq_page_table = page_table if _tq_is_paged else None
+            _tq_layer_idx = getattr(self, "tq_layer_idx", 0)
             turbo_quant_cache.update_cache(
-                k_for_tq, v_for_tq, layer_idx=0, current_pos=current_pos, page_table=_tq_page_table
+                k_for_tq,
+                v_for_tq,
+                layer_idx=_tq_layer_idx,
+                current_pos=current_pos,
+                page_table=_tq_page_table,
             )
             ttnn.deallocate(k_for_tq)
             ttnn.deallocate(v_for_tq)
@@ -805,7 +812,7 @@ class Attention(LightweightModule):
             # Fused SDPA: reads directly from BFP4 index + BF16 norms caches.
             attn_out_bqhd = turbo_quant_cache.fused_sdpa_decode(
                 q_bqhd,
-                layer_idx=0,
+                layer_idx=_tq_layer_idx,
                 current_pos=current_pos,
                 scale=self.scale,
                 page_table=_tq_page_table,
