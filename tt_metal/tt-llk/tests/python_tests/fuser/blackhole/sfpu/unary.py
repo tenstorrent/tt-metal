@@ -84,8 +84,14 @@ class UnarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
+        dest_acc = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
+        op = f"SfpuType::{self.operation.cpp_enum_value}"
 
-        return f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
+        return (
+            f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
+            f"    test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
+        )
 
     def calculate(
         self,
@@ -100,7 +106,6 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
-            f"    test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
             f"    test_utils::call_unary_sfpu_operation<"
             f"dest_sync{stage}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"

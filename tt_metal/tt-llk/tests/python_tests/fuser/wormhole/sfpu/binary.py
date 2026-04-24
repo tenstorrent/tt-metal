@@ -77,6 +77,11 @@ class BinarySfpu(Sfpu):
 
         return golden_tensor
 
+    def _format_arg(self, stage: int) -> str:
+        if self.operation == MathOperation.SfpuAddTopRow:
+            return "0"
+        return f"math_format{stage}"
+
     def init(
         self,
         operation: FusedOperation,
@@ -85,9 +90,14 @@ class BinarySfpu(Sfpu):
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
+        op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
+        approx_mode = self.approx_mode.cpp_enum_value
+        iterations = self.iterations
+        format = self._format_arg(stage)
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
+            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
         )
 
     def calculate(
@@ -105,14 +115,9 @@ class BinarySfpu(Sfpu):
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
         dst = self.dst_index_out
-
-        if self.operation == MathOperation.SfpuAddTopRow:
-            format = "0"
-        else:
-            format = f"math_format{stage}"
+        format = self._format_arg(stage)
 
         return (
-            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
             f"    test_utils::call_binary_sfpu_operation<"
             f"dest_sync{stage}, {dest_acc}, "
             f"{approx_mode}, {op}, {iterations}, {format}"
