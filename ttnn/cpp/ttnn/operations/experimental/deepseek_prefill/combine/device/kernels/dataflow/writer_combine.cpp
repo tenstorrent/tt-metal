@@ -75,12 +75,14 @@ void kernel_main() {
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(32);
 
     // Batch configuration (index 33) — read_batch_size not used by writer
-
     // Expert region offsets tensor metadata (indices 34-37) — unused by writer but present
     // so that compile_time_args stays consistent between reader and writer.
+    // Number of dispatch groups (index 38) — not used directly by writer but present for consistency
+    constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(38);  // unused but must match reader
+    (void)num_dispatch_groups;
 
-    // TensorAccessorArgs for all 5 tensors (starting at index 38)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<38>();
+    // TensorAccessorArgs for all 4 tensors (starting at index 39)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<39>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
