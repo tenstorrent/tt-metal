@@ -9,6 +9,17 @@
 namespace ckernel
 {
 
+// Currently unused but kept for backwards compatibility
+enum VectorMode
+{
+    None      = 0,
+    R         = 1,
+    C         = 2,
+    RC        = 4,
+    RC_custom = 6,
+    Invalid   = 0xFF,
+};
+
 enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
