@@ -121,7 +121,6 @@ def prepare_trig_inputs(
     src_A: torch.Tensor,
     mathop: MathOperation,
     input_format: DataFormat,
-    output_format: DataFormat,
 ) -> torch.Tensor:
     """
     Prepare inputs per-op with safe value ranges that the Quasar kernel can handle:
@@ -200,9 +199,7 @@ def test_sfpu_trigonometry_quasar(formats_dest_acc_sync_implied_math_input_dims_
         sfpu=False,
     )
 
-    src_A = prepare_trig_inputs(
-        src_A, mathop, formats.input_format, formats.output_format
-    )
+    src_A = prepare_trig_inputs(src_A, mathop, formats.input_format)
 
     num_faces = 4
 

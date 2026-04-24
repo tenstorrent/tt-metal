@@ -124,7 +124,7 @@ inline void _calculate_sine_sfp_rows_()
     TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG2, 1); // flip sign
     TTI_SFPENCC(0, 0);
 
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -202,7 +202,7 @@ inline void _calculate_cosine_sfp_rows_()
     TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG2, 1);
     TTI_SFPENCC(0, 0);
 
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -234,7 +234,7 @@ inline void _calculate_acosh_sfp_rows_()
     // log(LREG1) -> LREG2; LREG3..LREG5 scratch
     _log_body_inline_(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5);
 
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -272,7 +272,7 @@ inline void _calculate_asinh_sfp_rows_()
     TTI_SFPMOV(p_sfpu::LREG3, p_sfpu::LREG3, 1);
     TTI_SFPENCC(0, 0);
 
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -310,7 +310,7 @@ inline void _calculate_atanh_sfp_rows_()
     // res = 0.5 * log(...)  (fp16b 0.5 = 0x3F00)
     TTI_SFPMULI(0x3F00, p_sfpu::LREG2, 0);
 
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
