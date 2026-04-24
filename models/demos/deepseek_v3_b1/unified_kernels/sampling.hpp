@@ -1684,6 +1684,14 @@ struct TopKSampling {
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::output_addr);
                         output_ptr[0] = selected_index;
 
+                        if constexpr (CTArgs::socket_mode != 0) {
+                            cb_reserve_back(CTArgs::socket_cb_id, 1);
+                            auto d2h_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
+                            d2h_ptr[0] = selected_index;
+                            cb_push_back(CTArgs::socket_cb_id, 1);
+                        }
+
                         if constexpr (CTArgs::rand_output_addr != 0) {
                             auto rand_out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::rand_output_addr);
                             rand_out[0] = rand;

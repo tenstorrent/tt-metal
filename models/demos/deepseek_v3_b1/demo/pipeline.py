@@ -398,7 +398,7 @@ def create_sp4_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device) if enable_mtp else None,
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
@@ -670,7 +670,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device) if enable_mtp else None,
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
@@ -747,7 +747,7 @@ def create_single_pod_combined_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=weight_provider.load_shared_head_norm(device),
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
