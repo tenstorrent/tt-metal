@@ -142,6 +142,8 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
 #endif
 }
 
+// TODO (#43101): operand_id / format-change calculations below should live in the LLK_API wrapper layer
+// (per-arch llk_unpack_A_api / llk_pack_api), not in this compute API. Same issue exists on WH/BH.
 template <BroadcastType old_bcast_type, BroadcastType new_bcast_type>
 void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_ocb, uint32_t new_ocb) {
 #ifndef ARCH_QUASAR
@@ -176,9 +178,9 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
 #else
-#ifdef TRISC_UNPACK
-    const auto data_copy_type_u = (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-    const bool enable_unpack_to_dest = (data_copy_type_u == DataCopyType::A2D);
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    const auto data_copy_type = (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+    const bool enable_unpack_to_dest = (data_copy_type == DataCopyType::A2D);
     const std::uint32_t new_operand_id = get_operand_id(new_icb);
     const std::uint32_t old_operand_id = get_operand_id(old_icb);
     const bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
@@ -193,15 +195,6 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
         UNPACK((llk_unpack_A_init<new_bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
             false, new_icb)));
     }
-#endif
-
-#ifdef TRISC_MATH
-    const auto data_copy_type = (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-    const bool enable_unpack_to_dest = (data_copy_type == DataCopyType::A2D);
-    const std::uint32_t new_operand_id = get_operand_id(new_icb);
-    const std::uint32_t old_operand_id = get_operand_id(old_icb);
-    const bool unpacker_dst_format_change = unpack_dst_format[new_operand_id] != unpack_dst_format[old_operand_id];
-    const bool bcast_type_change = (old_bcast_type != new_bcast_type);
 
     if (unpacker_dst_format_change) {
         MATH((llk_math_hw_configure<DST_ACCUM_MODE>(new_icb, new_icb)));

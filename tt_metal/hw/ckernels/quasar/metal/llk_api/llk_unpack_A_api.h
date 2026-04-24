@@ -4,7 +4,7 @@
 
 #pragma once
 #include "llk_unpack_common_api.h"
-#include "llk_unpack_unary_broadcast_operands_api.h"
+#include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand.h"
 
 /*************************************************************************
@@ -58,7 +58,8 @@ inline void llk_unpack_A_init(const std::uint32_t transpose_of_faces = 0, const 
         }
     } else {
         constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
-        llk_unpack_unary_broadcast_operands_init<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(operand, 1);
+        const std::uint32_t operand_id = get_operand_id(operand);
+        _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(operand_id, 1);
     }
 }
 
@@ -94,7 +95,10 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         const std::uint32_t l1_tile_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
         _llk_unpack_unary_operand_<unp_sel, binary_reuse_dest>(l1_tile_idx);
     } else {
-        llk_unpack_unary_broadcast_operands<unp_sel, unpack_to_dest>(operand, tile_index);
+        const std::uint32_t operand_id = get_operand_id(operand);
+        const auto& local_dfb = g_dfb_interface[operand_id];
+        const std::uint32_t l1_tile_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx + tile_index;
+        _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
     }
     WAYPOINT("UPAD");
 }
