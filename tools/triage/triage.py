@@ -87,6 +87,25 @@ from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
 
+def _raise_open_file_limit(desired: int = 65536) -> None:
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new_soft = desired if hard == resource.RLIM_INFINITY else min(desired, hard)
+        if new_soft <= soft:
+            return
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except Exception as e:
+        utils.WARN(
+            f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
+        )
+        pass
+
+
+_raise_open_file_limit()
+
+
 class ScriptPriority(Enum):
     LOW = 0
     MEDIUM = 1
