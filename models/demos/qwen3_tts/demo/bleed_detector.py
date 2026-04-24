@@ -1,4 +1,6 @@
-#!/usr/bin/env python
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 """
 Bleed Detector - Utility for detecting and measuring reference audio bleed in TTS output.
 
