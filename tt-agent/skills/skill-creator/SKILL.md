@@ -82,20 +82,20 @@ Only after receiving explicit approval to proceed:
 2. **Load `tt-guidelines.md`** and apply TT-specific constraints.
 3. Write SKILL.md + sub-files.
 
-## Phase 3: Shrink
+## Phase 3: Shrink (gate)
 
 Applies equally to new skills and to edits of existing skills.
 
-1. `wc -l` every file touched. Flag anything over the target in
-   `tt-guidelines.md § Token Economy`.
+1. `wc -l` every file touched. Every file must be at or under its target
+   in `tt-guidelines.md § Token Economy`. Over target → return to Phase 2.
 2. For each net-added paragraph, ask: *what behavior changes if a reader
    skips this?* Cut decorative context.
-3. Collapse repeated framings into one. If the same rule is stated twice,
-   delete the second.
+3. Collapse repeated framings. If the same rule appears twice, delete one.
 4. Prefer tables over prose for enumerable facts.
 5. Replace duplicated content with cross-references.
 
-Do not skip this phase on edits — the bloat pattern is growth-per-edit.
+**Gate:** Phase 4 does not run until Phase 3 reports pass. Do not skip on
+edits — growth-per-edit is the bloat pattern.
 
 ## Phase 4: Validate
 

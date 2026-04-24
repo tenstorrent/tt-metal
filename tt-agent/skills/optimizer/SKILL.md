@@ -90,7 +90,7 @@ tuning hypothesis is on the queue, this is mandatory — not optional.
 | Spawn workspaces (multi-hypothesis only) | `workspaces.md` | N workspaces, N branches, ccache shared |
 | Iterate | dispatch `parameter-search.md` OR `dataflow-optimize.md` subagent(s); each calls `tt:run` + `tt:profiler` per trial; writes commit + trend row per trial | Per-iteration commits, profile notes, updated trend file |
 | Converge | `convergence.md` | Success / stall-asks-user / PCC-abort |
-| Review | invoke `tt:code-review` on the winning branch's diff | Review note, final summary |
+| Review | invoke `skills/code-review/review-loop.md` (not a single review — the escalating done-gate) on the winning branch's diff | Clean-review findings note or documented abort, then final summary |
 
 After each phase, summarize in 3-5 lines in the trend file and move on. Phase
 inputs are consumed, not carried forward.

@@ -104,23 +104,11 @@ Substitute `<Role>`, `<name>`, `<repo-root>`, and `<diff>` at dispatch time.
 ## Caller Contract
 
 tt:code-review is a **pure report producer**. Findings are advisory — it never
-blocks the caller.
+blocks the caller on its own.
 
 - **Human**: reads plan, fixes, iterates.
-- **Workflow skill**: reads plan, acts on findings, re-runs its verification
-  loop, may call back for a fresh review.
-
-### Calling from a workflow skill
-
-A workflow skill integrates code-review as a bookend like this:
-
-1. Before declaring done, compute a diff of its own changes:
-   `git diff <base>...HEAD` where `<base>` is the workflow's pre-change commit.
-2. Invoke code-review with the diff as direct input (skip scope prompt).
-3. Read the returned plan. For each MUST-FIX, decide: apply the fix and re-run
-   the verification step, or escalate with context.
-4. Cite the generated findings note path in the workflow's own experiment log
-   so the review evidence is traceable.
+- **Workflow skill**: must invoke the done-gate in `review-loop.md`, not
+  treat a single review as sufficient. The loop owns escalation and abort.
 
 ## Progressive Load Table
 
@@ -129,6 +117,7 @@ Files the code-review skill itself loads as its pipeline advances:
 | Sub-task | Load |
 |---|---|
 | Merging logic and output format | `merge.md` |
+| Review-to-done gate for workflow callers | `review-loop.md` |
 | Reviewer prompt template reference | see Dispatch Template above |
 
 Files each reviewer subagent loads (not loaded by the orchestrator):
