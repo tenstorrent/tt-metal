@@ -1000,18 +1000,14 @@ protected:
         if (GetNumAvailableDevices() < 2) {
             return;  // device_holder_ stays null → individual tests skip
         }
-        // Set FABRIC_1D before opening the device so the device manager
-        // initialises routing tables with the correct config.
-        tt::tt_fabric::SetFabricConfig(
-            tt::tt_fabric::FabricConfig::FABRIC_1D,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        // No need to call SetFabricConfig: device_manager auto-enables FABRIC_1D
+        // with STRICT mode when the fabric config is DISABLED (the default).
         device_holder_ =
             distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
     }
 
     static void TearDownTestSuite() {
         if (device_holder_) {
-            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
             device_holder_->close();
             device_holder_.reset();
         }
@@ -1046,6 +1042,8 @@ protected:
                 distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
         } catch (const std::exception& e) {
             // Descriptor unavailable (e.g. TT_METAL_HOME not set for custom descriptors).
+            // Disable mock mode to avoid leaking global state into subsequent test suites.
+            tt::tt_metal::experimental::disable_mock_mode();
             // device_holder_ stays null → per-test SetUp will GTEST_SKIP.
             return;
         }

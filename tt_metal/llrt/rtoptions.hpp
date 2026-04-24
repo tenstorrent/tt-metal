@@ -728,11 +728,14 @@ public:
         if (filename.empty()) {
             return;
         }
-        auto custom_path = get_root_dir() + "/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/" + filename;
-        mock_cluster_desc_path =
-            std::filesystem::exists(custom_path)
-                ? custom_path
-                : get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        auto custom_path = std::filesystem::path(get_root_dir()) /
+                           "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors" / filename;
+        std::error_code ec;
+        mock_cluster_desc_path = std::filesystem::exists(custom_path, ec) && !ec
+                                     ? custom_path.string()
+                                     : (std::filesystem::path(get_root_dir()) /
+                                        "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename)
+                                           .string();
         // Set target device to Mock if simulator is not enabled
         if (simulator_path.empty()) {
             runtime_target_device_ = tt::TargetDevice::Mock;
