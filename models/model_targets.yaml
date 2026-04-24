@@ -52,7 +52,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
@@ -244,7 +244,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.1-8b-dp-galaxy:
     aliases: ["llama3.1-8b-dp-galaxy"]
@@ -256,7 +256,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U08BH66EXAL
+            owner_id: U08BH66EXAL # Radoica Draskic
             team: models
   llama3.2-11b-vision:
     aliases: ["Llama-3.2-11B-Vision", "meta-llama/Llama-3.2-11B-Vision-Instruct"]
@@ -268,7 +268,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03FJB5TM5Y
+            owner_id: U03FJB5TM5Y # Colman Glagovich
             team: models
   llama90b-vl:
     aliases: ["Llama-3.2-90B-Vision", "meta-llama/Llama-3.2-90B-Vision-Instruct"]
@@ -280,7 +280,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ
+            owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   llama3.3-70b:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
@@ -292,7 +292,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.3-70b-galaxy:
     aliases: ["llama3.3-70b-galaxy"]
@@ -304,7 +304,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U053W15B6JF
+            owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
   llama3.3-70b-dp:
     aliases: ["llama3.3-70b-dp"]
@@ -316,7 +316,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.3-70b-dp-galaxy:
     aliases: ["llama3.3-70b-dp-galaxy"]
@@ -328,7 +328,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U08BH66EXAL
+            owner_id: U08BH66EXAL # Radoica Draskic
             team: models
   qwen3-32b-galaxy:
     aliases: ["qwen3-32b-galaxy"]
@@ -340,7 +340,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U053W15B6JF
+            owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
   qwen2.5-32b:
     aliases: ["Qwen2.5-32B", "Qwen/Qwen2.5-32B-Instruct"]
@@ -352,7 +352,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   qwen2.5-72b-vl:
     aliases: ["Qwen2.5-VL-72B", "Qwen/Qwen2.5-VL-72B-Instruct"]
@@ -364,7 +364,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ
+            owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
@@ -376,7 +376,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ
+            owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   qwq-32b:
     aliases: ["QwQ-32B", "Qwen/QwQ-32B"]
@@ -388,7 +388,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   mixtral-8x7b:
     aliases: ["Mixtral-8x7B", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
@@ -400,7 +400,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   falcon-7b:
     aliases: ["falcon-7b"]
@@ -412,7 +412,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U07RY6B5FLJ
+            owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   falcon-40b:
     aliases: ["falcon-40b"]
@@ -424,7 +424,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U053W15B6JF
+            owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
   gpt-oss-120b-high-batch-galaxy:
     aliases: ["gpt-oss-120b-high-batch-galaxy"]
@@ -436,7 +436,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U08TJ70UFRT
+            owner_id: U08TJ70UFRT # Stuti Raizada
             team: models
   whisper:
     aliases: ["whisper"]
@@ -448,7 +448,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U0491KT8MNY
+            owner_id: U0491KT8MNY # Mohamed Bahnas
             team: models
   phi-3-mini:
     aliases: ["Phi-3-mini", "microsoft/Phi-3-mini-128k-instruct"]
@@ -460,5 +460,5 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U03PUAKE719
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
