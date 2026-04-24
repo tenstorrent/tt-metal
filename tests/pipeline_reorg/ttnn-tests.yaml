@@ -9,6 +9,43 @@
 # Optional: merge_gate (filter in workflow), ttsim (for TTSim), fast_runtime_mode_off.
 # =============================================================================
 
+- name: "ttnn data movement group"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_test
+    tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py::test_run_tilize_with_val_padding_test
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_height_sharded
+    tests/ttnn/unit_tests/operations/data_movement/test_pad.py::test_pad
+    tests/ttnn/unit_tests/operations/data_movement/test_fill_pad.py::test_fill_pad_complex_sharding
+    tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
+    tests/ttnn/unit_tests/operations/data_movement/test_permute.py::test_permute_identity
+    tests/ttnn/unit_tests/operations/data_movement/test_slice.py::test_slice_usecase1
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_pc_with_different_shapes_in_sequence
+    tests/ttnn/unit_tests/operations/data_movement/test_embedding.py::test_base_case
+    tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_general
+    tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
+    tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
+    tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
+    tests/ttnn/unit_tests/operations/data_movement/test_interleaved_to_sharded.py::test_interleaved_to_sharded_nd_with_equivalent_2d
+    tests/ttnn/unit_tests/operations/data_movement/test_sharded_to_interleaved_oob.py::test_s2i_dram_height_sharded
+    tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py::test_convert_to_hwc_dram_uneven_sharding
+    tests/ttnn/unit_tests/operations/data_movement/test_full.py::test_full_int
+    tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dopout
+    tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py::test_non_zero_indices_ttnn
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  merge_gate: false
+  ttsim: true
+
 - name: "ttnn example tests"
   cmd: "./tests/scripts/run_ttnn_examples.sh"
   skus:
@@ -149,8 +186,8 @@
   merge_gate: false
   ttsim: true
 
-- name: "ttnn transformers group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn misc ops group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/deepseek tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
@@ -177,8 +214,8 @@
   merge_gate: false
   ttsim: true
 
-- name: "ttnn reduce and misc ops group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn reduce group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
