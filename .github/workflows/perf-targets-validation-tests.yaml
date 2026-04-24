@@ -1,0 +1,37 @@
+name: Perf Targets Validation Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/scripts/utils/validate_perf_targets.py"
+      - "models/demos/utils/model_targets.py"
+      - "models/model_targets.yaml"
+      - "tools/tests/github_scripts/test_validate_perf_targets.py"
+      - "tools/tests/github_scripts/test_model_targets_resolver.py"
+      - ".github/workflows/perf-targets-validation-tests.yaml"
+
+jobs:
+  perf-targets-validation-tests:
+    name: Run perf targets validation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest PyYAML
+
+      - name: Run new validator and resolver tests
+        run: |
+          python -m pytest -q \
+            tools/tests/github_scripts/test_validate_perf_targets.py \
+            tools/tests/github_scripts/test_model_targets_resolver.py
