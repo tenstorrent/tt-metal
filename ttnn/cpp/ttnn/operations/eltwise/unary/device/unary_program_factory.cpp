@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "unary_ng_device_operation.hpp"
+#include "unary_device_operation.hpp"
 
-#include "ttnn/operations/eltwise/unary_ng/common/unary_ng_op_utils.hpp"
-#include "ttnn/operations/eltwise/unary_ng/common/unary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
 #include <tt-metalium/host_api.hpp>
@@ -17,7 +17,8 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace tt::tt_metal;
-using namespace ttnn::operations::unary_ng;
+using namespace ttnn::operations::unary;
+using namespace ttnn::operations::unary::utils;
 using ttnn::operations::unary::EltwiseUnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
 
@@ -83,9 +84,11 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace ttnn::operations::unary_ng {
+namespace ttnn::operations::unary {
 
-tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_descriptor(
+using namespace utils;
+
+tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -94,7 +97,7 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = operation_attributes.op_chain;
-    TT_FATAL(!ops_chain.empty(), "UnaryNg: op_chain must not be empty");
+    TT_FATAL(!ops_chain.empty(), "Unary: op_chain must not be empty");
 
     uint32_t packed_scalar1 = 0;
     uint32_t packed_scalar2 = 0;
@@ -145,7 +148,8 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
 
     const auto& all_device_cores = operation_attributes.worker_grid;
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     const uint32_t src0_cb_index = CBIndex::c_0;
     const uint32_t tmp0_cb_index = CBIndex::c_1;
     if (operation_attributes.preserve_fp32_precision) {
@@ -159,7 +163,9 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
     CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(
         ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2, unary_defines);
 
-    const std::string compute_path = get_compute_kernel_path(ops_chain[0].type(), input.dtype());
+    const std::string compute_path = fmt::format(
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
+        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
@@ -211,7 +217,7 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
         .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/dataflow/reader_unary_ng.cpp";
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_device_cores;
     reader_desc.compile_time_args = reader_compile_time_args;
@@ -230,7 +236,7 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
         .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/dataflow/writer_unary_ng.cpp";
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_device_cores;
     writer_desc.compile_time_args = writer_compile_time_args;
@@ -325,7 +331,8 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
         out_shard_width = shard_specs->output_shard_spec.shape[1] / tile_width;
         auto out_memory_layout = output.memory_config().is_sharded() ? output.memory_config().memory_layout()
                                                                      : input.memory_config().memory_layout();
-        num_shards_per_width = CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(shard_specs->output_shard_spec, out_memory_layout);
+        num_shards_per_width =
+            CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(shard_specs->output_shard_spec, out_memory_layout);
 
         auto compute_shard_pages = [&](const ShardSpec& spec,
                                        const auto& tensor) -> std::function<uint32_t(CoreCoord)> {
@@ -405,9 +412,12 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
             uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
                                     ((i % num_shards_per_width) * out_shard_width);
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), in_tiles, out_start_id});
-            writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), o_tiles, out_start_id});
-            compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{o_tiles, packed_scalar1, packed_scalar2});
+            reader_desc.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), in_tiles, out_start_id});
+            writer_desc.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), o_tiles, out_start_id});
+            compute_desc.runtime_args.emplace_back(
+                core, KernelDescriptor::CoreRuntimeArgs{o_tiles, packed_scalar1, packed_scalar2});
         }
     } else {
         if (zero_start_grid) {
@@ -446,19 +456,41 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
             }
 
             if (rm_interleaved) {
-                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{
-                    input.buffer()->address(), npc, start_tile_id,
-                    chunks_per_row, input_chunk_size, input_last_chunk_size,
-                    rows_per_tile, total_rows});
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{
-                    output.buffer()->address(), npc, start_tile_id,
-                    chunks_per_row, output_chunk_size, output_last_chunk_size,
-                    rows_per_tile, total_rows});
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{npc * chunks_per_row, packed_scalar1, packed_scalar2});
+                reader_desc.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        input.buffer()->address(),
+                        npc,
+                        start_tile_id,
+                        chunks_per_row,
+                        input_chunk_size,
+                        input_last_chunk_size,
+                        rows_per_tile,
+                        total_rows});
+                writer_desc.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        output.buffer()->address(),
+                        npc,
+                        start_tile_id,
+                        chunks_per_row,
+                        output_chunk_size,
+                        output_last_chunk_size,
+                        rows_per_tile,
+                        total_rows});
+                compute_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{npc * chunks_per_row, packed_scalar1, packed_scalar2});
             } else {
-                reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
-                compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{npc, packed_scalar1, packed_scalar2});
+                reader_desc.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                writer_desc.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                compute_desc.runtime_args.emplace_back(
+                    core, KernelDescriptor::CoreRuntimeArgs{npc, packed_scalar1, packed_scalar2});
             }
 
             start_tile_id += npc;
@@ -472,4 +504,4 @@ tt::tt_metal::ProgramDescriptor UnaryNgDeviceOperation::ProgramFactory::create_d
     return desc;
 }
 
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn::operations::unary
