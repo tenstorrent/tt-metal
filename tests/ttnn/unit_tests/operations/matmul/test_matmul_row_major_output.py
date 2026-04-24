@@ -158,9 +158,12 @@ def test_mcast_2d_row_major_output_fuse_bias(device, out_subblock_h, out_subbloc
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    bias_padded = torch_bias.to(torch.bfloat16).expand(1, 1, 32, n).contiguous()
+    # Logical shape [1, 1, 1, N] — ttnn pads M=1 up to TILE_HEIGHT internally.
+    # Validation in matmul_device_operation.cpp (post main PR #42430) checks
+    # dim_bias == 1 || dim_bias == dim_out on the LOGICAL shape, so an
+    # expand to [1, 1, 32, N] would now fail (32 != 1, 32 != output M).
     bias = ttnn.from_torch(
-        bias_padded,
+        torch_bias.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
