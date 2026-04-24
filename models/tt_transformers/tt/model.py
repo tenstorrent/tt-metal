@@ -278,6 +278,9 @@ class Transformer(LightweightModule):
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
+        # Forward all kwargs (e.g. start_pos, last_token_idx, global_user_id) so
+        # subclasses' prepare_inputs_prefill and multimodal e2e paths stay in sync
+        # with the same trace contract as prepare_inputs_prefill.
         host_inputs = self.prepare_inputs_prefill(
             tokens,
             page_table=page_table,
@@ -285,6 +288,7 @@ class Transformer(LightweightModule):
             trace_enabled=True,
             batch_size=batch_size,
             user_id=user_id,
+            **kwargs,
         )
         return host_inputs
 
