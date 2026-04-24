@@ -157,13 +157,13 @@ def test_single_routed_expert(
         torch_weights=[weights],  # List with single expert weights
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        global_expert_idx_table=global_expert_idx_table,
     )
 
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
     tt_output = tt_expert(
         tt_input,
-        global_expert_idx_table=global_expert_idx_table,
         expert_token_counts=expert_token_counts_tt,
     )
     logger.debug(f"TTNN output shape: {tt_output.shape}")

@@ -22,6 +22,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -203,6 +204,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        global_expert_idx_table: Optional[ttnn.Tensor] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -221,6 +223,11 @@ class TtRoutedExpert(LightweightModule):
             activations_dtype: Data type for activations (default: bfloat8_b)
             weights_dtype: Data type for weights (default: bfloat4_b)
             compute_kernel_config: Compute kernel configuration
+            global_expert_idx_table: DRAM uint32 ROW_MAJOR_LAYOUT tensor mapping local
+                          expert slots to global expert ids. Immutable for the lifetime
+                          of this module — held here (not passed per-forward) because it
+                          does not change across forward calls. Blackhole only; required
+                          on BH to enable the on-device guard.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -234,6 +241,7 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.global_expert_idx_table = global_expert_idx_table
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
         logger.debug(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -327,7 +335,7 @@ class TtRoutedExpert(LightweightModule):
 
         return tt_weight
 
-    def _expert_ffn(
+    def _bh_expert_ffn(
         self,
         tokens: ttnn.Tensor,
         out: ttnn.Tensor,
@@ -340,28 +348,15 @@ class TtRoutedExpert(LightweightModule):
         expert_token_counts: Optional[ttnn.Tensor] = None,
     ) -> None:
         """
-        Chunked expert FFN: splits ``tokens`` into ``expert_iter_length``-sized
-        chunks and dispatches each chunk through the experimental routed_expert_ffn
-        op, writing results into the matching slice of ``out``.
+        Blackhole chunked expert FFN: splits ``tokens`` into
+        ``expert_iter_length``-sized chunks and dispatches each chunk through the
+        experimental routed_expert_ffn op, writing results into the matching
+        slice of ``out``.
 
-        Each chunk passes its index as ``curr_expert_iter``. On Blackhole, when
-        both ``global_expert_idx_table`` and ``expert_token_counts`` are provided,
-        the op routes through the forked device op whose per-kernel guard skips
-        iff ``expert_token_counts[global_expert_idx_table[local_expert_idx]]
-        <= curr_expert_iter * expert_iter_length`` — no device-to-host sync. On
-        Wormhole the guard parameters are ignored.
-
-        Args:
-            tokens: Per-expert input slice, shape (1, num_tokens, emb_dim).
-            out: Pre-allocated per-expert output slice, same shape as ``tokens``.
-            gate_proj, up_proj, down_proj: Expert projection weights.
-            local_expert_idx: Index into ``global_expert_idx_table`` for this slot.
-            expert_iter_length: Chunk size in tokens (guard compares against
-                ``curr_expert_iter * expert_iter_length``).
-            global_expert_idx_table: DRAM uint32 TILE_LAYOUT tensor shaped
-                (1, 1, experts_per_chip).
-            expert_token_counts: DRAM uint32 TILE_LAYOUT tensor shaped
-                (1, 1, num_global_experts).
+        When both ``global_expert_idx_table`` and ``expert_token_counts`` are
+        provided, the op routes through the forked device op whose per-kernel
+        guard skips iff ``expert_token_counts[global_expert_idx_table[local_expert_idx]]
+        <= curr_expert_iter * expert_iter_length`` — no device-to-host sync.
         """
         num_tokens = tokens.shape[1]
         expert_iters = ceil(num_tokens / expert_iter_length)
@@ -390,37 +385,110 @@ class TtRoutedExpert(LightweightModule):
             )
             logger.debug(f"FFN iteration {curr_expert_iter+1} output shape {expert_out.shape}")
 
+    def _wh_expert_ffn(
+        self,
+        tokens: ttnn.Tensor,
+        gate_proj: ttnn.Tensor,
+        up_proj: ttnn.Tensor,
+        down_proj: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """
+        Wormhole expert FFN: a single call into the experimental routed_expert_ffn
+        op (no chunking, no guard — WH has no forked-matmul path). The op
+        allocates its own output tensor and returns it.
+        """
+        return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
+            tokens,
+            gate_proj,
+            up_proj,
+            down_proj,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+    def _bh_forward_impl(
+        self,
+        dispatched_buffer: ttnn.Tensor,
+        expert_token_counts: Optional[ttnn.Tensor],
+        expert_iter_length: int,
+    ) -> ttnn.Tensor:
+        """
+        Blackhole forward: pre-allocates the output with empty_like, narrows
+        per-expert input/output slices, and writes FFN results in-place.
+        Reads ``self.global_expert_idx_table`` for the on-device guard.
+        """
+        expert_outputs = ttnn.empty_like(dispatched_buffer)
+        for local_expert in range(self.experts_per_chip):
+            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+
+            tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
+            out = ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1)
+            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+
+            self._bh_expert_ffn(
+                tokens,
+                out,
+                self.gate_projs[local_expert],
+                self.up_projs[local_expert],
+                self.down_projs[local_expert],
+                local_expert_idx=local_expert,
+                expert_iter_length=expert_iter_length,
+                global_expert_idx_table=self.global_expert_idx_table,
+                expert_token_counts=expert_token_counts,
+            )
+            logger.debug(f"Expert {local_expert}: output shape {out.shape}")
+
+        return expert_outputs
+
+    def _wh_forward_impl(self, dispatched_buffer: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Wormhole forward: extracts per-expert tokens via tensor indexing (WH does
+        not support ttnn.narrow on 3D DRAM tensors), runs the FFN, then
+        reassembles the output by unsqueeze+concat along the expert dimension.
+        """
+        expert_outputs_list = []
+        for local_expert in range(self.experts_per_chip):
+            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+
+            tokens = dispatched_buffer[local_expert, :, :]
+            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+
+            output = self._wh_expert_ffn(
+                tokens,
+                self.gate_projs[local_expert],
+                self.up_projs[local_expert],
+                self.down_projs[local_expert],
+            )
+            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+
+            expert_outputs_list.append(ttnn.unsqueeze(output, dim=0))
+
+        return ttnn.concat(expert_outputs_list, dim=0)
+
     def forward(
         self,
         dispatched_buffer: ttnn.Tensor,
-        global_expert_idx_table: Optional[ttnn.Tensor] = None,
         expert_token_counts: Optional[ttnn.Tensor] = None,
         expert_iter_length: Optional[int] = None,
     ) -> ttnn.Tensor:
         """
         Process dispatched tokens through local experts.
 
-        Pre-allocates the output tensor with empty_like, narrows per-expert slices
-        for both input and output, and writes FFN results directly into the output
-        buffer — avoiding the extra allocations that unsqueeze/concat would incur.
-
-        Architecture dispatch happens inside the underlying experimental op, so the
-        same code path runs on Wormhole and Blackhole. On Blackhole, when both
-        ``global_expert_idx_table`` and ``expert_token_counts`` are supplied, each
-        routed matmul reads them on-device and skips chunks where the expert's
-        token count is already past the current chunk's starting offset. On
-        Wormhole the guard tensors are ignored.
+        Dispatches to the architecture-specific implementation:
+          - Blackhole: pre-allocates output + narrow + in-place write, uses the
+            forked routed_matmul device op with on-device guard when
+            ``self.global_expert_idx_table`` (set in __init__) and
+            ``expert_token_counts`` are both non-None.
+          - Wormhole: indexing + concat (no narrow, no guard — WH lacks the
+            forked path). ``expert_token_counts`` and ``expert_iter_length`` are
+            ignored.
 
         Args:
             dispatched_buffer: Dispatched tokens, shape (experts_per_chip, max_tokens, emb_dim).
-            global_expert_idx_table: DRAM uint32 TILE_LAYOUT tensor of shape
-                (1, 1, experts_per_chip) mapping local expert slots to global
-                expert ids.
-            expert_token_counts: DRAM uint32 TILE_LAYOUT tensor of shape
-                (1, 1, num_global_experts). Indexed by global expert id; holds
-                the real token count per expert.
-            expert_iter_length: Chunk size in tokens. Defaults to
-                ``self.MAX_EXPERT_LENGTH`` when None.
+            expert_token_counts: DRAM uint32 ROW_MAJOR_LAYOUT tensor of token counts
+                per global expert. Blackhole only. Varies per forward call (unlike
+                ``global_expert_idx_table`` which is fixed at __init__).
+            expert_iter_length: Chunk size in tokens (Blackhole only).
+                Defaults to ``self.MAX_EXPERT_LENGTH`` when None.
 
         Returns:
             expert_outputs: Expert output tensor, same shape as ``dispatched_buffer``.
@@ -434,26 +502,16 @@ class TtRoutedExpert(LightweightModule):
             logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
             dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
 
-        expert_outputs = ttnn.empty_like(dispatched_buffer)
-        for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
-
-            tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
-            out = ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1)
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
-
-            self._expert_ffn(
-                tokens,
-                out,
-                self.gate_projs[local_expert],
-                self.up_projs[local_expert],
-                self.down_projs[local_expert],
-                local_expert_idx=local_expert,
-                expert_iter_length=expert_iter_length,
-                global_expert_idx_table=global_expert_idx_table,
+        if is_wormhole_b0():
+            expert_outputs = self._wh_forward_impl(dispatched_buffer)
+        elif is_blackhole():
+            expert_outputs = self._bh_forward_impl(
+                dispatched_buffer,
                 expert_token_counts=expert_token_counts,
+                expert_iter_length=expert_iter_length,
             )
-            logger.debug(f"Expert {local_expert}: output shape {out.shape}")
+        else:
+            raise ValueError("Unsupported device architecture")
 
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs
