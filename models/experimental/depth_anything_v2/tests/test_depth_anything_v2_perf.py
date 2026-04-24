@@ -12,6 +12,9 @@ from models.experimental.depth_anything_v2.tt.model_def import TtDepthAnythingV2
 from models.common.utility_functions import profiler
 from models.perf.perf_utils import prep_perf_report
 
+# Device l1_small_size needed for conv2d ops
+DEVICE_PARAMS = {"l1_small_size": 16384}
+
 
 BATCH_SIZE = 1
 MODEL_ID = "depth-anything/Depth-Anything-V2-Large-hf"
@@ -77,6 +80,7 @@ def run_perf_depth_anything_v2(expected_inference_time, expected_compile_time, d
 
 
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
@@ -99,6 +103,7 @@ def test_perf_bare_metal(
 
 
 @pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (

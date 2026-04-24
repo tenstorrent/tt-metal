@@ -2,6 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Demo script for Depth Anything V2 Large on Tenstorrent Wormhole.
+
+Usage:
+    python models/experimental/depth_anything_v2/demo/demo.py
+    python models/experimental/depth_anything_v2/demo/demo.py --model_id "depth-anything/Depth-Anything-V2-Large-hf"
+    python models/experimental/depth_anything_v2/demo/demo.py --image_path /path/to/image.jpg
+"""
+
+import argparse
+import os
+import traceback
+
 import torch
 
 try:
@@ -10,9 +22,6 @@ except ImportError:
     print("Error: Could not import AutoImageProcessor or AutoModelForDepthEstimation from transformers.")
     print("Please ensure you have a recent version of transformers installed.")
     exit(1)
-
-import os
-import traceback
 
 from PIL import Image
 
@@ -46,7 +55,7 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
         print("Proceeding to verify model weight conversion on host...")
 
     # 3. Convert Weights & Initialize TT Model
-    print("converting weights...")
+    print("Converting weights...")
     parameters = custom_preprocessor(torch_model, "depth_anything_v2")
     tt_model = TtDepthAnythingV2(torch_model.config, parameters, device)
     print("TT Model initialized.")
@@ -55,8 +64,10 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     if image_path and os.path.exists(image_path):
         image = Image.open(image_path).convert("RGB")
     else:
-        print("No image path provided or file missing, using a dummy input.")
-        # Create a dummy image or use random tensor
+        if image_path:
+            print(f"Warning: Image path '{image_path}' not found, using a dummy input.")
+        else:
+            print("No image path provided, using a dummy input.")
         image = Image.new("RGB", (518, 518), color=(73, 109, 137))
 
     # Save input for reference
@@ -66,11 +77,9 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
     pixel_values = inputs["pixel_values"]  # (1, 3, 518, 518)
 
     # Convert pixel_values to ttnn
-    # Note: Depth Anything expects 518x518 generally.
-    # We use ROW_MAJOR_LAYOUT initially to avoid padding issues before patchification.
     tt_pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # 6. Run Inference
+    # 5. Run Inference
     print("Running inference on Tenstorrent device...")
     try:
         if device is not None:
@@ -78,10 +87,8 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
             print("Inference completed successfully!")
 
             # Post-processing to save image
-            # 1. To Torch
             predicted_depth = ttnn.to_torch(predicted_depth)
 
-            # 2. Interpolate to original size
             prediction = torch.nn.functional.interpolate(
                 predicted_depth.unsqueeze(1),
                 size=image.size[::-1],
@@ -89,12 +96,10 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
                 align_corners=False,
             ).squeeze()
 
-            # 3. Normalize to 0-255
             output = prediction.detach().cpu().numpy()
             formatted = (output - output.min()) / (output.max() - output.min()) * 255.0
             formatted = formatted.astype("uint8")
 
-            # 4. Save
             depth_image = Image.fromarray(formatted)
             output_path = "depth_map_output.png"
             depth_image.save(output_path)
@@ -113,4 +118,18 @@ def run_demo(model_id="depth-anything/Depth-Anything-V2-Large-hf", image_path=No
 
 
 if __name__ == "__main__":
-    run_demo()
+    parser = argparse.ArgumentParser(description="Depth Anything V2 Large demo on Tenstorrent Wormhole")
+    parser.add_argument(
+        "--model_id",
+        type=str,
+        default="depth-anything/Depth-Anything-V2-Large-hf",
+        help="HuggingFace model identifier (default: depth-anything/Depth-Anything-V2-Large-hf)",
+    )
+    parser.add_argument(
+        "--image_path",
+        type=str,
+        default=None,
+        help="Path to input image (default: uses a dummy 518x518 image)",
+    )
+    args = parser.parse_args()
+    run_demo(model_id=args.model_id, image_path=args.image_path)
