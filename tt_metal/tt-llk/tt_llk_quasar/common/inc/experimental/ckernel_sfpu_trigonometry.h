@@ -15,6 +15,26 @@ namespace ckernel
 {
 namespace sfpu
 {
+// fp16b bit patterns (upper 16 bits of the corresponding fp32) used as
+// SFPLOADI/SFPMULI/SFPADDI immediates in MOD0_FLOATB mode.
+constexpr std::uint32_t FP16B_INV_PI = 0x3EA2; // 1/pi                ~= 0.31831
+constexpr std::uint32_t FP16B_PI     = 0x4049; // pi                  ~= 3.1406
+constexpr std::uint32_t FP16B_HALF   = 0x3F00; // 0.5
+constexpr std::uint32_t FP16B_TWO    = 0x4000; // 2.0
+
+// Round-to-nearest-even bias constants for the float-to-int snap:
+// adding +1.5*2^23 pushes the integer part into the mantissa's
+// representable range so IEEE RNE resolves ties to even, then subtracting
+// 1.5*2^23 leaves the exact nearest integer. Exact in fp16b for |y| < 2^22,
+// which covers the sin/cos argument-reduction domain.
+constexpr std::uint32_t FP16B_RNE_BIAS_POS = 0x4B40; // +1.5 * 2^23
+constexpr std::uint32_t FP16B_RNE_BIAS_NEG = 0xCB40; // -1.5 * 2^23
+
+// SFPSETCC imm12 bit 11 = 1: "treat LREG as FP32" (test sign via the MSB of
+// the fp32 bit-pattern, not via two's-complement of int32). Used by the
+// sine/cosine parity check to conditionally negate the result.
+constexpr std::uint32_t SFPSETCC_IMM_FP32_TEST = 0x800;
+
 // Placeholder init — no LUT/constant pre-loads; every coefficient fits in SFPLOADI/SFPMULI/SFPADDI immediates
 inline void _init_trigonometry_()
 {
@@ -62,16 +82,16 @@ inline void _calculate_sine_sfp_rows_()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // x
 
-    TTI_SFPMULI(0x3EA2, p_sfpu::LREG0, 0); // y = (1/pi) * x  (fp16b 0.31831)
+    TTI_SFPMULI(FP16B_INV_PI, p_sfpu::LREG0, 0); // y = (1/pi) * x  (fp16b 0.31831)
 
     // whole_float = round_to_nearest_even(y): add then subtract 1.5 * 2^23
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPADDI(0x4B40, p_sfpu::LREG1, 0); // +1.5*2^23
-    TTI_SFPADDI(0xCB40, p_sfpu::LREG1, 0); // -1.5*2^23 -> rounded to nearest even
+    TTI_SFPADDI(FP16B_RNE_BIAS_POS, p_sfpu::LREG1, 0); // +1.5*2^23
+    TTI_SFPADDI(FP16B_RNE_BIAS_NEG, p_sfpu::LREG1, 0); // -1.5*2^23 -> rounded to nearest even
 
     // frac = y - whole_float ; z = pi * frac
     TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-    TTI_SFPMULI(0x4049, p_sfpu::LREG0, 0); // z = pi * frac (fp16b pi ~= 3.1406)
+    TTI_SFPMULI(FP16B_PI, p_sfpu::LREG0, 0); // z = pi * frac (fp16b pi ~= 3.1406)
 
     // Maclaurin: out = z; tmp = z; (tmp *= z*z; out += coeff * tmp) per term
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG2, 0); // out
@@ -113,14 +133,14 @@ inline void _calculate_sine_sfp_rows_()
     // Parity check on whole_float in LREG1: parity = whole - 2 * round(whole/2)
     // Use SFPMULI with fp16b(0.5) / fp16b(2.0) to halve/double — avoids DIVP2 imm-sign ambiguity.
     TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG5, 0); // LREG5 = whole
-    TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0);       // LREG5 *= 0.5  (fp16b(0.5) = 0x3F00)
-    TTI_SFPADDI(0x4B40, p_sfpu::LREG5, 0);       // round via magic-constant trick
-    TTI_SFPADDI(0xCB40, p_sfpu::LREG5, 0);
-    TTI_SFPMULI(0x4000, p_sfpu::LREG5, 0);                                           // LREG5 *= 2.0  (fp16b(2.0) = 0x4000)
+    TTI_SFPMULI(FP16B_HALF, p_sfpu::LREG5, 0);   // LREG5 *= 0.5
+    TTI_SFPADDI(FP16B_RNE_BIAS_POS, p_sfpu::LREG5, 0); // round whole/2 to nearest even
+    TTI_SFPADDI(FP16B_RNE_BIAS_NEG, p_sfpu::LREG5, 0);
+    TTI_SFPMULI(FP16B_TWO, p_sfpu::LREG5, 0);                                        // LREG5 *= 2.0
     TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LREG5, 0); // parity = whole - 2*round(whole/2)
 
     // Negate out if parity != 0 (treat LREG5 as FP32 via Imm12[11]=1, bit-encoded as 0x800).
-    TTI_SFPSETCC(0x800, p_sfpu::LREG5, sfpi::SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPSETCC(SFPSETCC_IMM_FP32_TEST, p_sfpu::LREG5, sfpi::SFPSETCC_MOD1_LREG_NE0);
     TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG2, 1); // flip sign
     TTI_SFPENCC(0, 0);
 
@@ -146,14 +166,14 @@ inline void _calculate_cosine_sfp_rows_()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // x
 
-    TTI_SFPMULI(0x3EA2, p_sfpu::LREG0, 0); // y = (1/pi) * x
+    TTI_SFPMULI(FP16B_INV_PI, p_sfpu::LREG0, 0); // y = (1/pi) * x
 
     TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPADDI(0x4B40, p_sfpu::LREG1, 0);
-    TTI_SFPADDI(0xCB40, p_sfpu::LREG1, 0); // whole_float
+    TTI_SFPADDI(FP16B_RNE_BIAS_POS, p_sfpu::LREG1, 0);
+    TTI_SFPADDI(FP16B_RNE_BIAS_NEG, p_sfpu::LREG1, 0); // whole_float
 
     TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG0, 0); // frac
-    TTI_SFPMULI(0x4049, p_sfpu::LREG0, 0);                                           // z = pi * frac
+    TTI_SFPMULI(FP16B_PI, p_sfpu::LREG0, 0);                                         // z = pi * frac
 
     // out = 1.0; tmp = z*z
     TTI_SFPMOV(p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
@@ -192,13 +212,13 @@ inline void _calculate_cosine_sfp_rows_()
 
     // Parity check on whole_float (LREG1) — use SFPMULI for halve/double (no DIVP2 sign ambiguity).
     TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG5, 0);
-    TTI_SFPMULI(0x3F00, p_sfpu::LREG5, 0); // *= 0.5
-    TTI_SFPADDI(0x4B40, p_sfpu::LREG5, 0);
-    TTI_SFPADDI(0xCB40, p_sfpu::LREG5, 0);
-    TTI_SFPMULI(0x4000, p_sfpu::LREG5, 0); // *= 2.0
+    TTI_SFPMULI(FP16B_HALF, p_sfpu::LREG5, 0); // *= 0.5
+    TTI_SFPADDI(FP16B_RNE_BIAS_POS, p_sfpu::LREG5, 0);
+    TTI_SFPADDI(FP16B_RNE_BIAS_NEG, p_sfpu::LREG5, 0);
+    TTI_SFPMULI(FP16B_TWO, p_sfpu::LREG5, 0); // *= 2.0
     TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG1, p_sfpu::LREG5, 0);
 
-    TTI_SFPSETCC(0x800, p_sfpu::LREG5, sfpi::SFPSETCC_MOD1_LREG_NE0);
+    TTI_SFPSETCC(SFPSETCC_IMM_FP32_TEST, p_sfpu::LREG5, sfpi::SFPSETCC_MOD1_LREG_NE0);
     TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG2, 1);
     TTI_SFPENCC(0, 0);
 
@@ -307,8 +327,8 @@ inline void _calculate_atanh_sfp_rows_()
     // log(num/den) -> LREG2; LREG3..LREG5 scratch
     _log_body_inline_(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5);
 
-    // res = 0.5 * log(...)  (fp16b 0.5 = 0x3F00)
-    TTI_SFPMULI(0x3F00, p_sfpu::LREG2, 0);
+    // res = 0.5 * log(...)
+    TTI_SFPMULI(FP16B_HALF, p_sfpu::LREG2, 0);
 
     TTI_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
