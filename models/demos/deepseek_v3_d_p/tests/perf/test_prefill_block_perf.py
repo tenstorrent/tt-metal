@@ -45,13 +45,25 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
             0.03,
             "glx_8x4_layer3_moe_real_weights",
         ),
+        (
+            f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
+            148_407_903,
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_2x4_layer3_moe",
+            1,
+            1,
+            0.03,
+            "2x4_layer3_moe_real_weights_2link",
+        ),
     ],
     ids=[
         "block_8x4_layer0_dense",
         "block_8x4_layer3_moe",
+        "block_2x4_layer3_moe",
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.timeout(0)
 def test_deepseek_v3_prefill_block_perf(
     command,
     expected_device_perf_ns_per_iteration,
