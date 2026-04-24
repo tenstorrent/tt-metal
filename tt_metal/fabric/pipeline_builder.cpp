@@ -182,7 +182,7 @@ std::map<std::string, size_t> assign_submeshes(
                 }
                 size_t si = node_to_sub.at(src);
                 size_t sj = node_to_sub.at(dst);
-                if (!connections.count({si, sj})) {
+                if (!connections.contains({si, sj})) {
                     return false;
                 }
             }
@@ -201,7 +201,7 @@ std::map<std::string, size_t> assign_submeshes(
                 size_t psub = node_to_sub.at(parent);
                 std::set<size_t> reachable;
                 for (size_t j = 0; j < num_submeshes; ++j) {
-                    if (!used.count(j) && connections.count({psub, j})) {
+                    if (!used.contains(j) && connections.contains({psub, j})) {
                         reachable.insert(j);
                     }
                 }
@@ -211,7 +211,7 @@ std::map<std::string, size_t> assign_submeshes(
                 } else {
                     std::set<size_t> intersect;
                     for (auto s : reachable) {
-                        if (candidates.count(s)) {
+                        if (candidates.contains(s)) {
                             intersect.insert(s);
                         }
                     }
@@ -221,7 +221,7 @@ std::map<std::string, size_t> assign_submeshes(
         }
         if (!constrained) {
             for (size_t j = 0; j < num_submeshes; ++j) {
-                if (!used.count(j)) {
+                if (!used.contains(j)) {
                     candidates.insert(j);
                 }
             }
@@ -420,7 +420,7 @@ GraphLayoutResult resolve_graph_layout(
 
     std::vector<std::pair<uint32_t, uint32_t>> unclaimed;
     for (const auto& [fid, row, col] : chips[stage0_sub]) {
-        if (!used_coords.count({row, col})) {
+        if (!used_coords.contains({row, col})) {
             unclaimed.push_back({row, col});
         }
     }
