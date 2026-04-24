@@ -1328,6 +1328,14 @@ void Device::wait_for_fabric_workers_ready() {
         const auto master_logical_core =
             soc_desc_p5.get_eth_core_for_channel(master_chan, CoordSystem::LOGICAL);
 
+        // Track whether Phase 5 relay read threw so Phase 5b can skip reads that would hang.
+        // When the Phase 5 master-channel read throws, it means the UMD relay path to this
+        // device is broken (fabric firmware was loaded on the relay ERISC after Phase 3).
+        // In that state, Phase 5b reads would either throw 5-second timeouts (accumulating
+        // seconds per channel) or hang indefinitely (relay ERISC alive but peer fabric
+        // firmware never responds to UMD relay protocol).  Skip Phase 5b entirely instead.
+        bool phase5_relay_read_threw = false;
+
         // Skip the handshake poll if the master channel is pre-known dead.
         const bool master_is_dead = fabric_pre_dead_channels_.count(master_chan) > 0;
         if (!master_is_dead) {
@@ -1338,7 +1346,6 @@ void Device::wait_for_fabric_workers_ready() {
                 this->id(),
                 master_chan,
                 sync_status);
-
             std::vector<uint32_t> sync_buf(1, 0U);
             const auto sync_start = std::chrono::steady_clock::now();
             uint32_t sync_spin = 0U;
@@ -1348,6 +1355,7 @@ void Device::wait_for_fabric_workers_ready() {
                     detail::ReadFromDeviceL1(
                         this, master_logical_core, router_sync_addr, 4, sync_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
+                    phase5_relay_read_threw = true;
                     log_warning(
                         tt::LogMetal,
                         "wait_for_fabric_workers_ready: Device {} Phase 5: read failed on master "
@@ -1436,6 +1444,19 @@ void Device::wait_for_fabric_workers_ready() {
         // channels have reached READY_FOR_TRAFFIC.  Extended to 2000ms (was 500ms) to observe
         // how long propagation from master to subordinate channels actually takes and whether
         // 500ms was cutting off channels that would have become healthy shortly after.
+        //
+        // Skip Phase 5b entirely if Phase 5 reads threw (relay path broken after Phase 3).
+        // In that case, channel reads in Phase 5b either accumulate 5-second timeouts per
+        // channel or hang indefinitely (relay ERISC still alive but peer fabric firmware never
+        // responds to UMD relay protocol) — both outcomes block the quiesce path.
+        if (phase5_relay_read_threw) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5b: skipping health check — "
+                "Phase 5 relay read threw (UMD relay path broken after Phase 3 firmware load). "
+                "Reads would hang or accumulate 5s timeouts per channel.",
+                this->id());
+        } else {
         constexpr uint32_t kHealthCheckTimeoutMs = 2000;
         // Log unhealthy channels every 200ms for observability.
         constexpr uint32_t kHCIntermediateLogMs = 200;
@@ -1610,6 +1631,7 @@ void Device::wait_for_fabric_workers_ready() {
             this->id(),
             chans.size() - fabric_pre_dead_channels_.size(),
             fabric_pre_dead_channels_.size());
+        }  // end else (phase5_relay_read_threw == false)
     }
 
     log_info(tt::LogMetal, "Fabric workers ready on Device {}", this->id_);
