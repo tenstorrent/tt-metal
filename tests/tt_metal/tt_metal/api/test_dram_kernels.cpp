@@ -248,12 +248,10 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDRISCReadFromTensixL1) {
     EXPECT_EQ(result[0], kMagicValue) << "DRISC should have read the value from Tensix L1";
 }
 
-// DRISC L1 write to DRAM GDDR over DMA
-// Host Verifies data
-// pass a magic value to DRISC as compile time arg
-// DRISC DMA to DRAC
-// Read that from Host
-TEST_F(BlackholeSingleCardFixture, DramKernelDRISCWriteToDRAM) {
+class DramKernelDRISCBWFixture : public BlackholeSingleCardFixture, public testing::WithParamInterface<uint32_t> {};
+
+// DRISC L1 write to DRAM GDDR — all banks x N endpoints concurrently.
+TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
     const auto& hal = MetalContext::instance().hal();
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         GTEST_SKIP() << "DRAM programmable cores not enabled";
@@ -263,73 +261,179 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDRISCWriteToDRAM) {
     auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord);
-    distributed::MeshWorkload workload;
-    Program program = CreateProgram();
-
-    CoreCoord logical_core_drisc{0, 0};
-
-    uint32_t dram_unserved_base_addr = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    uint32_t dram_unserved_size = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
-    uint32_t l1_unreserved_base_drisc = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    // some space reserved the end to write wall clock data for host to read
-    uint32_t size_to_xfer_16b =
-        (hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED) >> 4) - 1;
-    uint32_t dram_channel = device->dram_channel_from_logical_core(logical_core_drisc);
-    uint32_t dram_channel2 = device->dram_channel_from_logical_core({0, 1});
-    uint32_t dram_channel3 = device->dram_channel_from_logical_core({0, 2});
-    uint64_t drisc_write_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    CoreCoord drisc_virtual = device->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->build_id());
     auto dram_compute_grid = soc_desc.get_dram_compute_grid_size();
+    uint32_t num_banks = dram_compute_grid.x;
+    uint32_t num_endpoints = std::min(GetParam(), static_cast<uint32_t>(dram_compute_grid.y));
 
-    std::cout << "dram_compute_grid.x i.e. num_banks    : " << dram_compute_grid.x << '\n';
-    std::cout << "dram_compute_grid.y i.e. num_endpoints: " << dram_compute_grid.y << '\n';
-    std::cout << "dram_unserved_addr                    : " << dram_unserved_base_addr << '\n';
-    std::cout << "dram_unserved_size                    : " << dram_unserved_size << '\n';
-    std::cout << "dram_channel                          : " << dram_channel << '\n';
-    std::cout << "dram_channel2                         : " << dram_channel2 << '\n';
-    std::cout << "dram_channel3                         : " << dram_channel3 << '\n';
-    std::cout << "l1_unreserved_base_drisc              : " << l1_unreserved_base_drisc << '\n';
-    std::cout << "size_to_xfer_16b                      : " << size_to_xfer_16b << '\n';
-    uint32_t bytes_per_iter = size_to_xfer_16b << 4;
+    uint32_t dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_unreserved_size = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint64_t l1_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint32_t size_to_xfer_16b = (64 * 1024) >> 4;
+    const uint32_t bytes_per_iter = size_to_xfer_16b << 4;
+    constexpr uint32_t iters = 1000;
+    const uint32_t total_bytes_per_core = iters * bytes_per_iter;
+
+    // Endpoints within the same bank share GDDR address space — partition by endpoint row.
+    TT_FATAL(
+        dram_unreserved_size >= num_endpoints * total_bytes_per_core,
+        "Not enough DRAM: need {} bytes per bank, have {}",
+        num_endpoints * total_bytes_per_core,
+        dram_unreserved_size);
+
     std::vector<uint32_t> data = create_random_vector_of_bfloat16(
         bytes_per_iter, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
-    constexpr uint32_t iters = 100;
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        data.data(), bytes_per_iter, tt_cxy_pair(mesh_device->build_id(), drisc_virtual), drisc_write_addr);
 
-    // DRISC kernel DMAs from DRISC L1 into DRAM GDDR memory
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
-        logical_core_drisc,
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .compile_args = {dram_unserved_base_addr, l1_unreserved_base_drisc, size_to_xfer_16b, iters}});
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+
+    for (uint32_t row = 0; row < num_endpoints; row++) {
+        for (uint32_t col = 0; col < num_banks; col++) {
+            CoreCoord logical_core{col, row};
+            CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+
+            MetalContext::instance().get_cluster().write_core(
+                data.data(), bytes_per_iter, tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_noc_base);
+
+            uint32_t core_dram_addr = dram_unreserved_base + row * total_bytes_per_core;
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
+                logical_core,
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {core_dram_addr, l1_unreserved_base, size_to_xfer_16b, iters},
+                    .defines = {{"L1_TO_GDDR_WRITE_TEST", "1"}}});
+        }
+    }
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // Read back via DRAM channel — same physical address space as DMA dest
-    std::vector<uint32_t> result(data.size());
-    tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-        device, dram_channel, dram_unserved_base_addr, bytes_per_iter, result);
-    EXPECT_EQ(result, data);
+    uint64_t timing_noc_addr = l1_noc_base + (static_cast<uint64_t>(size_to_xfer_16b) << 4);
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;
+    uint64_t max_cycles = 0;
 
-    uint64_t result_noc_addr = drisc_write_addr + (static_cast<uint64_t>(size_to_xfer_16b) << 4);
-    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;
-    std::vector<uint32_t> timing(2);
-    MetalContext::instance().get_cluster().read_core(
-        timing.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), drisc_virtual), result_noc_addr);
-    uint64_t elapsed_cycles = (static_cast<uint64_t>(timing[1]) << 32) | timing[0];
-    double bw_gbps = static_cast<double>(bytes_per_iter) * iters * clk_mhz / elapsed_cycles / 1e9;
+    for (uint32_t row = 0; row < num_endpoints; row++) {
+        for (uint32_t col = 0; col < num_banks; col++) {
+            CoreCoord virtual_core = device->virtual_core_from_logical_core({col, row}, CoreType::DRAM);
+            std::vector<uint32_t> t(2);
+            MetalContext::instance().get_cluster().read_core(
+                t.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), virtual_core), timing_noc_addr);
+            max_cycles = std::max(max_cycles, (static_cast<uint64_t>(t[1]) << 32) | t[0]);
+        }
+    }
+
+    uint64_t total_bytes_all = static_cast<uint64_t>(num_banks) * num_endpoints * total_bytes_per_core;
     log_info(
         LogTest,
-        "DRISC DMA BW: {:.2f} GB/s ({} bytes x {} iters, {} cycles)",
-        bw_gbps,
-        bytes_per_iter,
-        iters,
-        elapsed_cycles);
+        "DRISC DMA Multi-Endpoint Write BW: {:.2f} GB/s ({} banks x {} endpoints, {:.0f} MB total, {} max cycles)",
+        static_cast<double>(total_bytes_all) * clk_hz / max_cycles / 1e9,
+        num_banks,
+        num_endpoints,
+        total_bytes_all / 1e6,
+        max_cycles);
 }
+
+// DRAM GDDR to DRISC L1 DMA — all banks x endpoints concurrently.
+TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
+    const auto& hal = MetalContext::instance().hal();
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        GTEST_SKIP() << "DRAM programmable cores not enabled";
+    }
+
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord);
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->build_id());
+    auto dram_compute_grid = soc_desc.get_dram_compute_grid_size();
+    uint32_t num_banks = dram_compute_grid.x;
+    uint32_t num_endpoints = std::min(GetParam(), static_cast<uint32_t>(dram_compute_grid.y));
+
+    uint32_t dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    uint32_t dram_unreserved_size = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
+    uint32_t l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint64_t l1_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    uint32_t size_to_xfer_16b = (64 * 1024) >> 4;
+    const uint32_t bytes_per_iter = size_to_xfer_16b << 4;
+    constexpr uint32_t iters = 1000;
+    const uint32_t total_bytes_per_core = iters * bytes_per_iter;
+
+    // Each endpoint within the same bank reads from its own DRAM slot (partitioned by row).
+    TT_FATAL(
+        dram_unreserved_size >= num_endpoints * bytes_per_iter,
+        "Not enough DRAM for {} endpoint source regions",
+        num_endpoints);
+
+    std::vector<uint32_t> data = create_random_vector_of_bfloat16(
+        bytes_per_iter, 1000.0f, std::chrono::system_clock::now().time_since_epoch().count());
+
+    for (uint32_t col = 0; col < num_banks; col++) {
+        uint32_t dram_channel = device->dram_channel_from_logical_core(CoreCoord{col, 0});
+        for (uint32_t row = 0; row < num_endpoints; row++) {
+            tt::tt_metal::detail::WriteToDeviceDRAMChannel(
+                device, dram_channel, dram_unreserved_base + row * bytes_per_iter, data);
+        }
+    }
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+
+    for (uint32_t row = 0; row < num_endpoints; row++) {
+        for (uint32_t col = 0; col < num_banks; col++) {
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
+                CoreCoord{col, row},
+                DramConfig{
+                    .noc = NOC::NOC_0,
+                    .compile_args = {
+                        dram_unreserved_base + row * bytes_per_iter, l1_unreserved_base, size_to_xfer_16b, iters}});
+        }
+    }
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    uint64_t timing_noc_addr = l1_noc_base + (static_cast<uint64_t>(size_to_xfer_16b) << 4);
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;
+    uint64_t max_cycles = 0;
+
+    for (uint32_t row = 0; row < num_endpoints; row++) {
+        for (uint32_t col = 0; col < num_banks; col++) {
+            CoreCoord virtual_core = device->virtual_core_from_logical_core({col, row}, CoreType::DRAM);
+
+            std::vector<uint32_t> result(data.size());
+            MetalContext::instance().get_cluster().read_core(
+                result.data(), bytes_per_iter, tt_cxy_pair(mesh_device->build_id(), virtual_core), l1_noc_base);
+            EXPECT_EQ(result, data) << "Data mismatch on core (bank=" << col << ", endpoint=" << row << ")";
+
+            std::vector<uint32_t> t(2);
+            MetalContext::instance().get_cluster().read_core(
+                t.data(), sizeof(uint64_t), tt_cxy_pair(mesh_device->build_id(), virtual_core), timing_noc_addr);
+            max_cycles = std::max(max_cycles, (static_cast<uint64_t>(t[1]) << 32) | t[0]);
+        }
+    }
+
+    uint64_t total_bytes_all = static_cast<uint64_t>(num_banks) * num_endpoints * total_bytes_per_core;
+    log_info(
+        LogTest,
+        "DRISC DMA Multi-Endpoint Read BW: {:.2f} GB/s ({} banks x {} endpoints, {:.0f} MB total, {} max cycles)",
+        static_cast<double>(total_bytes_all) * clk_hz / max_cycles / 1e9,
+        num_banks,
+        num_endpoints,
+        total_bytes_all / 1e6,
+        max_cycles);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EndpointSweep,
+    DramKernelDRISCBWFixture,
+    testing::Values(1u, 2u, 3u),
+    [](const testing::TestParamInfo<uint32_t>& info) { return std::to_string(info.param) + "_endpoints"; });
