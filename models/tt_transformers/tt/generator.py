@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 from collections import defaultdict
 
 import torch
@@ -57,6 +58,12 @@ def _is_insufficient_trace_region_error(exc: BaseException) -> bool:
     if "trace" not in msg:
         return False
     return "trace_region" in msg or "get_trace_buffers_size" in msg or ("allocated" in msg and "region" in msg)
+
+
+def _trace_buffer_bytes_from_fatal(exc: BaseException) -> int | None:
+    """Parse 'Creating trace buffers of size N B' from a mesh trace allocation error, if present."""
+    m = re.search(r"Creating trace buffers of size (\d+)B", str(exc), re.IGNORECASE)
+    return int(m.group(1)) if m else None
 
 
 class Generator(WarmupForwardMixin):
@@ -228,7 +235,7 @@ class Generator(WarmupForwardMixin):
             self.prefill_forward_text(
                 **prefill_forward_args,
                 kv_cache=kv_cache,
-                enable_trace=False,  # Vision encoder warmup doesn't support trace
+                enable_trace=warmup_use_trace,
                 model_id_warmup=model_id,
                 sampling_params=None,
                 pixel_values=warmup_pixel_values,
@@ -563,6 +570,20 @@ class Generator(WarmupForwardMixin):
                 logger.info(
                     f"Batched prefill disabled: {padded_batch} x {prefill_seq_lens[0]} = "
                     f"{padded_batch * prefill_seq_lens[0]} tokens exceeds limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
+                )
+                use_batched_prefill = False
+
+        # Host e2e vision prefill trace only has a single-user merged-embedding capture; batched+images would
+        # misroute pixels. Fall back to sequential per-user so each step can use _vm trace when supported.
+        if use_batched_prefill and enable_trace and kwargs.get("pixel_values", None) is not None:
+            pvs = kwargs["pixel_values"]
+            if isinstance(pvs, (list, tuple)):
+                any_pixel = any(x is not None for x in pvs)
+            else:
+                any_pixel = pvs is not None
+            if any_pixel and getattr(self.model[0], "supports_vision_prefill_host_trace", False):
+                logger.info(
+                    "Batched prefill with images: using sequential per-user prefill to enable e2e vision host trace."
                 )
                 use_batched_prefill = False
 
@@ -1148,11 +1169,22 @@ class Generator(WarmupForwardMixin):
                 tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
             except RuntimeError as err:
                 if _is_insufficient_trace_region_error(err):
-                    logger.warning(
-                        "Decode trace capture failed (mesh trace region too small): running decode without trace. "
-                        "For Gemma 3 27B on T3K, set trace_region_size to at least 33554432 (32 MiB) in your "
-                        "device / override_tt_config (e.g. alongside l1_small_size and fabric_config)."
-                    )
+                    need_b = _trace_buffer_bytes_from_fatal(err)
+                    if need_b is not None:
+                        # Suggest a whole-MiB size: at least 64 MiB (common 27B decode) or the next MiB past the error.
+                        round_mib = ((need_b + 1_048_575) // 1_048_576) * 1_048_576
+                        min_suggest = max(64 * 1_048_576, round_mib)
+                        logger.warning(
+                            f"Decode trace capture failed (mesh trace region too small): running decode without trace. "
+                            f"This run needed ~{need_b} B of trace buffer; set trace_region_size to at least {min_suggest} "
+                            f'in device init / override_tt_config (e.g. "trace_region_size": {min_suggest} with l1_small_size, fabric_config).'
+                        )
+                    else:
+                        logger.warning(
+                            "Decode trace capture failed (mesh trace region too small): running decode without trace. "
+                            "Gemma 3 27B decode trace often needs 64 MiB (67108864) or more when max batch is large; "
+                            "increase trace_region_size in override_tt_config until the error no longer appears."
+                        )
                     self._decode_trace_unavailable = True
                     tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
                 else:
