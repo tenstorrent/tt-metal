@@ -23,6 +23,8 @@
   - [A.11 Mistral Large 3](#a11-mistral-large-3-675b-moe-architecture-verified) — Custom
   - [A.12 Gemma 4 (optional)](#a12-gemma-4-26b-a4b-moe-architecture-verified-optional) — Custom
   - [A.13 DeepSeek OCR](#a13-deepseek-ocr-moe-architecture-verified) — Legacy/small
+  - [A.14 DeepSeek V4 Flash](#a14-deepseek-v4-flash--moe-architecture-verified) — DS V4 family
+  - [A.15 DeepSeek V4 Pro](#a15-deepseek-v4-pro--moe-architecture-verified) — DS V4 family
 - [Appendix B: Existing TT-Metal Implementations](#appendix-b-existing-tt-metal-implementations-comparison-as-of-main437da8d3796)
 - [Appendix C: Verification of unverified_moe_info.md](#appendix-c-verification-of-unverified_moe_infomd)
 
@@ -53,12 +55,15 @@ All verified from config.json and/or modeling code.
 | Qwen3-Omni 30B-A3B | [Qwen/Qwen3-Omni-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct) |
 | Qwen3.5 35B-A3B | [Qwen/Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) |
 | Gemma 4 26B-A4B (optional) | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it) |
+| DeepSeek V4 Flash | [deepseek-ai/DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) / [deepseek-ai/DeepSeek-V4-Flash-Base](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Base) |
+| DeepSeek V4 Pro | [deepseek-ai/DeepSeek-V4-Pro](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro) / [deepseek-ai/DeepSeek-V4-Pro-Base](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-Base) |
 
 ### Notes
 - **GLM-4.7** uses the same `glm4_moe` architecture as GLM-4.5 but with extended context (202752 vs 131072). Also has a Flash variant: `zai-org/GLM-4.7-Flash` (`glm4_moe_lite`).
 - **GLM-4.5** MoE params match GLM-4.7 exactly (same `glm4_moe` arch, same hidden/expert/routing values). Not a separate plan entry.
 - **Mistral Large 3 (675B)** is the correct model (not "Mistral 3.2 Large"). From `params.json`: hidden=7168, expert_hidden_dim=**4096**, 128 experts, 1 shared, K=**4**. Mistral Small 3.2 is a 24B dense model (no MoE).
 - **Qwen n_shared_experts**: No Qwen config contains an explicit `n_shared_experts` or `num_shared_experts` field. Shared expert count is inferred: present if `shared_expert_intermediate_size > 0`, absent if field is 0 or missing. Marked "(inferred)" in the comparison table.
+- **DeepSeek V4 Flash == Flash-Base config**: For both Flash and Pro, the non-base and Base variants have byte-for-byte identical config.json files. A single architecture section covers both. `inference/model.py` is present only in the non-base repos (Flash, Pro) — the Base repos contain no Python files.
 
 ---
 
@@ -79,6 +84,8 @@ All verified from config.json and/or modeling code.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **GPT-OSS 120B** | 2880 | 2880 | — | 128 | 0 | 4 | custom GELU-gated | softmax | simple | —/— | 1.0 | Yes | Yes | all MoE | 36 | No | GPT-OSS |
 | **DeepSeek V3** | 7168 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 8/4 | 2.5 | No | correction | 3 | 61 | No | DS V3 |
+| **DS V4 Flash** | 4096 | 2048 | 2048 | 256 | 1 | 6 | SiLU/SwiGLU (swiglu_limit=10, routed only) | `sqrtsoftplus` (code) | noaux_tc; hash L0–2 (code) | —/— | 1.5 | No | correction (code) | 0 | 43 | No | DS V4 |
+| **DS V4 Pro** | 7168 | 3072 | 3072 | 384 | 1 | 6 | SiLU/SwiGLU (swiglu_limit=10, routed only) | `sqrtsoftplus` (code) | noaux_tc; hash L0–2 (code) | —/— | 2.5 | No | correction (code) | 0 | 61 | No | DS V4 |
 | **GLM-5** | 6144 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.5 | No | correction | 3 | 78 | No | DS V3-like |
 | **Kimi K2.5** | 7168 | 2048 | 2048 | 384 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.827 | No | correction | 1 | 61 | No | DS V3-like |
 | **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | group_limited_topk (code) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
@@ -95,6 +102,9 @@ All verified from config.json and/or modeling code.
 **Notes on the table above:**
 - Qwen3.5 models (397B, 35B) use a **sigmoid gate on shared expert output** before adding to routed output (see §A.8). This is a unique architectural detail for generalization.
 - Qwen-family models (Qwen3, Qwen3.5, Qwen3-Omni) show "—" for scaling_factor because their configs have no `routed_scaling_factor` field. Their routing uses `norm_topk_prob` normalization instead, effectively equivalent to scaling=1.0 after normalization.
+- DS V4 `sqrtsoftplus` scoring: `sqrt(F.softplus(logits))` (model.py L571) — a new function, neither sigmoid nor softmax. After top-k selection, weights are normalized to sum to 1 (since it's not softmax), then multiplied by `routed_scaling_factor`.
+- DS V4 hash routing: for the first `num_hash_layers=3` layers, expert indices come from a learned lookup table `tid2eid[token_id]` (model.py L577), not from gate scores. Routing weights are still computed from gate scores for these layers. The score correction bias is absent in hash layers.
+- DS V4 `swiglu_limit=10.0` clamps gate (max=10) and up (min=−10, max=10) in **routed** experts only (model.py L600–602). The shared expert is created without `swiglu_limit` (L627–628) and has no clamping.
 
 ---
 
@@ -124,6 +134,12 @@ Based on the verified configs, the models cluster into clear families:
 ### Family 4: Legacy/Small
 - **DeepSeek OCR**: Based on DS V2, greedy routing, very small (1280 hidden, 12 layers).
 
+### Family 5: DeepSeek V4 (sqrtsoftplus + noaux_tc + hash layers)
+- **DS V4 Flash**: 256 experts, K=6, all layers MoE, `sqrtsoftplus` scoring, `noaux_tc` for layers 3+, hash routing for layers 0–2, SwiGLU with clamping (limit=10) on routed experts only.
+- **DS V4 Pro**: 384 experts, K=6, same architecture as Flash at larger scale (hidden=7168, intermediate=3072). scaling=2.5 (same as DS V3).
+
+Key distinctions from DS V3: different scoring function (sqrtsoftplus vs sigmoid), hash routing replaces learned routing for first 3 layers, no expert grouping (no n_group/topk_group), all layers are MoE (no first_k_dense_replace), SwiGLU clamping on routed experts (not shared). Architecture class is `DeepseekV4ForCausalLM`.
+
 ---
 
 ## 5. Generalization Implications
@@ -133,7 +149,7 @@ Based on the verified configs, the models cluster into clear families:
 2. `moe_intermediate_size` — ranges from 384 to 4096 (Qwen3-Omni talker: 384, Mistral: 4096)
 3. `n_routed_experts` — ranges from 64 to 512. All values are divisible by 8, 16, and 32 — ring distribution can always be done exactly across standard device counts.
 4. `n_shared_experts` — 0, 1, or 2
-5. `num_experts_per_tok` (K) — 4, 6, 8, or 10. Note: K=6 only appears in DS-OCR and Qwen3-Omni Talker; neither existing TT-Metal implementation (K=8 or K=4) handles K=6, so new kernel work is needed if these are in scope for v1.
+5. `num_experts_per_tok` (K) — 4, 6, 8, or 10. Note: K=6 appears in DS-OCR, Qwen3-Omni Talker, DS V4 Flash, and DS V4 Pro (4 models). Neither existing TT-Metal implementation (K=8 or K=4) handles K=6, so new kernel work is needed if any of these are in scope for v1.
 6. `shared_expert_intermediate_size` — usually `moe_intermediate * n_shared`, but Qwen3.5 has an explicit field. In all Qwen3/Qwen3.5 models, the shared expert is always 1 MLP with `intermediate_size = shared_expert_intermediate_size` (not N smaller experts). The Qwen3-Omni Talker's 768 = 2×384 is a single wider expert, not two experts.
 7. `shared_expert_gate` (on/off) — Qwen3.5 (397B, 35B) applies `sigmoid(gate(x)) * shared_output` before adding to routed output (modeling code L788). This requires an additional weight: `shared_expert_gate` projection `[hidden_size, 1]`. Other models add shared expert output directly.
 8. `routed_scaling_factor` — 1.0, 2.5, or 2.827
@@ -142,19 +158,20 @@ Based on the verified configs, the models cluster into clear families:
 11. `moe_layer_freq` — all current models use 1 (every layer after `first_k_dense_replace` is MoE). Listed for completeness; if a future model uses freq > 1 (only every Nth layer is MoE), the interface needs to handle it.
 
 ### 5.2 Activation function strategy
-- **12/14 models use SiLU/SwiGLU** (all confirmed from config or modeling code): `down(silu(gate(x)) * up(x))`
+- **14/16 models use SiLU/SwiGLU** (all confirmed from config or modeling code): `down(silu(gate(x)) * up(x))`; DS V4 Flash and Pro also apply clamping to gate/up in routed experts (`swiglu_limit=10.0`) but not in the shared expert
 - **Gemma 4**: GELU/SwiGLU — same gate/up/down pattern but with `gelu_pytorch_tanh` instead of SiLU
-- **GPT-OSS**: custom GELU-gated with clamping and shift — unique pattern
-- Recommendation: parameterize the activation function (SiLU vs GELU), implement GPT-OSS as a special variant
+- **GPT-OSS**: custom GELU-gated with clamping and shift — unique pattern (`(up+1) * gate * sigmoid(1.702*gate)`, limit=7.0)
+- Recommendation: parameterize the activation function (SiLU vs GELU), implement GPT-OSS as a special variant; `swiglu_limit` clamping should be an optional configurable parameter
 
 ### 5.3 Routing strategy
-- **DeepSeek family (5 rows: DS V3, GLM-5, GLM-4.7, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling (GLM-4.7 confirmed from modeling code)
+- **DeepSeek V3 family (5 rows: DS V3, GLM-5, GLM-4.7, Kimi K2.5, Ling-1T)**: sigmoid scoring + group-based top-k + bias correction + scaling (GLM-4.7 confirmed from modeling code)
+- **DeepSeek V4 family (2 rows: DS V4 Flash, DS V4 Pro)**: sqrtsoftplus scoring + simple top-k + bias correction + scaling; first `num_hash_layers=3` layers use hash routing (token-ID lookup table) instead of learned gate scores for expert selection
 - **Standard softmax family (5 rows: Qwen3, Qwen3.5×2, Qwen3-Omni×2)**: softmax top-k (confirmed from modeling code)
 - **GPT-OSS**: softmax top-k with router bias
 - **Gemma 4**: softmax top-k with per-expert learned scaling
 - **Mistral Large 3**: softmax top-k (confirmed from mistral-inference moe.py)
 - **DS-OCR**: softmax scoring (V2 default) + greedy top-k selection
-- Recommendation: implement sigmoid+group and softmax as two routing modes
+- Recommendation: implement sigmoid+group, sqrtsoftplus+simple, and softmax as three routing modes; hash routing is a compile-time variant of the first N layers
 
 ### 5.4 Expert projection layout
 - **11/14 rows**: separate gate_proj + up_proj + down_proj (no bias)
@@ -187,6 +204,8 @@ Using tile_size=32:
 | Mistral L3 | 7168/32=224 × 4096/32=128 | 128 × 224 |
 | Ling-1T | 8192/32=256 × 64 | 64 × 256 |
 | Gemma 4 26B | 2816/32=88 × 704/32=22 | 22 × 88 |
+| DS V4 Flash | 4096/32=128 × 2048/32=64 | 64 × 128 |
+| DS V4 Pro | 7168/32=224 × 3072/32=96 | 96 × 224 |
 
 ---
 
@@ -865,6 +884,148 @@ output = dense_mlp_output + moe_output   (parallel dense + MoE, not sequential!)
 | Shared expert intermediate | 1792 (= 896 × 2) |
 
 **Notes:** DeepSeek OCR is a very small model (~3.3B) based on DeepSeek-**V2** (not V3). Uses **softmax scoring** (V2 default from configuration_deepseek_v2.py L142 — config.json does not override) with **greedy top-k** selection.
+
+---
+
+### A.14 DeepSeek V4 Flash — MoE Architecture (Verified)
+
+**Source:** `deepseek-ai/DeepSeek-V4-Flash` config.json + `inference/model.py` (Flash and Flash-Base share identical configs)
+**Downloaded to:** `plans/hf_model_cards/deepseek-v4-flash/`, `plans/hf_model_cards/deepseek-v4-flash-base/`
+
+#### Source References
+- `hf_model_cards/deepseek-v4-flash/config.json`: hidden_size (L14), moe_intermediate_size (L21), n_routed_experts (L22), n_shared_experts (L23), num_experts_per_tok (L26), num_hash_layers (L27), num_hidden_layers (L28), scoring_func (L55), topk_method (L59), routed_scaling_factor (L54), swiglu_limit (L57), norm_topk_prob (L24)
+- `hf_model_cards/deepseek-v4-flash/inference/model.py`: Gate class (L546–584) — scoring functions (L566–571), hash routing path (L558, L576–578), score correction bias (L561–562, L575), norm+scale (L581–583); Expert class (L587–606) — SwiGLU with clamping (L598–603); MoE class (L609–645) — shared expert no clamping (L627–628), forward (L630–645), shared expert addition (L644)
+
+#### Downloaded Files
+- `config.json` — `hf download deepseek-ai/DeepSeek-V4-Flash config.json --local-dir plans/hf_model_cards/deepseek-v4-flash`
+- `inference/model.py` (+ supporting files) — `hf download deepseek-ai/DeepSeek-V4-Flash --include "*.py" --local-dir plans/hf_model_cards/deepseek-v4-flash`
+- `README.md` — `hf download deepseek-ai/DeepSeek-V4-Flash README.md --local-dir plans/hf_model_cards/deepseek-v4-flash`
+- (Base) `config.json` — `hf download deepseek-ai/DeepSeek-V4-Flash-Base config.json --local-dir plans/hf_model_cards/deepseek-v4-flash-base`
+
+| Parameter | Value |
+|-----------|-------|
+| `hidden_size` | **4096** |
+| `moe_intermediate_size` | **2048** |
+| `n_routed_experts` | **256** |
+| `n_shared_experts` | **1** |
+| `num_experts_per_tok` (K) | **6** |
+| `num_hash_layers` | **3** (layers 0–2 use hash routing) |
+| `scoring_func` | **sqrtsoftplus** (config + code L571: `F.softplus(scores).sqrt()`) |
+| `topk_method` | **noaux_tc** (layers 3+); hash (layers 0–2) |
+| `routed_scaling_factor` | **1.5** |
+| `swiglu_limit` | **10.0** (applied to routed experts only; shared expert has no limit) |
+| `norm_topk_prob` | true |
+| `n_group` / `topk_group` | — / — (no grouping) |
+| `num_hidden_layers` | 43 |
+| `num_nextn_predict_layers` | 1 (multi-token prediction) |
+| Architecture | `DeepseekV4ForCausalLM` |
+| Expert projection layout | Separate w1/w2/w3 (gate/down/up), no bias |
+| Shared expert intermediate | 2048 (= moe_intermediate_size; code L628: `Expert(args.dim, args.moe_inter_dim)`) |
+
+#### MoE Block Structure (from inference/model.py)
+
+```
+MoE (model.py L609)
+├── gate: Gate(layer_id, args)
+│   ├── weight: Parameter(n_routed_experts=256, dim=4096)
+│   ├── bias: Parameter(256, float32)          # score correction (non-hash layers only)
+│   ├── tid2eid: Parameter(vocab_size, K=6, int32)  # hash layers 0–2 only
+│   └── forward:
+│       ├── scores = sqrtsoftplus(linear(x, weight))   # L571: sqrt(softplus(logits))
+│       ├── if hash layer: indices = tid2eid[input_ids]  # L577: deterministic from token ID
+│       ├── else:          indices = (scores + bias).topk(K=6)  # L579: learned + correction
+│       ├── weights = original_scores.gather(indices)   # bias not included in weights
+│       ├── weights /= weights.sum()                     # L582: normalize (non-softmax)
+│       └── weights *= route_scale (1.5)                 # L583
+│
+├── experts: ModuleList[256 × Expert(dim=4096, inter_dim=2048, swiglu_limit=10.0)]
+│   └── forward:
+│       ├── gate = w1(x).float()
+│       ├── up   = w3(x).float()
+│       ├── gate = clamp(gate, max=10.0)        # L601
+│       ├── up   = clamp(up, min=-10.0, max=10.0)  # L602
+│       └── return w2(silu(gate) * up)
+│
+└── shared_experts: Expert(dim=4096, inter_dim=2048, swiglu_limit=0)
+    └── forward: standard SwiGLU, no clamping
+```
+
+#### Scoring Function — `sqrtsoftplus`
+
+```python
+# DeepSeek V4 (model.py L571):
+scores = F.softplus(logits).sqrt()   # sqrt(log(1 + exp(x)))
+
+# DeepSeek V3 (for comparison):
+scores = logits.sigmoid()            # 1 / (1 + exp(-x))
+```
+
+`sqrtsoftplus` is always positive and unbounded above; `sigmoid` is bounded to (0, 1). Both are then normalized across selected experts before scaling.
+
+#### Hash Routing (layers 0–2)
+
+```python
+# Hash layers (model.py L558, L576–578):
+self.tid2eid = Parameter(vocab_size=129280, K=6, dtype=int32)   # learned lookup
+# ...
+if self.hash:
+    indices = self.tid2eid[input_ids]   # expert indices from token ID, not gate score
+    # routing weights still come from gate scores (original_scores.gather)
+    # bias correction parameter absent for hash layers (L558–562)
+```
+
+Each token is deterministically routed to the same K=6 experts based solely on its token ID. This replaces the score-based top-k for the first 3 layers. The `e_score_correction_bias` is absent in hash layers (`self.bias = None`, L558–562).
+
+#### Weight Shapes (per MoE layer, 120B-class Flash)
+
+| Component | Shape | Notes |
+|-----------|-------|-------|
+| Gate weight | [256, 4096] | No bias |
+| Gate correction bias | [256] float32 | Score correction (non-hash layers only) |
+| Gate tid2eid | [129280, 6] int32 | Hash routing LUT (hash layers only) |
+| Routed expert w1 (gate) | [256, 2048, 4096] | |
+| Routed expert w2 (down) | [256, 4096, 2048] | |
+| Routed expert w3 (up) | [256, 2048, 4096] | |
+| Shared expert w1/w2/w3 | same dims as above | No swiglu_limit |
+
+---
+
+### A.15 DeepSeek V4 Pro — MoE Architecture (Verified)
+
+**Source:** `deepseek-ai/DeepSeek-V4-Pro` config.json + `inference/model.py` (identical to Flash codebase; Pro and Pro-Base share identical configs)
+**Downloaded to:** `plans/hf_model_cards/deepseek-v4-pro/`, `plans/hf_model_cards/deepseek-v4-pro-base/`
+
+#### Source References
+- `hf_model_cards/deepseek-v4-pro/config.json`: hidden_size (L14), moe_intermediate_size (L21), n_routed_experts (L22), n_shared_experts (L23), num_experts_per_tok (L26), num_hash_layers (L27), num_hidden_layers (L28), scoring_func (L55), topk_method (L59), routed_scaling_factor (L54), swiglu_limit (L57), norm_topk_prob (L24)
+- `hf_model_cards/deepseek-v4-pro/inference/model.py`: identical MoE code as Flash (same architecture, different dimensions)
+
+#### Downloaded Files
+- `config.json` — `hf download deepseek-ai/DeepSeek-V4-Pro config.json --local-dir plans/hf_model_cards/deepseek-v4-pro`
+- `inference/model.py` (+ supporting files) — `hf download deepseek-ai/DeepSeek-V4-Pro --include "*.py" --local-dir plans/hf_model_cards/deepseek-v4-pro`
+- `README.md` — `hf download deepseek-ai/DeepSeek-V4-Pro README.md --local-dir plans/hf_model_cards/deepseek-v4-pro`
+- (Base) `config.json` — `hf download deepseek-ai/DeepSeek-V4-Pro-Base config.json --local-dir plans/hf_model_cards/deepseek-v4-pro-base`
+
+| Parameter | Value | vs DS V4 Flash |
+|-----------|-------|----------------|
+| `hidden_size` | **7168** | 4096 (↑) |
+| `moe_intermediate_size` | **3072** | 2048 (↑) |
+| `n_routed_experts` | **384** | 256 (↑) |
+| `n_shared_experts` | **1** | same |
+| `num_experts_per_tok` (K) | **6** | same |
+| `num_hash_layers` | **3** | same |
+| `scoring_func` | **sqrtsoftplus** | same |
+| `topk_method` | **noaux_tc** | same |
+| `routed_scaling_factor` | **2.5** | 1.5 (↑, same as DS V3) |
+| `swiglu_limit` | **10.0** | same |
+| `norm_topk_prob` | true | same |
+| `n_group` / `topk_group` | — / — | same |
+| `num_hidden_layers` | 61 | 43 (↑, same as DS V3) |
+| `num_nextn_predict_layers` | 1 | same |
+| Architecture | `DeepseekV4ForCausalLM` | same |
+| Expert projection layout | Separate w1/w2/w3, no bias | same |
+| Shared expert intermediate | 3072 (= moe_intermediate_size) | 2048 |
+
+**Notes:** DS V4 Pro is the larger variant of DS V4. MoE architecture is identical to Flash — same scoring function, same hash routing in first 3 layers, same clamped SwiGLU. Key dimension differences: hidden_size=7168 (matches DS V3 Pro), moe_intermediate_size=3072 (larger than DS V3's 2048), n_routed_experts=384 (more than DS V3's 256, same as Kimi K2.5), routed_scaling_factor=2.5 (same as DS V3).
 
 ---
 
