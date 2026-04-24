@@ -168,40 +168,56 @@ def get_mesh_composer(mesh_device, tensor_placement: Optional[Dict] = None):
         return None
 
 
-def _restore_2d_topology(
+def _restore_topology(
     tensor: ttnn.Tensor,
     placement_entries: list,
     dist_parsed: list,
     mesh_shape_tuple: tuple,
 ) -> None:
-    """Restore correct 2D TensorTopology on a device tensor.
+    """Restore correct TensorTopology on a device tensor to match the master trace.
 
-    The C++ factory methods (create_fully_replicated_tensor_topology,
-    create_sharded_tensor_topology) always flatten to 1D MeshShape(N).
-    This helper reconstructs the correct 2D topology from the vector
-    config's placement info and applies it via update_tensor_topology().
+    The C++ factory methods may create a topology that doesn't match what the
+    master trace recorded (e.g., flattening 2D to 1D, or setting 2D when the
+    master had 1D).  This helper reconstructs the exact topology from the vector
+    config's distribution_shape and placement info.
     """
     import re
 
-    # Build the 2D distribution shape
-    dist_shape = ttnn.MeshShape(*dist_parsed[:2])
+    ndim = len(dist_parsed)
 
-    # Build 2D placements list from the parsed placement entries
-    placements = []
-    for entry in (placement_entries or []):
-        shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
-        if shard_match:
-            placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
-        else:
+    if ndim >= 2:
+        # 2D (or higher) distribution — e.g. [4, 8]
+        dist_shape = ttnn.MeshShape(*dist_parsed[:2])
+
+        placements = []
+        for entry in (placement_entries or []):
+            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+            if shard_match:
+                placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
+            else:
+                placements.append(ttnn.PlacementReplicate())
+        while len(placements) < 2:
             placements.append(ttnn.PlacementReplicate())
 
-    # Pad to 2 entries if only 1 (1D placement on a 2D mesh)
-    while len(placements) < 2:
-        placements.append(ttnn.PlacementReplicate())
+        rows, cols = dist_parsed[0], dist_parsed[1]
+        mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+    elif ndim == 1:
+        # 1D distribution — e.g. [32]
+        dist_shape = ttnn.MeshShape([dist_parsed[0]])
 
-    # Build mesh_coords for the full mesh (row-major order)
-    rows, cols = dist_parsed[0], dist_parsed[1] if len(dist_parsed) > 1 else 1
-    mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+        placements = []
+        for entry in (placement_entries or []):
+            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+            if shard_match:
+                placements.append(ttnn.PlacementShard(int(shard_match.group(1))))
+            else:
+                placements.append(ttnn.PlacementReplicate())
+        if not placements:
+            placements.append(ttnn.PlacementReplicate())
+
+        mesh_coords = [ttnn.MeshCoordinate([i]) for i in range(dist_parsed[0])]
+    else:
+        return  # Nothing to restore
 
     topology = ttnn.TensorTopology(dist_shape, placements, mesh_coords)
     tensor.update_tensor_topology(topology)
@@ -329,14 +345,14 @@ def create_tensor_on_mesh(
         mesh_mapper=mesh_mapper,
     )
 
-    # Restore correct 2D tensor topology from vector placement info.
-    # The C++ factory methods always create 1D topology (MeshShape(N))
-    # during to_device(), losing the 2D distribution info from the host tensor.
-    # We reconstruct and re-apply the correct 2D topology so that the
-    # operation tracer captures it accurately (matching the master trace).
-    if tensor_placement and is_2d_distribution:
+    # Restore correct tensor topology from vector placement info.
+    # The C++ factory methods may create a topology that doesn't match the
+    # master trace (e.g., flattening [4,8] to [32] or vice versa).
+    # We reconstruct and re-apply the exact topology so that the operation
+    # tracer captures it accurately (matching the master trace).
+    if tensor_placement and dist_parsed:
         try:
-            _restore_2d_topology(result, entries, dist_parsed, mesh_shape_tuple)
+            _restore_topology(result, entries, dist_parsed, mesh_shape_tuple)
         except Exception:
             pass  # Best-effort; don't block sweep execution
 

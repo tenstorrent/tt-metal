@@ -361,10 +361,6 @@ def run(
 
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
-        elif has_compute_kernel_config:
-            # Master trace had compute_kernel_config (possibly None). Pass it so the
-            # sweep call matches the master trace kwargs.
-            linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
         if core_grid is not None:
             linear_kwargs["core_grid"] = core_grid

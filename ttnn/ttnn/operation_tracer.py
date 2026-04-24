@@ -155,9 +155,20 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
     """
     import torch
 
+    # Prefer logical_shape (unpadded) for original_shape to match the master trace.
+    # The padded .shape includes tile alignment (e.g. [1,1,8,64] → [1,1,32,64])
+    # which differs from what the model trace records.
+    raw_shape = list(value.shape) if hasattr(value, "shape") else None
+    if hasattr(value, "logical_shape"):
+        try:
+            logical_shape = value.logical_shape()
+            raw_shape = list(logical_shape)
+        except Exception:
+            pass
+
     tensor_data: Dict[str, Any] = {
         "type": "ttnn.Tensor",
-        "original_shape": list(value.shape) if hasattr(value, "shape") else None,
+        "original_shape": raw_shape,
         "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
     }
 
