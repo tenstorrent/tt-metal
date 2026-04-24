@@ -232,7 +232,7 @@ def _perf_param(
 
 # CI set (BH LoudBox pipeline): keep small.
 _DISPATCH_PERF_PARAMS = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, "7k", 3_535_925, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, "7k", 3_385_201, ""),
     _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, "7k", 2_820_533, ""),
 ]
 _COMBINE_PERF_PARAMS = [
