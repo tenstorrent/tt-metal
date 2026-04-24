@@ -203,18 +203,18 @@ def _restore_topology(
         mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
     elif ndim == 1:
         # 1D distribution — e.g. [32]
-        # Try 1D MeshShape first; fall back to 2D (1, N) if the C++ API
-        # rejects the 1D form (some builds only support 2D MeshShape).
+        # Try 1D MeshShape first; if that fails, fall back to the actual
+        # mesh_shape_tuple (e.g. (4, 8)) so the topology uses a valid 2D
+        # distribution that is semantically equivalent.  Using (1, N) would
+        # create an invalid topology that corrupts downstream tensors.
         total = dist_parsed[0]
         is_2d_fallback = False
         try:
             dist_shape = ttnn.MeshShape(total)
         except (TypeError, RuntimeError):
             is_2d_fallback = True
-            try:
-                dist_shape = ttnn.MeshShape(1, total)
-            except (TypeError, RuntimeError):
-                dist_shape = ttnn.MeshShape(total, 1)
+            # Use actual mesh shape — (4, 8) for Galaxy — instead of (1, 32)
+            dist_shape = ttnn.MeshShape(*mesh_shape_tuple)
 
         placements = []
         for entry in (placement_entries or []):
@@ -229,11 +229,14 @@ def _restore_topology(
         if is_2d_fallback and len(placements) < 2:
             placements.insert(0, ttnn.PlacementReplicate())
 
-        try:
-            mesh_coords = [ttnn.MeshCoordinate(i) for i in range(total)]
-        except (TypeError, RuntimeError):
-            # Fall back to 2D coordinates matching the dist_shape fallback
-            mesh_coords = [ttnn.MeshCoordinate(0, i) for i in range(total)]
+        if not is_2d_fallback:
+            try:
+                mesh_coords = [ttnn.MeshCoordinate(i) for i in range(total)]
+            except (TypeError, RuntimeError):
+                mesh_coords = [ttnn.MeshCoordinate(0, i) for i in range(total)]
+        else:
+            rows, cols = mesh_shape_tuple[0], mesh_shape_tuple[1]
+            mesh_coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
     else:
         return  # Nothing to restore
 
