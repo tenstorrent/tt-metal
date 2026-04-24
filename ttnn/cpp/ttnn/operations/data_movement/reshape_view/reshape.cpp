@@ -366,7 +366,7 @@ ttnn::Tensor reshape_tiled(
                 requested_shape_3d,
                 tt::tt_metal::TensorLayout::fromPaddedShape(
                     tensor3d.dtype(),
-                    tt::tt_metal::PageConfig(tensor3d.layout()),
+                    tensor3d.tensor_spec().page_config(),
                     interleaved_output_mem_config,
                     requested_shape_3d,
                     requested_padded_shape_3d));
