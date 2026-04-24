@@ -66,6 +66,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    _restore_topology,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -526,40 +527,68 @@ def run(
         )
 
         # Convert tensors to device as interleaved first, then shard
-        input_tensor_interleaved = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_interleaved = create_tensor_on_mesh(
+                torch_input_tensor, device, input_a_dtype, input_a_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement,
+            )
+        else:
+            input_tensor_interleaved = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_interleaved, shard_mem_config)
 
-        cos_cache_interleaved = ttnn.from_torch(
-            torch_cos_cache,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+        input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+        input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
+
+        if is_mesh_device and (input_b_tensor_placement or input_a_tensor_placement):
+            cos_cache_interleaved = create_tensor_on_mesh(
+                torch_cos_cache, device, input_b_dtype, input_b_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_b_tensor_placement or input_a_tensor_placement,
+            )
+        else:
+            cos_cache_interleaved = ttnn.from_torch(
+                torch_cos_cache,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         cos_cache_tt = ttnn.interleaved_to_sharded(cos_cache_interleaved, shard_mem_config)
 
-        sin_cache_interleaved = ttnn.from_torch(
-            torch_sin_cache,
-            dtype=input_c_dtype,
-            layout=input_c_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and (input_c_tensor_placement or input_a_tensor_placement):
+            sin_cache_interleaved = create_tensor_on_mesh(
+                torch_sin_cache, device, input_c_dtype, input_c_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_c_tensor_placement or input_a_tensor_placement,
+            )
+        else:
+            sin_cache_interleaved = ttnn.from_torch(
+                torch_sin_cache,
+                dtype=input_c_dtype,
+                layout=input_c_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         sin_cache_tt = ttnn.interleaved_to_sharded(sin_cache_interleaved, shard_mem_config)
 
-        trans_mat_interleaved = ttnn.from_torch(
-            torch_trans_mat,
-            dtype=input_d_dtype,
-            layout=input_d_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh_device and (input_d_tensor_placement or input_a_tensor_placement):
+            trans_mat_interleaved = create_tensor_on_mesh(
+                torch_trans_mat, device, input_d_dtype, input_d_layout,
+                ttnn.DRAM_MEMORY_CONFIG, input_d_tensor_placement or input_a_tensor_placement,
+            )
+        else:
+            trans_mat_interleaved = ttnn.from_torch(
+                torch_trans_mat,
+                dtype=input_d_dtype,
+                layout=input_d_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
     else:
