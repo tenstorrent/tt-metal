@@ -271,7 +271,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=False,
+            init_zeros=True,
         )
 
         # Initialize routed expert
