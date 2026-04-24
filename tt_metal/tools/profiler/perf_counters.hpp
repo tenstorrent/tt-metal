@@ -269,29 +269,41 @@ constexpr std::pair<PerfCounterGroup, uint32_t> counter_group_flags[] = {
 };
 constexpr uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
-// Shared: returns control register base for a given counter group.
-// Called on TRISC1 (start/stop) and BRISC (read), so keep inline and branch-free.
+// Lookup table indexed by PerfCounterGroup. Smaller than a 9-case switch.
+// Keep ordered to match the enum (FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4).
+constexpr uint32_t cntl_reg_for_group[9] = {
+    RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
+    RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
+    RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,    // UNPACK
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_0
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_1
+    RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0,  // INSTRN
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_2
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_3
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_4
+};
+
 FORCE_INLINE uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: return RISCV_DEBUG_REG_PERF_CNT_FPU0;
-        case PerfCounterGroup::PACK: return RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0;
-        case PerfCounterGroup::UNPACK: return RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0;
-        case PerfCounterGroup::INSTRN: return RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0;
-        default: return RISCV_DEBUG_REG_PERF_CNT_L1_0;  // L1_0..L1_4
-    }
+    return cntl_reg_for_group[static_cast<uint32_t>(counter_group)];
 }
 
-// Shared: sets the L1 mux select (bank 0..4) for the given group.
+// Shared: sets the L1 mux select (bank 0..4) for the given group. 0 for non-L1 groups (unused).
+constexpr uint32_t mux_sel_for_group[9] = {
+    0,  // FPU (unused)
+    0,  // PACK (unused)
+    0,  // UNPACK (unused)
+    0,  // L1_0 → bank 0
+    1,  // L1_1 → bank 1
+    0,  // INSTRN (unused)
+    2,  // L1_2 → bank 2
+    3,  // L1_3 → bank 3
+    4,  // L1_4 → bank 4
+};
+
 FORCE_INLINE void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     volatile tt_reg_ptr uint32_t* mux_reg =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-    uint32_t mux_sel = static_cast<uint32_t>(counter_group) - static_cast<uint32_t>(PerfCounterGroup::L1_0);
-    // Remap enum order (L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4) to bank indices (0,1,2,3,4) —
-    // INSTRN sits between L1_1 and L1_2, so skip its slot.
-    if (counter_group == PerfCounterGroup::L1_2 || counter_group == PerfCounterGroup::L1_3 ||
-        counter_group == PerfCounterGroup::L1_4) {
-        mux_sel -= 1;  // subtract INSTRN slot
-    }
+    uint32_t mux_sel = mux_sel_for_group[static_cast<uint32_t>(counter_group)];
     *mux_reg = (*mux_reg & ~L1_MUX_MASK) | (mux_sel << 4);
 }
 
@@ -343,45 +355,53 @@ struct PerfCounterWrapper {
 #if defined(COMPILE_FOR_BRISC)
 // --- BRISC-only: counter readout and DRAM push -----------------------------
 
-FORCE_INLINE uint32_t get_read_register_for_counter_group(PerfCounterGroup counter_group) {
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: return RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU;
-        case PerfCounterGroup::PACK: return RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK;
-        case PerfCounterGroup::UNPACK: return RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK;
-        case PerfCounterGroup::INSTRN: return RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD;
-        default: return RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1;  // L1_0..L1_4
-    }
+// Lookup tables indexed by PerfCounterGroup (same ordering as cntl_reg_for_group).
+constexpr uint32_t read_reg_for_group[9] = {
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU,            // FPU
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK,      // PACK
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK,    // UNPACK
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_0
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_1
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD,  // INSTRN
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_2
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_3
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_4
+};
+
+constexpr uint32_t num_counters_for_group[9] = {
+    NUM_FPU_COUNTERS,     // FPU
+    NUM_PACK_COUNTERS,    // PACK
+    NUM_UNPACK_COUNTERS,  // UNPACK
+    NUM_L1_0_COUNTERS,    // L1_0
+    NUM_L1_1_COUNTERS,    // L1_1
+    NUM_INSTRN_COUNTERS,  // INSTRN
+    NUM_L1_2_COUNTERS,    // L1_2
+    NUM_L1_3_COUNTERS,    // L1_3
+    NUM_L1_4_COUNTERS,    // L1_4
+};
+
+constexpr const std::pair<PerfCounterType, uint16_t>* counters_for_group[9] = {
+    fpu_counters.data(),     // FPU
+    pack_counters.data(),    // PACK
+    unpack_counters.data(),  // UNPACK
+    l1_0_counters.data(),    // L1_0
+    l1_1_counters.data(),    // L1_1
+    instrn_counters.data(),  // INSTRN
+    l1_2_counters.data(),    // L1_2
+    l1_3_counters.data(),    // L1_3
+    l1_4_counters.data(),    // L1_4
+};
+
+FORCE_INLINE uint32_t get_read_register_for_counter_group(PerfCounterGroup g) {
+    return read_reg_for_group[static_cast<uint32_t>(g)];
 }
 
-FORCE_INLINE uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: return NUM_FPU_COUNTERS;
-        case PerfCounterGroup::UNPACK: return NUM_UNPACK_COUNTERS;
-        case PerfCounterGroup::PACK: return NUM_PACK_COUNTERS;
-        case PerfCounterGroup::L1_0: return NUM_L1_0_COUNTERS;
-        case PerfCounterGroup::L1_1: return NUM_L1_1_COUNTERS;
-        case PerfCounterGroup::INSTRN: return NUM_INSTRN_COUNTERS;
-        case PerfCounterGroup::L1_2: return NUM_L1_2_COUNTERS;
-        case PerfCounterGroup::L1_3: return NUM_L1_3_COUNTERS;
-        case PerfCounterGroup::L1_4: return NUM_L1_4_COUNTERS;
-    }
-    __builtin_unreachable();
+FORCE_INLINE uint32_t get_num_counters_for_counter_group(PerfCounterGroup g) {
+    return num_counters_for_group[static_cast<uint32_t>(g)];
 }
 
-FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counter_group(
-    PerfCounterGroup counter_group) {
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: return fpu_counters.data();
-        case PerfCounterGroup::UNPACK: return unpack_counters.data();
-        case PerfCounterGroup::PACK: return pack_counters.data();
-        case PerfCounterGroup::L1_0: return l1_0_counters.data();
-        case PerfCounterGroup::L1_1: return l1_1_counters.data();
-        case PerfCounterGroup::INSTRN: return instrn_counters.data();
-        case PerfCounterGroup::L1_2: return l1_2_counters.data();
-        case PerfCounterGroup::L1_3: return l1_3_counters.data();
-        case PerfCounterGroup::L1_4: return l1_4_counters.data();
-    }
-    __builtin_unreachable();
+FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counter_group(PerfCounterGroup g) {
+    return counters_for_group[static_cast<uint32_t>(g)];
 }
 
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
@@ -412,11 +432,34 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
 // so no intermediate flush is needed. Worst case WH all-groups = 130 counters * 3
 // uint32s = 390 uint32s, which fits in the 488-uint32 body region.
 void read_perf_counters() {
-    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
-            read_single_group(counter_group_flags[i].first);
-        }
-    }
+    // Compile-time unrolled: compiler drops calls whose group bit isn't set in PROFILE_PERF_COUNTERS.
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU
+    read_single_group(PerfCounterGroup::FPU);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_PACK
+    read_single_group(PerfCounterGroup::PACK);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_UNPACK
+    read_single_group(PerfCounterGroup::UNPACK);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_0
+    read_single_group(PerfCounterGroup::L1_0);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_1
+    read_single_group(PerfCounterGroup::L1_1);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_INSTRN
+    read_single_group(PerfCounterGroup::INSTRN);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_2
+    read_single_group(PerfCounterGroup::L1_2);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_3
+    read_single_group(PerfCounterGroup::L1_3);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_4
+    read_single_group(PerfCounterGroup::L1_4);
+#endif
 }
 
 #endif  // COMPILE_FOR_BRISC
