@@ -100,6 +100,10 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
 #endif
 
+std::vector<MeshId> get_all_fabric_mesh_ids() {
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph().get_mesh_ids();
+}
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
