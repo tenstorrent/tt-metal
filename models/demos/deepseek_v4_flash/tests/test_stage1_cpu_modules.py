@@ -34,6 +34,12 @@ from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import (
     validate_prefill_attention_block_config,
     validate_prefill_attention_block_input,
 )
+from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import (
+    PrefillIndexerWeights,
+    load_prefill_indexer_weights,
+    validate_prefill_indexer_config,
+    validate_prefill_indexer_input,
+)
 from models.demos.deepseek_v4_flash.ttnn_router import select_router_scores, validate_router_config
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import validate_sparse_attention_contract
 
@@ -227,6 +233,75 @@ def test_attention_projection_weight_loading_and_grouped_wo_a_host_scaffold(tmp_
         )
 
 
+def test_prefill_indexer_weight_loading_and_contract_validation(tmp_path):
+    source = generate_tiny_hf_checkpoint(tmp_path / "source", num_hidden_layers=3)
+    output = convert_hf_checkpoint(source, tmp_path / "tt_preprocessed")
+    weights = load_prefill_indexer_weights(output, layer=2)
+
+    assert weights.wq_b.shape == (32, 16)
+    assert weights.weights_proj.shape == (4, 32)
+    assert weights.compressor.wkv.shape == (16, 32)
+    assert weights.compressor.wgate.shape == (16, 32)
+    assert weights.compressor.ape.shape == (4, 16)
+    assert weights.compressor.norm_weight.shape == (8,)
+
+    device = object()
+    dtype = object()
+    memory_config = object()
+    projection = SimpleNamespace(
+        device=device,
+        dtype=dtype,
+        memory_config=memory_config,
+        hidden_size=32,
+        q_lora_rank=16,
+    )
+    validate_prefill_indexer_config(
+        attention_projection=projection,
+        weights=weights,
+        index_n_heads=4,
+        index_head_dim=8,
+        index_topk=8,
+        compress_ratio=4,
+        overlap=True,
+        dtype=dtype,
+        memory_config=memory_config,
+    )
+
+    hidden_states = torch.zeros(1, 1, 8, 32)
+    q_rank = torch.zeros(1, 1, 8, 16)
+    validate_prefill_indexer_input(
+        hidden_states,
+        q_rank=q_rank,
+        hidden_size=32,
+        q_lora_rank=16,
+        compress_ratio=4,
+    )
+    with pytest.raises(ValueError, match="offset must be 0"):
+        validate_prefill_indexer_input(
+            hidden_states,
+            hidden_size=32,
+            q_lora_rank=16,
+            compress_ratio=4,
+            offset=8,
+        )
+    with pytest.raises(ValueError, match="Expected indexer wq_b shape"):
+        validate_prefill_indexer_config(
+            attention_projection=projection,
+            weights=PrefillIndexerWeights(
+                wq_b=weights.wq_b[:8],
+                weights_proj=weights.weights_proj,
+                compressor=weights.compressor,
+            ),
+            index_n_heads=4,
+            index_head_dim=8,
+            index_topk=8,
+            compress_ratio=4,
+            overlap=True,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
+
+
 def test_prefill_attention_block_contract_validation(tmp_path):
     source = generate_tiny_hf_checkpoint(tmp_path / "source", num_hidden_layers=3)
     output = convert_hf_checkpoint(source, tmp_path / "tt_preprocessed")
@@ -241,8 +316,7 @@ def test_prefill_attention_block_contract_validation(tmp_path):
         hidden_size=32,
         compress_ratio=4,
     )
-    with pytest.raises(ValueError, match="topk_idxs is required"):
-        validate_prefill_attention_block_input(hidden_states, None, hidden_size=32, compress_ratio=4)
+    validate_prefill_attention_block_input(hidden_states, None, hidden_size=32, compress_ratio=4)
     with pytest.raises(ValueError, match="Expected topk_idxs batch/seq"):
         validate_prefill_attention_block_input(
             hidden_states,
@@ -260,8 +334,18 @@ def test_prefill_attention_block_contract_validation(tmp_path):
         memory_config=memory_config,
         num_heads=4,
         head_dim=8,
+        hidden_size=32,
+        q_lora_rank=16,
     )
-    compressor = SimpleNamespace(device=device, dtype=dtype, memory_config=memory_config, head_dim=8)
+    compressor = SimpleNamespace(device=device, dtype=dtype, memory_config=memory_config, head_dim=8, compress_ratio=4)
+    indexer = SimpleNamespace(
+        device=device,
+        dtype=dtype,
+        memory_config=memory_config,
+        hidden_size=32,
+        q_lora_rank=16,
+        compress_ratio=4,
+    )
     sparse_attention = SimpleNamespace(
         device=device,
         dtype=dtype,
@@ -272,14 +356,18 @@ def test_prefill_attention_block_contract_validation(tmp_path):
     validate_prefill_attention_block_config(
         attention_projection=projection,
         compressor=compressor,
+        indexer=indexer,
         sparse_attention=sparse_attention,
         attn_sink=attn_sink,
     )
-    bad_compressor = SimpleNamespace(device=device, dtype=dtype, memory_config=memory_config, head_dim=4)
+    bad_compressor = SimpleNamespace(
+        device=device, dtype=dtype, memory_config=memory_config, head_dim=4, compress_ratio=4
+    )
     with pytest.raises(ValueError, match="compressor head_dim"):
         validate_prefill_attention_block_config(
             attention_projection=projection,
             compressor=bad_compressor,
+            indexer=indexer,
             sparse_attention=sparse_attention,
             attn_sink=attn_sink,
         )

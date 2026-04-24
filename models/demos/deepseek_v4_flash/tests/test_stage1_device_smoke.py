@@ -37,6 +37,7 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
 )
 from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import TtPrefillAttentionBlock, load_attention_sink
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor, load_prefill_compressor_weights
+from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import TtPrefillIndexer, load_prefill_indexer_weights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_router import TtRouter, load_router_weights
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
@@ -270,6 +271,70 @@ def test_tiny_attention_q_projection_module_matches_torch(tiny_tt_preprocessed_c
     torch.testing.assert_close(torch_output.float(), expected.float(), rtol=8e-2, atol=8e-2)
 
 
+def test_tiny_prefill_indexer_module_computes_reference_topk(tiny_tt_preprocessed_checkpoint: Path, device):
+    """Smoke the indexer ABI; projection and compression run through TTNN, top-k remains host-side."""
+
+    manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
+    layer = 2
+    projection_weights = load_attention_projection_weights(
+        tiny_tt_preprocessed_checkpoint,
+        manifest=manifest,
+        layer=layer,
+        include_output_projection=False,
+    )
+    indexer_weights = load_prefill_indexer_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
+
+    hidden_size = manifest["config"]["hidden_size"]
+    index_n_heads = manifest["config"]["index_n_heads"]
+    index_head_dim = manifest["config"]["index_head_dim"]
+    compress_ratio = manifest["config"]["compress_ratios"][layer]
+    seq_len = 32
+    torch_input = torch.linspace(-0.21, 0.19, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
+        1, 1, seq_len, hidden_size
+    )
+    torch_input = torch_input.to(torch.bfloat16)
+
+    q_rank = F.linear(torch_input[:, 0].float(), projection_weights.wq_a.to(torch.bfloat16).float()).to(torch.bfloat16)
+    q_rank = rms_norm(
+        q_rank,
+        projection_weights.q_norm.to(torch.bfloat16),
+        float(manifest["config"]["rms_norm_eps"]),
+    )
+    index_q = F.linear(q_rank.float(), indexer_weights.wq_b.to(torch.bfloat16).float()).to(torch.bfloat16)
+    index_q = index_q.reshape(1, seq_len, index_n_heads, index_head_dim)
+    index_kv = compressor_prefill(
+        torch_input[:, 0],
+        indexer_weights.compressor.wkv.to(torch.bfloat16),
+        indexer_weights.compressor.wgate.to(torch.bfloat16),
+        indexer_weights.compressor.ape,
+        indexer_weights.compressor.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=index_head_dim,
+        norm_eps=float(manifest["config"]["rms_norm_eps"]),
+        overlap=True,
+    )
+    index_weights = F.linear(torch_input[:, 0].float(), indexer_weights.weights_proj.to(torch.bfloat16).float()).to(
+        torch.bfloat16
+    )
+    index_weights = index_weights.float() * (index_head_dim**-0.5 * index_n_heads**-0.5)
+    expected = indexer_topk(
+        index_q,
+        index_kv,
+        index_weights,
+        index_topk=int(manifest["config"]["index_topk"]),
+        compress_ratio=compress_ratio,
+        start_pos=0,
+        offset=0,
+    )
+
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    module = TtPrefillIndexer.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=layer)
+    topk_idxs = module(tt_input)
+
+    assert topk_idxs.shape == expected.shape
+    torch.testing.assert_close(topk_idxs, expected)
+
+
 def test_tiny_attention_output_projection_host_grouped_wo_a_matches_torch(
     tiny_tt_preprocessed_checkpoint: Path, device
 ):
@@ -311,7 +376,7 @@ def test_tiny_attention_output_projection_host_grouped_wo_a_matches_torch(
 
 
 def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preprocessed_checkpoint: Path, device):
-    """Integrated prefill block; compressor pooling, sparse attention, and grouped wo_a are host fallbacks."""
+    """Integrated prefill block; indexer, sparse attention, and grouped wo_a include host fallbacks."""
 
     manifest = load_tt_manifest(tiny_tt_preprocessed_checkpoint)
     layer = 2
@@ -326,11 +391,14 @@ def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preproc
         manifest=manifest,
         layer=layer,
     )
+    indexer_weights = load_prefill_indexer_weights(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
     attn_sink = load_attention_sink(tiny_tt_preprocessed_checkpoint, manifest=manifest, layer=layer)
 
     hidden_size = manifest["config"]["hidden_size"]
     num_heads = manifest["config"]["num_attention_heads"]
     head_dim = manifest["config"]["head_dim"]
+    index_n_heads = manifest["config"]["index_n_heads"]
+    index_head_dim = manifest["config"]["index_head_dim"]
     compress_ratio = manifest["config"]["compress_ratios"][layer]
     seq_len = 32
     torch_input = torch.linspace(-0.18, 0.22, steps=seq_len * hidden_size, dtype=torch.float32).reshape(
@@ -339,12 +407,13 @@ def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preproc
     torch_input = torch_input.to(torch.bfloat16)
 
     q_rank = F.linear(torch_input[:, 0].float(), projection_weights.wq_a.to(torch.bfloat16).float()).to(torch.bfloat16)
+    q_rank = rms_norm(
+        q_rank,
+        projection_weights.q_norm.to(torch.bfloat16),
+        float(manifest["config"]["rms_norm_eps"]),
+    )
     q = F.linear(
-        rms_norm(
-            q_rank,
-            projection_weights.q_norm.to(torch.bfloat16),
-            float(manifest["config"]["rms_norm_eps"]),
-        ).float(),
+        q_rank.float(),
         projection_weights.wq_b.to(torch.bfloat16).float(),
     ).to(torch.bfloat16)
     compressed_kv = compressor_prefill(
@@ -359,11 +428,26 @@ def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preproc
         overlap=True,
     ).to(torch.bfloat16)
     q_heads = q.reshape(1, seq_len, num_heads, head_dim)
-    index_weights = torch.linspace(0.5, 1.25, steps=num_heads, dtype=torch.float32).reshape(1, 1, num_heads)
-    index_weights = index_weights.expand(1, seq_len, num_heads)
+    index_q = F.linear(q_rank.float(), indexer_weights.wq_b.to(torch.bfloat16).float()).to(torch.bfloat16)
+    index_q = index_q.reshape(1, seq_len, index_n_heads, index_head_dim)
+    index_kv = compressor_prefill(
+        torch_input[:, 0],
+        indexer_weights.compressor.wkv.to(torch.bfloat16),
+        indexer_weights.compressor.wgate.to(torch.bfloat16),
+        indexer_weights.compressor.ape,
+        indexer_weights.compressor.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=index_head_dim,
+        norm_eps=float(manifest["config"]["rms_norm_eps"]),
+        overlap=True,
+    )
+    index_weights = F.linear(torch_input[:, 0].float(), indexer_weights.weights_proj.to(torch.bfloat16).float()).to(
+        torch.bfloat16
+    )
+    index_weights = index_weights.float() * (index_head_dim**-0.5 * index_n_heads**-0.5)
     topk_idxs = indexer_topk(
-        q_heads,
-        compressed_kv,
+        index_q,
+        index_kv,
         index_weights,
         index_topk=int(manifest["config"]["index_topk"]),
         compress_ratio=compress_ratio,
@@ -387,7 +471,7 @@ def test_tiny_prefill_attention_block_host_fallbacks_match_torch(tiny_tt_preproc
 
     tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     module = TtPrefillAttentionBlock.from_preprocessed(tiny_tt_preprocessed_checkpoint, device=device, layer=layer)
-    torch_output = ttnn.to_torch(module(tt_input, topk_idxs=topk_idxs))
+    torch_output = ttnn.to_torch(module(tt_input, topk_idxs=None))
 
     assert torch.any(topk_idxs < 0)
     assert torch_output.shape == expected.shape

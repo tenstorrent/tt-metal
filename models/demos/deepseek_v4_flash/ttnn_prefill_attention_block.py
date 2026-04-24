@@ -14,6 +14,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.ttnn_attention_projection import TtAttentionProjection
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor
+from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import TtPrefillIndexer
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import TtSparsePrefillAttention
 
 
@@ -21,13 +22,15 @@ class TtPrefillAttentionBlock(LightweightModule):
     """Single-device DeepSeek V4 Flash prefill attention block stepping stone.
 
     Callable path:
-    ``hidden_states -> q projection -> compressor -> sparse attention -> output projection``.
+    ``hidden_states -> q projection -> compressor + indexer -> sparse attention -> output projection``.
 
     ``hidden_states`` must be a TTNN tensor shaped ``[batch, 1, seq_len, hidden]``.
-    ``topk_idxs`` is still an explicit host torch tensor shaped
-    ``[batch, seq_len, topk]``. Compressor overlap pooling, sparse gather plus
-    sink-softmax reduction, and grouped ``wo_a`` remain host-side fallbacks owned
-    by the underlying stepping-stone modules.
+    ``topk_idxs`` may still be provided explicitly as a host torch tensor shaped
+    ``[batch, seq_len, topk]``; when omitted, the block computes compressed-KV
+    sparse indices through ``TtPrefillIndexer``. Compressor overlap pooling,
+    indexer top-k, sparse gather plus sink-softmax reduction, and grouped
+    ``wo_a`` remain host-side fallbacks owned by the underlying stepping-stone
+    modules.
     """
 
     def __init__(
@@ -35,17 +38,20 @@ class TtPrefillAttentionBlock(LightweightModule):
         *,
         attention_projection: TtAttentionProjection,
         compressor: TtPrefillCompressor,
+        indexer: TtPrefillIndexer,
         sparse_attention: TtSparsePrefillAttention,
         attn_sink: torch.Tensor,
     ):
         validate_prefill_attention_block_config(
             attention_projection=attention_projection,
             compressor=compressor,
+            indexer=indexer,
             sparse_attention=sparse_attention,
             attn_sink=attn_sink,
         )
         self.attention_projection = attention_projection
         self.compressor = compressor
+        self.indexer = indexer
         self.sparse_attention = sparse_attention
         self.attn_sink = attn_sink.float().contiguous()
 
@@ -67,19 +73,28 @@ class TtPrefillAttentionBlock(LightweightModule):
         head_dim = int(config["head_dim"])
         if softmax_scale is None:
             softmax_scale = head_dim**-0.5
+        attention_projection = TtAttentionProjection.from_preprocessed(
+            preprocessed_path,
+            device=device,
+            layer=layer,
+            include_output_projection=True,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
         return cls(
-            attention_projection=TtAttentionProjection.from_preprocessed(
-                preprocessed_path,
-                device=device,
-                layer=layer,
-                include_output_projection=True,
-                dtype=dtype,
-                memory_config=memory_config,
-            ),
+            attention_projection=attention_projection,
             compressor=TtPrefillCompressor.from_preprocessed(
                 preprocessed_path,
                 device=device,
                 layer=layer,
+                dtype=dtype,
+                memory_config=memory_config,
+            ),
+            indexer=TtPrefillIndexer.from_preprocessed(
+                preprocessed_path,
+                device=device,
+                layer=layer,
+                attention_projection=attention_projection,
                 dtype=dtype,
                 memory_config=memory_config,
             ),
@@ -101,8 +116,11 @@ class TtPrefillAttentionBlock(LightweightModule):
             hidden_size=self.attention_projection.hidden_size,
             compress_ratio=self.compressor.compress_ratio,
         )
-        q = self.attention_projection.project_q(hidden_states)
+        q_rank = self.attention_projection.project_q_rank(hidden_states)
+        q = self.attention_projection.project_q_from_rank(q_rank)
         compressed_kv = self.compressor(hidden_states)
+        if topk_idxs is None:
+            topk_idxs = self.indexer.topk_from_q_rank(hidden_states, q_rank=q_rank)
         attention_output = self.sparse_attention(
             q,
             compressed_kv,
@@ -133,15 +151,28 @@ def validate_prefill_attention_block_config(
     *,
     attention_projection: TtAttentionProjection,
     compressor: TtPrefillCompressor,
+    indexer: TtPrefillIndexer,
     sparse_attention: TtSparsePrefillAttention,
     attn_sink: torch.Tensor,
 ) -> None:
-    if attention_projection.device != compressor.device or attention_projection.device != sparse_attention.device:
-        raise ValueError("attention_projection, compressor, and sparse_attention must use the same TTNN device")
-    if attention_projection.dtype != compressor.dtype or attention_projection.dtype != sparse_attention.dtype:
-        raise ValueError("attention_projection, compressor, and sparse_attention must use the same TTNN dtype")
+    if (
+        attention_projection.device != compressor.device
+        or attention_projection.device != indexer.device
+        or attention_projection.device != sparse_attention.device
+    ):
+        raise ValueError(
+            "attention_projection, compressor, indexer, and sparse_attention must use the same TTNN device"
+        )
+    if (
+        attention_projection.dtype != compressor.dtype
+        or attention_projection.dtype != indexer.dtype
+        or attention_projection.dtype != sparse_attention.dtype
+    ):
+        raise ValueError("attention_projection, compressor, indexer, and sparse_attention must use the same TTNN dtype")
     if attention_projection.memory_config != compressor.memory_config:
         raise ValueError("attention_projection and compressor must use the same TTNN memory config")
+    if attention_projection.memory_config != indexer.memory_config:
+        raise ValueError("attention_projection and indexer must use the same TTNN memory config")
     if attention_projection.memory_config != sparse_attention.memory_config:
         raise ValueError("attention_projection and sparse_attention must use the same TTNN memory config")
     if attention_projection.num_heads != sparse_attention.num_heads:
@@ -158,6 +189,21 @@ def validate_prefill_attention_block_config(
         raise ValueError(
             f"compressor head_dim {compressor.head_dim} must match sparse attention head_dim "
             f"{sparse_attention.head_dim}"
+        )
+    if indexer.hidden_size != attention_projection.hidden_size:
+        raise ValueError(
+            f"indexer hidden_size {indexer.hidden_size} must match projection hidden_size "
+            f"{attention_projection.hidden_size}"
+        )
+    if indexer.q_lora_rank != attention_projection.q_lora_rank:
+        raise ValueError(
+            f"indexer q_lora_rank {indexer.q_lora_rank} must match projection q_lora_rank "
+            f"{attention_projection.q_lora_rank}"
+        )
+    if indexer.compress_ratio != compressor.compress_ratio:
+        raise ValueError(
+            f"indexer compress_ratio {indexer.compress_ratio} must match compressor compress_ratio "
+            f"{compressor.compress_ratio}"
         )
     if attn_sink.ndim != 1 or tuple(attn_sink.shape) != (sparse_attention.num_heads,):
         raise ValueError(f"Expected attn_sink shape {(sparse_attention.num_heads,)}, got {tuple(attn_sink.shape)}")
@@ -179,7 +225,7 @@ def validate_prefill_attention_block_input(
     if seq_len < compress_ratio:
         raise ValueError(f"Expected seq_len >= compress_ratio {compress_ratio}, got {seq_len}")
     if topk_idxs is None:
-        raise ValueError("topk_idxs is required for this prefill attention block stepping stone")
+        return
     if topk_idxs.ndim != 3:
         raise ValueError(f"Expected topk_idxs shape [batch, seq_len, topk], got {tuple(topk_idxs.shape)}")
     if topk_idxs.dtype not in (torch.int32, torch.int64):

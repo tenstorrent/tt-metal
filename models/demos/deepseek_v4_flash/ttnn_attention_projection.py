@@ -118,14 +118,20 @@ class TtAttentionProjection(LightweightModule):
         return self.project_q(hidden_states)
 
     def project_q(self, hidden_states):
+        return self.project_q_from_rank(self.project_q_rank(hidden_states))
+
+    def project_q_rank(self, hidden_states):
         _validate_ttnn_projection_input(hidden_states, expected_width=self.hidden_size, label="hidden_states")
         q_rank = ttnn.linear(hidden_states, self.wq_a, memory_config=self.memory_config)
-        q_rank = ttnn.rms_norm(
+        return ttnn.rms_norm(
             q_rank,
             weight=self.q_norm,
             epsilon=self.norm_eps,
             memory_config=self.memory_config,
         )
+
+    def project_q_from_rank(self, q_rank):
+        _validate_ttnn_projection_input(q_rank, expected_width=self.q_lora_rank, label="q_rank")
         return ttnn.linear(q_rank, self.wq_b, memory_config=self.memory_config)
 
     def project_output(self, attention_output):
