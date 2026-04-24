@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,17 +35,17 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     const ttnn::MeshCoordinate& mesh_coord,
     const RMSAllGatherInputs& tensor_args,
     Tensor& tensor_return_value) {
-    // Setup device information
+    // Setup device information using coordinate-based abstractions (multi-host safe)
     ttnn::MeshDevice* mesh_device = tensor_args.input.device();
 
-    // Use multi-host-safe coordinate-based pattern
+    // Compute device_index from mesh coordinate without IDevice* pointer comparison
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input, mesh_coord, operation_attributes.cluster_axis);
 
-    std::optional<ttnn::MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        tensor_args.input, mesh_coord, +1, operation_attributes.topology, operation_attributes.cluster_axis);
-
-    std::optional<ttnn::MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+    // Compute forward/backward neighbor coordinates without using mesh_view or IDevice*
+    const std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input, mesh_coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+    const std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input, mesh_coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
 
     const auto& a = tensor_args.input;
