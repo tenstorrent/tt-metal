@@ -65,12 +65,6 @@ void build_failure(const string& target_name, const string& op, const string& cm
     }
 }
 
-void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
-    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
-                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
-    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
-}
-
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
@@ -292,7 +286,7 @@ void JitBuildEnv::init(
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
     hasher.update(cflags_);
@@ -313,7 +307,7 @@ void JitBuildEnv::init(
         // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
         char buf[100];
         if (fgets(buf, sizeof(buf), pipe)) {
-            hasher.update(buf, buf + std::strlen(buf));
+            hasher.update(std::string_view{buf});
         }
         pclose(pipe);
     }
@@ -440,7 +434,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // (e.g. after a code change that modifies HAL output), the hash changes and cached
     // objects are invalidated, preventing stale binaries from being reused.
     {
-        tt::FNV1a hasher;
+        tt::StableHasher hasher;
         hasher.update(env_.gpp_);
         hasher.update(cflags_);
         hasher.update(defines_);
@@ -858,10 +852,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
     auto t0 = std::chrono::steady_clock::now();
-
     build.build(settings);
-    write_successful_jit_build_marker(build, settings);
-
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
     tok.record(elapsed_ms);
@@ -870,11 +861,8 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
     auto t0 = std::chrono::steady_clock::now();
-
     const JitBuildState& primary = *targets[0];
     primary.build(settings, targets);
-    write_successful_jit_build_marker(primary, settings);
-
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
     tok.record(elapsed_ms);
@@ -888,9 +876,6 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     }
 
     sync_build_steps(events);
-    for (const auto& build : build_subset) {
-        write_successful_jit_build_marker(build, settings);
-    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {

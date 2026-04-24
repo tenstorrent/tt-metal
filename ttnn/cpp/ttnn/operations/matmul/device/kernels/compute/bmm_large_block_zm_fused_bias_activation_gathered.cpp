@@ -212,8 +212,8 @@ void kernel_main() {
     constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
 
 #ifdef SFPU_ACTIVATION
-    constexpr KernelActivation activation_type =
-        static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
+    constexpr ttnn::operations::matmul::KernelActivation activation_type =
+        static_cast<ttnn::operations::matmul::KernelActivation>(get_named_compile_time_arg_val("activation_type"));
 #endif
 
     experimental::CircularBuffer in1_cb(in1_cb_id);

@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+namespace ttnn::operations::matmul {
+
 enum class KernelActivation : uint32_t {
     NONE,
     GELU,
@@ -18,3 +20,5 @@ enum class KernelActivation : uint32_t {
     SELU,
     SOFTPLUS
 };
+
+}  // namespace ttnn::operations::matmul

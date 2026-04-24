@@ -463,6 +463,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -536,6 +537,7 @@ def test_multi_core_matmul_1d_pad_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -633,6 +635,7 @@ def test_multi_core_matmul_1d_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -710,6 +713,7 @@ def test_multi_core_matmul_1d_ring_hop_wh(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -792,6 +796,7 @@ def test_multi_core_matmul_1d_gs(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     run_multi_core_matmul_1d(
         device,
         in0_dtype,
@@ -944,6 +949,7 @@ def test_matmul_1d_ring_llama_perf(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -1112,6 +1118,7 @@ def test_matmul_1d_ring_qwen_perf(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -1200,6 +1207,7 @@ def test_matmul_1d_ring_llama_lm_head(
     num_iters,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

@@ -12,6 +12,12 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "internal/risc_attribs.h"
 #include <cstring>  // for memcpy
+#include <type_traits>
+
+using ttnn::operations::matmul::KernelActivation;
+
+template <typename>
+inline constexpr bool unsupported_kernel_activation_v = false;
 
 // Helper templates to select activation variants based on parameters
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
@@ -50,6 +56,10 @@ struct ActivationInitHelper {
             selu_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
             softplus_tile_init_pack();
+        } else {
+            static_assert(
+                unsupported_kernel_activation_v<std::integral_constant<KernelActivation, ACT>>,
+                "Unsupported KernelActivation in ActivationInitHelper");
         }
     }
 };
@@ -102,6 +112,10 @@ struct ActivationApplyHelper {
             uint32_t beta_reciprocal;
             memcpy(&beta_reciprocal, &beta_recip_f, sizeof(uint32_t));
             softplus_tile_pack(tile_index, PARAM0, beta_reciprocal, PARAM1);
+        } else {
+            static_assert(
+                unsupported_kernel_activation_v<std::integral_constant<KernelActivation, ACT>>,
+                "Unsupported KernelActivation in ActivationApplyHelper");
         }
     }
 };

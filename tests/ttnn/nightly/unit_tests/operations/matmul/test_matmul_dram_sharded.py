@@ -247,6 +247,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     for _ in range(2):
         run_test_matmul_in1_dram_sharded(
             device,
@@ -417,6 +418,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     out_dtype,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     M = 32
     K = 4096
     N = 4096
@@ -459,6 +461,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
 @pytest.mark.parametrize(
     "M, K, N, activation, in0_sharded, fuse_batch",
     [
+        (1024, 1024, 1024, "gelu", True, True),
         (1024, 1024, 1024, None, True, True),
         (1024, 4096, 2048, None, False, False),
     ],
@@ -477,6 +480,7 @@ def test_matmul_2d_in1_dram_sharded(
     fuse_batch,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
@@ -548,7 +552,6 @@ def test_matmul_2d_in1_dram_sharded(
     if has_bias:
         bias = torch.ones(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
-        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <bit>
+#include <optional>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -19,6 +20,24 @@ namespace ttnn::operations::matmul::utilities {
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
+
+/**
+ * @brief True when fused matmul bias add can use the row-broadcast kernel path.
+ *
+ * Broadcast applies when there is no distinct row axis (rank < 2, e.g. vector bias) or the
+ * logical row dimension is 1 (shape[-2] == 1, e.g. [..., 1, N]). Otherwise the bias has multiple
+ * logical rows and the fused kernel must use elementwise add_tiles.
+ */
+inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor>& bias) {
+    if (!bias.has_value()) {
+        return false;
+    }
+    const auto& shape = bias->logical_shape();
+    if (shape.rank() < 2) {
+        return true;
+    }
+    return shape[-2] == 1;
+}
 
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
@@ -56,6 +75,17 @@ bool is_input_batched(const ttnn::Shape& shape);
  */
 ttnn::Shape compute_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
+
+/*
+ * @brief Computes the output shape of a matmul operation with bias given two input shapes
+ *
+ * Determines the output shape based on the broadcasting rules for matrix multiplication with bias:
+ *
+ * @param matmul_shape The shape of the matmul operation
+ * @param bias_shape The shape of the bias tensor
+ * @return Shape of the resulting tensor after matmul with bias
+ */
+ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape);
 
 using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
 std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(

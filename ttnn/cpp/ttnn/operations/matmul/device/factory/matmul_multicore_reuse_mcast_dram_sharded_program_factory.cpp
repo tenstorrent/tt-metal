@@ -63,7 +63,8 @@ create_program_dram_sharded(
     bool untilize_out,
     bool skip_compute,
     bool skip_in0_mcast,
-    bool skip_write_back) {
+    bool skip_write_back,
+    bool row_broadcast_bias) {
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
@@ -450,6 +451,9 @@ create_program_dram_sharded(
         false,         // get_batch_from_reader
         false,         // in0_transpose_tile
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Setup named compile args
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
@@ -959,6 +963,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
+
     tt::tt_metal::IDevice* device = reuse_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
 
     TT_FATAL(
@@ -1077,7 +1083,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
         untilize_out,
         skip_compute,
         skip_in0_mcast,
-        skip_write_back);
+        skip_write_back,
+        row_broadcast_bias);
 }
 
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::cached_mesh_workload_t

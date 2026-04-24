@@ -178,10 +178,14 @@ bool single_core_binary(
             .tile = test_config.tile,
         };
 
-        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
-        inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
-        inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
-        out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_output_dfb_config);
+        inp0_dfb =
+            tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
+        inp1_dfb =
+            tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
+        inp2_dfb =
+            tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
+        out_dfb =
+            tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_output_dfb_config);
 
     } else {
         tt_metal::CircularBufferConfig l1_input0_cb_config =
@@ -241,7 +245,8 @@ bool single_core_binary(
             program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = writer_cta});
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = writer_cta});
 
         compute_cta = {inp0_dfb, inp1_dfb, inp2_dfb, out_dfb};
         binary_kernel = tt_metal::experimental::quasar::CreateKernel(
@@ -311,7 +316,8 @@ bool single_core_binary(
     uint16_t srcb_fid_mask = 0xFFFF;
 
     // Quasar has 8x8 mantissa multipliers so fidelity has no effect on bfloat16 multiplications.
-    // Only set FID masks for non-Quasar to ensure we are testing the effect of reduced math fidelity on the binary compute results.
+    // Only set FID masks for non-Quasar to ensure we are testing the effect of reduced math fidelity on the binary
+    // compute results.
     // TODO: If the tests are extended to FP32, then the FID masks should also be applied for Quasar.
     if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
         set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
@@ -561,9 +567,6 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -579,14 +582,15 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -602,14 +606,15 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "DestReuse test support will be added with DestReuse bring-up";
-    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -625,6 +630,10 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            // TODO: Remove early return once back-to-back tests are passing on Quasar
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
