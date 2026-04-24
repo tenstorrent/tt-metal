@@ -208,43 +208,69 @@ def run_model_device_perf_test_with_merge(
     )
 
 
-def run_approx_galaxy_moe_perf(
+def run_moe_perf_with_approximation(
     command_8x1: str,
+    expected_ns_8x1: float,
+    model_name_8x1: str,
     command_2x4: str,
+    expected_ns_2x4: float,
+    model_name_2x4: str,
     subdir: str,
     num_iterations: int = 1,
     batch_size: int = 1,
+    margin: float = 0.03,
+    comments_8x1: str = "",
+    comments_2x4: str = "",
 ):
     """
-    Approximate 8x4 galaxy MoE performance from cheaper 8x1 + 2x4 proxy runs.
+    Run 8x1 + 2x4 MoE proxies once each, perf-validate both against baselines,
+    and compute the approximated 8x4 galaxy total from the same two CSVs.
 
-    Runs both proxy commands sequentially, captures the profiler CSV from each,
-    then applies the SP/TP op-selection logic from approx.py to log the estimated
-    per-op breakdown and total. No perf assertion is performed.
+    Replaces the earlier split across `test_deepseek_v3_moe_perf[8x1|2x4]` +
+    `test_deepseek_v3_moe_perf_approx_galaxy` (4 runs total) with 2 runs: each
+    proxy executes once and its CSV feeds both the per-proxy baseline check and
+    the SP/TP op-selection approximation.
 
     SP ops (Dispatch, Combine, expert FFN Matmul, ...) come from 8x1.
     TP ops (AllGather, ReduceScatter, AllBroadcast, gate, ...) come from 2x4.
     """
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    logger.info("Running 8x1 proxy (dispatch + combine + expert FFN)...")
-    run_device_perf(command_8x1, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size)
+    logger.info("=== 8x1 proxy: dispatch + combine + expert FFN ===")
+    run_model_device_perf_test_with_merge(
+        command=command_8x1,
+        expected_device_perf_ns_per_iteration=expected_ns_8x1,
+        subdir=subdir,
+        model_name=model_name_8x1,
+        num_iterations=num_iterations,
+        batch_size=batch_size,
+        margin=margin,
+        comments=comments_8x1,
+    )
     csv_8x1 = get_latest_ops_log_filename(subdir)
     logger.info(f"8x1 CSV: {csv_8x1}")
 
-    # run_device_perf calls clear_profiler_runtime_artifacts() which deletes all of
-    # generated/profiler/ before each run. Copy the 8x1 CSV to a temp file so it
-    # survives the 2x4 run's cleanup.
+    # run_device_perf (inside run_model_device_perf_test_with_merge) calls
+    # clear_profiler_runtime_artifacts() which deletes generated/profiler/ before
+    # each run. Copy 8x1 CSV to tmp so it survives the 2x4 run.
     tmp_csv_8x1 = None
     try:
         tmp_csv_8x1 = tempfile.NamedTemporaryFile(suffix=".csv", delete=False).name
         shutil.copy(csv_8x1, tmp_csv_8x1)
 
-        logger.info("Running 2x4 proxy (gate + TP collectives)...")
-        run_device_perf(command_2x4, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size)
+        logger.info("=== 2x4 proxy: gate + TP collectives ===")
+        run_model_device_perf_test_with_merge(
+            command=command_2x4,
+            expected_device_perf_ns_per_iteration=expected_ns_2x4,
+            subdir=subdir,
+            model_name=model_name_2x4,
+            num_iterations=num_iterations,
+            batch_size=batch_size,
+            margin=margin,
+            comments=comments_2x4,
+        )
         csv_2x4 = get_latest_ops_log_filename(subdir)
         logger.info(f"2x4 CSV: {csv_2x4}")
 
+        logger.info("=== Approximating 8x4 galaxy total from 8x1 + 2x4 ===")
         df_approx = approximate_8x4_perf(csv_8x1=tmp_csv_8x1, csv_2x4=csv_2x4)
         logger.info(f"\n{df_approx.to_string(index=False)}")
     finally:
