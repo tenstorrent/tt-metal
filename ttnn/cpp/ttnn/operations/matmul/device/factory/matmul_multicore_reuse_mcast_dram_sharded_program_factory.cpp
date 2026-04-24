@@ -464,11 +464,13 @@ create_program_dram_sharded(
         {"bias_ntiles", per_core_N_compute},
     };
 
-    // Add activation type if needed
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using operations::matmul::utilities::get_activation_type;
-        KernelActivation activation_type = get_activation_type(fused_activation.value().op_type);
-        compute_named_compile_args["activation_type"] = static_cast<uint32_t>(activation_type);
+        using operations::matmul::utilities::get_activation_params;
+        const auto& activation = fused_activation.value();
+        const auto params = get_activation_params(activation);
+        compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
+        compute_named_compile_args["activation_param0"] = params.param0;
+        compute_named_compile_args["activation_param1"] = params.param1;
     }
 
     // Create compute kernel

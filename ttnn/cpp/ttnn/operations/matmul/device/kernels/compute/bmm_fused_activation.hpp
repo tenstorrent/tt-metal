@@ -7,40 +7,111 @@
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/relu.h"
 #include "api/compute/eltwise_unary/activations.h"
+#include "api/compute/eltwise_unary/hardtanh.h"
+#include "api/compute/eltwise_unary/selu.h"
+#include "api/compute/eltwise_unary/softplus.h"
 #include "internal/risc_attribs.h"
+#include <cstring>  // for memcpy
+
+// Helper templates to select activation variants based on parameters
+template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
+struct ActivationInitHelper {
+    FORCE_INLINE static void init() {
+        if constexpr (ACT == KernelActivation::SILU) {
+            silu_tile_init_pack();
+        } else if constexpr (ACT == KernelActivation::TANH) {
+            // PARAM0: 0 = accurate, non-zero = fast
+            if constexpr (PARAM0 != 0) {
+                tanh_tile_init_pack<true>();
+            } else {
+                tanh_tile_init_pack<false>();
+            }
+        } else if constexpr (ACT == KernelActivation::GELU) {
+            // PARAM0: 0 = accurate, non-zero = fast
+            if constexpr (PARAM0 != 0) {
+                gelu_tile_init_pack<true>();
+            } else {
+                gelu_tile_init_pack<false>();
+            }
+        } else if constexpr (ACT == KernelActivation::RELU6) {
+            relu_max_tile_init_pack();
+        } else if constexpr (ACT == KernelActivation::SIGMOID) {
+            // Enhanced: PARAM1 is fast_approximate flag
+            if constexpr (PARAM1 != 0) {
+                sigmoid_tile_init_pack<true>();
+            } else {
+                sigmoid_tile_init_pack<false>();
+            }
+        } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
+            hardsigmoid_tile_init_pack();
+        } else if constexpr (ACT == KernelActivation::HARDTANH) {
+            hardtanh_tile_init_pack();
+        } else if constexpr (ACT == KernelActivation::SELU) {
+            selu_tile_init_pack();
+        } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
+            softplus_tile_init_pack();
+        }
+    }
+};
+
+template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
+struct ActivationApplyHelper {
+    FORCE_INLINE static void apply(uint32_t tile_index) {
+        if constexpr (ACT == KernelActivation::SILU) {
+            silu_tile_pack(tile_index);
+        } else if constexpr (ACT == KernelActivation::TANH) {
+            // PARAM0: 0 = accurate, non-zero = fast
+            if constexpr (PARAM0 != 0) {
+                tanh_tile_pack<true>(tile_index);
+            } else {
+                tanh_tile_pack<false>(tile_index);
+            }
+        } else if constexpr (ACT == KernelActivation::GELU) {
+            // PARAM0: 0 = accurate, non-zero = fast
+            if constexpr (PARAM0 != 0) {
+                gelu_tile_pack<true>(tile_index);
+            } else {
+                gelu_tile_pack<false>(tile_index);
+            }
+        } else if constexpr (ACT == KernelActivation::RELU6) {
+            // PARAM0 is the max value (as uint32_t bit pattern)
+            // Default to 6.0 if PARAM0 is 0
+            constexpr uint32_t max = (PARAM0 != 0) ? PARAM0 : 0x40c00000u;
+            relu_max_tile_pack(tile_index, max);
+        } else if constexpr (ACT == KernelActivation::SIGMOID) {
+            // Enhanced: PARAM0 is vector mode, PARAM1 is fast_approximate
+            constexpr int vec_mode = (PARAM0 == 1) ? VectorMode::R : (PARAM0 == 2) ? VectorMode::C : VectorMode::RC;
+            if constexpr (PARAM1 != 0) {
+                sigmoid_tile_pack<vec_mode, true>(tile_index);
+            } else {
+                sigmoid_tile_pack<vec_mode, false>(tile_index);
+            }
+        } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
+            hardsigmoid_tile_pack(tile_index);
+        } else if constexpr (ACT == KernelActivation::HARDTANH) {
+            hardtanh_tile_pack(tile_index, PARAM0, PARAM1);
+        } else if constexpr (ACT == KernelActivation::SELU) {
+            // PARAM0 is alpha, PARAM1 is lambda
+            selu_tile_pack(tile_index, PARAM0, PARAM1);
+        } else if constexpr (ACT == KernelActivation::SOFTPLUS) {
+            // PARAM0 is beta, PARAM1 is threshold
+            uint32_t beta = PARAM0;
+            float beta_f;
+            memcpy(&beta_f, &beta, sizeof(float));
+            float beta_recip_f = 1.0f / beta_f;
+            uint32_t beta_reciprocal;
+            memcpy(&beta_reciprocal, &beta_recip_f, sizeof(uint32_t));
+            softplus_tile_pack(tile_index, PARAM0, beta_reciprocal, PARAM1);
+        }
+    }
+};
 
 template <KernelActivation ACT>
 FORCE_INLINE void init_sfpu_activation_pack() {
-    if constexpr (ACT == KernelActivation::SILU) {
-        return silu_tile_init_pack();
-    } else if (ACT == KernelActivation::TANH) {
-        return tanh_tile_init_pack();
-    } else if (ACT == KernelActivation::GELU) {
-        return gelu_tile_init_pack();
-    } else if (ACT == KernelActivation::RELU6) {
-        return relu_max_tile_init_pack();
-    } else if (ACT == KernelActivation::SIGMOID) {
-        return sigmoid_tile_init_pack<false>();
-    } else if (ACT == KernelActivation::HARDSIGMOID) {
-        return hardsigmoid_tile_init_pack();
-    }
+    ActivationInitHelper<ACT, 0, 0>::init();
 }
 
 template <KernelActivation ACT>
 FORCE_INLINE void sfpu_activation_pack(uint32_t tile_index) {
-    if constexpr (ACT == KernelActivation::SILU) {
-        return silu_tile_pack(tile_index);
-    } else if (ACT == KernelActivation::TANH) {
-        return tanh_tile_pack(tile_index);
-    } else if (ACT == KernelActivation::GELU) {
-        return gelu_tile_pack(tile_index);
-    } else if (ACT == KernelActivation::RELU6) {
-        // constexpr uint32_t max = std::bit_cast<uint32_t>(6.0f);
-        constexpr uint32_t max = 0x40c00000u;
-        return relu_max_tile_pack(tile_index, max);
-    } else if (ACT == KernelActivation::SIGMOID) {
-        return sigmoid_tile_pack<VectorMode::RC, false>(tile_index);
-    } else if (ACT == KernelActivation::HARDSIGMOID) {
-        return hardsigmoid_tile_pack(tile_index);
-    }
+    ActivationApplyHelper<ACT, 0, 0>::apply(tile_index);
 }
