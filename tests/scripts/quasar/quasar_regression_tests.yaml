@@ -18,6 +18,12 @@ unit_tests_legacy:
   - filter: "*SingleDmL1Write*"
     config: 1x3, 2x3, 2x3_DISPATCH
 
+  - filter: "*SingleDmL1Write*"
+    config: 2x3
+
+  - filter: "*SingleDmL1Write*"
+    config: 2x3_DISPATCH
+
   - filter: "*DmLoopback*"
     config: 1x3
 
@@ -32,6 +38,9 @@ unit_tests_legacy:
 
   - filter: "*MultiDmAddTwoInts*"
     config: 2x3, 2x3_DISPATCH
+
+  - filter: "*MultiDmAddTwoInts*"
+    config: 2x3_DISPATCH
 
   - filter: "*Bmm"
     config: 1x3
