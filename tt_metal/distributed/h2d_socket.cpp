@@ -234,7 +234,14 @@ H2DSocket::H2DSocket(
     }
 
     init_config_buffer(mesh_device);
-    init_data_buffer(mesh_device, pcie_alignment);
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        init_data_buffer(mesh_device, pcie_alignment);
+    } else {
+        // DEVICE_PULL: data lives in pinned host memory; no L1 data buffer needed.
+        // Set fifo base to 0 so the kernel's offset arithmetic (read_ptr - fifo_addr)
+        // reduces to a plain byte offset into the host buffer.
+        aligned_data_buf_start_ = 0;
+    }
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
 
