@@ -205,6 +205,10 @@ This is where the approach takes shape. For each semantic step in the problem st
 3. **Compose from primitives.** If no single instruction or sibling exists, design a sequence. Prefer TTI_ forms (see Step 5).
 4. **Fall back to algorithm redesign.** If the target truly cannot compose the operation, flag it explicitly — the port may need a different mathematical approach (e.g., Taylor series instead of LUT, or emulating via int ops).
 
+**SFPMAD operand constraint:** `TTI_SFPMAD` / `TTI_SFPADD` / `TTI_SFPMUL` take general-purpose LREG operands (LREG0–7). Polynomial coefficients used in `TTI_SFPMAD` must be pre-loaded into LREG0–7 via `TTI_SFPLOADI` before the per-row loop. `_sfpu_load_config32_()` loads into the LUT/config register file, which is only readable via `TTI_SFPLUTFP32` — it does NOT make config-register values accessible as `TTI_SFPMAD` operands. Mixing these two register files produces wrong results silently.
+
+**Exponent extraction path for log-family kernels:** When the kernel must convert an extracted floating-point exponent from integer to float (e.g., for a log implementation), prefer the **biased-exponent path**: `TTI_SFPEXEXP(src, dst, 1)` → biased exponent is always in 0–255 (no sign bit) → `TTI_SFPCAST(dst, dst, 0)` → single INT32→FP32 conversion → `TTI_SFPMAD(LCONST_neg127, dst, LCONST_0, dst, 0)` to debias. This path uses only SFPCAST(mod=0), which has confirmed simulator support. Avoid the alternative unbiased path (`SFPEXEXP(mod=0)` → `SFPCAST(mod=3, SMAG32)` → `SFPCAST(mod=0)`) unless SFPCAST(mod=3) has been independently confirmed on the target simulator — it introduces a two-step conversion with a mode that is not validated by sibling kernels.
+
 Produce a **Semantic → Instruction Mapping** table:
 
 | Semantic step | Target instruction(s) | Source of truth |
@@ -348,6 +352,8 @@ Surface every uncertainty before handing off:
 ## Step 7: Format Applicability (MANDATORY)
 
 Start from the FULL Quasar-supported format set (`QUASAR_DATA_FORMAT_ENUM_VALUES` in `tests/python_tests/helpers/format_config.py`). Evaluate each independently — do **not** use the reference's `static_assert` as the filter. Quasar supports formats Blackhole lacks (Int16, MxFp8R, MxFp8P, Tf32).
+
+**Float16 is valid on Quasar (MANDATORY CHECK):** Float16 appears in both `QUASAR_DATA_FORMAT_ENUM_VALUES` (`format_config.py`) and `VALID_QUASAR_DEST_REG_FORMATS` (`data_format_inference.py`). Do NOT exclude Float16 based on inference from any format list — confirm by running `grep -n "Float16" tests/python_tests/helpers/data_format_inference.py` and verifying the format is present in `VALID_QUASAR_DEST_REG_FORMATS`. Float16 exclusions backed by format-list inference rather than a direct read of these files must be flagged as assumptions with a risk of being wrong.
 
 ### SFPU-specific rule
 

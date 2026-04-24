@@ -524,6 +524,13 @@ Work through these in order. Stop as soon as a hypothesis matches the evidence.
 - Approximation mode: does the test expect `APPROX_MODE()=Yes` but the kernel is always-accurate (or vice-versa)?
 - Face loop: iteration count and increment pattern match `num_faces`?
 
+**Sign-error diagnostics (MANDATORY when DATA_MISMATCH involves unexpected negative values or sign-flipped outputs):** If the mismatch is sign-related (e.g. all outputs have wrong sign, alternating positive/negative pattern, or a reciprocal produces a negated result), read the ISA definition of **every** sign-manipulation instruction in the kernel before proposing a fix:
+
+- **`TTI_SFPSETSGN`** — this instruction copies **ALL fields** (Sign, Exponent, Mantissa) from VC into VD. It does NOT copy only the sign bit. Using SFPSETSGN to apply a sign from one LREG to a RECIP result effectively **replaces** the RECIP output with the sign source, producing `source_value` instead of `±recip`. In atanh/asinh, if the domain constraint guarantees `1-x > 0`, the RECIP result is always positive and SFPSETSGN is unnecessary — remove it.
+- **`TTI_SFPABS` mode operand** — mode=0 is INT32 (clears the 32nd bit of the raw integer representation, wrong for FP32 values); mode=1 is FP32 (clears the IEEE sign bit, correct for FP32). Using mode=0 on FP32 data produces garbage for values with a sign bit in the exponent field. If the kernel computes `abs(x)` for a float input, it must use `TTI_SFPABS(src, dst, 1)`.
+
+Fetch the ISA page to confirm: `mcp__atlassian__getConfluencePage` on page `1170505767` (Tensix SFPU ISA). The ISA definition is the authority — do not diagnose sign errors from first principles when the page gives the exact functional model.
+
 **R4 — For ASSERTION**: the Python harness itself rejected the config. Usually means:
 - The spec's format list includes a combo the kernel doesn't actually support — revise the format list or the invalid-combo filter.
 - A runtime param value is out of bounds.

@@ -148,6 +148,20 @@ Open the scaffold and fill each function from the analysis's pseudocode. The ana
 
 Your job is to transcribe pseudocode to C++, not to redesign. If you find yourself second-guessing an instruction choice, read the analysis section and its cited source — if it's still wrong, the analysis is wrong, and this should be flagged rather than silently "fixed" here.
 
+**Faithfulness enforcement (MANDATORY):** If you find yourself inventing an instruction sequence that is NOT in the analysis §6b pseudocode — different instructions, different register indices, different call order — STOP. Do not proceed with the invented sequence. Report it to the orchestrator:
+
+```
+ANALYSIS_DEVIATION
+  Function: {name}
+  Analysis §6b says: {what the pseudocode prescribed}
+  I was about to write: {what you were about to do instead}
+  Reason I diverged: {why — e.g. "analysis TBD here", "I thought X was equivalent"}
+```
+
+Invention is the single most dangerous thing the writer can do: it produces a structurally different kernel that the tester then has to debug without knowing what the author intended. A flagged deviation costs one iteration; an uninvented structure costs all 10.
+
+**SFPMAD / SFPADD / SFPMUL operand constraint (MANDATORY):** The `lreg_src_a`, `lreg_src_b`, `lreg_src_c`, and `lreg_dest` fields in `TTI_SFPMAD` / `TTI_SFPADD` / `TTI_SFPMUL` are general-purpose LREG indices (LREG0–7). Config registers loaded via `_sfpu_load_config32_()` are part of the **LUT register file** — they are accessed via `TTI_SFPLUTFP32`, NOT as operands in `TTI_SFPMAD`. If you find yourself writing `TTI_SFPMAD(8, ...)` or `TTI_SFPMAD(9, ...)` because the analysis put polynomial coefficients into config registers 8–11, **stop** — that is an invalid encoding and will produce garbage results silently. Polynomial coefficients used in `TTI_SFPMAD` must be pre-loaded into LREG0–7 via `TTI_SFPLOADI` before the per-row loop.
+
 **Style rules** (match the sibling kernel the analysis cites):
 1. Indentation: 4 spaces (or whatever sibling uses)
 2. Braces: match sibling
