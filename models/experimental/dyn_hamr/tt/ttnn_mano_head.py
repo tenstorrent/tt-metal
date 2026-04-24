@@ -41,16 +41,6 @@ def _t(weight: torch.Tensor, device: Any) -> Any:
     )
 
 
-def _t_bfp8(weight: torch.Tensor, device: Any) -> Any:
-    """BFP8 weight tile — half the DRAM bandwidth of bfloat16."""
-    return ttnn.from_torch(
-        weight.to(torch.bfloat16).contiguous(),
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
-    )
-
-
 def _t_bias(bias: torch.Tensor, device: Any) -> Any:
     """Upload bias as (1, N) bf16 tile — shape required by minimal_matmul bias_tensor API."""
     return ttnn.from_torch(
@@ -139,18 +129,18 @@ def build_parameters_from_reference(ref, device: Any) -> Dict[str, Any]:
     for blk in td.layers:
         params["layers"].append({
             "norm_sa": {"weight": _t(blk.norm_sa.weight, device), "bias": _t(blk.norm_sa.bias, device)},
-            "sa_qkv_w": _t_bfp8(blk.sa.to_qkv.weight.t(), device),   # (1024, 3*512)
-            "sa_out_w": _t_bfp8(blk.sa.to_out.weight.t(), device),   # (512, 1024)
+            "sa_qkv_w": _t(blk.sa.to_qkv.weight.t(), device),        # (1024, 3*512)
+            "sa_out_w": _t(blk.sa.to_out.weight.t(), device),        # (512, 1024)
             "sa_out_b": _t_bias(blk.sa.to_out.bias, device),
             "norm_ca": {"weight": _t(blk.norm_ca.weight, device), "bias": _t(blk.norm_ca.bias, device)},
-            "ca_q_w": _t_bfp8(blk.ca.to_q.weight.t(), device),       # (1024, 512)
-            "ca_kv_w": _t_bfp8(blk.ca.to_kv.weight.t(), device),     # (1280, 2*512)
-            "ca_out_w": _t_bfp8(blk.ca.to_out.weight.t(), device),   # (512, 1024)
+            "ca_q_w": _t(blk.ca.to_q.weight.t(), device),            # (1024, 512)
+            "ca_kv_w": _t(blk.ca.to_kv.weight.t(), device),          # (1280, 2*512)
+            "ca_out_w": _t(blk.ca.to_out.weight.t(), device),        # (512, 1024)
             "ca_out_b": _t_bias(blk.ca.to_out.bias, device),
             "norm_ff": {"weight": _t(blk.norm_ff.weight, device), "bias": _t(blk.norm_ff.bias, device)},
-            "ff_fc1_w": _t_bfp8(blk.ff.net[0].weight.t(), device),   # (1024, 1024)
+            "ff_fc1_w": _t(blk.ff.net[0].weight.t(), device),        # (1024, 1024)
             "ff_fc1_b": _t_bias(blk.ff.net[0].bias, device),
-            "ff_fc2_w": _t_bfp8(blk.ff.net[2].weight.t(), device),   # (1024, 1024)
+            "ff_fc2_w": _t(blk.ff.net[2].weight.t(), device),        # (1024, 1024)
             "ff_fc2_b": _t_bias(blk.ff.net[2].bias, device),
         })
     return params
