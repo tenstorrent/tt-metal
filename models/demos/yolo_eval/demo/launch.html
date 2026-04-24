@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>4K Image Detection — TT WH Galaxy</title>
+<style>
+  :root {
+    --bg-0: #0a0612;
+    --bg-1: #16101f;
+    --card: #161126;
+    --card-border: #2a1f48;
+    --text: #e6e1f5;
+    --text-dim: #b9a7ff;
+    --accent: #7c5cff;
+    --accent-hover: #9279ff;
+    --pill-inactive: #1c1530;
+    --good: #5af2a3;
+    --warn: #ffb05a;
+    --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background:
+      radial-gradient(80% 60% at 70% 0%, #1a1230 0%, transparent 60%),
+      radial-gradient(60% 50% at 0% 100%, #150f24 0%, transparent 70%),
+      var(--bg-0);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header.topbar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(8px);
+    background: rgba(10, 6, 18, 0.78);
+    border-bottom: 1px solid rgba(124, 92, 255, 0.18);
+  }
+  .logo-card {
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .logo-card img { height: 32px; display: block; }
+  .center-stack { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .title {
+    font-size: 18px; line-height: 1.2; font-weight: 600;
+    letter-spacing: 0.2px;
+    border-bottom: 2px solid rgba(124, 92, 255, 0.5);
+    padding-bottom: 4px;
+  }
+  .toggle-pill {
+    position: relative;
+    display: inline-flex;
+    background: var(--pill-inactive);
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    padding: 4px;
+    box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.06);
+    user-select: none;
+  }
+  .toggle-pill .seg {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 999px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-weight: 500;
+    transition: color 160ms ease;
+    min-width: 124px;
+    justify-content: center;
+  }
+  .toggle-pill .seg.active { color: #fff; }
+  .toggle-pill .indicator {
+    position: absolute;
+    top: 4px; bottom: 4px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, var(--accent), #5b3dd6);
+    box-shadow: 0 6px 18px rgba(124, 92, 255, 0.45);
+    transition: transform 200ms ease, width 200ms ease;
+    z-index: 0;
+  }
+  main {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 16px;
+    padding: 16px;
+  }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+    .right-col { order: -1; }
+  }
+  .video-card {
+    position: relative;
+    background: #050308;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 300px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  #main, #localCam {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: calc(100vh - 160px);
+    background: #000;
+    object-fit: contain;
+  }
+  #localCam { display: none; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  .right-col { display: flex; flex-direction: column; gap: 16px; }
+  .preview-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .preview-card h3 {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  #tiles {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #050308;
+    border-radius: 6px;
+    border: 1px solid rgba(124, 92, 255, 0.18);
+  }
+  .caption {
+    margin-top: 8px;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  .meta-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 12px;
+    font: 11px ui-monospace, monospace;
+    color: var(--text-dim);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .meta-card .row { display: flex; justify-content: space-between; padding: 2px 0; }
+  .meta-card .row b { color: var(--text); font-weight: 500; }
+  .switch-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 6, 18, 0.78);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    z-index: 50;
+    backdrop-filter: blur(6px);
+  }
+  .switch-overlay.show { display: flex; }
+  .spinner {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    border: 4px solid rgba(124, 92, 255, 0.18);
+    border-top-color: var(--accent);
+    animation: spin 900ms linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .switch-overlay .msg {
+    font-size: 16px;
+    color: var(--text);
+    letter-spacing: 0.2px;
+  }
+  .err-toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(255, 107, 107, 0.16); border: 1px solid rgba(255, 107, 107, 0.5);
+    color: #ffd5d5; padding: 8px 14px; border-radius: 8px; font: 13px ui-monospace, monospace;
+    display: none;
+  }
+  .err-toast.show { display: block; }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo-card">
+      <img src="assets/tt_logo.png" alt="Tenstorrent" />
+    </div>
+    <div class="center-stack">
+      <div class="title">4K Image Detection — TT WH Galaxy</div>
+      <div class="toggle-pill" id="toggle" role="tablist" aria-label="Source">
+        <span class="indicator" id="ind"></span>
+        <button class="seg" data-id="camera" role="tab" aria-selected="false">
+          <span aria-hidden="true">🎥</span><span>Camera</span>
+        </button>
+        <button class="seg active" data-id="video" role="tab" aria-selected="true">
+          <span aria-hidden="true">🎬</span><span>Video</span>
+        </button>
+      </div>
+    </div>
+    <div></div>
+  </header>
+
+  <main>
+    <section class="video-card" id="videoCard">
+      <video id="main" autoplay muted playsinline></video>
+      <video id="localCam" autoplay muted playsinline></video>
+      <canvas id="overlay"></canvas>
+    </section>
+    <aside class="right-col">
+      <div class="preview-card">
+        <h3>Tile preview</h3>
+        <canvas id="tiles" width="320" height="180"></canvas>
+        <div class="caption" id="tilesCap">— tiles → — devices</div>
+      </div>
+      <div class="meta-card" id="meta">
+        <div class="row"><span>transport</span><b id="m_transport">—</b></div>
+        <div class="row"><span>resolution</span><b id="m_res">—</b></div>
+        <div class="row"><span>tiles</span><b id="m_tiles">—</b></div>
+        <div class="row"><span>delivery</span><b id="m_delivery">—</b></div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="switch-overlay" id="switching">
+    <div class="spinner"></div>
+    <div class="msg" id="switchMsg">Switching transport…</div>
+  </div>
+  <div class="err-toast" id="err"></div>
+
+<script>
+"use strict";
+/* ===================================================================
+ * Constants
+ * =================================================================== */
+const TILE = 640;
+// Everything is same-origin: the supervisor serves this page AND proxies /offer
+// to the pipeline. So no need for separate URLs.
+const SUPERVISOR = location.origin;
+const OFFER_URL  = `${location.origin}/offer`;
+
+/* ===================================================================
+ * Utility: grid math mirroring build_overlap_grid in the pipeline.
+ * Returns the same (xStarts, yStarts) the server computes, so the
+ * mini preview canvas draws the exact tiling the runtime picks.
+ * =================================================================== */
+function gridFor(w, h) {
+  const cols = Math.max(1, Math.ceil(w / TILE));
+  const rows = Math.max(1, Math.ceil(h / TILE));
+  const xStarts = Array.from({length: cols},
+    (_, i) => Math.min(i * TILE, Math.max(0, w - TILE)));
+  const yStarts = Array.from({length: rows},
+    (_, i) => Math.min(i * TILE, Math.max(0, h - TILE)));
+  return { cols, rows, n: cols * rows, xStarts, yStarts };
+}
+
+function captionFor(g) {
+  if (g.n <= 1) return "single device, ≤ 640×640";
+  return `${g.n} tiles → ${g.n} devices`;
+}
+
+/* ===================================================================
+ * Tile preview canvas: downscale a recent video frame and overlay grid
+ * =================================================================== */
+const tileCanvas = document.getElementById("tiles");
+const tileCtx    = tileCanvas.getContext("2d");
+let lastGrid     = gridFor(3840, 2160);
+let mainSrc      = null; // <video> or <canvas>-equivalent for ctx.drawImage
+
+// Source resolution drives the grid even before pixels arrive.
+let srcW = 0, srcH = 0;
+
+function _drawGridOnly(dx, dy, dw, dh, sw, sh) {
+  const sxToPx = dw / sw, syToPx = dh / sh;
+  tileCtx.lineWidth = 1;
+  tileCtx.strokeStyle = "rgba(124, 92, 255, 0.85)";
+  for (const x of lastGrid.xStarts) {
+    const px = dx + Math.round(x * sxToPx);
+    tileCtx.beginPath(); tileCtx.moveTo(px + 0.5, dy); tileCtx.lineTo(px + 0.5, dy + dh); tileCtx.stroke();
+    const px2 = dx + Math.round((x + TILE) * sxToPx);
+    tileCtx.beginPath(); tileCtx.moveTo(px2 + 0.5, dy); tileCtx.lineTo(px2 + 0.5, dy + dh); tileCtx.stroke();
+  }
+  for (const y of lastGrid.yStarts) {
+    const py = dy + Math.round(y * syToPx);
+    tileCtx.beginPath(); tileCtx.moveTo(dx, py + 0.5); tileCtx.lineTo(dx + dw, py + 0.5); tileCtx.stroke();
+    const py2 = dy + Math.round((y + TILE) * syToPx);
+    tileCtx.beginPath(); tileCtx.moveTo(dx, py2 + 0.5); tileCtx.lineTo(dx + dw, py2 + 0.5); tileCtx.stroke();
+  }
+}
+
+function drawTilePreview() {
+  const cw = tileCanvas.width, ch = tileCanvas.height;
+  tileCtx.fillStyle = "#050308";
+  tileCtx.fillRect(0, 0, cw, ch);
+
+  // The grid is computed in SOURCE-frame space (e.g. 3840×2160 even when the
+  // H.264 stream is downscaled to 1920×1080). If we used mainSrc.videoWidth
+  // here the grid would be drawn against display-space dims and tile coords
+  // > videoWidth would fall off-canvas (symptom: caption says 24 tiles, only
+  // 6 visible). Always prefer supervisor-reported srcW/srcH and fall back to
+  // the element's intrinsic size only when the supervisor hasn't told us yet.
+  let sw = srcW || (mainSrc && (mainSrc.videoWidth || mainSrc.naturalWidth)) || 0;
+  let sh = srcH || (mainSrc && (mainSrc.videoHeight || mainSrc.naturalHeight)) || 0;
+  if (!sw || !sh) {
+    tileCtx.fillStyle = "#1c1530";
+    tileCtx.fillRect(0, 0, cw, ch);
+    tileCtx.fillStyle = "#b9a7ff";
+    tileCtx.font = "11px ui-monospace, monospace";
+    tileCtx.fillText("waiting for stream…", 12, 20);
+    document.getElementById("tilesCap").textContent = captionFor(lastGrid);
+    return;
+  }
+  const ar = sw / sh;
+  let dw = cw, dh = Math.round(cw / ar);
+  if (dh > ch) { dh = ch; dw = Math.round(ch * ar); }
+  const dx = ((cw - dw) >> 1), dy = ((ch - dh) >> 1);
+
+  // Draw pixels if available; else draw a dim rectangle to host the grid lines.
+  const haveStream = mainSrc && (mainSrc.videoWidth || mainSrc.naturalWidth);
+  if (haveStream) {
+    try { tileCtx.drawImage(mainSrc, dx, dy, dw, dh); } catch (_e) {}
+  } else {
+    tileCtx.fillStyle = "#1c1530";
+    tileCtx.fillRect(dx, dy, dw, dh);
+  }
+  _drawGridOnly(dx, dy, dw, dh, sw, sh);
+  document.getElementById("tilesCap").textContent = captionFor(lastGrid);
+}
+
+function rafLoop() {
+  drawTilePreview();
+  requestAnimationFrame(rafLoop);
+}
+
+/* ===================================================================
+ * Toggle pill UX
+ * =================================================================== */
+const segs = Array.from(document.querySelectorAll(".toggle-pill .seg"));
+const ind  = document.getElementById("ind");
+function setActiveSeg(id, animate = true) {
+  segs.forEach(s => {
+    const on = (s.dataset.id === id);
+    s.classList.toggle("active", on);
+    s.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const target = segs.find(s => s.dataset.id === id);
+  if (!target) return;
+  const r = target.getBoundingClientRect();
+  const p = target.parentElement.getBoundingClientRect();
+  if (!animate) ind.style.transition = "none";
+  ind.style.width = r.width + "px";
+  ind.style.transform = `translateX(${r.left - p.left - 4}px)`;
+  if (!animate) requestAnimationFrame(() => { ind.style.transition = ""; });
+}
+
+/* ===================================================================
+ * Overlay canvas (camera mode only) - draws boxes from data channel
+ * =================================================================== */
+const mainEl    = document.getElementById("main");
+const localCam  = document.getElementById("localCam");
+const overlay   = document.getElementById("overlay");
+const ovctx     = overlay.getContext("2d");
+let latestDets  = null;
+const COCO = ["person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed","dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"];
+
+function syncOverlaySize() {
+  const v = currentMode === "camera" ? localCam : mainEl;
+  const w = v.videoWidth || v.clientWidth, h = v.videoHeight || v.clientHeight;
+  if (!w || !h) return;
+  if (overlay.width !== w || overlay.height !== h) {
+    overlay.width = w; overlay.height = h;
+  }
+}
+
+function drawOverlay() {
+  syncOverlaySize();
+  ovctx.clearRect(0, 0, overlay.width, overlay.height);
+  if (currentMode !== "camera" || !latestDets) return;
+  const { boxes, scores, cls, frame_w, frame_h } = latestDets;
+  if (!boxes || !boxes.length) return;
+  const sx = overlay.width  / (frame_w || overlay.width);
+  const sy = overlay.height / (frame_h || overlay.height);
+  ovctx.lineWidth = 2;
+  ovctx.font = "12px ui-monospace, monospace";
+  for (let i = 0; i < boxes.length; i++) {
+    const [x1, y1, x2, y2] = boxes[i];
+    const c = cls ? cls[i] : 0;
+    const s = scores ? scores[i] : 0;
+    const X = x1 * sx, Y = y1 * sy, W = (x2 - x1) * sx, H = (y2 - y1) * sy;
+    ovctx.strokeStyle = "rgba(124, 92, 255, 0.95)";
+    ovctx.strokeRect(X, Y, W, H);
+    const label = `${COCO[c] || c} ${(s * 100).toFixed(0)}%`;
+    const tw = ovctx.measureText(label).width + 8;
+    ovctx.fillStyle = "rgba(124, 92, 255, 0.85)";
+    ovctx.fillRect(X, Math.max(0, Y - 16), tw, 16);
+    ovctx.fillStyle = "#fff";
+    ovctx.fillText(label, X + 4, Math.max(12, Y - 4));
+  }
+}
+function overlayLoop() { drawOverlay(); requestAnimationFrame(overlayLoop); }
+
+/* ===================================================================
+ * Connection state machine
+ * =================================================================== */
+let pc = null;
+let dch = null;
+let currentMode = "video";          // "video" | "camera"
+let camStream = null;
+let negotiatedW = 0, negotiatedH = 0;
+
+function showSwitch(msg) {
+  document.getElementById("switchMsg").textContent = msg;
+  document.getElementById("switching").classList.add("show");
+}
+function hideSwitch() { document.getElementById("switching").classList.remove("show"); }
+function toast(msg) {
+  const el = document.getElementById("err");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove("show"), 4000);
+}
+
+function teardown() {
+  try { if (dch) dch.close(); } catch (_e) {}
+  try { if (pc)  pc.close();  } catch (_e) {}
+  dch = null; pc = null;
+  if (camStream) {
+    camStream.getTracks().forEach(t => { try { t.stop(); } catch (_e) {} });
+    camStream = null;
+  }
+  mainEl.srcObject = null;
+  mainEl.removeAttribute("src");
+  localCam.srcObject = null;
+}
+
+async function postSource(transport, w, h) {
+  const r = await fetch(`${SUPERVISOR}/api/source`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transport, width: w | 0, height: h | 0 }),
+  });
+  if (!r.ok) throw new Error(`supervisor /api/source ${r.status}`);
+  return r.json();
+}
+
+async function offerToPipeline(pcLocal) {
+  const r = await fetch(OFFER_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: pcLocal.localDescription.sdp, type: pcLocal.localDescription.type }),
+  });
+  if (!r.ok) {
+    let detail = "";
+    try { const j = await r.json(); detail = j.error || j.detail || ""; } catch (_) {}
+    throw new Error(`pipeline /offer ${r.status}${detail ? ` — ${detail}` : ""}`);
+  }
+  return r.json();
+}
+
+/* ---------- Video mode: H.264 fMP4 over HTTP from /stream ---------- */
+async function startVideo() {
+  showSwitch("Starting Video transport…");
+  teardown();
+  const status = await postSource("video", 0, 0);
+  if (!status.ok) { hideSwitch(); toast("supervisor failed to start pipeline"); return; }
+  negotiatedW = status.frame_w; negotiatedH = status.frame_h;
+  lastGrid = gridFor(negotiatedW, negotiatedH);
+  updateMeta(status, "H.264 fMP4 over HTTP");
+  showSwitch("Connecting to video stream…");
+  localCam.style.display = "none";
+  mainEl.style.display = "block";
+  mainEl.srcObject = null;
+  // Cache-buster stops the browser from replaying a closed prior stream
+  // buffer when toggling video→camera→video in the same page session.
+  mainEl.src = `${location.origin}/stream?t=${Date.now()}`;
+  mainSrc = mainEl;
+  const ready = new Promise((resolve) => {
+    const done = () => { mainEl.removeEventListener("loadeddata", done); mainEl.removeEventListener("playing", done); resolve(); };
+    mainEl.addEventListener("loadeddata", done, { once: true });
+    mainEl.addEventListener("playing", done, { once: true });
+    setTimeout(resolve, 8000); // don't hang UI if the first GOP is slow
+  });
+  try { await mainEl.play(); } catch (_e) { /* autoplay quirks */ }
+  await ready;
+  hideSwitch();
+}
+
+/* ---------- Camera mode: sendrecv camera + boxes over data channel ---------- */
+async function startCamera() {
+  showSwitch("Requesting camera permission…");
+  teardown();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        // Ask the webcam for 60 fps — most modern cameras support it at
+        // ≤ 1080p given enough light. Browsers silently fall back to 30
+        // if the device/lighting can't sustain it.
+        frameRate: { ideal: 60, min: 30 },
+      },
+      audio: false,
+    });
+  } catch (e) {
+    hideSwitch(); toast("camera permission denied: " + e.message); return;
+  }
+  camStream = stream;
+  localCam.srcObject = stream;
+  localCam.style.display = "block";
+  mainEl.style.display = "none";
+  mainSrc = localCam;
+  await new Promise((res) => {
+    if (localCam.readyState >= 1) return res();
+    localCam.onloadedmetadata = () => res();
+  });
+  negotiatedW = localCam.videoWidth || 1280;
+  negotiatedH = localCam.videoHeight || 720;
+  lastGrid = gridFor(negotiatedW, negotiatedH);
+
+  showSwitch(`Starting Camera transport (${negotiatedW}×${negotiatedH})…`);
+  const status = await postSource("camera", negotiatedW, negotiatedH);
+  if (!status.ok) { hideSwitch(); toast("supervisor failed to start camera pipeline"); return; }
+  updateMeta(status, "data_only (boxes over data channel)");
+
+  showSwitch("Connecting to inference…");
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  dch = pc.createDataChannel("dets", { ordered: true });
+  dch.onmessage = (ev) => {
+    try {
+      let payload;
+      if (typeof ev.data === "string") payload = JSON.parse(ev.data);
+      else payload = JSON.parse(new TextDecoder().decode(ev.data));
+      if (payload && payload.k === "dets") {
+        latestDets = {
+          boxes: payload.boxes || [],
+          scores: payload.scores || [],
+          cls: payload.cls || [],
+          frame_w: negotiatedW,
+          frame_h: negotiatedH,
+        };
+      }
+    } catch (_e) { /* silent */ }
+  };
+  stream.getVideoTracks().forEach(t => pc.addTrack(t, stream));
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  const ans = await offerToPipeline(pc);
+  await pc.setRemoteDescription(ans);
+  hideSwitch();
+}
+
+function updateMeta(status, deliveryDesc) {
+  document.getElementById("m_transport").textContent = status.transport || "—";
+  document.getElementById("m_res").textContent = `${status.frame_w}×${status.frame_h}`;
+  document.getElementById("m_tiles").textContent = `${status.tiles_x}×${status.tiles_y} = ${status.n_tiles}`;
+  document.getElementById("m_delivery").textContent = deliveryDesc;
+  if (status.frame_w && status.frame_h) {
+    srcW = status.frame_w; srcH = status.frame_h;
+    lastGrid = gridFor(srcW, srcH);
+  }
+}
+
+async function selectMode(mode) {
+  if (mode === currentMode) return;
+  currentMode = mode;
+  setActiveSeg(mode);
+  localStorage.setItem("ttdemo.mode", mode);
+  try {
+    if (mode === "video") await startVideo();
+    else                  await startCamera();
+  } catch (e) {
+    hideSwitch();
+    toast(e.message || String(e));
+    console.error(e);
+  }
+}
+
+segs.forEach(s => s.addEventListener("click", () => selectMode(s.dataset.id)));
+window.addEventListener("resize", () => setActiveSeg(currentMode, false));
+
+async function fetchStatus() {
+  try {
+    const r = await fetch(`${SUPERVISOR}/api/status`, { cache: "no-store" });
+    if (!r.ok) return null;
+    return r.json();
+  } catch (_e) { return null; }
+}
+
+(async function bootstrap() {
+  setActiveSeg("video", false);
+  rafLoop();
+  overlayLoop();
+
+  // Seed the tile preview + meta panel from the supervisor BEFORE we kick off
+  // any WebRTC. So a refresh-in-the-middle still shows "24 tiles -> 24 devices"
+  // immediately, and the user sees the grid even while the trace is warming up.
+  const status0 = await fetchStatus();
+  if (status0 && status0.transport && status0.transport !== "idle") {
+    const deliv = status0.transport === "video"
+      ? "H.264 fMP4 over HTTP"
+      : "data_only (boxes over data channel)";
+    updateMeta(status0, deliv);
+  }
+
+  const saved = localStorage.getItem("ttdemo.mode");
+  const initial = (saved === "camera") ? "camera" : (status0 && status0.transport === "camera" ? "camera" : "video");
+  currentMode = (initial === "video") ? "camera" : "video"; // force selectMode to switch
+  await selectMode(initial);
+})();
+</script>
+</body>
+</html>

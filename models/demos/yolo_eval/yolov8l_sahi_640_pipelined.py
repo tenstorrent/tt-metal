@@ -200,6 +200,7 @@ def build_overlap_grid(
     frame_w: int,
     tile_h: int = _TILE_SIZE_640,
     tile_w: int = _TILE_SIZE_640,
+    add_whole_frame: bool = False,
 ) -> TileGrid:
     """Build a tile grid that shifts the last row/col to avoid partial tiles.
 
@@ -211,6 +212,13 @@ def build_overlap_grid(
         x: [0, 640, 1280, 1920, 2560, 3200]  -- 6 cols, exact fit
         y: [0, 640, 1280, 1520]               -- 4 rows, last overlaps by 400 px
         Total: 24 tiles, all 640x640, no padding.
+
+    When ``add_whole_frame`` is True, appends one extra tile at the end that
+    represents the full frame resized to (tile_h, tile_w).  That tile's spec
+    is set so the C++ crop kernel does a harmless (0,0,tile_h,tile_w) copy —
+    the prep worker then overwrites that slot with a cv2.resize of the full
+    frame.  Per-tile transforms (separate from TileSpec) carry the scale so
+    detections can be mapped back to frame coords.
     """
     x_starts = list(range(0, frame_w, tile_w))
     if x_starts[-1] + tile_w > frame_w:
@@ -226,6 +234,12 @@ def build_overlap_grid(
             sh = min(tile_h, frame_h - r)
             sw = min(tile_w, frame_w - c)
             specs.append(TileSpec(r, c, sh, sw, needs_pad=(sh < tile_h or sw < tile_w)))
+
+    if add_whole_frame:
+        # WF sentinel tile — C++ kernel will crop (0..tile_h, 0..tile_w)
+        # from the frame into this slot (wasted work, ~0ms); the prep worker
+        # then overwrites that slot with cv2.resize(frame → tile_h×tile_w).
+        specs.append(TileSpec(0, 0, tile_h, tile_w, needs_pad=False))
 
     return TileGrid(
         tile_h=tile_h,
@@ -285,6 +299,8 @@ def _prep_process_worker(
     frame_w: int,
     display_width: int,
     pace: bool = False,
+    webrtc_ingress_q=None,
+    wf_slot: int = -1,
 ):
     """Separate process: read, fused slice+preprocess, scale frame to ring buffer.
 
@@ -307,18 +323,23 @@ def _prep_process_worker(
 
     torch.set_num_threads(1)
 
-    src = FrameSource(video_path)
+    src = None if webrtc_ingress_q is not None else FrameSource(video_path)
     ring_idx = 0
     prep_frame_idx = 0  # for double-buffer alternation
 
     # Frame pacing: when enabled, cap delivery to source video FPS.
+    # For WebRTC, browsers don't expose a stable fps; 30 fps is the universal
+    # default for getUserMedia streams.
     _pace_interval = 0.0
     if pace:
-        _cap = cv2.VideoCapture(video_path)
-        _src_fps = _cap.get(cv2.CAP_PROP_FPS)
-        _cap.release()
-        if _src_fps > 0:
-            _pace_interval = 1.0 / _src_fps
+        if webrtc_ingress_q is not None:
+            _pace_interval = 1.0 / 30.0
+        else:
+            _cap = cv2.VideoCapture(video_path)
+            _src_fps = _cap.get(cv2.CAP_PROP_FPS)
+            _cap.release()
+            if _src_fps > 0:
+                _pace_interval = 1.0 / _src_fps
     _pace_t0 = 0.0
 
     # C++ fused per-range kernel: 8 Python threads, each processes 3 tiles
@@ -332,6 +353,26 @@ def _prep_process_worker(
     # with scale+sp processing.  cv2.VideoCapture.read() releases the GIL
     # during H.264 decode, so real parallelism with sp (also GIL-free).
     def _read_next():
+        if webrtc_ingress_q is not None:
+            # Block until a real frame lands or stop is requested. The browser
+            # may take several seconds to prompt for camera permission, so
+            # don't surface timeouts as "no frames" to the main loop.
+            while not stop_event.is_set():
+                try:
+                    v = webrtc_ingress_q.get(timeout=1.0)
+                except Exception:
+                    continue
+                if v is None:
+                    continue
+                if not isinstance(v, np.ndarray) or v.size == 0:
+                    continue
+                # Resize to the declared frame size if the browser sent
+                # something else (e.g. requested 1920x1080 but camera
+                # defaulted to 1280x720).
+                if v.shape[0] != frame_h or v.shape[1] != frame_w:
+                    v = cv2.resize(v, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
+                return True, v
+            return False, None
         ok, f = src.read()
         if not ok:
             src.reset()
@@ -388,12 +429,35 @@ def _prep_process_worker(
 
             t0 = time.perf_counter()
             list(slice_pool.map(_cpp_range, range(8)))
+
+            # Whole-frame context tile: resize full frame to (tile_h, tile_w),
+            # overwrite the WF slot written by the C++ kernel.  Catches objects
+            # that straddle tile seams at the cost of 1 extra tile of compute.
+            if wf_slot >= 0:
+                tile_h = grid.tile_h
+                tile_w = grid.tile_w
+                wf_bgr = cv2.resize(frame, (tile_w, tile_h), interpolation=cv2.INTER_LINEAR)
+                # BGR->RGB + HWC->CHW + bf16/255, write into WF slot of shm_tensor
+                wf_chw = torch.from_numpy(wf_bgr[:, :, ::-1].transpose(2, 0, 1).copy())
+                shm_tensor[wf_slot].copy_(wf_chw)
+                shm_tensor[wf_slot].mul_(_INV_255)
+
             t_sp = (time.perf_counter() - t0) * 1000
             sp_timings = {"slice_ms": t_sp, "preprocess_ms": 0.0}
             prep_frame_idx += 1
+            # Per-tile affine transform: box_frame = box_tile * (sx, sy) + (ox, oy)
             for i, ts in enumerate(grid.tiles[:tiles_per_frame]):
-                shm_shifts[i, 0] = ts.col_start
-                shm_shifts[i, 1] = ts.row_start
+                if i == wf_slot:
+                    # Whole-frame tile: scale [0, tile_w] -> [0, frame_w]
+                    shm_shifts[i, 0] = float(frame_w) / grid.tile_w
+                    shm_shifts[i, 1] = float(frame_h) / grid.tile_h
+                    shm_shifts[i, 2] = 0.0
+                    shm_shifts[i, 3] = 0.0
+                else:
+                    shm_shifts[i, 0] = 1.0
+                    shm_shifts[i, 1] = 1.0
+                    shm_shifts[i, 2] = float(ts.col_start)
+                    shm_shifts[i, 3] = float(ts.row_start)
 
             # Signal ready as soon as bf16 tensor is written.
             # Scale + ring write happen AFTER ready, overlapping with main's
@@ -438,6 +502,373 @@ def _prep_process_worker(
 
 
 # ---------------------------------------------------------------------------
+# Cross-tile merge strategies
+# ---------------------------------------------------------------------------
+#
+# When the same object straddles adjacent tiles it gets detected in each tile.
+# After per-tile NMS + tile-origin shift we're left with K boxes in frame
+# coords, many of which are duplicates.  The question: how do we collapse
+# duplicates?
+#
+# Modes (chosen by --merge-mode):
+#   - nms         : torchvision NMS. Suppresses lower-conf duplicates; keeps a
+#                   single tile's view of the object. Fast. Default behavior
+#                   before NMM was added.
+#   - greedy-nmm  : SAHI's GreedyNMMPostprocess. Greedy iterate in descending
+#                   confidence; for each seed, find all pairwise matches and
+#                   replace them with the UNION extent (min/max over x1,y1,x2,y2).
+#                   Keeps the seed's class+score. Best default — proper "merge".
+#   - nmm         : Connected-components variant. Transitive: if A~B and B~C
+#                   but not A~C, all three collapse into one union box.
+#                   Aggressive; good for tiny seam artifacts, risky if distinct
+#                   objects are close enough to chain.
+#   - wbf         : Weighted Box Fusion. Group like greedy-nmm, then the output
+#                   box coords are a confidence-weighted average (not union),
+#                   score is mean of group. Smoother localization when tiles
+#                   each saw a partial view; can shrink boxes when one tile
+#                   saw a clipped slice.
+#
+# Match metric (chosen by --merge-match):
+#   - iou : |A∩B| / |A∪B|. Strict — requires symmetric overlap.
+#   - ios : |A∩B| / min(|A|,|B|). Loose — triggers when one box is largely
+#           contained in the other. Matches tile-seam geometry where a
+#           partial-view detection sits inside the full-view detection.
+#           Default for nmm / greedy-nmm / wbf.
+#
+# All merge modes operate in frame coordinates (post tile-shift) and respect
+# class_agnostic: when True, cross-class duplicates collapse (fixes the
+# "person labeled chair/backpack/suitcase" case on tile seams).
+
+
+def _pairwise_overlap(boxes: torch.Tensor, match_metric: str) -> torch.Tensor:
+    """N×N pairwise IoU or IoS matrix. boxes: [N, 4] xyxy."""
+    n = boxes.shape[0]
+    if n == 0:
+        return torch.zeros(0, 0)
+    x1 = torch.max(boxes[:, None, 0], boxes[None, :, 0])
+    y1 = torch.max(boxes[:, None, 1], boxes[None, :, 1])
+    x2 = torch.min(boxes[:, None, 2], boxes[None, :, 2])
+    y2 = torch.min(boxes[:, None, 3], boxes[None, :, 3])
+    inter = (x2 - x1).clamp_(min=0) * (y2 - y1).clamp_(min=0)
+    area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    if match_metric == "iou":
+        denom = area[:, None] + area[None, :] - inter
+    else:  # ios
+        denom = torch.min(area[:, None], area[None, :])
+    return inter / denom.clamp_(min=1e-9)
+
+
+def _cross_tile_greedy_nmm(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    cls_ids: torch.Tensor,
+    threshold: float,
+    match_metric: str,
+    class_agnostic: bool,
+    max_det: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    n = boxes.shape[0]
+    if n == 0:
+        return boxes, scores, cls_ids
+    order = scores.argsort(descending=True)
+    b = boxes[order]
+    s = scores[order]
+    c = cls_ids[order]
+    ov = _pairwise_overlap(b, match_metric)
+    consumed = torch.zeros(n, dtype=torch.bool)
+    out_b, out_s, out_c = [], [], []
+    for i in range(n):
+        if consumed[i]:
+            continue
+        match = ov[i] > threshold
+        match[: i + 1] = False
+        match &= ~consumed
+        if not class_agnostic:
+            match &= c == c[i]
+        group = match.clone()
+        group[i] = True
+        g = b[group]
+        out_b.append(torch.stack([g[:, 0].min(), g[:, 1].min(), g[:, 2].max(), g[:, 3].max()]))
+        out_s.append(s[i])
+        out_c.append(c[i])
+        consumed |= group
+        if len(out_b) >= max_det:
+            break
+    if not out_b:
+        return b[:0], s[:0], c[:0]
+    return torch.stack(out_b), torch.stack(out_s), torch.stack(out_c)
+
+
+def _cross_tile_nmm(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    cls_ids: torch.Tensor,
+    threshold: float,
+    match_metric: str,
+    class_agnostic: bool,
+    max_det: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Connected-components NMM: transitive merging via union-find on the
+    overlap graph. Aggressive; a box "bridging" two objects fuses them.
+    """
+    n = boxes.shape[0]
+    if n == 0:
+        return boxes, scores, cls_ids
+    ov = _pairwise_overlap(boxes, match_metric) > threshold
+    if not class_agnostic:
+        same = cls_ids[:, None] == cls_ids[None, :]
+        ov &= same
+    # Union-find
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    idxs = ov.nonzero(as_tuple=False)
+    for a, b in idxs.tolist():
+        if a < b:
+            union(a, b)
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out_b, out_s, out_c = [], [], []
+    # Sort groups by max score desc so max_det cut keeps the best
+    sorted_groups = sorted(groups.values(), key=lambda idxs: float(scores[idxs].max()), reverse=True)
+    for idxs in sorted_groups[:max_det]:
+        g = boxes[idxs]
+        out_b.append(torch.stack([g[:, 0].min(), g[:, 1].min(), g[:, 2].max(), g[:, 3].max()]))
+        top = int(scores[idxs].argmax())
+        out_s.append(scores[idxs[top]])
+        out_c.append(cls_ids[idxs[top]])
+    if not out_b:
+        return boxes[:0], scores[:0], cls_ids[:0]
+    return torch.stack(out_b), torch.stack(out_s), torch.stack(out_c)
+
+
+def _cross_tile_wbf(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    cls_ids: torch.Tensor,
+    threshold: float,
+    match_metric: str,
+    class_agnostic: bool,
+    max_det: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Weighted Box Fusion: group as in greedy-nmm, but the merged box is
+    the confidence-weighted average of the group's coords (not the union).
+    Output score = mean of group scores. Class = max-score class in group.
+    """
+    n = boxes.shape[0]
+    if n == 0:
+        return boxes, scores, cls_ids
+    order = scores.argsort(descending=True)
+    b = boxes[order]
+    s = scores[order]
+    c = cls_ids[order]
+    ov = _pairwise_overlap(b, match_metric)
+    consumed = torch.zeros(n, dtype=torch.bool)
+    out_b, out_s, out_c = [], [], []
+    for i in range(n):
+        if consumed[i]:
+            continue
+        match = ov[i] > threshold
+        match[: i + 1] = False
+        match &= ~consumed
+        if not class_agnostic:
+            match &= c == c[i]
+        group = match.clone()
+        group[i] = True
+        gb = b[group]
+        gs = s[group]
+        w = gs / gs.sum().clamp_(min=1e-9)
+        merged = (gb * w.unsqueeze(1)).sum(dim=0)
+        out_b.append(merged)
+        out_s.append(gs.mean())
+        out_c.append(c[i])  # seed's class; i is max-score of the group by construction
+        consumed |= group
+        if len(out_b) >= max_det:
+            break
+    if not out_b:
+        return b[:0], s[:0], c[:0]
+    return torch.stack(out_b), torch.stack(out_s), torch.stack(out_c)
+
+
+def _seam_axis_match(
+    g_min: float,
+    g_max: float,
+    b_min: float,
+    b_max: float,
+    end: float,
+    start: float,
+    tol: float,
+) -> bool:
+    """Does (g, b) form a seam-adjacent pair along one axis?
+
+    end = prev-tile inner edge (e.g. col_end), start = next-tile inner edge
+    (e.g. col_start).  For hard cuts end == start.  For overlapping tiles
+    end > start.
+
+    Two geometries qualify:
+      abutting — one box's "outgoing" edge ≈ end and the other's "incoming"
+                 edge ≈ start (within tol, in either ordering).
+      crossing — both boxes span across the seam's midpoint ((end+start)/2).
+    """
+    mid = 0.5 * (end + start)
+    abutting = (abs(g_max - end) <= tol and abs(b_min - start) <= tol) or (
+        abs(b_max - end) <= tol and abs(g_min - start) <= tol
+    )
+    crossing = (g_min < mid < g_max) and (b_min < mid < b_max)
+    return abutting or crossing
+
+
+def _merge_seam_adjacent(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    cls_ids: torch.Tensor,
+    seams_x: tuple = (),
+    seams_y: tuple = (),
+    tol: int = 100,
+    perp_overlap_frac: float = 0.15,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Merge same-class boxes split across a tile seam (either axis).
+
+    Handles both hard-cut seams (1920 width → 3 cols × 640 px, no overlap)
+    and overlap-zone seams (1080 height → 2 rows with the row boundary as a
+    200 px wide overlap band) by representing each seam as an (end, start)
+    pair.  Union-of-extents merge; max score.
+
+    Leaf-based chaining: a candidate joins a group only if it seam-matches
+    some *individual leaf* already in the group, not the group's union
+    extent.  Group-extent matching allowed one pair to merge, then the
+    widened extent to snowball everything into a single whole-frame box.
+    Leaf-based keeps transitive chains limited to genuinely adjacent pairs.
+
+    Args:
+        seams_x: tuple of (col_end, col_start) pairs for vertical seams
+        seams_y: tuple of (row_end, row_start) pairs for horizontal seams
+        tol: px tolerance for "inner edge ≈ seam edge"
+        perp_overlap_frac: required fraction of min-extent overlap in the
+            axis perpendicular to the seam.
+    """
+    n = boxes.shape[0]
+    if n < 2 or (not seams_x and not seams_y):
+        return boxes, scores, cls_ids
+
+    # Cache leaf coords once (torch indexing in a tight loop is slow).
+    x1s = boxes[:, 0].tolist()
+    y1s = boxes[:, 1].tolist()
+    x2s = boxes[:, 2].tolist()
+    y2s = boxes[:, 3].tolist()
+    cls_list = cls_ids.tolist()
+
+    def _leaf_seam_match(k: int, j: int) -> bool:
+        """Does leaf k and candidate j qualify as a seam-split pair?"""
+        kx1, ky1, kx2, ky2 = x1s[k], y1s[k], x2s[k], y2s[k]
+        jx1, jy1, jx2, jy2 = x1s[j], y1s[j], x2s[j], y2s[j]
+        k_w = max(kx2 - kx1, 1.0)
+        k_h = max(ky2 - ky1, 1.0)
+        j_w = max(jx2 - jx1, 1.0)
+        j_h = max(jy2 - jy1, 1.0)
+        y_inter = max(0.0, min(ky2, jy2) - max(ky1, jy1))
+        x_inter = max(0.0, min(kx2, jx2) - max(kx1, jx1))
+
+        if seams_x and y_inter >= perp_overlap_frac * min(k_h, j_h):
+            for end_x, start_x in seams_x:
+                if _seam_axis_match(
+                    kx1,
+                    kx2,
+                    jx1,
+                    jx2,
+                    float(end_x),
+                    float(start_x),
+                    float(tol),
+                ):
+                    return True
+        if seams_y and x_inter >= perp_overlap_frac * min(k_w, j_w):
+            for end_y, start_y in seams_y:
+                if _seam_axis_match(
+                    ky1,
+                    ky2,
+                    jy1,
+                    jy2,
+                    float(end_y),
+                    float(start_y),
+                    float(tol),
+                ):
+                    return True
+        return False
+
+    consumed = [False] * n
+    out_b, out_s, out_c = [], [], []
+
+    for i in range(n):
+        if consumed[i]:
+            continue
+        group = [i]
+        g_cls = cls_list[i]
+        while True:
+            added = False
+            for j in range(n):
+                if consumed[j] or j in group:
+                    continue
+                if cls_list[j] != g_cls:
+                    continue
+                # Leaf-based: match j against any existing leaf in the group.
+                for k in group:
+                    if _leaf_seam_match(k, j):
+                        group.append(j)
+                        added = True
+                        break
+                if added:
+                    break
+            if not added:
+                break
+
+        gb = boxes[group]
+        out_b.append(torch.stack([gb[:, 0].min(), gb[:, 1].min(), gb[:, 2].max(), gb[:, 3].max()]))
+        out_s.append(scores[group].max())
+        out_c.append(cls_ids[group[0]])
+        for k in group:
+            consumed[k] = True
+
+    return torch.stack(out_b), torch.stack(out_s), torch.stack(out_c)
+
+
+def _cross_tile_merge(
+    mode: str,
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    cls_ids: torch.Tensor,
+    threshold: float,
+    match_metric: str,
+    class_agnostic: bool,
+    max_det: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Dispatch. For 'nms' uses torchvision (IoU only, since IoS NMS is niche)."""
+    if mode == "nms":
+        if class_agnostic:
+            keep = _tv_nms(boxes, scores, threshold)[:max_det]
+        else:
+            keep = _tv_batched_nms(boxes, scores, cls_ids.int(), threshold)[:max_det]
+        return boxes[keep], scores[keep], cls_ids[keep]
+    if mode == "greedy-nmm":
+        return _cross_tile_greedy_nmm(boxes, scores, cls_ids, threshold, match_metric, class_agnostic, max_det)
+    if mode == "nmm":
+        return _cross_tile_nmm(boxes, scores, cls_ids, threshold, match_metric, class_agnostic, max_det)
+    if mode == "wbf":
+        return _cross_tile_wbf(boxes, scores, cls_ids, threshold, match_metric, class_agnostic, max_det)
+    raise ValueError(f"unknown merge mode: {mode!r}")
+
+
+# ---------------------------------------------------------------------------
 # Parallel per-tile NMS (threaded)
 # ---------------------------------------------------------------------------
 
@@ -446,7 +877,7 @@ def _fused_nms_merge(
     preds_batch: torch.Tensor,
     conf: float,
     iou: float,
-    shifts: list[tuple[int, int]],
+    shifts: list[tuple[float, float, float, float]],
     n_valid: int,
     merge_iou: float = 0.5,
     class_agnostic: bool = False,
@@ -454,6 +885,11 @@ def _fused_nms_merge(
     scale_y: float = 1.0,
     max_det: int = 300,
     pool: ThreadPoolExecutor | None = None,
+    merge_mode: str = "nms",
+    merge_match: str = "iou",
+    seams_x: tuple = (),
+    seams_y: tuple = (),
+    seam_tol: int = 80,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Fused per-tile NMS + cross-tile merge. Returns numpy arrays directly.
 
@@ -535,28 +971,54 @@ def _fused_nms_merge(
     cls_ids = all_cls_id[kept]  # [K]
     kept_tiles = tile_idx[kept]  # [K]
 
-    # Vectorized shift: apply tile offsets to all boxes at once
-    shifts_t = torch.tensor(shifts[:n_valid], dtype=torch.float32)  # [n_valid, 2]
-    shift_xy = shifts_t[kept_tiles]  # [K, 2]
-    boxes[:, 0] += shift_xy[:, 0]
-    boxes[:, 2] += shift_xy[:, 0]
-    boxes[:, 1] += shift_xy[:, 1]
-    boxes[:, 3] += shift_xy[:, 1]
+    # Vectorized per-tile affine transform: box_frame = box_tile * (sx, sy) + (ox, oy).
+    # For regular crop tiles: (sx, sy) = (1, 1) and (ox, oy) = (col_start, row_start).
+    # For the whole-frame context tile: (sx, sy) = (frame_w/tile_w, frame_h/tile_h)
+    # and (ox, oy) = (0, 0).
+    shifts_t = torch.tensor(shifts[:n_valid], dtype=torch.float32)  # [n_valid, 4]
+    tr = shifts_t[kept_tiles]  # [K, 4]
+    sx = tr[:, 0]
+    sy = tr[:, 1]
+    ox = tr[:, 2]
+    oy = tr[:, 3]
+    boxes[:, 0] = boxes[:, 0] * sx + ox
+    boxes[:, 2] = boxes[:, 2] * sx + ox
+    boxes[:, 1] = boxes[:, 1] * sy + oy
+    boxes[:, 3] = boxes[:, 3] * sy + oy
 
-    # Cross-tile merge NMS
-    if class_agnostic:
-        cross_keep = _tv_nms(boxes, confs, merge_iou)
-    else:
-        cross_keep = _tv_batched_nms(boxes, confs, cls_ids.int(), merge_iou)
+    # Cross-tile merge — dispatch on merge_mode.  NMS suppresses, NMM merges
+    # extents (union), WBF averages coords by confidence.
+    boxes, confs, cls_ids = _cross_tile_merge(
+        mode=merge_mode,
+        boxes=boxes,
+        scores=confs,
+        cls_ids=cls_ids,
+        threshold=merge_iou,
+        match_metric=merge_match,
+        class_agnostic=class_agnostic,
+        max_det=max_det,
+    )
+
+    # Seam-adjacency merge: catches same-class boxes split across a tile
+    # boundary (x or y) where IoS is too low for WBF/NMM to see them as the
+    # same object.  Only runs when at least one seam set is non-empty.
+    if seams_x or seams_y:
+        boxes, confs, cls_ids = _merge_seam_adjacent(
+            boxes,
+            confs,
+            cls_ids,
+            seams_x=seams_x,
+            seams_y=seams_y,
+            tol=seam_tol,
+        )
 
     # Apply scale and convert to numpy in one shot (no .item() per detection)
-    boxes = boxes[cross_keep]
     boxes[:, 0] *= scale_x
     boxes[:, 2] *= scale_x
     boxes[:, 1] *= scale_y
     boxes[:, 3] *= scale_y
 
-    return boxes.numpy(), confs[cross_keep].numpy(), cls_ids[cross_keep].int().numpy()
+    return boxes.numpy(), confs.numpy(), cls_ids.int().numpy()
 
 
 def _draw_boxes_np(
@@ -605,6 +1067,8 @@ def _postprocess_worker_shm(
     iou: float,
     merge_iou: float,
     merge_class_agnostic: bool,
+    merge_mode: str,
+    merge_match: str,
     jpeg_quality: int,
     frame_file: str,
     hud_label: str,
@@ -614,6 +1078,10 @@ def _postprocess_worker_shm(
     ring_size: int,
     shm_preds: torch.Tensor | None = None,
     h264_queue: "mp.Queue | None" = None,
+    dets_q: "mp.Queue | None" = None,
+    seams_x: tuple = (),
+    seams_y: tuple = (),
+    seam_tol: int = 80,
 ):
     """BG process: per-tile NMS + cross-tile merge + draw + encode."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -740,6 +1208,11 @@ def _postprocess_worker_shm(
                 scale_x=scale_x,
                 scale_y=scale_y,
                 pool=nms_pool,
+                merge_mode=merge_mode,
+                merge_match=merge_match,
+                seams_x=seams_x,
+                seams_y=seams_y,
+                seam_tol=seam_tol,
             )
             t_nms = time.perf_counter() - t0
             t_merge = 0.0  # merged into nms
@@ -758,6 +1231,60 @@ def _postprocess_worker_shm(
                     )
                 else:
                     print(f"{TAG} frame {fc}: 0 detections", flush=True)
+
+            # Per-class duplicate diagnostic: once per second, if any class has
+            # >=2 surviving boxes, dump their coords so we can see why seam/WBF
+            # didn't merge them.  Enable with SAHI_DEBUG_DUPES=1.
+            if os.environ.get("SAHI_DEBUG_DUPES") and n_dets >= 2 and (fc % 30) == 0:
+                from collections import defaultdict as _dd
+
+                _by_cls = _dd(list)
+                for _i in range(n_dets):
+                    _by_cls[int(cls_np[_i])].append(_i)
+                for _c, _idxs in _by_cls.items():
+                    if len(_idxs) < 2:
+                        continue
+                    _nm = names_dict.get(_c, str(_c))
+                    print(
+                        f"{TAG} dup[{_nm}] frame={fc} seams_x={seams_x} seams_y={seams_y} n={len(_idxs)}",
+                        flush=True,
+                    )
+                    for _i in _idxs:
+                        _x1, _y1, _x2, _y2 = boxes_np[_i]
+                        print(
+                            f"{TAG}   box: x=({_x1:.0f},{_x2:.0f}) y=({_y1:.0f},{_y2:.0f}) "
+                            f"w={_x2-_x1:.0f} h={_y2-_y1:.0f} conf={scores_np[_i]:.2f}",
+                            flush=True,
+                        )
+
+            # Camera/data_only mode: push the detections to the WebRTC
+            # DataChannel so the browser can draw boxes over its own local
+            # camera preview. Cheap (JSON-encoded list of up to ~50 boxes)
+            # and non-blocking — drop oldest on queue-full.
+            if dets_q is not None:
+                try:
+                    _n = int(len(boxes_np))
+                    _msg = {
+                        "k": "dets",
+                        "frame_id": int(fc),
+                        "n": _n,
+                        "boxes": boxes_np.astype(np.float32).tolist() if _n else [],
+                        "scores": scores_np.astype(np.float32).tolist() if _n else [],
+                        "cls": cls_np.astype(np.int32).tolist() if _n else [],
+                    }
+                    try:
+                        dets_q.put_nowait(_msg)
+                    except Exception:
+                        try:
+                            dets_q.get_nowait()
+                        except Exception:
+                            pass
+                        try:
+                            dets_q.put_nowait(_msg)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
             t0 = time.perf_counter()
             _draw_boxes_np(canvas, boxes_np, scores_np, cls_np, names_dict)
@@ -874,34 +1401,81 @@ def run_sahi_640_pipelined(args):
     l1_small = yolov8l_l1_small_size_for_res(_TILE_SIZE_640, _TILE_SIZE_640)
     trace_region = 6_434_816  # tuned for 640x640
 
-    # --- Frame source (peek for dimensions) --------------------------------
-    try:
-        src = FrameSource(args.input)
-    except RuntimeError as e:
-        print(f"{TAG} ERROR: {e}", file=sys.stderr, flush=True)
-        sys.exit(1)
+    source = str(getattr(args, "source", "file") or "file")
 
-    sample = src.peek()
-    frame_h, frame_w = sample.shape[:2]
-    is_image = src.is_image
-    src.release()
+    # --- Frame source (peek for dimensions) --------------------------------
+    if source == "webrtc":
+        frame_w = int(getattr(args, "frame_width", 0) or 0)
+        frame_h = int(getattr(args, "frame_height", 0) or 0)
+        if frame_w <= 0 or frame_h <= 0:
+            print(
+                f"{TAG} ERROR: --source webrtc requires --frame-width and --frame-height", file=sys.stderr, flush=True
+            )
+            sys.exit(1)
+        is_image = False
+        print(f"{TAG} source=webrtc fixed frame size: {frame_w}x{frame_h}", flush=True)
+    else:
+        if not (getattr(args, "input", None) or ""):
+            print(f"{TAG} ERROR: --input is required for --source file", file=sys.stderr, flush=True)
+            sys.exit(1)
+        try:
+            src = FrameSource(args.input)
+        except RuntimeError as e:
+            print(f"{TAG} ERROR: {e}", file=sys.stderr, flush=True)
+            sys.exit(1)
+        sample = src.peek()
+        frame_h, frame_w = sample.shape[:2]
+        is_image = src.is_image
+        src.release()
 
     # --- Tile grid (overlap to keep all tiles full-size) -------------------
-    grid = build_overlap_grid(frame_h, frame_w, _TILE_SIZE_640, _TILE_SIZE_640)
+    # --whole-frame-tile appends one extra tile that sees the full frame
+    # downscaled to 640×640, catching objects that straddle tile seams.
+    _add_wf = bool(getattr(args, "whole_frame_tile", False))
+    grid = build_overlap_grid(frame_h, frame_w, _TILE_SIZE_640, _TILE_SIZE_640, add_whole_frame=_add_wf)
     tiles_per_frame = grid.n_tiles
+    wf_slot = grid.n_tiles - 1 if _add_wf else -1
 
+    # Tile seams for seam-adjacency merge.  Each seam is an (end, start) pair:
+    # end = prev tile's inner edge (e.g. col_end), start = next tile's inner
+    # edge (e.g. col_start).  Hard cuts have end == start (e.g. (640,640) at
+    # 1920 width).  Overlapping tiles have end > start — e.g. at 1080 height
+    # the y-seam is (640, 440) because row 0 ends at 640 and row 1 starts at
+    # 440.  Crop tiles only — whole-frame tile excluded.
+    if bool(getattr(args, "seam_merge", False)):
+        _crop_tiles = grid.tiles if not _add_wf else grid.tiles[:-1]
+        _col_starts = sorted({ts.col_start for ts in _crop_tiles})
+        _col_ends = sorted({ts.col_start + ts.src_w for ts in _crop_tiles})
+        _row_starts = sorted({ts.row_start for ts in _crop_tiles})
+        _row_ends = sorted({ts.row_start + ts.src_h for ts in _crop_tiles})
+        # Interior splits: ends < frame edge, starts > 0.  Zip in order.
+        _int_col_ends = [e for e in _col_ends if e < frame_w]
+        _int_col_starts = [s for s in _col_starts if s > 0]
+        _int_row_ends = [e for e in _row_ends if e < frame_h]
+        _int_row_starts = [s for s in _row_starts if s > 0]
+        seams_x = tuple(zip(_int_col_ends, _int_col_starts))
+        seams_y = tuple(zip(_int_row_ends, _int_row_starts))
+    else:
+        seams_x = ()
+        seams_y = ()
+    seam_tol = int(getattr(args, "seam_tol", 20))
+
+    _wf_suffix = f" (+1 whole-frame tile)" if _add_wf else ""
     print(
         f"{TAG} Frame: {frame_w}x{frame_h} -> "
         f"{grid.n_cols}x{grid.n_rows} = {tiles_per_frame} tiles "
-        f"of {_TILE_SIZE_640}x{_TILE_SIZE_640}",
+        f"of {_TILE_SIZE_640}x{_TILE_SIZE_640}{_wf_suffix}",
         flush=True,
     )
     for i, ts in enumerate(grid.tiles):
+        _kind = "whole-frame" if i == wf_slot else "crop"
         print(
-            f"{TAG}   tile {i:2d}: start=({ts.col_start:4d},{ts.row_start:4d}) "
+            f"{TAG}   tile {i:2d} [{_kind}]: start=({ts.col_start:4d},{ts.row_start:4d}) "
             f"src={ts.src_w}x{ts.src_h} pad={ts.needs_pad}",
             flush=True,
         )
+    if seams_x or seams_y:
+        print(f"{TAG} seams_x={seams_x} seams_y={seams_y} tol={seam_tol}", flush=True)
 
     # --- Compute sub-mesh shape (exact fit, no padding) --------------------
     sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
@@ -967,8 +1541,12 @@ def run_sahi_640_pipelined(args):
     conf = max(args.conf, _CONF_FLOOR_640)
     merge_iou = args.merge_threshold
     merge_class_agnostic = args.class_agnostic
+    merge_mode = args.merge_mode
+    merge_match = args.merge_match
     print(
-        f"{TAG} NMS conf={conf} iou={args.iou} " f"merge_iou={merge_iou} class_agnostic={merge_class_agnostic}",
+        f"{TAG} NMS conf={conf} iou={args.iou} "
+        f"merge_iou={merge_iou} class_agnostic={merge_class_agnostic} "
+        f"merge_mode={merge_mode} merge_match={merge_match}",
         flush=True,
     )
 
@@ -1010,14 +1588,36 @@ def run_sahi_640_pipelined(args):
     q_post: mp.Queue = _ctx.Queue(maxsize=4)
     hud_label = f"YOLOv8L SAHI-640 4K " f"({mesh_rows}x{mesh_cols}={total_devices} chips, " f"{tiles_per_frame} tiles)"
 
-    # --- H.264 streaming server (optional, when --serve --serve-codec h264) -
-    # Runs as a separate mp.Process; receives drawn BGR canvases via an
-    # mp.Queue(2) (drop-oldest back-pressure).  Serves fMP4 over chunked HTTP
-    # — ~4 Mbps vs MJPEG's ~2.8 Gbps at 4K, so the demo is WAN-viewable.
+    # --- H.264 streaming server (file mode) OR WebRTC ingress (webrtc mode) -
+    # Exactly one server runs per pipeline process. The supervisor restarts the
+    # whole process on mode toggle, so we never have both alive at once.
     h264_queue: "mp.Queue | None" = None
     h264_proc: "mp.Process | None" = None
+    webrtc_ingress_q: "mp.Queue | None" = None
+    webrtc_dets_q: "mp.Queue | None" = None
+    webrtc_proc: "mp.Process | None" = None
     _serve_codec = getattr(args, "serve_codec", "h264")
-    if args.serve and _serve_codec == "h264" and not is_image:
+
+    if source == "webrtc":
+        # Camera mode: aiohttp+aiortc bridge on args.port. Frames come in via
+        # ingress_q (consumed by prep worker); detections go out via dets_q
+        # (produced by post worker, serialised over a DataChannel).
+        from models.demos.yolo_eval import webrtc_ingress as _webrtc
+
+        webrtc_ingress_q = _ctx.Queue(maxsize=4)
+        webrtc_dets_q = _ctx.Queue(maxsize=32)
+        webrtc_proc = _ctx.Process(
+            target=_webrtc.run_server,
+            args=(args.host, int(args.port), webrtc_ingress_q, webrtc_dets_q, frame_w, frame_h),
+            daemon=True,
+            name="sahi640-webrtc",
+        )
+        webrtc_proc.start()
+        print(
+            f"{TAG} WebRTC ingress: http://{args.host}:{args.port}/offer  " f"ingress={frame_w}x{frame_h}",
+            flush=True,
+        )
+    elif args.serve and _serve_codec == "h264" and not is_image:
         from models.demos.yolo_eval import _h264_server as _h264
 
         # Canvas dims = display_width × scaled height (or frame dims if native).
@@ -1056,6 +1656,8 @@ def run_sahi_640_pipelined(args):
             args.iou,
             merge_iou,
             merge_class_agnostic,
+            merge_mode,
+            merge_match,
             args.jpeg_quality,
             args._frame_file,
             hud_label,
@@ -1065,6 +1667,10 @@ def run_sahi_640_pipelined(args):
             RING_SIZE,
             shm_preds,
             h264_queue,
+            webrtc_dets_q,
+            seams_x,
+            seams_y,
+            seam_tol,
         ),
         daemon=True,
         name="sahi640-bg",
@@ -1080,7 +1686,11 @@ def run_sahi_640_pipelined(args):
     _shm_buf0 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
     _shm_buf1 = torch.zeros(total_devices, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
     shm_tensor_bufs = [_shm_buf0, _shm_buf1]  # indexed by frame parity
-    shm_shifts = torch.zeros(total_devices, 2, dtype=torch.int32).share_memory_()
+    # Per-tile affine transform: (scale_x, scale_y, offset_x, offset_y).
+    # Real crop tile: (1, 1, col_start, row_start). Whole-frame tile:
+    # (frame_w/tile_w, frame_h/tile_h, 0, 0).  Applied in _fused_nms_merge
+    # as box = box * (sx, sy) + (ox, oy).
+    shm_shifts = torch.zeros(total_devices, 4, dtype=torch.float32).share_memory_()
     shm_timings = torch.zeros(10, dtype=torch.float32).share_memory_()
     go_event = _ctx.Event()
     ready_event = _ctx.Event()
@@ -1098,7 +1708,7 @@ def run_sahi_640_pipelined(args):
     prep_proc = _ctx.Process(
         target=_prep_process_worker,
         args=(
-            args.input,
+            args.input or "",
             grid,
             tiles_per_frame,
             total_devices,
@@ -1114,6 +1724,8 @@ def run_sahi_640_pipelined(args):
             frame_w,
             display_width,
             getattr(args, "pace", False),
+            webrtc_ingress_q,
+            wf_slot,
         ),
         daemon=True,
         name="sahi640-prep",
@@ -1172,7 +1784,15 @@ def run_sahi_640_pipelined(args):
             print(f"{TAG} No frames available.", flush=True)
             return
 
-        cur_shifts = [(int(shm_shifts[i, 0].item()), int(shm_shifts[i, 1].item())) for i in range(tiles_per_frame)]
+        cur_shifts = [
+            (
+                float(shm_shifts[i, 0].item()),
+                float(shm_shifts[i, 1].item()),
+                float(shm_shifts[i, 2].item()),
+                float(shm_shifts[i, 3].item()),
+            )
+            for i in range(tiles_per_frame)
+        ]
         cur_ring_slot = int(shm_timings[7].item())
 
         print(
@@ -1225,7 +1845,13 @@ def run_sahi_640_pipelined(args):
             # --- Read metadata from shm FIRST, then release prep early ---
             if _next_valid:
                 next_shifts = [
-                    (int(shm_shifts[i, 0].item()), int(shm_shifts[i, 1].item())) for i in range(tiles_per_frame)
+                    (
+                        float(shm_shifts[i, 0].item()),
+                        float(shm_shifts[i, 1].item()),
+                        float(shm_shifts[i, 2].item()),
+                        float(shm_shifts[i, 3].item()),
+                    )
+                    for i in range(tiles_per_frame)
                 ]
                 next_ring_slot = int(shm_timings[7].item())
                 _prep_timings = {
@@ -1473,7 +2099,33 @@ def parse_args() -> argparse.Namespace:
         description="YOLOv8L SAHI-640 4K inference (24 tiles of 640x640).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--input", required=True, help="Path to 4K video or image.")
+    p.add_argument(
+        "--input", required=False, default=None, help="Path to 4K video or image (required when --source file)."
+    )
+    p.add_argument(
+        "--source",
+        choices=["file", "webrtc"],
+        default="file",
+        help="Frame source: file (video/image via --input) or webrtc (live camera from browser).",
+    )
+    p.add_argument(
+        "--frame-width",
+        type=int,
+        default=0,
+        help="Camera frame width for --source webrtc. Required; mismatched inbound frames are resized.",
+    )
+    p.add_argument(
+        "--frame-height",
+        type=int,
+        default=0,
+        help="Camera frame height for --source webrtc.",
+    )
+    # These three are accepted for supervisor-argv compatibility but ignored
+    # in the minimal ingress mode — kept so demo_supervisor.py's existing argv
+    # builder doesn't need to change.
+    p.add_argument("--webrtc-delivery", default="data_only", help="Accepted for compat; only data_only is implemented.")
+    p.add_argument("--webrtc-srv-bitrate", default="4M", help="Accepted for compat; ignored (no return H.264 track).")
+    p.add_argument("--webrtc-srv-keyint", type=int, default=30, help="Accepted for compat; ignored.")
     p.add_argument("--conf", type=float, default=0.25, help="NMS confidence.")
     p.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold.")
     p.add_argument("--serve", action="store_true", help="Stream MJPEG.")
@@ -1496,6 +2148,34 @@ def parse_args() -> argparse.Namespace:
         "--class-agnostic",
         action="store_true",
         help="Merge across classes.",
+    )
+    p.add_argument(
+        "--merge-mode",
+        choices=["nms", "greedy-nmm", "nmm", "wbf"],
+        default="greedy-nmm",
+        help="Cross-tile merge strategy. nms=torchvision suppression; greedy-nmm=SAHI-style greedy merge (union extents); nmm=union-find merge (transitive); wbf=weighted box fusion (confidence-weighted avg).",
+    )
+    p.add_argument(
+        "--merge-match",
+        choices=["iou", "ios"],
+        default="ios",
+        help="Overlap metric for merging. iou=|A∩B|/|A∪B|; ios=|A∩B|/min(|A|,|B|) (better for tile-seam duplicates where one box clips).",
+    )
+    p.add_argument(
+        "--whole-frame-tile",
+        action="store_true",
+        help="Append a whole-frame context tile (full frame resized to 640×640) as one extra tile. Catches objects that straddle hard tile seams (e.g. a person split between two adjacent camera tiles). Costs +1 device of compute per frame.",
+    )
+    p.add_argument(
+        "--seam-merge",
+        action="store_true",
+        help="After cross-tile merge, union same-class boxes whose inner edges straddle a known tile seam but don't overlap (IoU/IoS=0). Catches torso-split duplicates at tile boundaries without a whole-frame tile.",
+    )
+    p.add_argument(
+        "--seam-tol",
+        type=int,
+        default=20,
+        help="Seam-adjacency tolerance in pixels — both inner edges must be within this distance of the seam to trigger a merge.",
     )
     p.add_argument("--output", type=str, default=None, help="Save result (image mode).")
     p.add_argument(
