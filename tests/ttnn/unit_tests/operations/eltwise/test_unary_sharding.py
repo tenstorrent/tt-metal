@@ -68,7 +68,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     ],
 )
 def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_op, torch_dtype, ttnn_dtype, device):
-    """Test unary_ng ops with all combinations of sharded/interleaved input and output."""
+    """Test unary ops with all combinations of sharded/interleaved input and output."""
     torch.manual_seed(0)
     if torch_dtype.is_floating_point:
         torch_input = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
@@ -97,8 +97,8 @@ def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_o
     ],
 )
 @pytest.mark.parametrize("ttnn_op", [ttnn.sinh])
-def test_unary_ng_row_major(input_shape, ttnn_op, device):
-    """Test unary_ng ops with ROW_MAJOR layout on interleaved tensors."""
+def test_unary_row_major(input_shape, ttnn_op, device):
+    """Test unary ops with ROW_MAJOR layout on interleaved tensors."""
     torch.manual_seed(0)
     torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-10, 10)
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -139,8 +139,8 @@ def test_unary_ng_row_major(input_shape, ttnn_op, device):
     ],
 )
 @pytest.mark.parametrize("ttnn_op", [ttnn.cbrt])
-def test_unary_ng_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
-    """Test unary_ng ops with sub_core_grids on interleaved tensors."""
+def test_unary_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
+    """Test unary ops with sub_core_grids on interleaved tensors."""
     torch.manual_seed(0)
     torch_input = torch.empty(shape, dtype=torch.bfloat16).uniform_(-100, 100)
 
@@ -160,11 +160,11 @@ def test_unary_ng_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.abs])
-def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
+def test_unary_uneven_sharding_fallback(ttnn_op, device):
     """Test that uneven sharding falls back to interleaved path gracefully.
 
     When the tensor dimensions don't divide evenly into the shard shape, is_uneven()
-    returns true and unary_ng falls back to the TensorAccessor (interleaved) path
+    returns true and unary falls back to the TensorAccessor (interleaved) path
     instead of using the native sharded path.
     """
     torch.manual_seed(42)
@@ -224,8 +224,8 @@ def test_unary_ng_uneven_sharding_fallback(ttnn_op, device):
         (torch.float32, ttnn.float32),
     ],
 )
-def test_unary_ng_row_major_sharded(input_shape, shard_shape, core_grid, strategy, device, torch_dtype, ttnn_dtype):
-    """Test unary_ng abs with ROW_MAJOR layout and sharded memory config."""
+def test_unary_row_major_sharded(input_shape, shard_shape, core_grid, strategy, device, torch_dtype, ttnn_dtype):
+    """Test unary abs with ROW_MAJOR layout and sharded memory config."""
     torch.manual_seed(42)
     torch_input = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
 
@@ -277,8 +277,8 @@ def test_unary_ng_row_major_sharded(input_shape, shard_shape, core_grid, strateg
     ],
 )
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_unary_ng_shard_orientation(strategy, shard_shape_rm, shard_shape_cm, core_grid, shard_orientation, device):
-    """Test unary_ng with both ROW_MAJOR and COL_MAJOR shard orientations."""
+def test_unary_shard_orientation(strategy, shard_shape_rm, shard_shape_cm, core_grid, shard_orientation, device):
+    """Test unary with both ROW_MAJOR and COL_MAJOR shard orientations."""
     torch.manual_seed(0)
     input_shape = [1, 1, 256, 256]
     torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
@@ -334,10 +334,10 @@ def test_unary_ng_shard_orientation(strategy, shard_shape_rm, shard_shape_cm, co
         ),
     ],
 )
-def test_unary_ng_generic_sharded_memory_config(
+def test_unary_generic_sharded_memory_config(
     input_shape, input_shard_shape, input_core_grid, input_strategy, output_memory_config, device
 ):
-    """Test unary_ng with generic sharded memory configs (no explicit shard spec).
+    """Test unary with generic sharded memory configs (no explicit shard spec).
 
     When using L1_HEIGHT_SHARDED_MEMORY_CONFIG etc., the shard spec is inferred
     from the input tensor. The output strategy must match the input strategy.
@@ -368,8 +368,8 @@ def test_unary_ng_generic_sharded_memory_config(
     assert torch.equal(ttnn_output, torch_output)
 
 
-def test_unary_ng_reshard(device):
-    """Test unary_ng where input is sharded on one grid and output on a different grid."""
+def test_unary_reshard(device):
+    """Test unary where input is sharded on one grid and output on a different grid."""
     torch.manual_seed(0)
     input_shape = [1, 1, 64, 512]
     torch_input = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-100, 100)
@@ -425,8 +425,8 @@ def test_unary_ng_reshard(device):
     ],
 )
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
-def test_unary_ng_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
-    """Test that unary_ng correctly handles ROW_MAJOR interleaved tensors.
+def test_unary_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
+    """Test that unary correctly handles ROW_MAJOR interleaved tensors.
 
     Wide rows (row_width > tile_size) are chunked across the width.
     Narrow rows (row_width < tile_size) are packed multiple-per-tile to amortize CB overhead.
@@ -440,7 +440,7 @@ def test_unary_ng_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
 
 
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
-def test_unary_ng_rm_block_shard(device, torch_dtype, ttnn_dtype):
+def test_unary_rm_block_shard(device, torch_dtype, ttnn_dtype):
     """Test block-sharded ROW_MAJOR with non-tile-aligned shard shape (32, 80).
 
     Shard element count (2560) is not a multiple of tile_hw (1024), so

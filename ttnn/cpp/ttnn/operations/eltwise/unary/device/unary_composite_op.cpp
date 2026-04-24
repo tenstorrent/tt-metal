@@ -16,7 +16,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -425,7 +425,7 @@ Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCon
     float fact_val = std::tgamma(1.0f + k);       // k!
     float pos_neg = (k % 2 == 0) ? -1.0f : 1.0f;  // (-1)^(k+1)
     float scale = fact_val * pos_neg;
-    return ttnn::operations::unary_ng::detail::unary_ng_impl(
+    return ttnn::operations::unary::detail::unary_impl(
         input_a,
         {operations::unary::UnaryWithParam(operations::unary::UnaryOpType::POLYGAMMA, {n, scale})},
         output_mem_config);
