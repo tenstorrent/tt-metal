@@ -9,11 +9,6 @@
 
 #include "api/debug/dprint_pages.h"
 
-namespace detail {
-inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
-
-}  // namespace detail
-
 void kernel_main() {
     // Extract config type from compile-time argument
     constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
@@ -269,7 +264,7 @@ void kernel_main() {
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
             const uint32_t elts_per_page = source_width_tiles * tile_width;
 
-            tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, num_tokens_block);
+            // tt::data_movement::common::print_bf16_pages(source_base_l1_addr, elts_per_page, num_tokens_block);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
