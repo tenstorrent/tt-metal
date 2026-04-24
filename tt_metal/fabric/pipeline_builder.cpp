@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt-metalium/experimental/fabric/control_plane.hpp"
 
 namespace tt::tt_fabric {
 
