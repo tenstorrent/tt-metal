@@ -56,25 +56,42 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["mode"] == "cpu-reference"
     assert result["passed"] is True
     assert result["trace_capture"]["attempted"] is False
+    assert result["trace_capture_attempted"] is False
+    assert result["trace_capture_passed"] is False
     assert result["trace_capture"]["ttnn_to_torch_guarded"] is True
+    assert result["guard_status"]["ttnn_to_torch_guarded"] is True
     assert result["host_boundaries_inside_trace"] == []
+    assert result["cache_update"]["name"] == "compressed_kv_projection_cache_append"
+    assert result["cache_update"]["cache_len"] == 64
+    assert result["cache_update"]["update_index"] == 4
+    assert result["cache_update"]["device_resident_inside_trace"] is True
     assert result["traceable_decode_scope"]["not_full_forward"] is True
     assert result["traceable_decode_scope"]["inside_trace"] == [
         "ttnn.rms_norm(attn_norm)",
         "TtAttentionProjection.project_q_rank",
         "TtAttentionProjection.project_q_from_rank",
+        "ttnn.linear(wkv)",
+        "ttnn.rms_norm(kv_norm)",
+        "ttnn.to_memory_config(kv_update_height_sharded)",
+        "ttnn.update_cache(kv_projection_cache)",
         "ttnn.rms_norm(ffn_norm)",
         "TtSharedExpertMLP",
         "ttnn.add(hidden,shared_output)",
     ]
     assert "router scoring/top-k/hash selection" in result["traceable_decode_scope"]["excluded_from_trace"]
     assert result["loaded_tensor_groups"]["attention_query"]["count"] == 4
+    assert result["loaded_tensor_groups"]["kv_projection"]["count"] == 2
     assert result["loaded_tensor_groups"]["ffn_norm"]["canonical_keys"] == ["layers.3.ffn_norm.weight"]
     assert result["loaded_tensor_groups"]["shared_expert"]["count"] == 6
-    assert result["payload_bytes"]["total"] == 8524
+    assert result["payload_bytes"]["kv_projection"] == 544
+    assert result["payload_bytes"]["total"] == 9068
     assert result["decoded_tensors"]["wq_a"]["shape"] == [16, 32]
     assert result["decoded_tensors"]["wq_b"]["shape"] == [32, 16]
+    assert result["decoded_tensors"]["wkv"]["shape"] == [8, 32]
+    assert result["decoded_tensors"]["kv_norm"]["shape"] == [8]
     assert result["decoded_tensors"]["shared_w1"]["shape"] == [32, 32]
+    assert result["reference"]["kv_output"]["shape"] == [1, 1, 4, 8]
+    assert result["reference"]["kv_cache"]["shape"] == [1, 1, 64, 8]
     assert result["reference"]["residual_output"]["shape"] == [1, 1, 4, 32]
     assert result["accuracy"]["cpu_reference"]["passed"] is True
 
@@ -106,10 +123,13 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["schema_version"] == 1
     assert payload["mode"] == "cpu-reference"
     assert payload["trace_capture"]["attempted"] is False
+    assert payload["trace_capture_attempted"] is False
     assert payload["trace_capture"]["ttnn_to_torch_guarded"] is True
+    assert payload["guard_status"]["ttnn_to_torch_guarded"] is True
     assert payload["host_boundaries_inside_trace"] == []
     assert payload["traceable_decode_scope"]["not_full_forward"] is True
-    assert payload["payload_bytes"]["total"] == 8524
+    assert payload["cache_update"]["update_index"] == 4
+    assert payload["payload_bytes"]["total"] == 9068
 
 
 def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
@@ -133,5 +153,11 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["trace_capture"]["attempted"] is True
     assert result["trace_capture"]["capture_passed"] is True
     assert result["trace_capture"]["execute_replay_passed"] is True
+    assert result["trace_capture_attempted"] is True
+    assert result["trace_capture_passed"] is True
+    assert result["trace_execute_replay_passed"] is True
     assert result["trace_capture"]["ttnn_to_torch_guarded"] is True
+    assert result["guard_status"]["ttnn_to_torch_guarded"] is True
     assert result["host_boundaries_inside_trace"] == []
+    assert result["cache_update"]["device_resident_inside_trace"] is True
+    assert result["accuracy"]["kv_cache"]["passed"] is True
