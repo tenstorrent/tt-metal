@@ -379,6 +379,36 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
+// Maps a raw EDMStatus uint32 to its enum name for log readability.
+// Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
+// Defined once here and shared by configure_fabric(), quiesce_and_restart_fabric_workers(),
+// phase5b_erisc_health_check(), and wait_for_fabric_workers_ready() to avoid duplication.
+namespace {
+static const char* edm_status_str(uint32_t v) {
+    switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
+        case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:        return "INITIALIZATION_STARTED";
+        case tt::tt_fabric::EDMStatus::STARTED:                       return "STARTED";
+        case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:      return "LOCAL_HANDSHAKE_COMPLETE";
+        case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:     return "REMOTE_HANDSHAKE_COMPLETE";
+        case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:             return "READY_FOR_TRAFFIC";
+        case tt::tt_fabric::EDMStatus::TERMINATED:                    return "TERMINATED";
+        case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:               return "TXQ_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:        return "STREAM_REG_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED:  return "DOWNSTREAM_EDM_SETUP_STARTED";
+        case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:        return "EDM_VCS_SETUP_COMPLETE";
+        case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE:   return "ETHERNET_HANDSHAKE_COMPLETE";
+        case tt::tt_fabric::EDMStatus::VCS_OPENED:                    return "VCS_OPENED";
+        case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:     return "ROUTING_TABLE_INITIALIZED";
+        case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:       return "INITIALIZATION_COMPLETE";
+        default: break;
+    }
+    if (v == 0xDEAD5B5B) return "(deadline-skipped)";
+    if (v == 0xDEADECE7) return "(read-exception)";
+    return "(unknown)";
+}
+}  // namespace
+
 bool Device::compile_fabric() {
     fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
     return fabric_program_ != nullptr;
@@ -396,6 +426,13 @@ void Device::configure_fabric(
     // is valid again, so fabric_relay_path_broken_ must be cleared so that the next quiesce
     // cycle does not falsely short-circuit Phase 2.5, Phase 3, and Phase 5 for non-MMIO
     // devices.  (#42429 — flag is set in quiesce ENTRY snapshot / Phase 5 catch block).
+    if (fabric_relay_path_broken_.load()) {
+        log_info(
+            tt::LogMetal,
+            "configure_fabric: Device {} relay-broken flag reset by configure_fabric — "
+            "UMD relay path restored (fresh firmware loaded on MMIO relay ERISCs)",
+            this->id_);
+    }
     fabric_relay_path_broken_ = false;
     // Clear accumulated soft-reset failures from the prior quiesce cycle.  A channel that was
     // force-reset and recovered should not be permanently excluded from Phase 5 health checks
@@ -608,6 +645,22 @@ void Device::configure_fabric(
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
+    }
+    // Exit summary: on the healthy path (no dead channels, no relay-soft-reset skips) emit
+    // a single compact line.  Only log the verbose detail block when something is non-trivial
+    // so CI logs are not flooded with 8+ lines per device per iteration on every healthy run.
+    const bool relay_broken_now = fabric_relay_path_broken_.load();
+    if (relay_broken_now || !skip_soft_reset_channels.empty() || !pre_dead_channels.empty()) {
+        log_info(
+            tt::LogMetal,
+            "configure_fabric: Device {} complete — relay_broken={} mmio={} "
+            "pre_dead_channels={} skip_soft_reset_channels={} newly_dead={}",
+            this->id_,
+            relay_broken_now,
+            this->is_mmio_capable(),
+            pre_dead_channels.size(),
+            skip_soft_reset_channels.size(),
+            health.newly_dead_channels.size());
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
@@ -892,32 +945,6 @@ void Device::quiesce_and_restart_fabric_workers() {
         }
     }
 
-    // Helper: convert raw EDM status word to a human-readable string for log messages.
-    // Mirrors the lambda of the same name in wait_for_fabric_workers_ready().
-    auto edm_status_str_q = [](uint32_t v) -> const char* {
-        switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
-            case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:        return "INITIALIZATION_STARTED";
-            case tt::tt_fabric::EDMStatus::STARTED:                       return "STARTED";
-            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:      return "LOCAL_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:     return "REMOTE_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:             return "READY_FOR_TRAFFIC";
-            case tt::tt_fabric::EDMStatus::TERMINATED:                    return "TERMINATED";
-            case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:               return "TXQ_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:        return "STREAM_REG_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED:  return "DOWNSTREAM_EDM_SETUP_STARTED";
-            case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:        return "EDM_VCS_SETUP_COMPLETE";
-            case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE:   return "ETHERNET_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::VCS_OPENED:                    return "VCS_OPENED";
-            case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:     return "ROUTING_TABLE_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:       return "INITIALIZATION_COMPLETE";
-            default: break;
-        }
-        if (v == 0xDEAD5B5B) return "(deadline-skipped)";
-        if (v == 0xDEADECE7) return "(read-exception)";
-        return "(unknown)";
-    };
-
     // Phase 2.5: Terminate ERISC fabric routers before re-loading firmware.
     //
     // The Tensix MUX BRISC was halted in Phase 2, but the ERISC routers were not
@@ -1082,15 +1109,16 @@ void Device::quiesce_and_restart_fabric_workers() {
             } else {
                 log_warning(
                     tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                    "quiesce_and_restart_fabric_workers: Device {} (mmio={}) eth_chan {} Phase 2.5: "
                     "ERISC did not terminate within budget {}ms (actual elapsed {}ms, status=0x{:08x} {}) — "
                     "force-resetting ERISC to guarantee it is halted before Phase 3 overwrites L1",
                     this->id(),
+                    this->is_mmio_capable(),
                     eth_chan_id,
                     erisc_timeout_ms,
                     p25_elapsed,
                     status_buf[0],
-                    edm_status_str_q(status_buf[0]));
+                    edm_status_str(status_buf[0]));
                 // R1: Force-reset the unresponsive ERISC before Phase 3 writes new firmware to its L1.
                 // Without this, Phase 3's configure_fabric_cores() may overwrite L1 while the ERISC
                 // is mid-packet-send, causing data corruption (the same issue this branch fixes).
@@ -1427,31 +1455,7 @@ bool Device::phase5b_erisc_health_check(
     const metal_SocDescriptor& soc_desc_p5,
     uint32_t router_sync_addr,
     uint32_t expected_ready) {
-    // Maps a raw EDMStatus uint32 to its enum name for log readability.
-    // Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
-    auto edm_status_str = [](uint32_t v) -> const char* {
-        switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
-            case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:      return "INITIALIZATION_STARTED";
-            case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
-            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:    return "LOCAL_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:   return "REMOTE_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:           return "READY_FOR_TRAFFIC";
-            case tt::tt_fabric::EDMStatus::TERMINATED:                  return "TERMINATED";
-            case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:             return "TXQ_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:      return "STREAM_REG_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED: return "DOWNSTREAM_EDM_SETUP_STARTED";
-            case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:      return "EDM_VCS_SETUP_COMPLETE";
-            case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE: return "ETHERNET_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::VCS_OPENED:                  return "VCS_OPENED";
-            case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:   return "ROUTING_TABLE_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
-            default: break;
-        }
-        if (v == 0xDEAD5B5B) return "(deadline-skipped)";
-        if (v == 0xDEADECE7) return "(read-exception)";
-        return "(unknown)";
-    };
+    // edm_status_str() is a file-scope static helper defined above compile_fabric().
 
     constexpr uint32_t kHealthCheckTimeoutMs = 2000;
     // Log unhealthy channels every 200ms for observability.
@@ -1541,9 +1545,10 @@ bool Device::phase5b_erisc_health_check(
                 // already-degraded hardware, which accumulates 5s timeouts and hangs.
                 log_warning(
                     tt::LogMetal,
-                    "wait_for_fabric_workers_ready: Device {} Phase 5b: read failed on "
+                    "wait_for_fabric_workers_ready: Device {} (mmio={}) Phase 5b: read failed on "
                     "chan {} — treating as not-READY_FOR_TRAFFIC: {}",
                     this->id(),
+                    this->is_mmio_capable(),
                     ch.eth_chan_id,
                     e.what());
                 // 0xDEADECE7: Phase 5b relay read threw an exception.
@@ -1798,31 +1803,7 @@ void Device::wait_for_fabric_workers_ready() {
     auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
     const bool has_tensix_mux = (tensix_config_mode != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
-    // Maps a raw EDMStatus uint32 to its enum name for log readability.
-    // Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
-    auto edm_status_str = [](uint32_t v) -> const char* {
-        switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
-            case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:      return "INITIALIZATION_STARTED";
-            case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
-            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:    return "LOCAL_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:   return "REMOTE_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:           return "READY_FOR_TRAFFIC";
-            case tt::tt_fabric::EDMStatus::TERMINATED:                  return "TERMINATED";
-            case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:             return "TXQ_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:      return "STREAM_REG_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED: return "DOWNSTREAM_EDM_SETUP_STARTED";
-            case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:      return "EDM_VCS_SETUP_COMPLETE";
-            case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE: return "ETHERNET_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::VCS_OPENED:                  return "VCS_OPENED";
-            case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:   return "ROUTING_TABLE_INITIALIZED";
-            case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
-            default: break;
-        }
-        if (v == 0xDEAD5B5B) return "(deadline-skipped)";
-        if (v == 0xDEADECE7) return "(read-exception)";
-        return "(unknown)";
-    };
+    // edm_status_str() is a file-scope static helper defined above compile_fabric().
 
     // Phase 4: Wait for each MUX core to reach READY_FOR_TRAFFIC before returning.
     //
