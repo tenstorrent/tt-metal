@@ -98,6 +98,7 @@ struct SdpaReduceForwarder {
             while (pending != 0) {
                 if (cached_free_write_slots == 0) {
                     do {
+                        invalidate_l1_cache();
                         cached_free_write_slots = fabric_connection.get_num_free_write_slots();
                     } while (cached_free_write_slots == 0);
                 }
