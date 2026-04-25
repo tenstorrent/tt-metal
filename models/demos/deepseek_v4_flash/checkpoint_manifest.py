@@ -60,6 +60,82 @@ _LAYER_RE = re.compile(r"^layers\.(?P<layer>\d+)\.")
 _MTP_RE = re.compile(r"^mtp\.(?P<layer>\d+)\.")
 
 
+def build_snapshot_status(snapshot_dir: str | Path) -> dict[str, Any]:
+    """Return metadata-only materialization status for a local HF snapshot."""
+
+    snapshot_dir = Path(snapshot_dir).expanduser().resolve()
+    if not snapshot_dir.is_dir():
+        raise FileNotFoundError(f"HF snapshot directory does not exist: {snapshot_dir}")
+
+    index_metadata = _read_weight_index_metadata(snapshot_dir)
+    expected_shards = index_metadata["shards"]
+    if not expected_shards:
+        expected_shards = [path.name for path in sorted(snapshot_dir.glob("*.safetensors"))]
+    expected_shard_set = set(expected_shards)
+    present_shards = [name for name in expected_shards if (snapshot_dir / name).is_file()]
+    missing_shards = [name for name in expected_shards if not (snapshot_dir / name).is_file()]
+    extra_shards = sorted(
+        path.name for path in snapshot_dir.glob("*.safetensors") if path.name not in expected_shard_set
+    )
+    present_bytes = sum(_file_size(snapshot_dir / name) for name in present_shards)
+
+    dry_run_blockers = []
+    dry_run_warnings = []
+    if not (snapshot_dir / "config.json").is_file():
+        dry_run_blockers.append("Missing config.json.")
+    if index_metadata["index_error"] is not None:
+        dry_run_blockers.append(index_metadata["index_error"])
+    elif not index_metadata["index_present"]:
+        dry_run_blockers.append(f"Missing {MODEL_INDEX_FILENAME}; metadata-only dry-run cannot see tensor names.")
+    elif not index_metadata["tensor_index_available"]:
+        dry_run_blockers.append(f"{MODEL_INDEX_FILENAME} does not contain a non-empty weight_map.")
+    if missing_shards:
+        dry_run_warnings.append(
+            f"{len(missing_shards)} shard file(s) referenced by {MODEL_INDEX_FILENAME} are absent locally."
+        )
+    if extra_shards:
+        dry_run_warnings.append(f"{len(extra_shards)} local safetensor shard(s) are not referenced by the index.")
+
+    manifest_dry_run = {
+        "can_proceed": not dry_run_blockers,
+        "blockers": dry_run_blockers,
+        "warnings": dry_run_warnings,
+    }
+
+    return {
+        "schema_version": REAL_CHECKPOINT_MANIFEST_SCHEMA_VERSION,
+        "model_name": MODEL_NAME,
+        "source": {
+            "snapshot_dir": str(snapshot_dir),
+            "repo_id": REAL_CHECKPOINT_REPO_ID,
+        },
+        "files": {
+            "config": "config.json" if (snapshot_dir / "config.json").is_file() else None,
+            "inference_config": "inference/config.json"
+            if (snapshot_dir / "inference" / "config.json").is_file()
+            else None,
+            "weight_index": MODEL_INDEX_FILENAME if index_metadata["index_present"] else None,
+            "non_weight_files": _non_weight_files(snapshot_dir),
+        },
+        "weights": {
+            "tensor_index_available": index_metadata["tensor_index_available"],
+            "tensor_count": index_metadata["tensor_count"],
+            "expected_shard_count": len(expected_shards),
+            "present_shard_count": len(present_shards),
+            "missing_shard_count": len(missing_shards),
+            "expected_shard_names": expected_shards,
+            "present_shard_names": present_shards,
+            "missing_shard_names": missing_shards,
+            "extra_shard_names": extra_shards,
+            "present_bytes": present_bytes,
+            "indexed_bytes": index_metadata["indexed_bytes"],
+            "index_error": index_metadata["index_error"],
+        },
+        "manifest_dry_run": manifest_dry_run,
+        "manifest_dry_run_can_proceed": manifest_dry_run["can_proceed"],
+    }
+
+
 def build_checkpoint_manifest(snapshot_dir: str | Path) -> dict[str, Any]:
     """Build a JSON-serializable manifest for a local HF snapshot.
 
@@ -282,11 +358,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect a DeepSeek V4 Flash HF checkpoint without loading tensors.")
     parser.add_argument("--snapshot-dir", required=True, type=Path)
     parser.add_argument("--topology", choices=SUPPORTED_TOPOLOGIES, default="t3k")
+    parser.add_argument(
+        "--status", action="store_true", help="Emit metadata-only local snapshot materialization status."
+    )
     parser.add_argument("--dry-run", action="store_true", help="Also emit a preprocessing dry-run plan.")
     args = parser.parse_args()
 
-    manifest = build_checkpoint_manifest(args.snapshot_dir)
-    output: dict[str, Any] = {"manifest": manifest}
+    output: dict[str, Any] = {}
+    if args.status:
+        output["snapshot_status"] = build_snapshot_status(args.snapshot_dir)
+    if not args.status or args.dry_run:
+        manifest = build_checkpoint_manifest(args.snapshot_dir)
+        output["manifest"] = manifest
     if args.dry_run:
         output["preprocessing_plan"] = build_preprocessing_plan(manifest, args.topology)
     print(json.dumps(output, indent=2, sort_keys=True))
@@ -295,19 +378,16 @@ def main() -> None:
 def _load_weight_index(snapshot_dir: Path) -> dict[str, Any]:
     index_path = snapshot_dir / MODEL_INDEX_FILENAME
     if index_path.is_file():
-        index = _read_json_object(index_path)
-        weight_map = index.get("weight_map")
-        if not isinstance(weight_map, dict) or not weight_map:
-            raise ValueError(f"Expected non-empty weight_map in {index_path}")
-        mapped = {str(key): str(value) for key, value in weight_map.items()}
-        shards = sorted(set(mapped.values()))
+        index_metadata = _read_weight_index_metadata(snapshot_dir)
+        if index_metadata["index_error"] is not None:
+            raise ValueError(index_metadata["index_error"])
         return {
-            "weight_map": mapped,
-            "shards": shards,
-            "total_size": _optional_int(index.get("metadata", {}).get("total_size")),
+            "weight_map": index_metadata["weight_map"],
+            "shards": index_metadata["shards"],
+            "total_size": index_metadata["indexed_bytes"],
             "tensor_index_available": True,
             "unreadable_shards": [],
-            "missing_shard_files": _missing_shard_files(snapshot_dir, shards),
+            "missing_shard_files": _missing_shard_files(snapshot_dir, index_metadata["shards"]),
         }
 
     shard_paths = sorted(snapshot_dir.glob("*.safetensors"))
@@ -673,8 +753,67 @@ def _existing_files(base: Path, filenames: tuple[str, ...]) -> list[str]:
     return [filename for filename in filenames if (base / filename).is_file()]
 
 
+def _read_weight_index_metadata(snapshot_dir: Path) -> dict[str, Any]:
+    index_path = snapshot_dir / MODEL_INDEX_FILENAME
+    if not index_path.is_file():
+        return {
+            "index_present": False,
+            "index_error": None,
+            "weight_map": {},
+            "shards": [],
+            "indexed_bytes": None,
+            "tensor_index_available": False,
+            "tensor_count": 0,
+        }
+    try:
+        index = _read_json_object(index_path)
+        weight_map = index.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ValueError(f"Expected non-empty weight_map in {index_path}")
+        mapped = {str(key): str(value) for key, value in weight_map.items()}
+    except Exception as exc:
+        return {
+            "index_present": True,
+            "index_error": str(exc),
+            "weight_map": {},
+            "shards": [],
+            "indexed_bytes": None,
+            "tensor_index_available": False,
+            "tensor_count": 0,
+        }
+    return {
+        "index_present": True,
+        "index_error": None,
+        "weight_map": mapped,
+        "shards": sorted(set(mapped.values())),
+        "indexed_bytes": _optional_int(index.get("metadata", {}).get("total_size")),
+        "tensor_index_available": True,
+        "tensor_count": len(mapped),
+    }
+
+
 def _missing_shard_files(snapshot_dir: Path, shard_names: list[str]) -> list[str]:
     return [name for name in shard_names if not (snapshot_dir / name).is_file()]
+
+
+def _non_weight_files(snapshot_dir: Path) -> list[dict[str, Any]]:
+    files = []
+    for path in sorted(snapshot_dir.rglob("*")):
+        if not path.is_file() or path.suffix == ".safetensors":
+            continue
+        relative_path = path.relative_to(snapshot_dir)
+        if _is_hidden_cache_path(relative_path):
+            continue
+        files.append({"path": relative_path.as_posix(), "bytes": _file_size(path)})
+    return files
+
+
+def _is_hidden_cache_path(path: Path) -> bool:
+    return any(part.startswith(".") for part in path.parts)
+
+
+def _file_size(path: Path) -> int:
+    return int(path.stat().st_size) if path.is_file() else 0
 
 
 def _optional_int(value: Any) -> int | None:

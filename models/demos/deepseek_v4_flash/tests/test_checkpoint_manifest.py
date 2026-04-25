@@ -14,6 +14,7 @@ from models.demos.deepseek_v4_flash.checkpoint_manifest import (
     _expected_weight_names,
     build_checkpoint_manifest,
     build_preprocessing_plan,
+    build_snapshot_status,
 )
 from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v4_flash.synthetic import tiny_config_dict, tiny_inference_config_dict
@@ -43,6 +44,61 @@ def test_checkpoint_manifest_parses_fake_index_only_snapshot(tmp_path: Path) -> 
     assert manifest["weights"]["coverage"]["counts"]["indexer_compressor"] == 4
     assert manifest["weights"]["observed"]["layer_count"] == 3
     assert manifest["weights"]["observed"]["routed_expert_count"] == 4
+
+
+def test_snapshot_status_reports_metadata_only_missing_shards(tmp_path: Path) -> None:
+    snapshot = _write_fake_snapshot(tmp_path, shard_contents={})
+
+    status = build_snapshot_status(snapshot)
+
+    json.dumps(status, sort_keys=True)
+    assert status["manifest_dry_run_can_proceed"] is True
+    assert status["manifest_dry_run"]["blockers"] == []
+    assert status["manifest_dry_run"]["warnings"]
+    assert status["weights"]["tensor_index_available"] is True
+    assert status["weights"]["expected_shard_count"] == 2
+    assert status["weights"]["present_shard_count"] == 0
+    assert status["weights"]["missing_shard_count"] == 2
+    assert status["weights"]["missing_shard_names"] == [
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+    ]
+    assert status["weights"]["present_bytes"] == 0
+    assert status["weights"]["indexed_bytes"] == 123456
+    assert "config.json" in {file["path"] for file in status["files"]["non_weight_files"]}
+    assert "model.safetensors.index.json" in {file["path"] for file in status["files"]["non_weight_files"]}
+
+
+def test_snapshot_status_reports_partially_materialized_snapshot(tmp_path: Path) -> None:
+    snapshot = _write_fake_snapshot(tmp_path, shard_contents={"model-00001-of-00002.safetensors": b"abc"})
+
+    status = build_snapshot_status(snapshot)
+
+    assert status["manifest_dry_run_can_proceed"] is True
+    assert status["weights"]["expected_shard_count"] == 2
+    assert status["weights"]["present_shard_count"] == 1
+    assert status["weights"]["present_shard_names"] == ["model-00001-of-00002.safetensors"]
+    assert status["weights"]["missing_shard_names"] == ["model-00002-of-00002.safetensors"]
+    assert status["weights"]["present_bytes"] == 3
+
+
+def test_snapshot_status_reports_complete_fake_snapshot_bytes(tmp_path: Path) -> None:
+    snapshot = _write_fake_snapshot(
+        tmp_path,
+        shard_contents={
+            "model-00001-of-00002.safetensors": b"",
+            "model-00002-of-00002.safetensors": b"payload",
+        },
+    )
+
+    status = build_snapshot_status(snapshot)
+
+    assert status["manifest_dry_run_can_proceed"] is True
+    assert status["manifest_dry_run"]["warnings"] == []
+    assert status["weights"]["expected_shard_count"] == 2
+    assert status["weights"]["present_shard_count"] == 2
+    assert status["weights"]["missing_shard_names"] == []
+    assert status["weights"]["present_bytes"] == len(b"payload")
 
 
 def test_checkpoint_manifest_reports_unknown_weight_patterns(tmp_path: Path) -> None:
@@ -105,10 +161,44 @@ def test_checkpoint_manifest_cli_dry_run_on_fake_snapshot(tmp_path: Path) -> Non
     assert output["preprocessing_plan"]["dry_run"] is True
 
 
+def test_checkpoint_manifest_cli_status_on_fake_snapshot(tmp_path: Path) -> None:
+    snapshot = _write_fake_snapshot(tmp_path, shard_contents={"model-00002-of-00002.safetensors": b"present"})
+    repo_root = Path(__file__).resolve().parents[4]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "models.demos.deepseek_v4_flash.checkpoint_manifest",
+            "--snapshot-dir",
+            str(snapshot),
+            "--topology",
+            "galaxy",
+            "--status",
+        ],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    output = json.loads(result.stdout)
+    assert set(output) == {"snapshot_status"}
+    status = output["snapshot_status"]
+    assert status["manifest_dry_run_can_proceed"] is True
+    assert status["weights"]["expected_shard_count"] == 2
+    assert status["weights"]["present_shard_count"] == 1
+    assert status["weights"]["missing_shard_names"] == ["model-00001-of-00002.safetensors"]
+
+
 def _write_fake_snapshot(
     tmp_path: Path,
     *,
     extra_weight_names: tuple[str, ...] = (),
+    shard_contents: dict[str, bytes] | None = None,
 ) -> Path:
     snapshot = tmp_path / "fake_hf_snapshot"
     snapshot.mkdir()
@@ -125,8 +215,10 @@ def _write_fake_snapshot(
     checkpoint_config = DeepSeekV4FlashConfig.from_hf_configs(config, inference_config)
     weight_names = sorted(_expected_weight_names(checkpoint_config) | set(extra_weight_names))
     shard_names = ("model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors")
-    for shard_name in shard_names:
-        (snapshot / shard_name).touch()
+    if shard_contents is None:
+        shard_contents = {shard_name: b"" for shard_name in shard_names}
+    for shard_name, contents in shard_contents.items():
+        (snapshot / shard_name).write_bytes(contents)
 
     weight_map = {name: shard_names[index % len(shard_names)] for index, name in enumerate(weight_names)}
     _write_json(
