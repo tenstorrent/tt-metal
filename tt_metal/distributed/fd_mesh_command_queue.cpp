@@ -933,6 +933,18 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
                                .get_cluster()
                                .get_assigned_channel_for_device(device->id());
         log_info(LogMetal, "[read_completion_queue_event] cq={} calling completion_queue_wait_front device={}", id_, device->id());
+        // FIX Z (#42429): Skip completion_queue_wait_front for non-MMIO devices whose relay
+        // path is known broken.  On such devices, sysmem_manager().completion_queue_wait_front()
+        // eventually calls a UMD relay read which times out after 5 seconds and throws
+        // "Timeout waiting for Ethernet core service remote IO request."  Since the relay path
+        // is already confirmed dead (fabric_relay_path_broken_ was set by prior quiesce Phase 5),
+        // there is no point waiting — throw immediately with a clear diagnostic instead.
+        if (!device->is_mmio_capable() && device->is_fabric_relay_path_broken()) {
+            TT_THROW(
+                "FIX Z: Fabric relay path broken on non-MMIO device {} — cannot read completion "
+                "queue event (UMD relay would time out). Aborting immediately.",
+                device->id());
+        }
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
         log_info(LogMetal, "[read_completion_queue_event] cq={} completion_queue_wait_front returned device={}", id_, device->id());
 
