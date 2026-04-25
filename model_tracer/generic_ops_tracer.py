@@ -481,6 +481,51 @@ def _strip_object_addresses(value):
     return value
 
 
+def _canonicalize_shape_product(value):
+    """Canonicalize a shape list/string to its product form for topology independence.
+
+    E.g. [4, 8] → [32], "[32]" → "[32]", "[4, 8]" → "[32]".
+    """
+    import ast as _ast
+    import math
+
+    if isinstance(value, str):
+        try:
+            parsed = _ast.literal_eval(value)
+        except Exception:
+            return value
+        if isinstance(parsed, (list, tuple)) and all(isinstance(x, (int, float)) for x in parsed):
+            product = math.prod(int(x) for x in parsed)
+            return str([product])
+        return value
+    elif isinstance(value, (list, tuple)):
+        if all(isinstance(x, (int, float)) for x in value):
+            product = math.prod(int(x) for x in value)
+            return [product]
+    return value
+
+
+def _canonicalize_placement(value):
+    """Canonicalize all-replicate placement to single-entry form.
+
+    ['PlacementReplicate', 'PlacementReplicate'] → ['PlacementReplicate']
+    """
+    import ast as _ast
+
+    if isinstance(value, str):
+        try:
+            parsed = _ast.literal_eval(value)
+        except Exception:
+            return value
+        if isinstance(parsed, (list, tuple)) and all(x == "PlacementReplicate" for x in parsed):
+            return str(["PlacementReplicate"])
+        return value
+    elif isinstance(value, (list, tuple)):
+        if all(isinstance(x, str) and x == "PlacementReplicate" for x in value):
+            return ["PlacementReplicate"]
+    return value
+
+
 def _normalize_for_hash(obj):
     """
     Normalize arguments in-place for stable config_hash computation.
@@ -498,7 +543,26 @@ def _normalize_for_hash(obj):
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
 
+        # Topology-independent normalization for tensor_placement fields:
+        # distribution_shape [4, 8] and [32] are equivalent → canonicalize to product
+        if "distribution_shape" in obj:
+            obj["distribution_shape"] = _canonicalize_shape_product(obj["distribution_shape"])
+        # mesh_device_shape [4, 8] and [1, 32] are equivalent → canonicalize to product
+        if "mesh_device_shape" in obj:
+            obj["mesh_device_shape"] = _canonicalize_shape_product(obj["mesh_device_shape"])
+        # All-replicate placement: 1D and 2D are equivalent
+        if "placement" in obj:
+            obj["placement"] = _canonicalize_placement(obj["placement"])
+
+        # storage_type can differ between runs — remove it
+        if "storage_type" in obj:
+            del obj["storage_type"]
+
+        # None-valued keys are equivalent to absent — remove them
         for k in list(obj.keys()):
+            if obj[k] is None and k != "shard_spec":  # shard_spec already handled above
+                del obj[k]
+                continue
             v = obj[k]
             if isinstance(v, str):
                 obj[k] = _strip_object_addresses(v)
@@ -539,8 +603,12 @@ def _extract_hardware_and_mesh(machine_info):
                             match = re.search(r"PlacementShard\((\d+)\)", placement_str)
                             if match:
                                 shard_dim = int(match.group(1))
+                        # Canonicalize mesh_shape to product for topology independence
+                        import math as _math
+
+                        mesh_product = _math.prod(int(x) for x in mesh_shape)
                         mesh_config = {
-                            "mesh_shape": mesh_shape,
+                            "mesh_shape": [mesh_product],
                             "placement_type": "shard" if shard_dim is not None else "replicate",
                             "shard_dim": shard_dim,
                         }

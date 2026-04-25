@@ -29,7 +29,10 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-NUM_DEVICES = ttnn.get_num_devices()
+try:
+    NUM_DEVICES = ttnn.get_num_devices()
+except Exception:
+    NUM_DEVICES = 0
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
