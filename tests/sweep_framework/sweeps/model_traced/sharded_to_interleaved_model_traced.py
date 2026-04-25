@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -235,7 +236,8 @@ def run(
         )
 
     # Verify correctness by comparing with original torch tensor
-    output_torch = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_torch = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     pcc = check_with_pcc(torch_input_tensor_a, output_torch, 0.999)
 
     return [pcc, e2e_perf]

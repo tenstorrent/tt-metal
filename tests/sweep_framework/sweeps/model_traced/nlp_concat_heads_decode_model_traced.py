@@ -15,6 +15,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     replicate_with_topology,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import master config loader for traced model configurations
@@ -140,7 +141,8 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.nlp_concat_heads_decode(input_tensor_a, num_heads=num_heads, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Unpad the output - TTNN output may be padded to tile size (32)

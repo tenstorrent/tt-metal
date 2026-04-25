@@ -67,6 +67,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     _restore_topology,
+    get_mesh_composer,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -668,6 +669,7 @@ def run(
         **rope_call_kwargs,
     )
 
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
     e2e_perf = stop_measuring_time(start_time)
 
