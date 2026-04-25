@@ -1665,8 +1665,10 @@ def _mtp_eh_proj_preprocess(
 ) -> dict[str, torch.Tensor]:
     """Preprocess eh_proj for cache: transpose, optionally fold gammas, pad, tile-shuffle."""
     proj_t = raw[src_key].T.contiguous()
+    print("Proj_t shape=", proj_t.shape, flush=True)
     if fold_rmsnorm_weights:
         gamma = torch.cat([raw[e_key], raw[h_key]], dim=0).unsqueeze(1)
+        print("Gamma shape=", gamma.shape, flush=True)
         proj_t = proj_t * gamma
     return {target_name: _transform_eh_proj(proj_t)}
 
@@ -1734,7 +1736,10 @@ def prepare_spec_weights(
             _LM_HEAD_K,
         ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
         if fold_rmsnorm_weights:
-            lm_w = lm_w * t[_norm_key]
+            print("LM_w shape=", lm_w.shape, flush=True)
+            norm_spec = t[_norm_key].unsqueeze(0)
+            print("Norm_key shape=", norm_spec.shape, flush=True)
+            lm_w = lm_w * norm_spec
         return {lm_target.name: lm_w.T.contiguous()}
 
     fingerprint = cache_config.context.fingerprint(

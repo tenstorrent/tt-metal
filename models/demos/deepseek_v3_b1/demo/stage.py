@@ -281,13 +281,11 @@ class SpecLMHeadStage(StageKind):
 
     def __init__(
         self,
-        weights: DeepSeekV3LMHeadWeights,
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
     ) -> None:
-        self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._spec_weights = spec_weights
@@ -495,12 +493,8 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        if self._spec_weights is not None:
-            spec_gamma = self._spec_weights.shared_head_norm
-            spec_b = self._spec_weights.lm_head
-        else:
-            spec_gamma = self._weights.final_norm
-            spec_b = self._weights.lm_head
+        spec_gamma = self._spec_weights.shared_head_norm
+        spec_b = self._spec_weights.lm_head
 
         self._state = {
             "input_tensor_mesh": input_tensor_mesh,
@@ -1160,7 +1154,6 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
 
     def __init__(
         self,
-        weights: DeepSeekV3LMHeadWeights,
         embedding_weights: DeepSeekV3EmbeddingLayerWeights,
         *,
         fp32_dest_acc_en: bool = True,
@@ -1169,7 +1162,6 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
-            weights,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=spec_weights,
