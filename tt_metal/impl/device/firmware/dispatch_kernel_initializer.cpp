@@ -261,6 +261,20 @@ const std::unordered_set<CoreCoord>& DispatchKernelInitializer::get_virtual_disp
 
 void DispatchKernelInitializer::wait_for_dispatch_cores() const {
     for (auto* dev : devices_) {
+        // If the UMD relay path to this device is known-broken (non-MMIO device whose
+        // Ethernet-relay firmware is no longer servicing IO requests), skip both the
+        // wait_until_cores_done read and the subsequent rescue writes.  Every UMD relay
+        // operation on such a device blocks for the full 5s flush timeout; with 4 dispatch
+        // cores × 8 streams = 32 writes the cascade totals ~160s per device and causes the
+        // test to be killed (exit=124).  The device is already non-functional at this point
+        // so skipping rescue is safe.
+        if (!dev->is_mmio_capable() && dev->is_fabric_relay_path_broken()) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_dispatch_cores: Device {} relay path broken (non-MMIO) — skipping wait and rescue to prevent UMD flush cascade",
+                dev->id());
+            continue;
+        }
         auto dispatch_cores = get_virtual_dispatch_cores(dev->id());
         log_info(tt::LogMetal, "[dispatch_teardown] wait_for_dispatch_cores device={} num_cores={}", dev->id(), dispatch_cores.size());
         // Wrap in try-catch so that device close continues even if dispatch cores fail or timeout.
@@ -291,6 +305,17 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
 }
 
 void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) const {
+    // Belt-and-suspenders guard: if the relay path is already known-broken for a non-MMIO
+    // device, every WriteToDeviceL1 call below will time out after 5s (UMD Ethernet relay
+    // flush timeout).  Skip all writes to prevent a 160s hang cascade.
+    if (!device->is_mmio_capable() && device->is_fabric_relay_path_broken()) {
+        log_warning(
+            tt::LogMetal,
+            "rescue_stuck_dispatch_cores: Device {} relay path broken (non-MMIO) — skipping rescue writes to prevent UMD flush cascade",
+            device->id());
+        return;
+    }
+
     // During teardown, dispatch cores (DISPATCH_S / DISPATCH_D) can get stuck spinning on
     // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX, waiting for a worker completion count
     // that will never arrive because fabric was already torn down.
