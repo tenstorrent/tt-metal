@@ -15,7 +15,7 @@ import numpy as np
 def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
     """Parse tt-train log content and extract step number, loss, and step time per step.
 
-    Uses regex to find "Step: N", "Loss: X.Y", and "Full step time X.Y ms" in order.
+    Uses regex to find "Step: N", "Loss: X.Y", and "Time: X.Y ms" in order.
     All three match lists must have the same length (one entry per step).
 
     Args:
@@ -29,7 +29,7 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
     """
     step_pattern = r"Step:\s*(\d+)"
     loss_pattern = r"Loss:\s*([\d.]+)"
-    step_time_pattern = r"Full step time\s+([\d.]+)\s*ms"
+    step_time_pattern = r"Time:\s+([\d.]+)\s*ms"
 
     step_matches = re.findall(step_pattern, content, re.DOTALL)
     loss_matches = re.findall(loss_pattern, content, re.DOTALL)

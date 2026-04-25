@@ -243,7 +243,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     KernelDescriptor compute_kernel_descriptor = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary_ng/device/kernels/compute/eltwise_sfpu.cpp",
+        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         .core_ranges = all_cores,
         .compile_time_args = {},
         .defines = defines_relu,

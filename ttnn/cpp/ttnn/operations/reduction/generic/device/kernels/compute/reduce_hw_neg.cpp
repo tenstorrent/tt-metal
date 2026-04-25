@@ -58,8 +58,8 @@ void kernel_main() {
                 }
 
                 cb_ineg_obj.wait_front(onetile);
-                reduce_init(cb_ineg, cb_scaler, cb_acc);
-                reduce_tile(cb_ineg, cb_scaler, 0, 0, reduce_dst_idx);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, 0, 0, reduce_dst_idx);
                 reduce_uninit();
                 cb_ineg_obj.pop_front(onetile);
                 if (wt > 0 || ht > 0) {

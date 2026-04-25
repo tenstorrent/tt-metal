@@ -29,7 +29,8 @@ constexpr uint32_t CHIP_STATS_UNUSED = UINT32_MAX;
 // Readers should check this version to ensure compatibility with the SHM layout.
 // v2: asic_id now stores UMD chip_unique_id directly (matches SHM filename)
 //     chip_stats sentinel is CHIP_STATS_UNUSED (UINT32_MAX), not 0
-constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 2;
+// v3: last_update_timestamp, ChipStats::chip_id and ChipStats::is_remote are atomic
+constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 3;
 
 // Shared memory region layout for per-device memory statistics
 // This structure is mapped into shared memory at /dev/shm/tt_device_*_memory
@@ -38,7 +39,7 @@ struct DeviceMemoryRegion {
     // Header information
     uint32_t version;                       // Structure version (for compatibility)
     uint32_t num_active_processes;          // Number of processes currently tracked (in per-PID array)
-    uint64_t last_update_timestamp;         // Last update time (nanoseconds since epoch)
+    std::atomic<uint64_t> last_update_timestamp;  // Last update time (nanoseconds since epoch)
     std::atomic<uint32_t> reference_count;  // Number of processes currently attached (always tracked)
 
     // Physical chip identification (for proper device correlation)
@@ -59,8 +60,8 @@ struct DeviceMemoryRegion {
     // chip_stats[0] = gateway (local) chip allocations
     // chip_stats[1..N] = remote chip allocations accessed through this gateway
     struct ChipStats {
-        uint32_t chip_id;    // Metal chip ID (CHIP_STATS_UNUSED = empty slot)
-        uint32_t is_remote;  // 1 if remote chip, 0 if local (gateway)
+        std::atomic<uint32_t> chip_id;    // Metal chip ID (CHIP_STATS_UNUSED = empty slot)
+        std::atomic<uint32_t> is_remote;  // 1 if remote chip, 0 if local (gateway)
         std::atomic<uint64_t> dram_allocated;
         std::atomic<uint64_t> l1_allocated;
         std::atomic<uint64_t> l1_small_allocated;

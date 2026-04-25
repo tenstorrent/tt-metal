@@ -15,11 +15,12 @@
 //
 // Compile-time args:
 //   CTA[0]    = block_size
-//   CTA[1..]  = TensorAccessorArgs for input a
+//   CTA[1]    = W                (logical width in elements)
+//   CTA[2..]  = TensorAccessorArgs for input a
 //   ...       = TensorAccessorArgs for b / residual  (may be null)
 //   ...       = TensorAccessorArgs for gamma          (may be null)
 //   ...       = TensorAccessorArgs for beta           (may be null)
-//   CTA[last] = elem_size_bytes  (TILIZE_IN only; unused for TILE path)
+//   CTA[N]    = elem_size_bytes  (TILIZE_IN only; unused for TILE path)
 //
 // Runtime args:
 //   arg[0] = src_addr
@@ -28,20 +29,18 @@
 //   arg[3] = start_tile_row    (tile-row index of first row for this core)
 //                              TILE:  previously passed as tile_offset = start_tile_row * Wt
 //                              RM:    previously passed as start_row;  start_tile_row = start_row / TILE_H
-//   arg[4] = packed_one_value  (scaler value for reduce)
+//   arg[4] = packed_one_value  (legacy; unused, scaler is generated in-kernel)
 //   arg[5] = eps               (epsilon as bit-cast uint32)
 //   arg[6] = gamma_dram_addr
 //   arg[7] = beta_dram_addr
 //   arg[8] = b_dram_addr       (residual, unused if no FUSE_PRE_ADD)
-//   arg[9] = W / W_logical     (logical width in elements)
-//   arg[10] = H_logical        (TILIZE_IN only: total valid rows; unused for TILE path)
+//   arg[9] = H_logical         (TILIZE_IN only: total valid rows; unused for TILE path)
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "ttnn/operations/normalization/kernel_util/dataflow/custom_tiles.h"
 #include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
@@ -55,11 +54,8 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
-    const uint32_t W_logical = get_arg_val<uint32_t>(9);
-    const uint32_t tile_width = get_arg_val<uint32_t>(10);
-    const uint32_t tile_height = get_arg_val<uint32_t>(11);
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(12);
+    const uint32_t H_logical = get_arg_val<uint32_t>(9);
 #endif
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
@@ -81,7 +77,8 @@ void kernel_main() {
 
     // No use_welford slot (large-tensor + Welford uses a separate kernel).
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr uint32_t W_logical = get_compile_time_arg_val(1);
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     [[maybe_unused]] constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -96,6 +93,7 @@ void kernel_main() {
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
+    experimental::CircularBuffer cb_in_rm(cb_id_in_rm);
 
     const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
 #else
@@ -121,12 +119,22 @@ void kernel_main() {
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
     {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
-        const uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W_logical % tile_width;
-        if (partial_last_tile_cols > 0) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
-                cb_in_2, scaler, partial_last_tile_cols, tile_height, tile_width);
+        constexpr uint32_t partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
+
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_in_2,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW,
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+            /*compute_uses_reduce_tile=*/true>();
+
+        if constexpr (partial_last_tile_cols > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_in_2,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+                /*compute_uses_reduce_tile=*/true>(partial_last_tile_cols);
         }
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
@@ -140,7 +148,7 @@ void kernel_main() {
         // Pass 0: Data for calculating E[X]
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #else
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
@@ -163,7 +171,7 @@ void kernel_main() {
 //   once the buffer is full while compute waits for in1 — circular wait.
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
@@ -203,7 +211,8 @@ void kernel_main() {
             // Pass 2 input for this block
 #ifdef TILIZE_IN
             layernorm_dataflow_utils::read_row_major_block_to_cb<decltype(src_a), decltype(block), TILE_W, TILE_H>(
-                cb_id_in_rm,
+                noc,
+                cb_in_rm,
                 src_a,
                 curr_tile_row,
                 num_valid_rows_pass2,

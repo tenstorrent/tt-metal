@@ -33,6 +33,7 @@ struct AllGatherDeviceOperation {
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<CoreRangeSet> sub_core_grid;
+        const bool use_l1_small_for_semaphores = false;
     };
 
     struct tensor_args_t {
@@ -99,5 +100,6 @@ ttnn::Tensor all_gather(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const std::optional<CoreRangeSet>& sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool use_l1_small_for_semaphores = false);
 }  // namespace ttnn::prim

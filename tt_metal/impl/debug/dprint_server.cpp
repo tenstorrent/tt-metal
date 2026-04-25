@@ -603,25 +603,50 @@ bool DevicePrintImpl::poll_one_core(
         return false;
     }
 
-    if (rpos > wpos) {
-        // Read until end of buffer and then from beginning until wpos
-        auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
+    while (true) {
+        bool stall = (wpos & DEVICE_PRINT_WRITE_STALL_FLAG) != 0;
 
-        // Process buffer data
-        print_buffer_data(device_id, logical_core, data);
+        // Clear stall bit to get actual wpos value
+        wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
-        // Update rpos, so that device knows it can use rest of the buffer
-        rpos = 0;
-    }
-    if (rpos < wpos) {
-        // Read until wpos
-        auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+        if (rpos > wpos) {
+            // Read until end of buffer and then from beginning until wpos
+            auto data =
+                cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
 
-        // Process buffer data
-        print_buffer_data(device_id, logical_core, data);
+            // Process buffer data
+            print_buffer_data(device_id, logical_core, data);
 
-        // Update rpos, so that device knows it can use rest of the buffer
-        rpos = wpos;
+            // Update rpos, so that device knows it can use rest of the buffer
+            rpos = 0;
+        }
+        if (rpos < wpos) {
+            // Read until wpos
+            auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+
+            // Process buffer data
+            print_buffer_data(device_id, logical_core, data);
+
+            // Update rpos, so that device knows it can use rest of the buffer
+            rpos = wpos;
+        }
+
+        // Check if writer is in stall waiting for reader and send clear buffer.
+        if (stall) {
+            // Write clear buffer.
+            rpos = DEVICE_PRINT_RESET_BUFFER_MAGIC;
+            cluster.write_core(device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
+
+            // We should probably drain while core is in stall state.
+            // Read wpos and rpos again and repeat
+            from_dev = cluster.read_core(device_id, virtual_core, buffer_address, eightbytes);
+            wpos = from_dev[0];
+            rpos = from_dev[1];
+            continue;
+        }
+
+        // We have caught up to the writer, break out of the loop and wait for more data to arrive
+        break;
     }
     cluster.write_core(device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     return true;

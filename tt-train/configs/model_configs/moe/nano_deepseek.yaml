@@ -1,0 +1,27 @@
+transformer_config:
+  model_type: "deepseek"
+  vocab_size: 256
+  embedding_dim: 512
+  num_blocks: 8
+  num_heads: 8
+  max_sequence_length: 256
+  dropout_prob: 0.0
+  # DeepSeek MLA
+  q_lora_rank: 256
+  kv_lora_rank: 128
+  qk_nope_head_dim: 64
+  qk_rope_head_dim: 32
+  v_head_dim: 64
+  theta: 10000.0
+  # DeepSeek MoE
+  n_dense_layers: 2
+  inter_dim: 1536
+  moe_inter_dim: 256
+  n_routed_experts: 8
+  n_shared_experts: 1
+  n_activated_experts: 2
+  n_expert_groups: 2
+  n_limited_groups: 1
+  score_func: "sigmoid"
+  route_scale: 2.5
+  runner_type: "default"

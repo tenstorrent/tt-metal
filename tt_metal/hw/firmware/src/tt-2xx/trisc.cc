@@ -50,7 +50,12 @@ uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_PACK)
+thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
+thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
+#else
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+#endif
 #endif
 
 namespace ckernel {

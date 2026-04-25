@@ -266,7 +266,7 @@ void kernel_main() {
 
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                         uint64_t dst_noc_addr =
-                            get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
+                            dst_accessor.get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                     }
                     dst_stick_id++;
@@ -293,7 +293,7 @@ void kernel_main() {
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
                         uint64_t dst_noc_addr =
-                            get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
+                            dst_accessor.get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim);
                         noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                     }
                     dst_stick_id++;
@@ -336,7 +336,7 @@ void kernel_main() {
                             l1_buf_offset += stick_size;
                         } else {
                             // Non-corner: send directly to neighbor's output DRAM
-                            dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                            dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
                         }
                     } else if constexpr (use_l1_intermediate) {
                         // W writer: all sticks to L1
@@ -344,7 +344,7 @@ void kernel_main() {
                             neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
                         l1_buf_offset += stick_size;
                     } else {
-                        dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                        dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id, 0, 0);
                     }
 
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
@@ -421,7 +421,7 @@ void kernel_main() {
                             for (uint32_t c = 0; c < num_sticks_to_read; c++) {
                                 cb_wait_front(cb_output_id, 1);
                                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                                uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
+                                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(base_dst + c);
                                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, 1);
@@ -432,7 +432,7 @@ void kernel_main() {
                             for (uint32_t c = 0; c < pad2_right_sticks; c++) {
                                 cb_wait_front(cb_output_id, 1);
                                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                                uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
+                                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(base_dst + c);
                                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, 1);
@@ -442,7 +442,7 @@ void kernel_main() {
                             for (uint32_t c = 0; c < pad2_left_sticks; c++) {
                                 cb_wait_front(cb_output_id, 1);
                                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                                uint64_t dst_noc_addr = get_noc_addr(right_start + c, dst_accessor);
+                                uint64_t dst_noc_addr = dst_accessor.get_noc_addr(right_start + c);
                                 noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, 1);
@@ -454,7 +454,7 @@ void kernel_main() {
                         for (uint32_t iter = 0; iter < num_sticks_to_read; iter++) {
                             cb_wait_front(cb_output_id, 1);
                             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+                            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(dst_stick_id);
                             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
                             noc_async_write_barrier();
                             cb_pop_front(cb_output_id, 1);

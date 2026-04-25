@@ -257,15 +257,13 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthSrcL1AddrOverflow = 15,
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
-    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
-    // This transient value indicates a DM is writing error metadata, host should ignore
-    DebugSanitizeWriteInProgress = 0xDEAD,
 };
 
 struct debug_assert_msg_t {
     volatile uint16_t line_num;
     volatile uint8_t tripped;
     volatile uint8_t which;
+    volatile uint32_t claim;
     volatile uint64_t hw_fault_info;
 };
 
@@ -279,9 +277,6 @@ enum debug_assert_type_t {
     DebugAssertRtaOutOfBounds = 8,
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
-    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
-    // This transient value indicates a DM is writing error metadata, host should ignore
-    DebugAssertWriteInProgress = 0xFF,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

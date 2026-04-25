@@ -140,11 +140,48 @@ template <typename CTArgs>
 class WriterSingleLink {
 public:
     void operator()(const SenderArgs& args) { impl(args); }
+    void open_connections(const SenderArgs& args, bool reset_header_pool = true) {
+        open_connections_impl(args, reset_header_pool);
+    }
 
 private:
-    void impl([[maybe_unused]] const SenderArgs& args) {
+    // This writer only sends chunk indices:
+    //   link_index, link_index + num_links, link_index + 2 * num_links, ...
+    // Count how many of those indices are still < num_chunks.
+    // If link_index is already beyond the final chunk, this writer sends nothing.
+    // Otherwise solve:
+    //   link_index + k * num_links <= num_chunks - 1
+    // which gives:
+    //   k_max = (num_chunks - 1 - link_index) / num_links
+    // and therefore count = k_max + 1.
+    static constexpr uint32_t packets_to_send_for_writer() {
+        if constexpr (CTArgs::num_chunks <= CTArgs::link_index) {
+            return 0u;
+        } else {
+            return ((CTArgs::num_chunks - 1 - CTArgs::link_index) / CTArgs::num_links) + 1u;
+        }
+    }
+
+    static constexpr bool use_posted_transport_writes = true;
+    static constexpr uint32_t max_header_ring_size = 2;
+    static constexpr uint32_t packets_to_send = packets_to_send_for_writer();
+    // A single packet never reuses a header, so the second header only pays setup cost with no flush savings.
+    static constexpr uint32_t header_ring_size = packets_to_send <= 1u ? 1u : max_header_ring_size;
+
+    static constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+    static constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
+
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        if constexpr (CTArgs::link_index >= CTArgs::num_links) {
+    uint64_t dst_noc_base = 0;
+    uint64_t remote_sem_noc = 0;
+    uint64_t local_ready_noc_addr = 0;
+    tt::tt_fabric::WorkerToFabricEdmSender connection;
+    std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
+#endif
+
+    void open_connections_impl([[maybe_unused]] const SenderArgs& args, [[maybe_unused]] bool reset_header_pool) {
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        if constexpr (CTArgs::link_index >= CTArgs::num_links || packets_to_send == 0) {
             return;
         }
 
@@ -153,7 +190,6 @@ private:
         const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t link_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
 
-        uint64_t local_ready_noc_addr = 0;
         if constexpr (CTArgs::signal_local_ready) {
             const uint32_t local_ready_dest_noc_x = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t local_ready_dest_noc_y = get_arg_val<uint32_t>(arg_idx++);
@@ -162,17 +198,31 @@ private:
                 safe_get_noc_addr(local_ready_dest_noc_x, local_ready_dest_noc_y, local_ready_sem_bank, 0);
         }
 
-        auto connection =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+        connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         connection.open_start();
+        if (reset_header_pool) {
+            PacketHeaderPool::reset();
+        }
 
-        PacketHeaderPool::reset();
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
-        fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
+        dst_noc_base = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
+        remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
+        const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
+        for (uint32_t i = 0; i < header_ring_size; ++i) {
+            headers[i] = PacketHeaderPool::allocate_header();
+            fabric_set_single_hop_unicast_route_from_direction(
+                headers[i], connection_direction, dst_chip_id, dst_mesh_id);
+            headers[i]->to_noc_fused_unicast_write_atomic_inc(
+                {dst_noc_base, remote_sem_noc, 1, false}, regular_payload_bytes);
+        }
+        connection.open_finish();
+#endif
+    }
 
-        const uint64_t dst_noc_base =
-            safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, args.intermediate_buffer_address, 0);
-        const uint64_t remote_sem_noc = safe_get_noc_addr(args.dest_noc_x, args.dest_noc_y, link_sem_bank_addr, 0);
+    void impl([[maybe_unused]] const SenderArgs& args) {
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        if constexpr (CTArgs::link_index >= CTArgs::num_links || packets_to_send == 0) {
+            return;
+        }
 
         // Ensure local data is available in the CB before signaling or sending.
         if constexpr (CTArgs::skip_local_push) {
@@ -190,38 +240,80 @@ private:
         // can safely NOC-read from the sender's L1.
         if constexpr (CTArgs::signal_local_ready) {
             noc_semaphore_inc(local_ready_noc_addr, 1);
-            noc_async_atomic_barrier();
         }
 
         const uint32_t src_base_addr = get_read_ptr(CTArgs::local_data_cb_id);
 
-        connection.open_finish();
+        connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
-        constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
-        uint32_t offset = CTArgs::link_index * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        // Initialize the current chunk offset in bytes to the first chunk this writer is responsible for.
+        uint32_t current_chunk_offset_bytes = CTArgs::link_index * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
+        uint32_t current_header_idx = 0;
 
-        constexpr uint32_t regular_payload_bytes = CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
-        constexpr uint32_t last_payload_bytes = CTArgs::last_chunk_tiles * CTArgs::page_size_bytes;
+        // Amortize downstream free-slot queries across back-to-back payload sends.
+        uint32_t cached_free_write_slots = 0;
 
-        auto send_payload = [&](uint32_t chunk_offset, uint32_t payload_bytes) __attribute__((always_inline)) {
-            header->to_noc_fused_unicast_write_atomic_inc(
-                {dst_noc_base + chunk_offset, remote_sem_noc, 1, false}, payload_bytes);
-            connection.wait_for_empty_write_slot();
-            connection.send_payload_without_header_non_blocking_from_address(
-                src_base_addr + chunk_offset, payload_bytes);
-            connection.send_payload_flush_non_blocking_from_address(
-                reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+        auto flush_transport = [&]() __attribute__((always_inline)) {
+            if constexpr (use_posted_transport_writes) {
+                noc_async_posted_writes_flushed();
+            } else {
+                noc_async_writes_flushed();
+            }
         };
 
+        auto refill_free_write_slots = [&]() __attribute__((always_inline)) {
+            do {
+                cached_free_write_slots = connection.get_num_free_write_slots();
+            } while (cached_free_write_slots == 0);
+        };
+
+        auto send_regular_payload = [&](uint32_t chunk_offset) __attribute__((always_inline)) {
+            auto* header = headers[current_header_idx++];
+            header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
+
+            connection.send_current_slot_stateful_non_blocking<use_posted_transport_writes>(
+                src_base_addr + chunk_offset, regular_payload_bytes, reinterpret_cast<uint32_t>(header));
+
+            if (current_header_idx == header_ring_size) {
+                current_header_idx = 0;
+                flush_transport();
+            }
+        };
+
+        auto send_last_payload = [&](uint32_t chunk_offset) __attribute__((always_inline)) {
+            auto* header = headers[current_header_idx++];
+            if constexpr (CTArgs::last_chunk_tiles != CTArgs::tiles_per_chunk) {
+                header->set_payload_size_bytes(last_payload_bytes);
+            }
+            header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc_base + chunk_offset);
+
+            connection.send_current_slot_stateful_non_blocking<use_posted_transport_writes>(
+                src_base_addr + chunk_offset, last_payload_bytes, reinterpret_cast<uint32_t>(header));
+        };
+
+        constexpr uint32_t stride_bytes = CTArgs::num_links * CTArgs::tiles_per_chunk * CTArgs::page_size_bytes;
         uint32_t chunk_idx = CTArgs::link_index;
-        for (; chunk_idx < CTArgs::num_chunks - 1; chunk_idx += CTArgs::num_links) {
-            send_payload(offset, regular_payload_bytes);
-            offset += stride_bytes;
-            noc_async_writes_flushed();
+        while (chunk_idx < CTArgs::num_chunks - 1) {
+            refill_free_write_slots();
+            while (chunk_idx < CTArgs::num_chunks - 1 && cached_free_write_slots > 0) {
+                send_regular_payload(current_chunk_offset_bytes);
+                cached_free_write_slots--;
+                current_chunk_offset_bytes += stride_bytes;
+                chunk_idx += CTArgs::num_links;
+            }
         }
 
         if (chunk_idx < CTArgs::num_chunks) {
-            send_payload(offset, last_payload_bytes);
+            if (cached_free_write_slots == 0) {
+                refill_free_write_slots();
+            }
+            send_last_payload(current_chunk_offset_bytes);
+        }
+
+        if constexpr (use_posted_transport_writes) {
+            // send_last_payload intentionally skips the wrap-time flush since the last packet never needs to
+            // make a header reusable again. Drain that remaining posted tail here before teardown.
+            flush_transport();
         }
 
         connection.close_start();

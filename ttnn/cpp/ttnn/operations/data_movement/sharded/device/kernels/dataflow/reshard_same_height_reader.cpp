@@ -18,7 +18,7 @@ void kernel_main() {
     uint32_t args_idx = 0;
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
 
-    uint32_t base_write_addr = get_read_ptr(shard_cb_id);
+    uint32_t base_write_addr = get_write_ptr(shard_cb_id);
 
     for (uint32_t i = 0; i < num_segments; ++i) {
         uint32_t read_size = args[args_idx++];

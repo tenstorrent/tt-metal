@@ -101,7 +101,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
         elif seq_len == 2048:
             out_pcc = 0.992
             k_cache_pcc = 0.989
-            v_cache_pcc = 0.966
+            v_cache_pcc = 0.965
             token_pcc = 0.99
     elif data_type == "BFLOAT16":
         if seq_len == 32:

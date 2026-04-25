@@ -16,11 +16,31 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const ttnn::Tensor& weights = tensor_args.weights;
+    const auto& indices = tensor_args.indices;
+    const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
 
     TT_FATAL(combine_output.storage_type() == StorageType::DEVICE, "combine_output must be on device");
     TT_FATAL(combine_output.buffer() != nullptr, "combine_output must have a buffer");
     TT_FATAL(weights.storage_type() == StorageType::DEVICE, "weights must be on device");
     TT_FATAL(weights.buffer() != nullptr, "weights must have a buffer");
+
+    // indices and expert_dispatch_table must be supplied together or not at all:
+    // both provided  -> DeepSeek dispatch-table-based expert skip
+    // both omitted   -> GPT-OSS weight==0 skip
+    TT_FATAL(
+        indices.has_value() == expert_dispatch_table.has_value(),
+        "indices and expert_dispatch_table must be provided together or omitted together; "
+        "got indices={}, expert_dispatch_table={}",
+        indices.has_value(),
+        expert_dispatch_table.has_value());
+
+    if (indices.has_value()) {
+        TT_FATAL(indices->storage_type() == StorageType::DEVICE, "indices must be on device");
+        TT_FATAL(indices->buffer() != nullptr, "indices must have a buffer");
+        TT_FATAL(
+            expert_dispatch_table->storage_type() == StorageType::DEVICE, "expert_dispatch_table must be on device");
+        TT_FATAL(expert_dispatch_table->buffer() != nullptr, "expert_dispatch_table must have a buffer");
+    }
 
     const auto combine_rank = combine_output.padded_shape().rank();
     TT_FATAL(
@@ -59,11 +79,20 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
 
     const ttnn::Tensor& combine_output = tensor_args.combine_output;
     const ttnn::Tensor& weights = tensor_args.weights;
+    const auto& indices = tensor_args.indices;
+    const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
 
     TT_FATAL(combine_output.layout() == ttnn::Layout::ROW_MAJOR, "combine_output must be ROW_MAJOR");
     TT_FATAL(combine_output.dtype() == DataType::BFLOAT16, "combine_output must be bfloat16");
     TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
+
+    if (indices.has_value()) {
+        TT_FATAL(indices->layout() == ttnn::Layout::ROW_MAJOR, "indices must be ROW_MAJOR");
+        TT_FATAL(indices->dtype() == DataType::INT32, "indices must be int32");
+        TT_FATAL(expert_dispatch_table->layout() == ttnn::Layout::ROW_MAJOR, "expert_dispatch_table must be ROW_MAJOR");
+        TT_FATAL(expert_dispatch_table->dtype() == DataType::INT32, "expert_dispatch_table must be int32");
+    }
 }
 
 ttnn::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
@@ -104,6 +133,8 @@ namespace ttnn::prim {
 ttnn::Tensor post_combine_reduce(
     const ttnn::Tensor& combine_output,
     const ttnn::Tensor& weights,
+    const std::optional<ttnn::Tensor>& indices,
+    const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
@@ -111,7 +142,7 @@ ttnn::Tensor post_combine_reduce(
 
     return ttnn::device_operation::launch<OperationType>(
         pcr::PostCombineReduceParams{expert_dim, output_memory_config},
-        pcr::PostCombineReduceInputs{combine_output, weights});
+        pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table});
 }
 
 }  // namespace ttnn::prim

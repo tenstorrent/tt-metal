@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
@@ -24,6 +25,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<3>();
 
     const auto s0 = TensorAccessor(dst_args, input_addr);
+    experimental::CircularBuffer cb_input(input_cb_id);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;
@@ -46,12 +48,12 @@ void kernel_main() {
         }
 
         if (within_input_region) {
-            cb_reserve_back(input_cb_id, 1);
-            uint32_t l1_write_addr = get_write_ptr(input_cb_id);
+            cb_input.reserve_back(1);
+            uint32_t l1_write_addr = cb_input.get_write_ptr();
             uint64_t src_noc_addr = s0.get_noc_addr(input_page_offset);
             noc_async_read(src_noc_addr, l1_write_addr, page_size);
             noc_async_read_barrier();
-            cb_push_back(input_cb_id, 1);
+            cb_input.push_back(1);
             input_page_offset++;
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
         }

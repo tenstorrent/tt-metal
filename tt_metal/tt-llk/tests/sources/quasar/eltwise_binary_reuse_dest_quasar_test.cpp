@@ -117,8 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Binary with reuse_dest: SrcA = DEST (from datacopy), SrcB = unpacked B. Compute op(SrcA, SrcB) -> DEST.
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(
-        ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
 
     for (int block = 0; block < num_blocks; block++)
     {
@@ -127,7 +126,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (int tile = 0; tile < tiles_in_block; tile++)
             {
                 const int global_tile_idx = block * tiles_in_block + tile;
-                _llk_math_eltwise_binary_<REUSE_DEST_TYPE>(global_tile_idx, params.num_faces);
+                _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, REUSE_DEST_TYPE>(
+                    global_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE, is_fp32_dest_acc_en /*clear_fp32_mode*/);
             }
         }
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();

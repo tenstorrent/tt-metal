@@ -23,8 +23,6 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     auto* src0_buffer = input_a.buffer();
     auto* src1_buffer = input_b.buffer();
     auto* dst_buffer = output.buffer();
-    float scaler = 1.0f;
-
     Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
@@ -63,7 +61,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
             {CBIndex::c_25, im1_t},
         });
 
-    std::vector<uint32_t> reader_compile_time_args = {*reinterpret_cast<uint32_t*>(&scaler)};
+    std::vector<uint32_t> reader_compile_time_args = {};
     TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
 

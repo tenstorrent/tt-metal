@@ -5,8 +5,8 @@
 #include "api/numeric/bfloat16.h"
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
@@ -45,12 +45,13 @@ void kernel_main() {
     constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(args_base + 2);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(args_base + 3);
+    constexpr uint32_t scaler_max_cb_id = get_compile_time_arg_val(args_base + 2);
+    constexpr uint32_t scaler_sum_cb_id = get_compile_time_arg_val(args_base + 3);
     constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(args_base + 4);
     constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(args_base + 5);
     constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(args_base + 6);
     constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(args_base + 7);
+    // args_base + 8: out_stick_size (passed from factory, unused in kernel)
     constexpr uint32_t rand_tile_index = get_compile_time_arg_val(args_base + 9);
     constexpr uint32_t cb_id_k = get_compile_time_arg_val(args_base + 10);
     constexpr uint32_t cb_id_p = get_compile_time_arg_val(args_base + 11);
@@ -62,8 +63,10 @@ void kernel_main() {
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scaler_max_cb_id, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<scaler_sum_cb_id, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
     const auto addrg_k = TensorAccessor(k_args, k_addr);

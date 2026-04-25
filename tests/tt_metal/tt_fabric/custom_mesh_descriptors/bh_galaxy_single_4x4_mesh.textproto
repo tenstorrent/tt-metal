@@ -1,0 +1,21 @@
+# Black Hole: one logical 4×4 mesh (16 devices) — "big mesh" overlay for sub-context prefill.
+# Sub-context decode uses bh_galaxy_dual_2x4_intermesh.textproto (two 2×4 + intermesh).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

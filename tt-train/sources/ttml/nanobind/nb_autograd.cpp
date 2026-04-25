@@ -239,11 +239,11 @@ void py_module(nb::module_& m) {
 
                 if (!mesh_shape_obj.is_none()) {
                     if (nb::isinstance<nb::list>(mesh_shape_obj) || nb::isinstance<nb::tuple>(mesh_shape_obj)) {
-                        const auto dims = nb::cast<std::vector<int>>(mesh_shape_obj);
-                        if (dims.size() != 2) {
-                            throw std::runtime_error("mesh_shape must be a list/tuple of 2 integers: [rows, cols]");
+                        const auto dims = nb::cast<std::vector<uint32_t>>(mesh_shape_obj);
+                        if (dims.empty()) {
+                            throw std::runtime_error("mesh_shape must be a non-empty list/tuple of integers");
                         }
-                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims[0], dims[1]);
+                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims);
                     } else {
                         mesh_shape = nb::cast<tt::tt_metal::distributed::MeshShape>(mesh_shape_obj);
                     }

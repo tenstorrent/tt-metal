@@ -37,6 +37,11 @@ class TtFfn(TtSharedExpert):
     """
 
     @staticmethod
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
+        """Check if dense FFN cache is complete (delegates to TtSharedExpert)."""
+        return TtSharedExpert.check_cache_complete(cache_path, cache_name_prefix)
+
+    @staticmethod
     def build_ttnn_cache(
         torch_weights: dict,
         mesh_device: ttnn.MeshDevice,

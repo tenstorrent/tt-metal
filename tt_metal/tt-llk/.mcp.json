@@ -1,0 +1,16 @@
+{
+    "mcpServers": {
+        "atlassian": {
+            "type": "http",
+            "url": "https://mcp.atlassian.com/v1/mcp"
+        },
+        "deepwiki": {
+            "type": "http",
+            "url": "https://mcp.deepwiki.com/mcp"
+        },
+        "glean_default": {
+            "type": "http",
+            "url": "https://tenstorrent-be.glean.com/mcp/default"
+        }
+    }
+}

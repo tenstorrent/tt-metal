@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 using namespace tt::data_movement::common;
 void kernel_main() {
@@ -24,13 +25,18 @@ void kernel_main() {
     constexpr uint32_t patch_size = stride_h * stride_w;
     const auto s_out = TensorAccessor(dst_args, dst_addr);
     uint32_t dst_index = get_arg_val<uint32_t>(1);
-    uint32_t intermed_l1_scratch = get_write_ptr(cb_id_in1);
+
+    experimental::Noc noc;
+    experimental::CB cb_in0(cb_id_in0);
+    experimental::CB cb_in1(cb_id_in1);
+
+    uint32_t intermed_l1_scratch = cb_in1.get_write_ptr();
     // Datatypes will be multiple of 2 bytes only so it is safe to use uint16_t pointer
     volatile tt_l1_ptr uint16_t* patch_data = (volatile uint16_t*)intermed_l1_scratch;
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {
         uint32_t idx = 0;
-        cb_wait_front(cb_id_in0, 1);
-        uint32_t l1_addr = get_read_ptr(cb_id_in0);
+        cb_in0.wait_front(1);
+        uint32_t l1_addr = cb_in0.get_read_ptr();
         if constexpr (!is_l1_aligned) {
             for (uint32_t i = 0; i < patch_size; i++) {
                 for (uint32_t j = 0; j < (stick_nbytes / 2); j++) {
@@ -39,15 +45,20 @@ void kernel_main() {
                 l1_addr += aligned_stick_nbytes_dram;
             }
         }
-        uint64_t dst_noc_addr = get_noc_addr(dst_index, s_out);
         if constexpr (!is_l1_aligned) {
-            noc_async_write((uint32_t)patch_data, dst_noc_addr, stick_nbytes * patch_size);
+            // Scratch buffer (cb_in1) is populated at its WRITE_PTR; no push_back has advanced it yet.
+            noc.async_write(
+                experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_in1),
+                s_out,
+                stick_nbytes * patch_size,
+                {},
+                {.page_id = dst_index});
         } else {
             // If L1 aligned, write directly from the circular buffer
-            noc_async_write(l1_addr, dst_noc_addr, stick_nbytes * patch_size);
+            noc.async_write(cb_in0, s_out, stick_nbytes * patch_size, {}, {.page_id = dst_index});
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_in0, 1);
+        noc.async_write_barrier();
+        cb_in0.pop_front(1);
         dst_index++;
     }
 }

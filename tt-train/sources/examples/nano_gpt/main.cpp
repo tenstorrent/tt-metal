@@ -691,7 +691,7 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    fmt::print("Total parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer =
         [&model, &optimizer_node, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
@@ -833,13 +833,22 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 ttml::autograd::ctx().get_profiler().read_results(device, "optimizer_step_done");
                 auto global_step = optimizer->get_steps();
+                auto average_loss = gradient_accumulator_helper.average_loss();
+                loss_meter.update(average_loss);
+
+                auto end_timer = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
                 if (needs_to_call_loss) {
                     if (multihost_config.enable_mpi) {
                         fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
                     }
-                    fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
+                    fmt::print(
+                        "Step: {}, Loss: {}, Time: {} ms, cache entries: {}\n",
+                        global_step,
+                        average_loss,
+                        (double)duration / 1000,
+                        device->num_program_cache_entries());
                 }
-                loss_meter.update(gradient_accumulator_helper.average_loss());
 
                 if (!multihost_config.enable_mpi) {
                     // save training state if it's not 3 tier training
@@ -851,15 +860,6 @@ int main(int argc, char **argv) {
 
                 ttml::autograd::ctx().get_profiler().read_results(
                     device, fmt::format("iteration_{}", global_step), /* dump_results */ true);
-
-                auto end_timer = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-                if (needs_to_call_loss) {
-                    fmt::print(
-                        "Full step time {} ms, cache entries: {}\n",
-                        (double)duration / 1000,
-                        device->num_program_cache_entries());
-                }
 
                 if (global_step >= training_config.max_steps) {
                     break;

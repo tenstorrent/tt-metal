@@ -64,17 +64,15 @@ class LMHead1D(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = (
-            get_dequantized_tensor(state_dict, "weight").permute(1, 0).contiguous()
-        )  # In torch the weights are in (out_features, in_features) format
-        assert weight_tensor.shape == (hidden_dim, vocab_size)
+        weight_tensor = get_dequantized_tensor(state_dict, "weight").unsqueeze(0).unsqueeze(0).contiguous()
+        assert weight_tensor.shape == (1, 1, vocab_size, hidden_dim)
 
         return {
             "linear": {
                 "input_tensor_b": shard_and_save(
                     output_path / "linear.input_tensor_b",
                     weight_tensor,
-                    shard_dims=(None, -1),
+                    shard_dims=(None, -2),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
@@ -154,6 +152,7 @@ class LMHead1D(AbstractModule):
         return {
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 program_config=program_config,
@@ -175,6 +174,7 @@ class LMHead1D(AbstractModule):
         return {
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                transpose_b=True,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),

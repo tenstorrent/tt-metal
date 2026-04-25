@@ -98,6 +98,7 @@ def test_bert_linear_batch7(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -273,8 +274,13 @@ def run_bert_linear_batch4(
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b)
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
-
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config_L1,
+    )
     if in0_sharded:
         in0_t = ttnn.interleaved_to_sharded(
             in0_t,
@@ -397,6 +403,7 @@ def test_bert_linear_batch4(
     fp32_acc_mode,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     for i in range(1):
         logger.info(i)
         if not not_fit_l1(M, K, N, fp32_acc_mode):
@@ -468,6 +475,7 @@ def test_bert_linear_batch4_fp32_input_output(
     activation,
     function_level_defaults,
 ):
+    torch.manual_seed(0)
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
@@ -515,8 +523,13 @@ def test_bert_linear_batch4_fp32_input_output(
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.float32)
 
     output_mem_config = interleaved_mem_config_DRAM
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.float32)[0]
-
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config_L1,
+    )
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,

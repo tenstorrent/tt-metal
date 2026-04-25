@@ -45,6 +45,8 @@
 #include "../../../unified_kernels/all_reduce.hpp"
 #include "../../../unified_kernels/all_gather.hpp"
 
+#include "../../../metadata/metadata.hpp"
+
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
 struct Core {
@@ -113,6 +115,16 @@ void kernel_main() {
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+
+    deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
+        .sender = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
+                0,
+                0,
+            },
+    };
 
     // RMSNorm reader runtime args
     deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
@@ -193,7 +205,7 @@ void kernel_main() {
         .cos_sin_cb = get_named_compile_time_arg_val("qkv_rope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
+        .global_pos = 0,
     };
 
     // NCRISC: All CreateQHeads data movement (sender on qnope/qrope cores, receiver on sdpa input cores)
@@ -295,12 +307,13 @@ void kernel_main() {
         .cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
+        .global_pos = 0,
     };
 
     deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 0),
         .local_cur_pos = 0,
+        .slot_id = 0,
         .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
         .kv_cache_intermed_sync_cb = get_named_compile_time_arg_val("kv_cache_intermed_sync_cb"),
         .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
@@ -362,7 +375,8 @@ void kernel_main() {
         per_core_rta_arg_idx += num_tree_reduction_steps * 4;
 
         flash_mla_args = {
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .local_cur_pos = 0,  // set via flash_mla.set_pos_and_slot() below
+            .slot_id = 0,        // set via flash_mla.set_pos_and_slot() below
             .cur_batch = cur_batch,
             .core_num_in_reduce = core_num_in_reduce,
             .is_output_core = is_output_core,
@@ -404,7 +418,8 @@ void kernel_main() {
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::WriterCTArgs<
         get_named_compile_time_arg_val("k_page_size"),
         get_named_compile_time_arg_val("vDHt"),
-        get_named_compile_time_arg_val("mla_out_o_cb")>;
+        get_named_compile_time_arg_val("mla_out_o_cb"),
+        get_named_compile_time_arg_val("mla_use_alt_mcast_vc")>;
 
     // Matmul4 CTArgs
     using Matmul4CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -526,7 +541,7 @@ void kernel_main() {
             .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
         };
         if constexpr (SdpaReduceWorkerCTArgs::position_enabled) {
-            sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+            sdpa_reduce_worker_args.global_pos = 0;
             sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
             sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -653,6 +668,8 @@ void kernel_main() {
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
 
+    constexpr uint32_t metadata_addr_common_rta_idx = 1;
+
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
@@ -666,6 +683,24 @@ void kernel_main() {
 
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
+
+    deepseek_b1_ops::Mcast::DMArgs mcast_metadata_args{
+        .sender =
+            {
+                get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+                get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+                get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
+                get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
+                sizeof(deepseek_b1_ops::DeepseekMetadata),
+                get_named_compile_time_arg_val("rmsnorm_input_cb"),
+                get_named_compile_time_arg_val("rmsnorm_num_tiles"),
+                get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
+                get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
+            },
+        .receiver = {},
+    };
 
     // Mcast CB indices from named compile-time args
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
@@ -765,7 +800,8 @@ void kernel_main() {
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
-        .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
+        .local_cur_pos = 0,  // set via kv_cache_update.set_pos_and_slot() below
+        .slot_id = 0,        // set via kv_cache_update.set_pos_and_slot() below
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
         .knope_core_index = get_named_compile_time_arg_val("knope_core_index"),
@@ -775,7 +811,8 @@ void kernel_main() {
     if constexpr (Core::is_mla_core) {
         flash_mla_args = {
             .k_addr = get_common_arg_val<uint32_t>(0),
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .local_cur_pos = 0,  // set via flash_mla.set_pos_and_slot() below
+            .slot_id = 0,        // set via flash_mla.set_pos_and_slot() below
             .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .is_mcast_sender = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -1029,6 +1066,8 @@ void kernel_main() {
     // Mcast compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
+    deepseek_b1_ops::Mcast::ComputeArgs mcast_metadata_args{};
+
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
     const auto matmul_half_info = unified_kernels::get_split_half_core_info<true>(
         get_named_compile_time_arg_val("matmul_grid_start_x"),
@@ -1189,9 +1228,10 @@ void kernel_main() {
         per_core_rta_arg_idx += num_tree_reduction_steps * 2;
 
         flash_mla_args = {
-            .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
+            .local_cur_pos = 0,  // set via flash_mla.set_pos_and_slot() below
             .do_reduce = do_reduce,
             .do_output = do_output,
+            .slot_id = 0,  // set via flash_mla.set_pos_and_slot() below
             .cur_batch = cur_batch,
             .core_num_in_reduce = core_num_in_reduce,
             .is_sender_after_reduce = is_sender_after_reduce,
@@ -1273,7 +1313,7 @@ void kernel_main() {
         1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
     deepseek_b1_ops::SdpaReduceWorker::ComputeArgs sdpa_reduce_worker_args;
     if constexpr (Core::is_sdpa_worker_core) {
-        sdpa_reduce_worker_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.global_pos = 0;
         sdpa_reduce_worker_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -1303,11 +1343,11 @@ void kernel_main() {
     auto setup_all_sharded_buffers = [&]() __attribute__((always_inline)) {};
 
 #if defined(COMPILE_FOR_BRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx);
 #elif defined(COMPILE_FOR_NCRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 1);
+    uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(bcast_writer_common_rt_count + 1);
 #elif defined(COMPILE_FOR_TRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(8);
+    uint32_t cur_metadata_addr = get_common_arg_val<uint32_t>(8);
 #endif
 
     // ====================================================================
@@ -1325,6 +1365,13 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST_INIT");
         mcast.init(mcast_args);
     }
+
+    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_full_mcast_grid_core, false, false>
+        mcast_metadata;
+
+    volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+        reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(cur_metadata_addr);
+    using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
 
     auto mla_body = [&]() __attribute__((always_inline)) {
         // ========================================================================
@@ -1348,27 +1395,26 @@ void kernel_main() {
             cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
         }
 #endif
+        // This first mcast is also used to synchronize downstream ccls, so must always run.
+        {
+            DeviceZoneScopedN("METADATA_BROADCAST");
+            mcast_metadata(mcast_metadata_args);
+        }
 
-        // SP position handling.
-        // Read the global position from L1 and decide whether this device has
-        // work / owns the current KV-cache slot. The normalized (device-local)
-        // local_cur_pos is used for kv cache update and flash mla.
-        volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
-        invalidate_l1_cache();
-        uint32_t cur_pos = pos_ptr[0];
+        if constexpr (!Core::is_input_core) {
+            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
+            unified_kernels::sync_riscs_enter(ccl_sync_sem);
+            unified_kernels::sync_riscs_exit(ccl_sync_sem);
+        }
 
-        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
-            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
-
-        using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
-        // The first mcast is also used to synchronize downstream ccls, so must always run.
-        // Can revisit this later
+        // TODO: These can be moved into the skip_attention block below now that we have the metadata mcast.
         // ====================================================================
         // Input core: RMSNorm + Mcast send
         // ====================================================================
         {
             DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
             rmsnorm(rmsnorm_args);
         }
 
@@ -1377,21 +1423,22 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
-        if constexpr (!Core::is_input_core) {
-#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_input_core) {
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            // The wait below is for safety if this runs on the same core as another doing the same sync
-            // If that is the case we don't actually need to do another sync
-            noc_semaphore_wait(ccl_sync_sem, INVALID);
-            noc_semaphore_set(ccl_sync_sem, VALID);
-#elif defined(COMPILE_FOR_BRISC)
-            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
-            noc_semaphore_wait(ccl_sync_sem, VALID);
-            noc_semaphore_set(ccl_sync_sem, INVALID);
-#endif
+            unified_kernels::sync_riscs_enter(ccl_sync_sem);
+            unified_kernels::sync_riscs_exit(ccl_sync_sem);
         }
+
+        // SP position handling.
+        // Read the global position from L1 and decide whether this device has
+        // work / owns the current KV-cache slot. The normalized (device-local)
+        // local_cur_pos is used for kv cache update and flash mla.
+        invalidate_l1_cache();
+        uint32_t cur_pos = metadata_ptr->position_id;
+
+        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
+            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
         if (!skip_attention) {
             // ====================================================================
@@ -1461,6 +1508,7 @@ void kernel_main() {
                 {
                     DeviceZoneScopedN("QROPE");
                     deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+                    rope.set_global_pos(qrope_args, cur_pos);
                     rope(qrope_args);
                 }
 
@@ -1502,7 +1550,7 @@ void kernel_main() {
             // ====================================================================
             deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_knope_core, Core::is_krope_core>
                 kv_cache_update;
-            kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
+            kv_cache_update.set_pos_and_slot(kv_cache_update_args, local_cur_pos, metadata_ptr->slot_id);
             if (!skip_kv_cache_update) {
                 DeviceZoneScopedN("KV CACHE");
                 // ================================================================
@@ -1541,6 +1589,7 @@ void kernel_main() {
                 {
                     DeviceZoneScopedN("K_ROPE");
                     deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
+                    krope.set_global_pos(krope_args, cur_pos);
                     krope(krope_args);
                 }
 
@@ -1564,7 +1613,7 @@ void kernel_main() {
             {
                 DeviceZoneScopedN("FLASH_MLA");
                 FlashMLAOp flash_mla;
-                flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
+                flash_mla.set_pos_and_slot(flash_mla_args, local_cur_pos, metadata_ptr->slot_id);
                 flash_mla(flash_mla_args);
             }
         } else {
@@ -1584,6 +1633,7 @@ void kernel_main() {
             DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
                 deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
+                sdpa_reduce_worker.set_global_pos(sdpa_reduce_worker_args, cur_pos);
                 sdpa_reduce_worker(sdpa_reduce_worker_args);
             }
             if constexpr (Core::is_sdpa_forwarder_core) {
@@ -1659,8 +1709,11 @@ void kernel_main() {
         // ========================================================================
         // GatherReduce3: 112 matmul5 cores (2x56 halves) -> sender core (11, 9)
         // Reduces [1, 32] * 56 from each half -> [1, 1792] per device
+        // Non-sender cores run it here; sender-core RISCs run it inside the
+        // CCL block below, after connections are opened (so the fabric
+        // handshake overlaps the sync-sem wait).
         // ========================================================================
-        {
+        if constexpr (!Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("GATHER3");
             deepseek_b1_ops::GatherReduce::
                 Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, Core::is_allreduce_sender_core, true, true>
@@ -1678,16 +1731,33 @@ void kernel_main() {
         if constexpr (Core::is_allreduce_sender_core) {
             DeviceZoneScopedN("CCL_SENDER_WRITER");
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+            PacketHeaderPool::reset();
             deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> ccl_writer;
+            ccl_writer.open_connections(ccl_sender_args, false);
+            deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
+            volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
+            noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores"));
+            allgather_sender.open_connections(allgather_transport_args, false);
+#endif
+            // gather3 must run on ALL RISCs (TRISC does the reduce that feeds local_data_cb).
+            {
+                DeviceZoneScopedN("GATHER3");
+                deepseek_b1_ops::GatherReduce::Op<
+                    Core::is_matmul5_core,
+                    Core::is_allreduce_sender_core,
+                    Core::is_allreduce_sender_core,
+                    true,
+                    true>
+                    gather3;
+                gather3(gather3_args);
+            }
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             ccl_writer(ccl_sender_args);
 
             // All-Gather: transport sender (BRISC=fwd, NCRISC=bwd)
             {
                 DeviceZoneScopedN("ALLGATHER_TRANSPORT");
-                deepseek_b1_ops::AllGather::TransportSender<AllGatherTransportCT> allgather_sender;
-                volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    get_named_compile_time_arg_val("ccl_sync_semaphore2_addr"));
-                noc_semaphore_wait(ccl_sync_sem, 2 * get_named_compile_time_arg_val("sdpa_fwd_num_cores"));
                 allgather_sender(allgather_transport_args);
                 // R2 active waits for the other risc to finish, so it's safe to reset the semaphore here.
                 if constexpr (AllGatherTransportCT::r2_active) {

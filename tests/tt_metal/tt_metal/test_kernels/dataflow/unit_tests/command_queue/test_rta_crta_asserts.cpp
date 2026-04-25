@@ -17,15 +17,7 @@
 #endif
 
 #ifdef ARCH_QUASAR
-// TODO: Remove this once PR #38124 is merged
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
-    asm volatile("fence" ::: "memory");
-    volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-    *flush_reg = static_cast<uint64_t>(addr);
-    asm volatile("fence" ::: "memory");
-}
-
+#include "risc_common.h"
 thread_local extern uint32_t rta_count;
 thread_local extern uint32_t crta_count;
 #else

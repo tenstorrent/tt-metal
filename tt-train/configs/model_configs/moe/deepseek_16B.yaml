@@ -1,0 +1,37 @@
+# DeepSeek-V2-Lite 16B (15.7B total, 2.8B active per token)
+# Reference: https://huggingface.co/deepseek-ai/deepseek-v2-lite
+#
+# This config is for reference only — the model does not fit in single-chip
+# memory and requires multi-device parallelism for training.
+#
+# Note: The HF config uses standard GQA (num_key_value_heads=16), but the
+# DeepSeek-V3 repo re-expresses this model with MLA parameters
+# (kv_lora_rank=512). Both are mathematically equivalent representations.
+transformer_config:
+  model_type: "deepseek"
+  vocab_size: 102400
+  embedding_dim: 2048
+  num_blocks: 28
+  num_heads: 16
+  max_sequence_length: 4096
+  dropout_prob: 0.0
+  # DeepSeek MLA (q_lora_rank=0 means direct Q projection, no LoRA bottleneck)
+  q_lora_rank: 0
+  kv_lora_rank: 512
+  qk_nope_head_dim: 128
+  qk_rope_head_dim: 64
+  v_head_dim: 128
+  theta: 10000.0
+  # DeepSeek MoE (no group routing — n_expert_groups=1)
+  # first_k_dense_replace=1 in HF config means first 1 layer is dense
+  n_dense_layers: 1
+  inter_dim: 10944
+  moe_inter_dim: 1408
+  n_routed_experts: 64
+  n_shared_experts: 2
+  n_activated_experts: 6
+  n_expert_groups: 1
+  n_limited_groups: 1
+  score_func: "softmax"
+  route_scale: 1.0
+  runner_type: "memory_efficient"

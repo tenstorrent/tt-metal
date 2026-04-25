@@ -9,6 +9,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -70,6 +73,7 @@ void kernel_main() {
 
     // For synchronization with tilize cores
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") != 0;
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -92,6 +96,9 @@ void kernel_main() {
     constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    // c_8 is unused on matmul cores when bias is off (CB not allocated); when has_bias, tilize uses c_8 only on
+    // tilize cores. Only referenced in if constexpr(has_bias) branches below.
+    constexpr auto cb_c2c_ones_tile = tt::CBIndex::c_8;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
@@ -112,20 +119,23 @@ void kernel_main() {
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+
+    // When has_bias, dm0 reads (num_w0_w1_tiles_h + 1) tiles per column (weights + 1 bias row).
+    // Block counts must match what dm0 pushes into the CB.
+    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? (num_w0_w1_tiles_h + 1) : num_w0_w1_tiles_h;
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B /
-        2;  // 32 * 3 = 96
-            // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
+        4 * ((w0_w1_dram_tiles_h + w0_w1_tiles_per_txn - 1) / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;
+    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B / 2;
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
-    constexpr uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_dram_tiles_h = has_bias ? (num_w2_tiles_h + 1) : num_w2_tiles_h;
+    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
+    // When has_bias, w2_dram_tiles_h includes the bias row, so w2_blocks_per_four_mm2_tile already
+    // accounts for the extra block needed by the bias tile — it serves as the per-A2A-iter loop bound.
+    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -143,6 +153,25 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    if constexpr (has_bias) {
+        // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
+        // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
+        unary_op_init_common(cb_c2c_ones_tile, cb_c2c_ones_tile);
+        tile_regs_acquire();
+        fill_tile_init();
+        constexpr uint32_t dst0 = 0;
+        fill_tile(dst0, 1.f);
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_c2c_ones_tile, 1);
+        pack_tile(dst0, cb_c2c_ones_tile);
+        tile_regs_release();
+        cb_push_back(cb_c2c_ones_tile, 1);
+        // Synchronize: UNPACK must wait for PACK to finish writing before the first
+        // matmul_block read. The tile is never popped so one cb_wait_front suffices.
+        cb_wait_front(cb_c2c_ones_tile, 1);
+    }
+
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);
 
@@ -212,10 +241,31 @@ void kernel_main() {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
+                [[maybe_unused]] uint32_t k_tracker = 0;
                 for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        if constexpr (has_bias) {
+                            if (k_tracker == num_w0_w1_tiles_h) {
+                                // Bias addition: matmul(ones_tile, bias_row)
+                                matmul_block(
+                                    cb_c2c_ones_tile,
+                                    cb_r2c_w0_w1,
+                                    0,
+                                    /*in1_index=*/k,
+                                    /*idst=*/0,
+                                    /*transpose=*/false,
+                                    /*ct_dim=*/4,
+                                    /*rt_dim=*/1,
+                                    /*kt_dim=*/1);
+                                k_tracker++;
+                                continue;
+                            } else if (k_tracker > num_w0_w1_tiles_h) {
+                                k_tracker++;
+                                continue;  // skip padding K slots after bias
+                            }
+                        }
                         matmul_block(
                             cb_s2c_in,
                             cb_r2c_w0_w1,
@@ -226,6 +276,9 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
+                        if constexpr (has_bias) {
+                            k_tracker++;
+                        }
                     }
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -271,16 +324,30 @@ void kernel_main() {
                 uint32_t in2_offset = 0, in2_index = 0;
 
                 tile_regs_acquire();
+                uint32_t w2_k_tracker = 0;
                 for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                        // The last block has only 4 tiles of interest, so we exit early.
-                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            break;
+                        if constexpr (has_bias) {
+                            if (w2_k_tracker == num_w2_tiles_h) {
+                                // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
+                                matmul_block(
+                                    cb_c2c_ones_tile,
+                                    cb_r2c_w2,
+                                    0,
+                                    /*in1_index=*/k,
+                                    /*idst=*/0,
+                                    /*transpose=*/false,
+                                    /*ct_dim=*/4,
+                                    /*rt_dim=*/1,
+                                    /*kt_dim=*/1);
+                                w2_k_tracker++;
+                                continue;
+                            }
                         }
-
+                        if (w2_k_tracker >= num_w2_tiles_h) {
+                            continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
+                        }
                         if (dm1_tiles_remaining == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
@@ -300,10 +367,11 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
+                        w2_k_tracker++;
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
-
+                cb_pop_front(cb_w2c_rdy, 1);
                 tile_regs_commit();
 
                 tile_regs_wait();

@@ -380,6 +380,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
+    const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -389,6 +390,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         attrs.is_causal,
         is_chunked_prefill,
         flexible_chunked,
+        chunk_start_idx_for_hash,
         attrs.compute_kernel_config,
         q,
         k,

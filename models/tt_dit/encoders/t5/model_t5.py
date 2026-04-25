@@ -15,6 +15,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
+from ...utils.tracing import traced_function
 
 
 # Make this a dataclass. Also consider using HF config directly.
@@ -104,10 +105,15 @@ class T5Encoder(Module):
         rename_substate(state, "encoder.final_layer_norm", "final_layer_norm")
         pop_substate(state, "shared")
 
-    def forward(self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def forward(
+        self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
+    ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
+        if zero_masking and attention_mask is not None:
+            output = output * ttnn.unsqueeze(attention_mask, -1)
         hidden_states.append(output)
         return hidden_states
 

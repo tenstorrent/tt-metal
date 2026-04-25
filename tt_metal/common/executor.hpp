@@ -27,9 +27,7 @@
 #include <thread>
 
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
-                                                   ? std::stoi(std::getenv("TT_METAL_THREADCOUNT"))
-                                                   : std::thread::hardware_concurrency();
+inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
