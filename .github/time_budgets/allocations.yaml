@@ -2,46 +2,254 @@
 # Values per SKU must sum to <= 1.0.
 # Teams not listed get 0 allocation on that SKU.
 #
-# Team names must match the "team:" field used in tests/pipeline_reorg/*.yaml
+# Team names must match the "team:" field in tests/pipeline_reorg/*.yaml
 # (and the normalized CODEOWNERS team slug for non-pipeline_reorg workflows).
 # Current pipeline_reorg teams: models, runtime, scaleout, shield, ttnn
 
-N150:
+# ── Wormhole CIv1 ──────────────────────────────────────────
+wh_n150:
   models:    0.20
   runtime:   0.20
   scaleout:  0.20
   shield:    0.20
   ttnn:      0.20
 
-N300:
+wh_n300:
   models:    0.20
   runtime:   0.20
   scaleout:  0.20
   shield:    0.20
   ttnn:      0.20
 
-p150b:
+wh_n300_perf:
   models:    0.20
   runtime:   0.20
   scaleout:  0.20
   shield:    0.20
   ttnn:      0.20
 
-p300b:
+wh_llmbox:
   models:    0.20
   runtime:   0.20
   scaleout:  0.20
   shield:    0.20
   ttnn:      0.20
 
-LLMBOX:
+wh_llmbox_perf:
   models:    0.20
   runtime:   0.20
   scaleout:  0.20
   shield:    0.20
   ttnn:      0.20
 
-galaxy:
+wh_llmbox_perf_release:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+wh_galaxy:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+wh_galaxy_perf:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+wh_galaxy_release:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+wh_galaxy_perf_release:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+# ── Wormhole CIv2 ──────────────────────────────────────────
+wh_n150_civ2:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+wh_n300_civ2:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+wh_llmbox_civ2:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+# ── Blackhole CIv1 ─────────────────────────────────────────
+bh_p100:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p100_perf:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p150:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p150_perf:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p300:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p300_viommu:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_llmbox:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_loudbox:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_quietbox:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_quietbox_perf:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_quietbox_2:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_deskbox:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_galaxy:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_galaxy_perf:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_galaxy_release:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_galaxy_perf_release:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+# ── Blackhole CIv2 ─────────────────────────────────────────
+bh_p100a_civ2_viommu:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p150b_civ2:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_p150b_civ2_viommu:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_loudbox_civ2_viommu:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+# ── Blackhole Superpods ────────────────────────────────────
+bh_sp1:
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
+
+bh_sp4:
   models:    0.20
   runtime:   0.20
   scaleout:  0.20
