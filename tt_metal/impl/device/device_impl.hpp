@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -187,7 +188,7 @@ public:
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
 
     bool is_mmio_capable() const override;
-    bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_; }
+    bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_.load(); }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -280,7 +281,7 @@ private:
     // on the MMIO device is now running fabric firmware).  Once set, subsequent quiesce
     // calls (e.g. from GTest TearDown) skip Phase 5 and ENTRY snapshot relay reads
     // entirely, preventing 5s-per-channel timeout accumulation and indefinite hangs.
-    bool fabric_relay_path_broken_ = false;
+    std::atomic<bool> fabric_relay_path_broken_{false};
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;

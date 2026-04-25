@@ -714,6 +714,11 @@ void Device::quiesce_and_restart_fabric_workers() {
         }  // end else (!fabric_relay_path_broken_)
     }
 
+    // FIX-4: Track MUX logical cores whose assert_risc_reset_at_core failed in Phase 2.
+    // Phase 3 will skip write_launch_msg_to_core for these cores — writing a launch message
+    // to a core whose BRISC may still be running is an unsafe L1 overwrite.
+    std::unordered_set<CoreCoord> mux_reset_failed_cores;
+
     // Phase 1: Send IMMEDIATELY_TERMINATE to each MUX worker core
     // Skipped in ETH-only fabric mode (FabricTensixConfig::DISABLED) — no Tensix MUX workers exist.
     if (has_tensix_mux) {
@@ -833,9 +838,36 @@ void Device::quiesce_and_restart_fabric_workers() {
                     this->id(),
                     eth_chan_id,
                     e.what());
+                // Record the failed core so Phase 3 can skip write_launch_msg_to_core for it.
+                mux_reset_failed_cores.insert(mux_core);
             }
         }
     }
+
+    // Helper: convert raw EDM status word to a human-readable string for log messages.
+    // Mirrors the lambda of the same name in wait_for_fabric_workers_ready().
+    auto edm_status_str_q = [](uint32_t v) -> const char* {
+        switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
+            case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:        return "INITIALIZATION_STARTED";
+            case tt::tt_fabric::EDMStatus::STARTED:                       return "STARTED";
+            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:      return "LOCAL_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:     return "REMOTE_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:             return "READY_FOR_TRAFFIC";
+            case tt::tt_fabric::EDMStatus::TERMINATED:                    return "TERMINATED";
+            case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:               return "TXQ_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:        return "STREAM_REG_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED:  return "DOWNSTREAM_EDM_SETUP_STARTED";
+            case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:        return "EDM_VCS_SETUP_COMPLETE";
+            case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE:   return "ETHERNET_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::VCS_OPENED:                    return "VCS_OPENED";
+            case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:     return "ROUTING_TABLE_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:       return "INITIALIZATION_COMPLETE";
+            default: break;
+        }
+        if (v == 0xDEAD5B5B) return "(deadline-skipped)";
+        return "(unknown)";
+    };
 
     // Phase 2.5: Terminate ERISC fabric routers before re-loading firmware.
     //
@@ -1005,12 +1037,14 @@ void Device::quiesce_and_restart_fabric_workers() {
                 log_warning(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                    "ERISC did not terminate within {}ms (status=0x{:08x}) — continuing "
-                    "without reset (WH: resetting ERISC tears down ETH PHY link)",
+                    "ERISC did not terminate within budget {}ms (actual elapsed {}ms, status=0x{:08x} {}) — "
+                    "continuing without reset (WH: resetting ERISC tears down ETH PHY link)",
                     this->id(),
                     eth_chan_id,
                     erisc_timeout_ms,
-                    status_buf[0]);
+                    p25_elapsed,
+                    status_buf[0],
+                    edm_status_str_q(status_buf[0]));
             }
         }
     }
@@ -1124,6 +1158,21 @@ void Device::quiesce_and_restart_fabric_workers() {
             continue;
         }
         for (const auto& logical_core : logical_cores_used[pct_idx]) {
+            // FIX-4: Skip write_launch_msg_to_core if Phase 2 assert_risc_reset_at_core failed
+            // for this MUX WORKER core.  The BRISC may still be running; issuing a launch message
+            // would overwrite its L1 state with a new kernel binary header, which can generate
+            // invalid NOC traffic and corrupt device state.
+            if (mux_reset_failed_cores.count(logical_core)) {
+                log_error(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Phase 3: skipping write_launch_msg_to_core for "
+                    "MUX WORKER core ({},{}) — Phase 2 assert_risc_reset_at_core failed, core may still "
+                    "be running",
+                    logical_core.x,
+                    logical_core.y);
+                continue;
+            }
+
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, pct_idx);
             dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
             dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
@@ -1399,7 +1448,9 @@ void Device::wait_for_fabric_workers_ready() {
             const auto start = std::chrono::steady_clock::now();
             constexpr uint32_t timeout_ms = 5000;
             constexpr uint32_t kSpinsBetweenSleeps = 64;
+            constexpr int64_t kP4IntermediateLogMs = 2000;
             uint32_t spin_counter = 0;
+            int64_t last_p4_log_ms = 0;
             bool ready = false;
             while (true) {
                 detail::ReadFromDeviceL1(this, mux_core, status_addr, 4, status_buf, CoreType::WORKER);
@@ -1409,6 +1460,19 @@ void Device::wait_for_fabric_workers_ready() {
                 }
                 const auto elapsed =
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                // Log every kP4IntermediateLogMs so CI logs show progress while waiting.
+                if (elapsed / kP4IntermediateLogMs > last_p4_log_ms / kP4IntermediateLogMs) {
+                    last_p4_log_ms = elapsed;
+                    log_info(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 4: still waiting for "
+                        "MUX READY_FOR_TRAFFIC ({}ms elapsed, status=0x{:08x} {})",
+                        this->id(),
+                        eth_chan_id,
+                        elapsed,
+                        status_buf[0],
+                        edm_status_str(status_buf[0]));
+                }
                 if (elapsed > timeout_ms) {
                     break;
                 }
