@@ -831,6 +831,26 @@ void Device::quiesce_and_restart_fabric_workers() {
     // and continue — configure_fabric_cores() will still safely overwrite L1 and boot
     // fresh firmware.  We do NOT assert_risc_reset_at_core on WH: resetting an ERISC
     // tears down the ETH PHY link and breaks non-MMIO L1 access for the whole mesh.
+    // FIX R (#42429): Skip Phase 2.5 entirely for non-MMIO devices when relay path is broken.
+    //
+    // Phase 2.5 L1 reads go through the UMD non-MMIO relay.  When fabric_relay_path_broken_
+    // is true the relay ERISC on the MMIO device runs fabric firmware, not relay firmware.
+    // For some channels this causes the UMD relay read to throw a 5s timeout exception
+    // (caught below and handled via `continue`), but for others (notably eth_chan 7 which
+    // was already in TERMINATED state) the relay read hangs *indefinitely* with no exception —
+    // producing the 665s CI kill gap observed in run #24920724360.
+    //
+    // Phase 3 already short-circuits for this same condition (see guard below), so TERMINATE
+    // is redundant: configure_fabric_cores() in Phase 3 overwrites ERISC L1 regardless of
+    // ERISC state.  Skipping Phase 2.5 relay reads here is safe and eliminates the hang.
+    if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
+        log_warning(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 2.5: relay path known broken "
+            "(fabric_relay_path_broken_) and device is non-MMIO — skipping all Phase 2.5 relay "
+            "reads/writes to prevent indefinite UMD relay hang.  Phase 3 will also be skipped.",
+            this->id());
+    } else {
     {
         const auto [erisc_term_addr, erisc_term_signal] =
             builder_ctx.get_fabric_router_termination_address_and_signal();
@@ -973,6 +993,7 @@ void Device::quiesce_and_restart_fabric_workers() {
             }
         }
     }
+    }  // end else (Phase 2.5 — relay path not broken)
 
     // Phase 3: Re-configure and re-launch the fabric workers
     // Reset termination signals, clear channel state, and re-send launch messages
