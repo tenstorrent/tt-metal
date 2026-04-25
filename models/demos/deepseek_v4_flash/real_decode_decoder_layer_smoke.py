@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 
 from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v4_flash.cpu_reference import sparse_attention
+from models.demos.deepseek_v4_flash.cpu_reference import compress_topk_indices, indexer_topk, sparse_attention
 from models.demos.deepseek_v4_flash.real_attention_projection_smoke import (
     build_torch_attention_projection_reference,
     deterministic_attention_activation,
@@ -51,16 +51,20 @@ from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import 
     DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_BYTES,
     DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_TENSORS,
     PREFILL_ATTENTION_RUNTIME_TTNN_TILE_MULTIPLE,
+    PrefillIndexerWeights,
+    _empty_indexer_reference,
     _floating_accuracy_summary,
     _int_equality_summary,
     _int_tensor_summary,
     _inverse_attention_rope,
+    _offset_valid_topk_indices,
 )
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
     _payload_byte_split as _attention_payload_byte_split,
 )
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
     _query_projection_weights_only,
+    _rotate_indexer_q,
     decode_real_prefill_attention_projection_weights,
     layer_prefill_attention_runtime_keys,
 )
@@ -684,6 +688,7 @@ def build_torch_decode_attention_runtime_reference(
     config: DeepSeekV4FlashConfig,
     layer: int,
     current_position: int,
+    indexer_weights: PrefillIndexerWeights | None = None,
 ) -> dict[str, torch.Tensor]:
     q_decode = decode_cache_reference["q_decode"].contiguous()
     batch_size, decode_tokens, num_heads, head_dim = q_decode.shape
@@ -694,16 +699,39 @@ def build_torch_decode_attention_runtime_reference(
         decode_cache_reference["kv_cache_ready"],
         sliding_window=int(config.sliding_window),
     )
-    compressed_kv = q_decode.new_empty(batch_size, 0, head_dim)
+    compressed_kv = _compressed_prefill_kv_from_cache(prefill_cache_reference, q_decode)
+    indexer_reference = _decode_indexer_reference_from_prefill_cache(
+        prefill_cache_reference,
+        decode_cache_reference,
+        indexer_weights,
+        config=config,
+        layer=layer,
+        current_position=current_position,
+        compressed_cache_length=int(compressed_kv.shape[1]),
+    )
     attention_cache = torch.cat([sliding_window_cache, compressed_kv], dim=1).contiguous()
-    window_topk_idxs = _decode_window_topk_indices(attention_cache.shape[1], batch_size=batch_size)
-    compress_topk_idxs = torch.empty(batch_size, 1, 0, dtype=torch.int32)
+    window_topk_idxs = _decode_window_topk_indices(sliding_window_cache.shape[1], batch_size=batch_size)
+    compress_topk_idxs = _decode_compress_topk_indices(
+        indexer_reference,
+        int(config.compress_ratios[layer]),
+        batch_size=batch_size,
+        current_position=current_position,
+        compressed_cache_length=int(compressed_kv.shape[1]),
+        offset=int(sliding_window_cache.shape[1]),
+    )
     runtime_topk_idxs = torch.cat([window_topk_idxs, compress_topk_idxs], dim=-1).to(torch.int32)
     attention_output_rotary = sparse_attention(
         q_decode,
         attention_cache,
         attn_sink.float().contiguous(),
         runtime_topk_idxs,
+        head_dim**-0.5,
+    ).contiguous()
+    local_only_attention_output_rotary = sparse_attention(
+        q_decode,
+        sliding_window_cache,
+        attn_sink.float().contiguous(),
+        window_topk_idxs,
         head_dim**-0.5,
     ).contiguous()
     attention_output = _inverse_attention_rope(
@@ -722,16 +750,112 @@ def build_torch_decode_attention_runtime_reference(
         "current_kv_cache_ready": decode_cache_reference["kv_cache_ready"].contiguous(),
         "sliding_window_cache": sliding_window_cache,
         "compressed_kv": compressed_kv,
+        **indexer_reference,
         "attention_cache": attention_cache,
         "window_topk_idxs": window_topk_idxs,
         "compress_topk_idxs": compress_topk_idxs,
         "runtime_topk_idxs": runtime_topk_idxs,
         "attention_output_rotary": attention_output_rotary,
+        "local_only_attention_output_rotary": local_only_attention_output_rotary,
         "attention_output": attention_output,
         "attention_output_flat": attention_output_flat,
         "output_rank": output_rank,
         "attention_output_projected": attention_output_projected,
     }
+
+
+def _compressed_prefill_kv_from_cache(
+    prefill_cache: Mapping[str, torch.Tensor],
+    q_decode: torch.Tensor,
+) -> torch.Tensor:
+    batch_size = int(q_decode.shape[0])
+    head_dim = int(q_decode.shape[-1])
+    compressed_kv = prefill_cache.get("compressed_kv")
+    if compressed_kv is None:
+        return q_decode.new_empty(batch_size, 0, head_dim)
+    if compressed_kv.ndim != 3:
+        raise ValueError(
+            f"compressed_kv must have shape [batch, cache_len, head_dim], got {tuple(compressed_kv.shape)}"
+        )
+    if int(compressed_kv.shape[0]) != batch_size or int(compressed_kv.shape[-1]) != head_dim:
+        raise ValueError(
+            "compressed_kv shape must match decode batch/head_dim, "
+            f"got {tuple(compressed_kv.shape)} for decode {tuple(q_decode.shape)}"
+        )
+    return compressed_kv.contiguous()
+
+
+def _decode_indexer_reference_from_prefill_cache(
+    prefill_cache: Mapping[str, torch.Tensor],
+    decode_cache: Mapping[str, torch.Tensor],
+    indexer_weights: PrefillIndexerWeights | None,
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    current_position: int,
+    compressed_cache_length: int,
+) -> dict[str, torch.Tensor]:
+    q_decode = decode_cache["q_decode"].contiguous()
+    batch_size = int(q_decode.shape[0])
+    if compressed_cache_length <= 0 or indexer_weights is None:
+        return _empty_indexer_reference(q_decode, config=config, seq_len=1)
+
+    index_compressed_kv = prefill_cache.get("index_compressed_kv")
+    if index_compressed_kv is None or index_compressed_kv.numel() == 0:
+        return _empty_indexer_reference(q_decode, config=config, seq_len=1)
+    if index_compressed_kv.ndim != 3 or int(index_compressed_kv.shape[0]) != batch_size:
+        raise ValueError(
+            "index_compressed_kv must have shape [batch, compressed_len, index_head_dim], "
+            f"got {tuple(index_compressed_kv.shape)}"
+        )
+
+    q_rank = decode_cache["q_rank_norm"][:, 0].contiguous().to(torch.bfloat16)
+    index_q = F.linear(q_rank.float(), indexer_weights.wq_b.float()).to(torch.bfloat16)
+    index_q = index_q.reshape(batch_size, 1, int(config.index_n_heads), int(config.index_head_dim))
+    index_q = _rotate_indexer_q(index_q, config=config, layer=layer, start_pos=current_position)
+
+    attn_input = decode_cache["attn_norm_output"][:, 0].contiguous().to(torch.bfloat16)
+    index_weights = F.linear(attn_input.float(), indexer_weights.weights_proj.float()).to(torch.bfloat16)
+    index_weights = index_weights.float() * (int(config.index_head_dim) ** -0.5 * int(config.index_n_heads) ** -0.5)
+    indexer_topk_idxs = indexer_topk(
+        index_q,
+        index_compressed_kv.contiguous(),
+        index_weights,
+        index_topk=int(config.index_topk),
+        compress_ratio=int(config.compress_ratios[layer]),
+        start_pos=current_position,
+        offset=0,
+    ).to(torch.int32)
+    return {
+        "index_q": index_q.contiguous(),
+        "index_weights": index_weights.contiguous(),
+        "index_compressed_kv": index_compressed_kv.contiguous(),
+        "indexer_topk_idxs": indexer_topk_idxs.contiguous(),
+    }
+
+
+def _decode_compress_topk_indices(
+    indexer_reference: Mapping[str, torch.Tensor],
+    ratio: int,
+    *,
+    batch_size: int,
+    current_position: int,
+    compressed_cache_length: int,
+    offset: int,
+) -> torch.Tensor:
+    if ratio <= 0 or compressed_cache_length <= 0:
+        return torch.empty(batch_size, 1, 0, dtype=torch.int32)
+    indexer_topk_idxs = indexer_reference["indexer_topk_idxs"]
+    if indexer_topk_idxs.shape[-1] > 0:
+        return _offset_valid_topk_indices(indexer_topk_idxs, offset=offset).to(torch.int32)
+    topk = compress_topk_indices(
+        ratio,
+        batch_size,
+        seq_len=1,
+        start_pos=current_position,
+        offset=offset,
+    ).to(torch.int32)
+    return topk[:, :, :compressed_cache_length]
 
 
 def main() -> None:
@@ -817,18 +941,21 @@ def _run_ttnn_decode_decoder_layer_slice(
     decode_activation: torch.Tensor,
     current_position: int,
     device_id: int,
+    prefill_cache_outputs: Mapping[str, torch.Tensor] | None = None,
+    indexer_weights: PrefillIndexerWeights | None = None,
 ) -> dict[str, Any]:
     cache_q_weights = _query_projection_weights_only(q_weights)
-    prefill_cache_outputs = _run_ttnn_prefill_cache_prep(
-        tensors,
-        cache_q_weights,
-        kv_weights,
-        config=config,
-        layer=layer,
-        activation=prefill_activation,
-        start_pos=0,
-        device_id=device_id,
-    )
+    if prefill_cache_outputs is None:
+        prefill_cache_outputs = _run_ttnn_prefill_cache_prep(
+            tensors,
+            cache_q_weights,
+            kv_weights,
+            config=config,
+            layer=layer,
+            activation=prefill_activation,
+            start_pos=0,
+            device_id=device_id,
+        )
     decode_cache_outputs = _run_ttnn_decode_cache_prep(
         tensors,
         cache_q_weights,
@@ -848,6 +975,7 @@ def _run_ttnn_decode_decoder_layer_slice(
         layer=layer,
         current_position=current_position,
         device_id=device_id,
+        indexer_weights=indexer_weights,
     )
     post_attention_residual = _residual_add(decode_activation, attention_outputs["attention_output_projected"])
     ffn_outputs = _run_ttnn_ffn_slice(
@@ -927,6 +1055,7 @@ def _run_ttnn_decode_attention_from_cache_boundary(
     layer: int,
     current_position: int,
     device_id: int,
+    indexer_weights: PrefillIndexerWeights | None = None,
 ) -> dict[str, torch.Tensor]:
     import ttnn
 
@@ -939,10 +1068,26 @@ def _run_ttnn_decode_attention_from_cache_boundary(
         decode_cache_outputs["kv_cache_ready"],
         sliding_window=int(config.sliding_window),
     )
-    compressed_kv = q_decode.new_empty(batch_size, 0, head_dim)
+    compressed_kv = _compressed_prefill_kv_from_cache(prefill_cache_outputs, q_decode)
+    indexer_outputs = _decode_indexer_reference_from_prefill_cache(
+        prefill_cache_outputs,
+        decode_cache_outputs,
+        indexer_weights,
+        config=config,
+        layer=layer,
+        current_position=current_position,
+        compressed_cache_length=int(compressed_kv.shape[1]),
+    )
     attention_cache = torch.cat([sliding_window_cache, compressed_kv], dim=1).contiguous()
-    window_topk_idxs = _decode_window_topk_indices(attention_cache.shape[1], batch_size=batch_size)
-    compress_topk_idxs = torch.empty(batch_size, 1, 0, dtype=torch.int32)
+    window_topk_idxs = _decode_window_topk_indices(sliding_window_cache.shape[1], batch_size=batch_size)
+    compress_topk_idxs = _decode_compress_topk_indices(
+        indexer_outputs,
+        int(config.compress_ratios[layer]),
+        batch_size=batch_size,
+        current_position=current_position,
+        compressed_cache_length=int(compressed_kv.shape[1]),
+        offset=int(sliding_window_cache.shape[1]),
+    )
     runtime_topk_idxs = torch.cat([window_topk_idxs, compress_topk_idxs], dim=-1).to(torch.int32)
 
     device = ttnn.open_device(device_id=device_id, num_command_queues=1)
@@ -992,6 +1137,13 @@ def _run_ttnn_decode_attention_from_cache_boundary(
         )
         attention_output_rotary_flat = ttnn.to_torch(tt_attention_output_rotary).contiguous()[:, 0]
         attention_output_rotary = attention_output_rotary_flat.reshape(batch_size, 1, num_heads, head_dim)
+        local_only_attention_output_rotary = sparse_attention(
+            q_decode,
+            sliding_window_cache,
+            attn_sink.float().contiguous(),
+            window_topk_idxs,
+            head_dim**-0.5,
+        ).contiguous()
         attention_output = _inverse_attention_rope(
             attention_output_rotary,
             config=config,
@@ -1013,11 +1165,13 @@ def _run_ttnn_decode_attention_from_cache_boundary(
             "current_kv_cache_ready": decode_cache_outputs["kv_cache_ready"].contiguous(),
             "sliding_window_cache": sliding_window_cache,
             "compressed_kv": compressed_kv,
+            **indexer_outputs,
             "attention_cache": attention_cache,
             "window_topk_idxs": window_topk_idxs,
             "compress_topk_idxs": compress_topk_idxs,
             "runtime_topk_idxs": runtime_topk_idxs,
             "attention_output_rotary": attention_output_rotary.contiguous(),
+            "local_only_attention_output_rotary": local_only_attention_output_rotary.contiguous(),
             "attention_output": attention_output.contiguous(),
             "attention_output_flat": attention_output_flat.contiguous(),
             "output_rank": output_rank.contiguous(),
