@@ -50,6 +50,7 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         layer=3,
         seq_len=4,
         max_bytes=16 * 1024,
+        routed_topk_prefix=1,
         cpu_only=True,
     )
 
@@ -95,8 +96,13 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["selected_routing"]["selection_boundary"] == "host_pretrace_router_topk"
     assert result["selected_routing"]["topk_prefix_limit"] == 1
     assert result["selected_routing"]["topk_prefix_is_full"] is False
+    assert result["selected_routing"]["full_topk_mode"] is False
     assert result["selected_routing"]["selected_expert_ids"] == [2]
+    assert result["selected_routing"]["executed_expert_ids"] == [2]
     assert result["selected_routing"]["route_weights_device_resident_inside_trace"] is True
+    assert result["routed_expert_execution"]["loaded_expert_ids"] == [2]
+    assert result["routed_expert_execution"]["executed_expert_ids"] == [2]
+    assert result["routed_expert_execution"]["full_topk_executed"] is False
     assert (
         "real sparse-attention output production; deterministic attention tensor is uploaded before trace"
         in result["traceable_decode_scope"]["excluded_from_trace"]
@@ -155,7 +161,7 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
             "--seq-len",
             "4",
             "--max-bytes",
-            str(16 * 1024),
+            str(24 * 1024),
             "--cpu-only",
         ],
         check=True,
@@ -173,13 +179,21 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["host_boundaries_inside_trace"] == []
     assert payload["traceable_decode_scope"]["not_full_forward"] is True
     assert payload["cache_update"]["update_index"] == 4
-    assert payload["selected_routing"]["topk_prefix_limit"] == 1
-    assert payload["selected_routing"]["selected_expert_ids"] == [2]
+    assert payload["selected_routing"]["full_topk"] == 2
+    assert payload["selected_routing"]["topk_prefix_limit"] == 2
+    assert payload["selected_routing"]["topk_prefix_is_full"] is True
+    assert payload["selected_routing"]["full_topk_mode"] is True
+    assert payload["selected_routing"]["selected_expert_ids"] == [2, 1]
+    assert payload["selected_routing"]["executed_expert_ids"] == [2, 1]
+    assert payload["routed_expert_execution"]["loaded_expert_ids"] == [2, 1]
+    assert payload["routed_expert_execution"]["executed_expert_ids"] == [2, 1]
+    assert payload["routed_expert_execution"]["full_topk_executed"] is True
     assert payload["payload_bytes"]["attention_output"] == 5120
-    assert payload["payload_bytes"]["routed_experts"] == 1920
-    assert payload["payload_bytes"]["total"] == 16380
+    assert payload["payload_bytes"]["routed_experts"] == 3840
+    assert payload["payload_bytes"]["total"] == 18300
     assert payload["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
     assert payload["decoded_tensors"]["routed_experts"]["2"]["w2"]["shape"] == [32, 32]
+    assert payload["decoded_tensors"]["routed_experts"]["1"]["w2"]["shape"] == [32, 32]
     assert payload["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
 
 
@@ -213,7 +227,9 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["cache_update"]["device_resident_inside_trace"] is True
     assert "ttnn.linear(grouped_wo_a_group_0..N)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.linear(routed_w1_selected_topk_prefix)" in result["trace_capture"]["traced_operations"]
-    assert result["selected_routing"]["topk_prefix_limit"] == 1
+    assert result["selected_routing"]["topk_prefix_limit"] == result["selected_routing"]["full_topk"]
+    assert result["selected_routing"]["topk_prefix_is_full"] is True
+    assert result["routed_expert_execution"]["full_topk_executed"] is True
     assert result["selected_routing"]["route_weights_device_resident_inside_trace"] is True
     assert (
         "real sparse-attention output production; deterministic attention tensor is uploaded before trace"

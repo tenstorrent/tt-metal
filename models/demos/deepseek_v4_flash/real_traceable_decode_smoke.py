@@ -65,7 +65,8 @@ REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_TRACEABLE_DECODE_LAYER = 3
 DEFAULT_TRACEABLE_DECODE_SEQ_LEN = 32
 DEFAULT_TRACEABLE_DECODE_CACHE_LEN = 64
-DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX = 1
+DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX: int | None = None
+DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK = 8
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS = 4
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES = 96 * 1024 * 1024
 DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
@@ -74,7 +75,7 @@ DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
     + DEFAULT_KV_PROJECTION_MAX_TENSORS
     + DEFAULT_SHARED_EXPERT_MAX_TENSORS
     + 3
-    + 6 * DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX
+    + 6 * DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK
     + 1
 )
 DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
@@ -82,7 +83,7 @@ DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
     + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES
     + DEFAULT_KV_PROJECTION_MAX_BYTES
     + DEFAULT_SHARED_EXPERT_MAX_BYTES
-    + 64 * 1024 * 1024 * DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX
+    + 64 * 1024 * 1024 * DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK
     + 4096
 )
 DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE = 64 * 1024 * 1024
@@ -334,7 +335,7 @@ def run_traceable_decode_subpath_smoke(
     *,
     layer: int = DEFAULT_TRACEABLE_DECODE_LAYER,
     seq_len: int = DEFAULT_TRACEABLE_DECODE_SEQ_LEN,
-    routed_topk_prefix: int = DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX,
+    routed_topk_prefix: int | None = DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX,
     max_tensors: int = DEFAULT_TRACEABLE_DECODE_MAX_TENSORS,
     max_bytes: int = DEFAULT_TRACEABLE_DECODE_MAX_BYTES,
     cpu_only: bool = False,
@@ -751,7 +752,7 @@ def build_traceable_decode_route_plan(
     config: DeepSeekV4FlashConfig,
     seq_len: int,
     ffn_norm_output: torch.Tensor,
-    routed_topk_prefix: int,
+    routed_topk_prefix: int | None,
     decode_token_index: int = 0,
 ) -> TraceableDecodeRoutePlan:
     _validate_activation(ffn_norm_output, hidden_size=int(config.hidden_size))
@@ -760,9 +761,9 @@ def build_traceable_decode_route_plan(
     if not 0 <= int(decode_token_index) < int(seq_len):
         raise ValueError(f"decode_token_index must be in [0, {seq_len}), got {decode_token_index}")
     full_topk = int(config.num_experts_per_tok)
-    topk_prefix = int(routed_topk_prefix)
+    topk_prefix = full_topk if routed_topk_prefix is None else int(routed_topk_prefix)
     if topk_prefix <= 0:
-        raise ValueError(f"routed_topk_prefix must be positive, got {routed_topk_prefix}")
+        raise ValueError(f"routed_topk_prefix must be positive when provided, got {routed_topk_prefix}")
     if topk_prefix > full_topk:
         raise ValueError(f"routed_topk_prefix {topk_prefix} exceeds num_experts_per_tok {full_topk}")
 
@@ -869,7 +870,12 @@ def main() -> None:
     parser.add_argument("--snapshot-dir", required=True, type=Path)
     parser.add_argument("--layer", type=int, default=DEFAULT_TRACEABLE_DECODE_LAYER)
     parser.add_argument("--seq-len", type=int, default=DEFAULT_TRACEABLE_DECODE_SEQ_LEN)
-    parser.add_argument("--routed-topk-prefix", type=int, default=DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX)
+    parser.add_argument(
+        "--routed-topk-prefix",
+        type=int,
+        default=DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX,
+        help="Optional routed expert prefix limit; omit to trace the full configured top-k fanout.",
+    )
     parser.add_argument("--max-tensors", type=int, default=DEFAULT_TRACEABLE_DECODE_MAX_TENSORS)
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_TRACEABLE_DECODE_MAX_BYTES)
     parser.add_argument("--device-id", type=int, default=0)
@@ -1026,6 +1032,21 @@ def _base_result(
         for name, items in metadata_groups.items()
     }
     guarded_labels = [symbol.label for symbol in default_guarded_symbols()]
+    routed_expert_ids_loaded = [int(expert) for expert in weights.routed_experts]
+    routed_expert_ids_executed = list(route_plan.selected_expert_ids)
+    excluded_from_trace = [
+        "K/V RoPE split and final sparse-attention cache read path",
+        "host sparse-attention gather/softmax/reduction",
+        "real sparse-attention output production; deterministic attention tensor is uploaded before trace",
+        "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
+        "cache advancement beyond the fixed traced update index",
+        "embedding and logits",
+    ]
+    if route_plan.topk_prefix < route_plan.full_topk:
+        excluded_from_trace.insert(
+            4,
+            "routed experts outside the configured top-k prefix when topk_prefix_limit is less than full top-k",
+        )
     return {
         "schema_version": REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION,
         "mode": "unexecuted",
@@ -1093,22 +1114,22 @@ def _base_result(
             "path": (
                 "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
                 "deterministic device attention tensor -> grouped wo_a/wo_b/post-attention residual; "
-                "post-attention residual -> ffn_norm/preselected routed experts plus shared expert/residual"
+                "post-attention residual -> ffn_norm/preselected routed top-k fanout plus shared expert/residual"
             ),
             "logical_decode_token_policy": (
                 "the first token is the logical decode token; tensor shape is tile-padded/static for trace replay"
             ),
-            "excluded_from_trace": [
-                "K/V RoPE split and final sparse-attention cache read path",
-                "host sparse-attention gather/softmax/reduction",
-                "real sparse-attention output production; deterministic attention tensor is uploaded before trace",
-                "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
-                "routed experts outside the configured top-k prefix when topk_prefix_limit is less than full top-k",
-                "cache advancement beyond the fixed traced update index",
-                "embedding and logits",
-            ],
+            "excluded_from_trace": excluded_from_trace,
         },
         "selected_routing": _route_plan_summary(route_plan, config=config),
+        "routed_expert_execution": {
+            "loaded_expert_ids": routed_expert_ids_loaded,
+            "loaded_expert_count": len(routed_expert_ids_loaded),
+            "executed_expert_ids": routed_expert_ids_executed,
+            "executed_expert_count": len(routed_expert_ids_executed),
+            "all_selected_experts_loaded": set(routed_expert_ids_executed).issubset(set(routed_expert_ids_loaded)),
+            "full_topk_executed": int(route_plan.topk_prefix) == int(route_plan.full_topk),
+        },
         "selected_source_keys": [item.source_key for item in metadata],
         "loaded_tensors": [_metadata_summary(item) for item in metadata],
         "loaded_tensor_groups": loaded_groups,
@@ -1434,7 +1455,11 @@ def _route_plan_summary(route_plan: TraceableDecodeRoutePlan, *, config: DeepSee
         "full_topk": int(route_plan.full_topk),
         "topk_prefix_limit": int(route_plan.topk_prefix),
         "topk_prefix_is_full": int(route_plan.topk_prefix) == int(route_plan.full_topk),
+        "full_topk_mode": int(route_plan.topk_prefix) == int(route_plan.full_topk),
         "selected_expert_ids": selected_indices,
+        "selected_expert_count": len(selected_indices),
+        "executed_expert_ids": selected_indices,
+        "executed_expert_count": len(selected_indices),
         "selected_route_weights": selected_weights,
         "full_router_indices_for_decode_token": full_indices,
         "full_router_weights_for_decode_token": full_weights,
@@ -1443,8 +1468,8 @@ def _route_plan_summary(route_plan: TraceableDecodeRoutePlan, *, config: DeepSee
         "routed_scaling_factor": float(config.routed_scaling_factor),
         "input_ids": _optional_tensor_summary(route_plan.input_ids),
         "limitation": (
-            "router/top-k is host-computed before trace; this trace replays a fixed top-k prefix route plan "
-            "for the logical decode token"
+            "router/top-k is host-computed before trace; this trace replays a fixed selected top-k route plan "
+            "for the logical decode token, optionally limited by topk_prefix_limit"
         ),
     }
 
@@ -1592,7 +1617,7 @@ def _validate_smoke_args(
     trace_region_size: int,
     cache_len: int,
     cache_update_index: int | None,
-    routed_topk_prefix: int,
+    routed_topk_prefix: int | None,
     pcc: float,
 ) -> None:
     if layer < 0:
@@ -1611,8 +1636,8 @@ def _validate_smoke_args(
         _resolve_cache_update_index(seq_len=seq_len, cache_len=cache_len, cache_update_index=cache_update_index)
     elif seq_len >= cache_len:
         raise ValueError(f"default cache_update_index seq_len={seq_len} must be less than cache_len {cache_len}")
-    if routed_topk_prefix <= 0:
-        raise ValueError(f"routed_topk_prefix must be positive, got {routed_topk_prefix}")
+    if routed_topk_prefix is not None and routed_topk_prefix <= 0:
+        raise ValueError(f"routed_topk_prefix must be positive when provided, got {routed_topk_prefix}")
     if not 0.0 <= pcc <= 1.0:
         raise ValueError(f"pcc must be in [0, 1], got {pcc}")
 
