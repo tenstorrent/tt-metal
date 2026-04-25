@@ -82,8 +82,8 @@ public:
 
         // Align the start of rw pointers buffer
         l1_rw_pointers_buffer_start = l1_align(l1_cache_buffer_address);
-        l1_device_print_buffer_start =
-            dram_align(l1_rw_pointers_buffer_start + rw_pointers_entry_size * noc_locations_count);
+        l1_dram_rw_pointers = dram_align(l1_rw_pointers_buffer_start + rw_pointers_entry_size * noc_locations_count);
+        l1_device_print_buffer_start = dram_align(l1_dram_rw_pointers + sizeof(uint32_t));
 
         // Check if buffer is large enough to hold necessary data and turn off feature in DRAM if needed.
         uint32_t min_buffer_end = l1_device_print_buffer_start;
@@ -97,7 +97,11 @@ public:
             // device_print buffer. Disable dispatching to DRAM and fallback to host only reading buffers.
             enabled = false;
 
-            // TODO: Write data to DRAM that will tell host to do fallback.
+            // Write data to DRAM that will tell host to do fallback.
+            volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
+            dram_rw_pointers[0] = DEBUG_PRINT_SERVER_DISABLED_MAGIC;
+            noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, sizeof(uint32_t));
+            noc_async_write_barrier();
         }
 
         // Initialize cache for noc addresses if enabled
@@ -338,12 +342,56 @@ private:
     }
 
     void push_data_to_dram(uint32_t buffer_size) {
+        // All buffers and pointers are DRAM aligned. We don't need to think about that.
+        // We just need to align local buffer size.
         uint32_t buffer_address = l1_device_print_buffer_start;
-        // TODO: Issue write to DRAM (from l1_device_print_buffer_start to current_l1_buffer_address).
-        // TODO: Handle cases like there isn't enough space for whole buffer in DRAM and we need to split it into
-        // multiple messages.
-        // TODO: Wait for enough space in DRAM.
-        // TODO: Update write pointer in DRAM.
+
+        buffer_size = dram_align(buffer_size);
+
+        // Check if DRAM buffer is overflowing and write what we can until end of the buffer.
+        if (dram_write_pointer >= dram_read_pointer) {
+            // Check if we can write whole buffer without wrapping around.
+            if (buffer_size <= dram_buffer_size - dram_write_pointer) {
+                noc_async_write(buffer_address, dram_write_pointer + noc_dram_buffer_start, buffer_size);
+                dram_write_pointer += buffer_size;
+                buffer_size = 0;
+            } else {
+                // We need to split buffer into two parts and write them separately.
+                uint32_t first_part_size = dram_buffer_size - dram_write_pointer;
+
+                noc_async_write(buffer_address, dram_write_pointer + noc_dram_buffer_start, first_part_size);
+                buffer_size -= first_part_size;
+                buffer_address += first_part_size;
+                dram_write_pointer = 0;
+            }
+        }
+
+        // Pointer to DRAM read/write pointers in our local L1.
+        volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
+
+        // Check if there is remaining buffer to write
+        if (buffer_size > 0) {
+            // We know that buffer is overflowing.
+            // Wait until there is enough space in the buffer.
+            while (buffer_size > dram_read_pointer - dram_write_pointer) {
+                // Read updated read pointer from DRAM.
+                noc_async_read(
+                    l1_dram_rw_pointers + sizeof(uint32_t), noc_dram_rw_pointers + sizeof(uint32_t), sizeof(uint32_t));
+                noc_async_read_barrier();
+                dram_read_pointer = dram_rw_pointers[1];
+            }
+
+            noc_async_write(buffer_address, dram_write_pointer + noc_dram_buffer_start, buffer_size);
+            dram_write_pointer += buffer_size;
+        }
+
+        // Wait until all data is written to DRAM before returning to make sure data is visible to host.
+        noc_async_write_barrier();
+
+        // Update write pointer in DRAM.
+        dram_rw_pointers[0] = dram_write_pointer;
+        noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, sizeof(uint32_t));
+        noc_async_write_barrier();
     }
 
     void update_read_pointers(uint32_t start_index, uint32_t end_index) {
@@ -389,12 +437,20 @@ private:
     uint32_t l1_cache_buffer_address;
     uint32_t l1_cache_buffer_end;
     uint32_t l1_rw_pointers_buffer_start;
+    uint32_t l1_dram_rw_pointers;
     uint32_t l1_device_print_buffer_start;
     bool enabled = true;
 
     // NOC locations that are marked to be processed in current iteration.
     uint8_t noc_locations_to_process[MaxNocLocations];
     uint32_t num_noc_locations_to_process;
+
+    // DRAM address where we will push data for host to read.
+    uint32_t dram_read_pointer = 0;
+    uint32_t dram_write_pointer = 0;
+    uint64_t noc_dram_rw_pointers;
+    uint64_t noc_dram_buffer_start;
+    uint32_t dram_buffer_size;
 
     // Number of cycles for events
     uint64_t cycles_for_stall_detection;
