@@ -902,10 +902,11 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         ),
     ],
 )
+@pytest.mark.parametrize("hot_expert_ids", [None, [1]], ids=["no_hot", "hot_skip_1"])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
-    bh_2d_mesh_device, sram_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+    bh_2d_mesh_device, sram_expert_ids, hot_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
@@ -1137,6 +1138,7 @@ def test_moe_fused_with_reduce(
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        hot_expert_ids=hot_expert_ids,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1180,6 +1182,13 @@ def test_moe_fused_with_reduce(
             gate_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in gate_dict_d.items()}
             up_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in up_dict_d.items()}
             down_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in down_dict_d.items()}
+        # Hot experts are skipped by the DRAM matmul reader (Phase 2 chunk 1A) — zero their
+        # weights in the golden so the expected output matches what the cold kernel computes.
+        if hot_expert_ids:
+            _hot = set(hot_expert_ids)
+            gate_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in gate_dict_d.items()}
+            up_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in up_dict_d.items()}
+            down_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in down_dict_d.items()}
 
         _, _, device_expected = MoeOp.golden(
             r.torch_input,

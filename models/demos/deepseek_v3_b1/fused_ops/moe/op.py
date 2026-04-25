@@ -284,6 +284,9 @@ class _MoeRoutedExpertContext:
     # Testing flag (routing only)
     use_hardcoded_expert_index: bool = False
 
+    # Hot expert IDs (expert IDs to skip in DRAM matmul, handled by SRAM path)
+    hot_expert_ids: list = None
+
     # ReduceToOne
     enable_reduce_to_one: bool = False
     reduce_local_cb: int = 0
@@ -1042,6 +1045,8 @@ class MoeRoutedExpertOp:
         cb_id_context=None,
         # Optional worker-core grid override (used to avoid overlap with external micro-ops).
         worker_core_grid=None,
+        # Hot experts: expert IDs to skip in DRAM matmul (will be handled by SRAM path)
+        hot_expert_ids=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1441,6 +1446,9 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # down_proj Gather — dst_num_pages computed from gate_proj dimensions
         # ==================================================================
+        # Note: gate/up writers pad to num_active_experts via the kernel's tail padding,
+        # so the gather receives full num_active_experts blocks (cold + dummy SRAM + dummy hot).
+        # down_proj's compute skips hot/SRAM via the constexpr filter.
         down_proj_gather_num_experts = gate_proj_params["num_active_experts"]
         down_proj_gather_data_size_bytes = gate_proj_params["per_core_n"] * tile_1x32_size
         # gate_proj_N_padded (in 1x32 tiles) = per_core_n * num_gate_proj_cores * num_experts
@@ -1877,6 +1885,8 @@ class MoeRoutedExpertOp:
             down_proj_cb_fmt_descriptor=down_proj_cb_fmt_descriptor,
             # Testing flag (routing only)
             use_hardcoded_expert_index=use_hardcoded_expert_index,
+            # Hot expert IDs
+            hot_expert_ids=hot_expert_ids,
             # ReduceToOne
             enable_reduce_to_one=enable_reduce_to_one,
             reduce_local_cb=reduce_local_cb,
@@ -1895,6 +1905,12 @@ class MoeRoutedExpertOp:
     @staticmethod
     def _build_compile_time_args(ctx, mesh_chip_id):
         """Build NCRISC, BRISC, and TRISC compile-time arg lists for routed expert."""
+        _hot = ctx.hot_expert_ids or []
+        _num_hot = len(_hot)
+        _hot_expert_0 = _hot[0] if _num_hot >= 1 else 0
+        _hot_expert_1 = _hot[1] if _num_hot >= 2 else 0
+        _hot_expert_2 = _hot[2] if _num_hot >= 3 else 0
+        _hot_expert_3 = _hot[3] if _num_hot >= 4 else 0
         ncrisc_named_compile_time_args = [
             # Input mcast (sender sharded buffer + receiver)
             ("moe_mcast_src_cb", ctx.rmsnorm_mcast_params["src_cb"]),
@@ -2047,6 +2063,12 @@ class MoeRoutedExpertOp:
             ("down_proj_num_subblocks_k_local", ctx.down_proj_params["num_subblocks_k_local"]),
             ("down_proj_accum_experts", ctx.down_proj_params["accum_experts"]),
             ("down_proj_index_offset", 0),
+            # Hot expert args (shared across gate/up/down matmuls)
+            ("num_hot_experts", _num_hot),
+            ("hot_expert_0", _hot_expert_0),
+            ("hot_expert_1", _hot_expert_1),
+            ("hot_expert_2", _hot_expert_2),
+            ("hot_expert_3", _hot_expert_3),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -2287,6 +2309,12 @@ class MoeRoutedExpertOp:
             ("gate_proj_index_offset", 0),
             ("up_proj_index_offset", 0),
             ("down_proj_index_offset", 0),
+            # Hot expert args (shared across gate/up/down matmuls)
+            ("num_hot_experts", _num_hot),
+            ("hot_expert_0", _hot_expert_0),
+            ("hot_expert_1", _hot_expert_1),
+            ("hot_expert_2", _hot_expert_2),
+            ("hot_expert_3", _hot_expert_3),
             # Testing flag (routing only)
             ("use_hardcoded_expert_index", 1 if ctx.use_hardcoded_expert_index else 0),
             # Routing flag
@@ -5006,6 +5034,7 @@ class MoeOp:
         persistent_mode=False,
         forward_metadata_size_bytes=0,
         metadata_l1_addr=0,
+        hot_expert_ids=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5056,6 +5085,7 @@ class MoeOp:
             semaphores=semaphores,
             cb_id_context=cb_id_context,
             worker_core_grid=worker_core_grid,
+            hot_expert_ids=hot_expert_ids,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -5470,6 +5500,7 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        hot_expert_ids=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -5544,6 +5575,7 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            hot_expert_ids=hot_expert_ids,
         )
 
         # ==================================================================
