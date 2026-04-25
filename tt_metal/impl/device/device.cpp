@@ -513,6 +513,13 @@ void Device::configure_fabric(
                     }
                 } catch (...) {
                     // Cannot resolve channel — conservatively skip this core.
+                    log_warning(
+                        tt::LogMetal,
+                        "compile_fabric: Device {} cannot resolve ETH channel for logical core ({},{}) "
+                        "— unknown exception; core added to dead_eth_logical_cores to avoid relay hang",
+                        this->id_,
+                        lc.x,
+                        lc.y);
                     dead_eth_logical_cores.insert(lc);
                 }
             }
@@ -614,6 +621,13 @@ void Device::configure_fabric(
                     is_skip_reset_chan = skip_soft_reset_channels.count(eth_chan) > 0;
                 } catch (...) {
                     // Cannot resolve channel — conservatively skip canary write.
+                    log_warning(
+                        tt::LogMetal,
+                        "compile_fabric: Device {} cannot resolve ETH channel for logical core ({},{}) "
+                        "— unknown exception; is_skip_reset_chan set to true, skipping host-canary write",
+                        this->id_,
+                        logical_core.x,
+                        logical_core.y);
                     is_skip_reset_chan = true;
                 }
                 if (!is_skip_reset_chan) {
