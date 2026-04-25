@@ -165,7 +165,18 @@ struct MatmulExpertCompressedSRAM {
             if constexpr (CTArgs::accum_experts) {
                 uint32_t num_sram_experts = 0;
                 for (uint32_t i = 0; i < num_active_experts; i++) {
-                    if (is_sram_expert(index_ptr[i])) {
+                    // cb_wait_front on TRISC is UNPACK-only; MATH/PACK never waited
+                    // for the mcast to land. Forward the value via mailbox so
+                    // MATH/PACK never read L1 directly.
+                    uint32_t raw_idx_i = 0;
+                    UNPACK(({
+                        raw_idx_i = static_cast<uint32_t>(index_ptr[i]);
+                        mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx_i);
+                        mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx_i);
+                    }));
+                    MATH(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    PACK(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    if (is_sram_expert(raw_idx_i)) {
                         num_sram_experts++;
                     }
                 }
@@ -176,7 +187,14 @@ struct MatmulExpertCompressedSRAM {
 
                     uint32_t sram_idx = 0;
                     for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                        uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                        uint32_t raw_idx = 0;
+                        UNPACK(({
+                            raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                            mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
+                            mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
+                        }));
+                        MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                        PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                         if (!(is_sram_expert(raw_idx))) {
                             continue;
                         }
@@ -218,7 +236,14 @@ struct MatmulExpertCompressedSRAM {
 
                 uint32_t num_sram_experts_pushed = 0;
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
-                    uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                    uint32_t raw_idx = 0;
+                    UNPACK(({
+                        raw_idx = static_cast<uint32_t>(index_ptr[exp_i]);
+                        mailbox_write(ckernel::ThreadId::MathThreadId, raw_idx);
+                        mailbox_write(ckernel::ThreadId::PackThreadId, raw_idx);
+                    }));
+                    MATH(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+                    PACK(raw_idx = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                     if (!(is_sram_expert(raw_idx))) {
                         continue;
                     }
