@@ -10,6 +10,7 @@ set(HW_JIT_API_HEADERS
     inc/api/debug/dump.h
     inc/api/debug/timing_perturbation.h
     inc/api/debug/device_print.h
+    inc/api/debug/device_print_dispatch.h
     inc/api/debug/dprint_pages.h
     inc/api/debug/dprint_tensix.h
     inc/api/debug/dprint_tile.h
