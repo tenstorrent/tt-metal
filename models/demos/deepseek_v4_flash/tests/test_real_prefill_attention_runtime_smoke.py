@@ -55,6 +55,30 @@ def test_layer_prefill_attention_runtime_selector_loads_layer3_runtime_slice_wit
     assert all(".attn.indexer." not in key for key in keys)
 
 
+def test_layer_prefill_attention_runtime_selector_loads_ratio4_indexer_slice(
+    tmp_path: Path,
+) -> None:
+    snapshot = generate_tiny_hf_checkpoint(
+        tmp_path / "hf",
+        num_hidden_layers=4,
+        num_routed_experts=4,
+        compress_ratios=[0, 0, 4, 128],
+    )
+    config = DeepSeekV4FlashConfig.from_model_path(snapshot)
+    index = RealCheckpointTensorIndex.from_snapshot(snapshot)
+
+    keys = layer_prefill_attention_runtime_keys(index, config=config, layer=2)
+
+    assert "layers.2.attn.indexer.wq_b.weight" in keys
+    assert "layers.2.attn.indexer.weights_proj.weight" in keys
+    assert "layers.2.attn.indexer.compressor.wkv.weight" in keys
+    assert "layers.2.attn.indexer.compressor.wgate.weight" in keys
+    assert "layers.2.attn.indexer.compressor.ape" in keys
+    assert "layers.2.attn.indexer.compressor.norm.weight" in keys
+    assert keys.index("layers.2.attn.indexer.wq_b.weight") > keys.index("layers.2.attn.compressor.norm.weight")
+    assert keys[-2:] == ["layers.2.attn.wo_a.weight", "layers.2.attn.wo_b.weight"]
+
+
 def test_cpu_real_prefill_attention_runtime_smoke_selects_references_and_reports_boundaries(
     tmp_path: Path,
 ) -> None:
@@ -111,6 +135,46 @@ def test_cpu_real_prefill_attention_runtime_smoke_selects_references_and_reports
     }
     assert result["payload_bytes"]["output_projection"] == 5120
     assert result["ttnn_ops"] == []
+    assert result["passed"] is True
+
+
+def test_cpu_real_prefill_attention_runtime_smoke_ratio4_exercises_compressed_indexer_path(
+    tmp_path: Path,
+) -> None:
+    snapshot = generate_tiny_hf_checkpoint(
+        tmp_path / "hf",
+        num_hidden_layers=4,
+        num_routed_experts=4,
+        compress_ratios=[0, 0, 4, 128],
+    )
+
+    result = run_real_prefill_attention_runtime_smoke(
+        snapshot,
+        layer=2,
+        seq_len=8,
+        max_bytes=128 * 1024,
+        cpu_only=True,
+    )
+
+    assert result["mode"] == "cpu-reference"
+    assert result["model"]["compress_ratio"] == 4
+    assert result["output_shapes"]["q_prefill"] == [1, 8, 4, 8]
+    assert result["output_shapes"]["sliding_window_cache"] == [1, 8, 8]
+    assert result["output_shapes"]["compressed_kv"] == [1, 2, 8]
+    assert result["output_shapes"]["index_q"] == [1, 8, 4, 8]
+    assert result["output_shapes"]["index_compressed_kv"] == [1, 2, 8]
+    assert result["output_shapes"]["attention_cache"] == [1, 10, 8]
+    assert result["output_shapes"]["compress_topk_idxs"] == [1, 8, 2]
+    assert result["output_shapes"]["runtime_topk_idxs"] == [1, 8, 10]
+    assert result["sparse_attention_inputs"]["compress_topk_source"] == "learned prefill indexer top-k"
+    assert result["sparse_attention_inputs"]["compressor_executed"] is True
+    assert result["sparse_attention_inputs"]["indexer_executed"] is True
+    assert result["sparse_attention_inputs"]["compressed_cache_length"] == 2
+    assert result["sparse_attention_inputs"]["compressed_topk_valid_count"] > 0
+    assert result["sparse_attention_inputs"]["compressed_tokens_contributed"] is True
+    assert result["sparse_attention_inputs"]["compressed_attention_delta_max"] > 0.0
+    assert result["payload_bytes"]["indexer"] > 0
+    assert result["payload_bytes"]["total"] == 17968
     assert result["passed"] is True
 
 
@@ -176,8 +240,8 @@ def test_cpu_real_prefill_attention_runtime_smoke_cli_outputs_json(tmp_path: Pat
     assert payload["layer"] == 3
     assert payload["payload_bytes"]["total"] == 20240
     assert payload["runtime_scope"]["path"] == (
-        "attn_norm -> real Q/KV cache prep -> sliding-window sparse attention -> "
-        "inverse RoPE -> grouped wo_a -> wo_b"
+        "attn_norm -> real Q/KV cache prep -> optional compressor/indexer -> "
+        "sliding-window + compressed sparse attention -> inverse RoPE -> grouped wo_a -> wo_b"
     )
     assert payload["output_shapes"]["attention_output_projected"] == [1, 1, 4, 32]
     assert payload["host_boundaries"][-2]["name"] == "grouped_wo_a_host"
@@ -199,12 +263,15 @@ def test_real_prefill_attention_runtime_smoke_ttnn_real_snapshot_matches_torch()
 
     result = run_real_prefill_attention_runtime_smoke(
         snapshot,
-        layer=int(os.environ.get("DSV4_FLASH_REAL_PREFILL_ATTENTION_RUNTIME_LAYER", "3")),
+        layer=int(os.environ.get("DSV4_FLASH_REAL_PREFILL_ATTENTION_RUNTIME_LAYER", "2")),
         seq_len=32,
         device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
     )
 
     assert result["passed"], json.dumps(result["accuracy"], indent=2, sort_keys=True)
+    if result["model"]["compress_ratio"] == 4:
+        assert result["sparse_attention_inputs"]["compressed_tokens_contributed"] is True
+        assert result["sparse_attention_inputs"]["indexer_executed"] is True
 
 
 def _available_ttnn_devices() -> tuple[int, str]:
