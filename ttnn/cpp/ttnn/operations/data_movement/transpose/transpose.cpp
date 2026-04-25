@@ -66,14 +66,13 @@ inline Tensor transpose_(
                 // the shard dims — but only when the user didn't explicitly request a memory_layout.
                 // Honoring a user-specified HEIGHT_SHARDED output even in this case avoids silently
                 // overriding the caller's intent.
-                bool wh_shard_spec_valid = true;
                 const bool can_promote_to_width_sharded =
                     !user_requested_layout && N == 1 && C == 1 && shard_spec.shape[1] == W;
                 if (can_promote_to_width_sharded) {
                     std::swap(shard_spec.shape[0], shard_spec.shape[1]);
                     if (a.layout() == Layout::TILE && (shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                                                        shard_spec.shape[1] % tt::constants::TILE_WIDTH != 0)) {
-                        wh_shard_spec_valid = false;
+                        shard_derivation_fallback();
                     } else {
                         output_mem_constructed = MemoryConfig(
                             TensorMemoryLayout::WIDTH_SHARDED, output_mem_constructed.buffer_type(), shard_spec);
@@ -85,13 +84,10 @@ inline Tensor transpose_(
                     if (!adjusted.has_value() ||
                         (a.layout() == Layout::TILE && (adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
                                                         adjusted->shape[1] % tt::constants::TILE_WIDTH != 0))) {
-                        wh_shard_spec_valid = false;
+                        shard_derivation_fallback();
                     } else {
                         output_mem_constructed = output_mem_constructed.with_shard_spec(std::move(adjusted));
                     }
-                }
-                if (!wh_shard_spec_valid) {
-                    shard_derivation_fallback();
                 }
             } else if (transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
                 auto shard_spec = a.shard_spec().value();
@@ -101,14 +97,10 @@ inline Tensor transpose_(
                 output_padded_shape[1] = a.logical_shape()[2];
                 output_padded_shape[2] = tt::round_up(a.logical_shape()[1], tt::constants::TILE_HEIGHT);
                 auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                bool hc_shard_spec_valid = true;
                 if (!adjusted.has_value() || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0) {
-                    hc_shard_spec_valid = false;
+                    shard_derivation_fallback();
                 } else {
                     output_mem_constructed = output_mem_constructed.with_shard_spec(std::move(adjusted));
-                }
-                if (!hc_shard_spec_valid) {
-                    shard_derivation_fallback();
                 }
             }
         } else if (output_mem_config.has_value()) {
