@@ -187,6 +187,7 @@ public:
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
 
     bool is_mmio_capable() const override;
+    bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_; }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

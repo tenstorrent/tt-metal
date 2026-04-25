@@ -149,6 +149,15 @@ protected:
                     chip_id);
                 continue;
             }
+            // Skip devices whose relay path is broken — relay reads will hang indefinitely
+            if (idev->is_fabric_relay_path_broken()) {
+                log_info(
+                    tt::LogMetal,
+                    "[fabric_eth_health:{}] Device {} skipped: relay path broken",
+                    label,
+                    chip_id);
+                continue;
+            }
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
             const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
             for (const auto& [chan_id, _direction] : active_eth_channels) {
