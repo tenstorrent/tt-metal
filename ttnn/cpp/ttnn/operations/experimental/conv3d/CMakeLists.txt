@@ -28,6 +28,7 @@ target_sources(
         conv3d.cpp
         prepare_conv3d_weights.cpp
         device/conv3d_device_operation.cpp
+        device/conv3d_host_utils.cpp
         device/conv3d_program_factory.cpp
 )
 

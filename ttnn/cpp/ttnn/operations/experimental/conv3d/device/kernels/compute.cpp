@@ -160,6 +160,9 @@ void kernel_main() {
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
     constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
     constexpr uint32_t cb_zero_tiled = get_compile_time_arg_val(28);
+    constexpr bool use_l1_prefetch = get_compile_time_arg_val(29) == 1;
+    // 0 = None, 1 = W, 2 = H (mirrors host Conv3dSlideAxis).
+    constexpr uint32_t slide_axis = get_compile_time_arg_val(30);
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -196,10 +199,18 @@ void kernel_main() {
                     }
                 }
 
-                // 3D blocking loops over assigned ranges:
+                // 3D blocking loops over assigned ranges. Loop order matches the
+                // reader so blocks arrive in the same sequence: t -> w -> h for
+                // slide_axis == H, otherwise t -> h -> w.
+                constexpr uint32_t outer_block_size = (slide_axis == 2) ? W_block_size : H_block_size;
+                constexpr uint32_t inner_block_size = (slide_axis == 2) ? H_block_size : W_block_size;
+                const uint32_t outer_start = (slide_axis == 2) ? w_out_start : h_out_start;
+                const uint32_t outer_end = (slide_axis == 2) ? w_out_end : h_out_end;
+                const uint32_t inner_start = (slide_axis == 2) ? h_out_start : w_out_start;
+                const uint32_t inner_end = (slide_axis == 2) ? h_out_end : w_out_end;
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
-                    for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
-                        for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+                    for (uint32_t outer = outer_start; outer < outer_end; outer += outer_block_size) {
+                        for (uint32_t inner = inner_start; inner < inner_end; inner += inner_block_size) {
                             // Fused tilize+matmul: tilize subblock_h rows, then
                             // matmul the batch. Repeat matmul_M_t/subblock_h times.
                             // Saves (M_t - subblock_h) * K_t tiles of L1 vs full M_t*K_t.

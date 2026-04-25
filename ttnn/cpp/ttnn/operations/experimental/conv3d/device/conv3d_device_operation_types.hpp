@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -12,6 +13,31 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
+
+// Internal slide-axis enum. Not exposed in the public Conv3dConfig.
+// Resolved before launch and stored in Conv3dParams so program-cache hashing sees it.
+enum class Conv3dSlideAxis : uint32_t {
+    None = 0,
+    W = 1,
+    H = 2,
+};
+
+struct Conv3dExecutionPolicy {
+    bool use_l1_prefetch = false;
+    Conv3dSlideAxis slide_axis = Conv3dSlideAxis::None;
+
+    // User-declared default ctor disables aggregate, which prevents the reflect
+    // library from also matching this struct (otherwise both compile-time and
+    // reflectable specializations of to_json_t / hash_object collide).
+    Conv3dExecutionPolicy() = default;
+    Conv3dExecutionPolicy(bool use_l1_prefetch_, Conv3dSlideAxis slide_axis_) :
+        use_l1_prefetch(use_l1_prefetch_), slide_axis(slide_axis_) {}
+
+    static constexpr auto attribute_names = std::make_tuple("use_l1_prefetch", "slide_axis");
+    auto attribute_values() const {
+        return std::make_tuple(this->use_l1_prefetch, static_cast<uint32_t>(this->slide_axis));
+    }
+};
 
 struct Conv3dConfig {
     Conv3dConfig(
@@ -86,6 +112,9 @@ struct Conv3dParams {
     std::array<uint32_t, 3> dilation;
     std::string padding_mode;
     uint32_t groups;
+    // Resolved execution policy. Set in ttnn::prim::conv3d before launch so it
+    // participates in compute_program_hash, then consumed by the program factory.
+    Conv3dExecutionPolicy execution_policy;
 };
 
 struct Conv3dInputs {

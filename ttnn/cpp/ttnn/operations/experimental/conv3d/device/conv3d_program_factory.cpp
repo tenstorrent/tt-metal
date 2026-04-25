@@ -4,6 +4,7 @@
 
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
+#include "conv3d_host_utils.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -264,12 +265,26 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t H_shard_max = 0;
     uint32_t W_shard_max = 0;
 
-    const bool has_spatial_reuse = (kT > 1 || kH > 1 || kW > 1);
-    const bool has_no_dilation =
-        (operation_attributes.dilation[0] == 1 && operation_attributes.dilation[1] == 1 &&
-         operation_attributes.dilation[2] == 1);
+    // Consume the resolved execution policy from operation attributes (set
+    // before launch in ttnn::prim::conv3d). Re-run the pure resolver here as a
+    // consistency check so a drifted resolver fails loudly instead of silently
+    // aliasing in the program cache.
+    const Conv3dExecutionPolicy stored_policy = operation_attributes.execution_policy;
+    const Conv3dExecutionPolicy recomputed_policy = resolve_conv3d_execution_policy(
+        operation_attributes, input_tensor.logical_shape(), input_tensor.dtype(), bias_tensor.has_value());
+    TT_FATAL(
+        stored_policy.use_l1_prefetch == recomputed_policy.use_l1_prefetch &&
+            stored_policy.slide_axis == recomputed_policy.slide_axis,
+        "Conv3d execution policy resolver drift: stored=({}, {}) recomputed=({}, {})",
+        stored_policy.use_l1_prefetch,
+        static_cast<uint32_t>(stored_policy.slide_axis),
+        recomputed_policy.use_l1_prefetch,
+        static_cast<uint32_t>(recomputed_policy.slide_axis));
 
-    if (has_spatial_reuse && has_no_dilation) {
+    const bool use_l1_prefetch = stored_policy.use_l1_prefetch;
+    const Conv3dSlideAxis slide_axis = stored_policy.slide_axis;
+
+    if (use_l1_prefetch) {
         // Shard covers the full receptive field span for one spatial block, including padding positions.
         // Do NOT cap at T_in/H_in/W_in — padding positions outside input bounds are stored in the shard
         // (zero-filled or clamped) so that Phase 2 can index without boundary checks.
@@ -279,31 +294,26 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
         uint32_t shard_bytes = shard_positions_max * C_in_block_bytes;
 
-        if (shard_bytes <= l1_prefetch_max_bytes) {
-            cb_input_shard_id = next_cb_index++;
-            tt::tt_metal::create_cb(
-                cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_max, data_format);
+        cb_input_shard_id = next_cb_index++;
+        tt::tt_metal::create_cb(
+            cb_input_shard_id, program, core_grid, C_in_block_bytes, shard_positions_max, data_format);
 
-            log_debug(
-                tt::LogOp,
-                "L1 prefetch: T_shard_max={}, H_shard_max={}, W_shard_max={}, shard_positions={}, "
-                "shard_bytes={}, cb_id={}",
-                T_shard_max,
-                H_shard_max,
-                W_shard_max,
-                shard_positions_max,
-                shard_bytes,
-                cb_input_shard_id);
-        } else {
-            log_debug(
-                tt::LogOp,
-                "L1 prefetch shard ({} bytes) exceeds limit ({} bytes), falling back to direct reader",
-                shard_bytes,
-                l1_prefetch_max_bytes);
-            T_shard_max = 0;
-            H_shard_max = 0;
-            W_shard_max = 0;
-        }
+        log_debug(
+            tt::LogOp,
+            "L1 prefetch: T_shard_max={}, H_shard_max={}, W_shard_max={}, shard_positions={}, "
+            "shard_bytes={}, slide_axis={}, cb_id={}",
+            T_shard_max,
+            H_shard_max,
+            W_shard_max,
+            shard_positions_max,
+            shard_bytes,
+            static_cast<uint32_t>(slide_axis),
+            cb_input_shard_id);
+        TT_FATAL(
+            shard_bytes <= l1_prefetch_max_bytes,
+            "Resolved use_l1_prefetch=true but shard ({} bytes) exceeds budget ({} bytes)",
+            shard_bytes,
+            l1_prefetch_max_bytes);
     }
 
     uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
@@ -382,7 +392,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         T_shard_max,
         H_shard_max,
         W_shard_max,
-        patch_pad_bytes};
+        patch_pad_bytes,
+        (uint32_t)use_l1_prefetch,
+        static_cast<uint32_t>(slide_axis)};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
@@ -443,7 +455,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_subblock_w,
         semaphore_id,
         (uint32_t)use_fp32_partials,
-        cb_zero_tiled_id};
+        cb_zero_tiled_id,
+        (uint32_t)use_l1_prefetch,
+        static_cast<uint32_t>(slide_axis)};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -478,7 +492,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id,
-        cb_zero_tiled_id};
+        cb_zero_tiled_id,
+        (uint32_t)use_l1_prefetch,
+        static_cast<uint32_t>(slide_axis)};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)

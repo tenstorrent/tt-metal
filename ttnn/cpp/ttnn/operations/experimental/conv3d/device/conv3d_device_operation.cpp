@@ -4,6 +4,7 @@
 
 #include "conv3d_device_operation.hpp"
 #include "conv3d_device_operation_types.hpp"
+#include "conv3d_host_utils.hpp"
 #include "conv3d_program_factory.hpp"
 #include "ttnn/operation.hpp"
 #include <array>
@@ -345,7 +346,13 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .dilation =
             (config.dilation != default_dilation && dilation_ == default_dilation) ? config.dilation : dilation_,
         .padding_mode = padding_mode_,
-        .groups = groups_};
+        .groups = groups_,
+        .execution_policy = {}};
+    // Resolve internal execution policy now so it lands in operation attributes
+    // before compute_program_hash() runs. Re-running the same pure resolver
+    // inside the program factory must produce the identical result.
+    operation_attributes.execution_policy = ttnn::experimental::prim::resolve_conv3d_execution_policy(
+        operation_attributes, input_tensor.logical_shape(), input_tensor.dtype(), bias_tensor.has_value());
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
