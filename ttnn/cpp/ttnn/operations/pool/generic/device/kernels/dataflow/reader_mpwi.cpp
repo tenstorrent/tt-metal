@@ -98,6 +98,7 @@ ALWI void initialize_return_indices_data() {
     // Calculate initial index based on padding conditions
     uint32_t init_index = 0;
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
+    constexpr uint32_t inc_rows_to_fill = is_large_kernel ? sticks_per_chunk : window_size_hw;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
     const uint32_t start_row = get_arg_val<uint32_t>(2);
     const uint32_t start_col = get_arg_val<uint32_t>(3);
@@ -145,7 +146,7 @@ ALWI void initialize_return_indices_data() {
     if constexpr (indexes_32_bit) {
         auto fill_inc_32 = [&](experimental::CB& inc_cb, uint32_t inc) __attribute__((always_inline)) {
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
-            for (uint32_t k = 0; k < window_size_hw; ++k) {
+            for (uint32_t k = 0; k < inc_rows_to_fill; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     ptr[k * TILE_WIDTH + c] = inc;
                 }
@@ -183,7 +184,7 @@ ALWI void initialize_return_indices_data() {
             uint16_t inc_16 = (uint16_t)inc;
             uint32_t inc_32_bit = (uint32_t)inc_16 | ((uint32_t)inc_16 << 16);
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
-            for (uint32_t k = 0; k < window_size_hw; ++k) {
+            for (uint32_t k = 0; k < inc_rows_to_fill; ++k) {
                 for (uint32_t c = 0; c < fill_c_32_bit; ++c) {
                     ptr[k * HALF_TILE_WIDTH + c] = inc_32_bit;
                 }
