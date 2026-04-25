@@ -638,6 +638,7 @@ def tokenize_prompt_to_isl(
         (input_ids, attention_mask, tokens): input_ids and attention_mask are [1, max_isl] tensors;
         tokens is a list of token strings (only when debug=True, else None).
     """
+    tokenizer.padding_side = "right"
     inputs = tokenizer(
         prompt_text,
         return_tensors="pt",  # return PyTorch tensors
@@ -650,9 +651,6 @@ def tokenize_prompt_to_isl(
     input_ids: torch.Tensor = inputs.input_ids  # shape [B, 1024] (padded or capped)
     attention_mask: torch.Tensor = inputs.attention_mask
     tokens = tokenizer.convert_ids_to_tokens(input_ids[0].tolist()) if debug else None
-
-    logger.debug(f"Input IDs shape: {input_ids.shape}")
-    logger.debug(f"Attention mask sum: {attention_mask.sum(dim=1)}")  # actual non‑pad tokens
 
     return input_ids, attention_mask, tokens
 
