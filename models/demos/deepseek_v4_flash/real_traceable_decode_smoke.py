@@ -26,7 +26,6 @@ from models.demos.deepseek_v4_flash.real_attention_projection_smoke import (
     _accuracy_summary,
     _metadata_summary,
     _tensor_summary,
-    decode_real_attention_projection_weights,
     deterministic_attention_activation,
     layer_attention_projection_keys,
 )
@@ -42,26 +41,46 @@ from models.demos.deepseek_v4_flash.real_kv_projection_smoke import (
     decode_real_kv_projection_weights,
     layer_kv_projection_keys,
 )
+from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
+    _layer_attention_output_projection_keys,
+    decode_real_prefill_attention_projection_weights,
+)
 from models.demos.deepseek_v4_flash.real_shared_expert_smoke import (
     DEFAULT_SHARED_EXPERT_MAX_BYTES,
     DEFAULT_SHARED_EXPERT_MAX_TENSORS,
     SHARED_EXPERT_TTNN_TILE_MULTIPLE,
     decode_real_shared_expert_weights,
 )
-from models.demos.deepseek_v4_flash.ttnn_attention_projection import AttentionProjectionWeights, TtAttentionProjection
+from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
+    AttentionProjectionWeights,
+    TtAttentionProjection,
+    grouped_output_projection_a,
+)
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 
 REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_TRACEABLE_DECODE_LAYER = 3
 DEFAULT_TRACEABLE_DECODE_SEQ_LEN = 32
 DEFAULT_TRACEABLE_DECODE_CACHE_LEN = 64
+DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS = 4
+DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES = 96 * 1024 * 1024
 DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
-    DEFAULT_ATTENTION_PROJECTION_MAX_TENSORS + DEFAULT_KV_PROJECTION_MAX_TENSORS + DEFAULT_SHARED_EXPERT_MAX_TENSORS + 1
+    DEFAULT_ATTENTION_PROJECTION_MAX_TENSORS
+    + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS
+    + DEFAULT_KV_PROJECTION_MAX_TENSORS
+    + DEFAULT_SHARED_EXPERT_MAX_TENSORS
+    + 1
 )
 DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
-    DEFAULT_ATTENTION_PROJECTION_MAX_BYTES + DEFAULT_KV_PROJECTION_MAX_BYTES + DEFAULT_SHARED_EXPERT_MAX_BYTES + 4096
+    DEFAULT_ATTENTION_PROJECTION_MAX_BYTES
+    + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES
+    + DEFAULT_KV_PROJECTION_MAX_BYTES
+    + DEFAULT_SHARED_EXPERT_MAX_BYTES
+    + 4096
 )
 DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE = 64 * 1024 * 1024
+ATTENTION_OUTPUT_PROJECTION_ATOL = 5e-1
+ATTENTION_OUTPUT_PROJECTION_RTOL = 8e-2
 
 
 @dataclass(frozen=True)
@@ -112,10 +131,12 @@ class TtTraceableDecodeSubpath:
 
     This is intentionally not a full decoder layer. The protected forward covers
     the device-resident query projection, compressed K/V projection and cache
-    append, and shared-expert FFN stepping stone:
+    append, grouped attention output projection, post-attention residual, and
+    shared-expert FFN stepping stone:
     ``hidden -> attn_norm -> wq_a -> q_norm -> wq_b``,
-    ``attn_norm -> wkv -> kv_norm -> update_cache``, and
-    ``hidden -> ffn_norm -> shared expert -> residual``.
+    ``attn_norm -> wkv -> kv_norm -> update_cache``,
+    ``attention_output -> grouped wo_a -> wo_b -> residual``, and
+    ``post_attention_residual -> ffn_norm -> shared expert -> residual``.
     """
 
     def __init__(
@@ -143,6 +164,8 @@ class TtTraceableDecodeSubpath:
             num_heads=int(config.num_attention_heads),
             head_dim=int(config.head_dim),
             norm_eps=float(config.rms_norm_eps),
+            o_groups=int(config.o_groups),
+            o_lora_rank=int(config.o_lora_rank),
             dtype=dtype,
             memory_config=memory_config,
         )
@@ -188,8 +211,11 @@ class TtTraceableDecodeSubpath:
             memory_config=memory_config,
         )
 
-    def __call__(self, hidden_states) -> dict[str, object]:
+    def __call__(self, hidden_states, attention_output) -> dict[str, object]:
         _validate_ttnn_hidden_states(hidden_states, hidden_size=int(self.config.hidden_size))
+        _validate_ttnn_attention_output(
+            attention_output, q_output_dim=int(self.config.num_attention_heads) * int(self.config.head_dim)
+        )
         attn_norm_output = ttnn.rms_norm(
             hidden_states,
             weight=self.attn_norm,
@@ -210,14 +236,16 @@ class TtTraceableDecodeSubpath:
             _kv_update_memory_config(device=self.device, token_rows=int(kv_output.shape[-2]), width=self.kv_output_dim),
         )
         self.kv_cache = ttnn.update_cache(self.kv_cache, kv_update, self.cache_update_index)
+        attention_projected = self.attention.project_output(attention_output)
+        post_attention_residual = ttnn.add(hidden_states, attention_projected, memory_config=self.memory_config)
         ffn_norm_output = ttnn.rms_norm(
-            hidden_states,
+            post_attention_residual,
             weight=self.ffn_norm,
             epsilon=float(self.config.rms_norm_eps),
             memory_config=self.memory_config,
         )
         shared_output = self.shared_expert(ffn_norm_output)
-        residual_output = ttnn.add(hidden_states, shared_output, memory_config=self.memory_config)
+        residual_output = ttnn.add(post_attention_residual, shared_output, memory_config=self.memory_config)
         return {
             "attn_norm_output": attn_norm_output,
             "q_rank_norm": q_rank_norm,
@@ -225,6 +253,8 @@ class TtTraceableDecodeSubpath:
             "kv_linear": kv_linear,
             "kv_output": kv_output,
             "kv_cache": self.kv_cache,
+            "attention_projected": attention_projected,
+            "post_attention_residual": post_attention_residual,
             "ffn_norm_output": ffn_norm_output,
             "shared_output": shared_output,
             "residual_output": residual_output,
@@ -274,11 +304,17 @@ def run_traceable_decode_subpath_smoke(
     )
     weights = decode_traceable_decode_subpath_weights(tensors, config=config, layer=layer)
     activation = deterministic_attention_activation(hidden_size=int(config.hidden_size), seq_len=seq_len)
+    attention_output = deterministic_traceable_attention_output(
+        q_output_dim=int(config.num_attention_heads) * int(config.head_dim),
+        seq_len=seq_len,
+    )
     replay_activation = _replay_activation(activation)
+    replay_attention_output = _replay_attention_output(attention_output)
     reference = build_torch_traceable_decode_subpath_reference(
         weights,
         config=config,
         activation=activation,
+        attention_output=attention_output,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
     )
@@ -286,6 +322,7 @@ def run_traceable_decode_subpath_smoke(
         weights,
         config=config,
         activation=replay_activation,
+        attention_output=replay_attention_output,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
     )
@@ -301,7 +338,9 @@ def run_traceable_decode_subpath_smoke(
         metadata_groups=metadata_groups,
         weights=weights,
         activation=activation,
+        attention_output=attention_output,
         replay_activation=replay_activation,
+        replay_attention_output=replay_attention_output,
         reference=reference,
         replay_reference=replay_reference,
         max_tensors=max_tensors,
@@ -327,7 +366,9 @@ def run_traceable_decode_subpath_smoke(
         weights,
         config=config,
         activation=activation,
+        attention_output=attention_output,
         replay_activation=replay_activation,
+        replay_attention_output=replay_attention_output,
         device_id=device_id,
         trace_region_size=trace_region_size,
         cache_len=cache_len,
@@ -349,16 +390,29 @@ def run_traceable_decode_subpath_smoke(
         "ttnn.rms_norm(kv_norm)",
         "ttnn.to_memory_config(kv_update_height_sharded)",
         "ttnn.update_cache(kv_projection_cache)",
+        "ttnn.slice(attention_output_group_0..N)",
+        "ttnn.linear(grouped_wo_a_group_0..N)",
+        "ttnn.concat(grouped_wo_a_rank)",
+        "ttnn.linear(wo_b)",
+        "ttnn.add(hidden,attention_projected)",
         "ttnn.rms_norm(ffn_norm)",
         "ttnn.linear(shared_w1)",
         "ttnn.linear(shared_w3)",
         "ttnn.mul(silu(shared_gate),shared_up)",
         "ttnn.linear(shared_w2)",
-        "ttnn.add(hidden,shared_output)",
+        "ttnn.add(post_attention_residual,shared_output)",
     ]
+    result["trace_capture"]["traced_operations"] = list(result["ttnn_ops"])
     result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs.items()}
     result["accuracy"] = {
-        name: _accuracy_summary(expected, ttnn_outputs[name], pcc_threshold=pcc, rtol=rtol, atol=atol)
+        name: _traceable_accuracy_summary(
+            name,
+            expected,
+            ttnn_outputs[name],
+            pcc_threshold=pcc,
+            rtol=rtol,
+            atol=atol,
+        )
         for name, expected in replay_reference.items()
     }
     result["passed"] = bool(
@@ -379,6 +433,7 @@ def load_traceable_decode_subpath_slice(
 ) -> tuple[dict[str, torch.Tensor], list[TensorMetadata], dict[str, list[str]]]:
     index = RealCheckpointTensorIndex.from_snapshot(snapshot_dir)
     attention_keys = layer_attention_projection_keys(index, layer=layer)
+    attention_output_keys = _layer_attention_output_projection_keys(index, layer=layer)
     kv_keys = [key for key in layer_kv_projection_keys(index, layer=layer) if key not in attention_keys]
     ffn_norm_keys = [f"layers.{layer}.ffn_norm.weight"]
     for key in ffn_norm_keys:
@@ -386,12 +441,13 @@ def load_traceable_decode_subpath_slice(
     shared_expert_keys = layer_shared_expert_mlp_keys(index, layer=layer)
     keys = {
         "attention_query": attention_keys,
+        "attention_output": attention_output_keys,
         "kv_projection": kv_keys,
         "ffn_norm": ffn_norm_keys,
         "shared_expert": shared_expert_keys,
     }
     tensors, metadata = index.load_tensors(
-        _unique_keys([*attention_keys, *kv_keys, *ffn_norm_keys, *shared_expert_keys]),
+        _unique_keys([*attention_keys, *attention_output_keys, *kv_keys, *ffn_norm_keys, *shared_expert_keys]),
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
@@ -404,7 +460,7 @@ def decode_traceable_decode_subpath_weights(
     config: DeepSeekV4FlashConfig,
     layer: int,
 ) -> TraceableDecodeWeights:
-    attention = decode_real_attention_projection_weights(tensors, config=config, layer=layer)
+    attention = decode_real_prefill_attention_projection_weights(tensors, config=config, layer=layer)
     kv = decode_real_kv_projection_weights(tensors, config=config, layer=layer)
     ffn_norm_key = f"layers.{layer}.ffn_norm.weight"
     if ffn_norm_key not in tensors:
@@ -428,10 +484,12 @@ def build_torch_traceable_decode_subpath_reference(
     *,
     config: DeepSeekV4FlashConfig,
     activation: torch.Tensor,
+    attention_output: torch.Tensor,
     cache_len: int,
     cache_update_index: int,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
+    _validate_attention_output(attention_output, q_output_dim=int(config.num_attention_heads) * int(config.head_dim))
     attn_norm_output = rms_norm(
         activation[:, 0],
         weights.attn_norm,
@@ -445,8 +503,15 @@ def build_torch_traceable_decode_subpath_reference(
     kv_cache = torch.zeros((1, 1, int(cache_len), _kv_output_dim(config)), dtype=torch.bfloat16)
     kv_cache[:, :, int(cache_update_index) : int(cache_update_index) + 1, :] = kv_output[:, :, :1, :]
 
+    if weights.attention.wo_a is None or weights.attention.wo_b is None:
+        raise ValueError("Traceable decode reference requires output projection weights")
+    output_rank = grouped_output_projection_a(
+        attention_output[:, 0], weights.attention.wo_a, o_groups=int(config.o_groups)
+    )
+    attention_projected = F.linear(output_rank.float(), weights.attention.wo_b.float()).unsqueeze(1).to(torch.bfloat16)
+    post_attention_residual = (activation.float() + attention_projected.float()).to(torch.bfloat16)
     ffn_norm_output = rms_norm(
-        activation[:, 0],
+        post_attention_residual[:, 0],
         weights.ffn_norm,
         eps=float(config.rms_norm_eps),
     ).unsqueeze(1)
@@ -461,7 +526,7 @@ def build_torch_traceable_decode_subpath_reference(
         .reshape(activation.shape[0], activation.shape[-2], int(config.hidden_size))
         .unsqueeze(1)
     )
-    residual_output = (activation.float() + shared_output.float()).to(torch.bfloat16)
+    residual_output = (post_attention_residual.float() + shared_output.float()).to(torch.bfloat16)
     return {
         "attn_norm_output": attn_norm_output.to(torch.bfloat16),
         "q_rank_norm": q_rank_norm.to(torch.bfloat16),
@@ -469,6 +534,8 @@ def build_torch_traceable_decode_subpath_reference(
         "kv_linear": kv_linear.unsqueeze(1).to(torch.bfloat16),
         "kv_output": kv_output.to(torch.bfloat16),
         "kv_cache": kv_cache,
+        "attention_projected": attention_projected.to(torch.bfloat16),
+        "post_attention_residual": post_attention_residual.to(torch.bfloat16),
         "ffn_norm_output": ffn_norm_output.to(torch.bfloat16),
         "shared_output": shared_output.to(torch.bfloat16),
         "residual_output": residual_output,
@@ -491,11 +558,6 @@ def default_guarded_symbols() -> tuple[GuardedSymbol, ...]:
             "models.demos.deepseek_v4_flash.ttnn_attention_projection",
             "grouped_output_projection_a",
             "grouped_output_projection_a(host_wo_a)",
-        ),
-        GuardedSymbol(
-            "models.demos.deepseek_v4_flash.ttnn_attention_projection",
-            "TtAttentionProjection.project_output",
-            "TtAttentionProjection.project_output(host_wo_a)",
         ),
         GuardedSymbol(
             "models.demos.deepseek_v4_flash.ttnn_sparse_attention",
@@ -587,7 +649,9 @@ def _run_ttnn_traceable_decode_subpath(
     *,
     config: DeepSeekV4FlashConfig,
     activation: torch.Tensor,
+    attention_output: torch.Tensor,
     replay_activation: torch.Tensor,
+    replay_attention_output: torch.Tensor,
     device_id: int,
     trace_region_size: int,
     cache_len: int,
@@ -615,17 +679,25 @@ def _run_ttnn_traceable_decode_subpath(
             ttnn.TILE_LAYOUT,
             device,
         )
+        tt_attention_output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(tuple(attention_output.shape)),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            device,
+        )
         _copy_activation_to_device(activation, tt_input)
-        module(tt_input)
+        _copy_activation_to_device(attention_output, tt_attention_output)
+        module(tt_input, tt_attention_output)
         ttnn.synchronize_device(device)
 
         with TraceableDecodeHostGuard() as guard:
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            output_tensors = module(tt_input)
+            output_tensors = module(tt_input, tt_attention_output)
             ttnn.end_trace_capture(device, trace_id, cq_id=0)
         ttnn.synchronize_device(device)
 
         _copy_activation_to_device(replay_activation, tt_input)
+        _copy_activation_to_device(replay_attention_output, tt_attention_output)
         ttnn.synchronize_device(device)
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(device)
@@ -669,7 +741,9 @@ def _base_result(
     metadata_groups: Mapping[str, Sequence[TensorMetadata]],
     weights: TraceableDecodeWeights,
     activation: torch.Tensor,
+    attention_output: torch.Tensor,
     replay_activation: torch.Tensor,
+    replay_attention_output: torch.Tensor,
     reference: Mapping[str, torch.Tensor],
     replay_reference: Mapping[str, torch.Tensor],
     max_tensors: int,
@@ -709,6 +783,9 @@ def _base_result(
             "head_dim": int(config.head_dim),
             "q_output_dim": int(config.num_attention_heads) * int(config.head_dim),
             "kv_output_dim": _kv_output_dim(config),
+            "o_groups": int(config.o_groups),
+            "o_lora_rank": int(config.o_lora_rank),
+            "attention_output_rank_dim": int(config.o_groups) * int(config.o_lora_rank),
             "moe_intermediate_size": int(config.moe_intermediate_size),
             "n_shared_experts": int(config.n_shared_experts),
             "shared_intermediate_size": int(config.moe_intermediate_size) * int(config.n_shared_experts),
@@ -728,14 +805,20 @@ def _base_result(
                 "ttnn.rms_norm(kv_norm)",
                 "ttnn.to_memory_config(kv_update_height_sharded)",
                 "ttnn.update_cache(kv_projection_cache)",
+                "TtAttentionProjection.project_output",
+                "ttnn.slice(attention_output_group_0..N)",
+                "ttnn.linear(grouped_wo_a_group_0..N)",
+                "ttnn.concat(grouped_wo_a_rank)",
+                "ttnn.linear(wo_b)",
+                "ttnn.add(hidden,attention_projected)",
                 "ttnn.rms_norm(ffn_norm)",
                 "TtSharedExpertMLP",
-                "ttnn.add(hidden,shared_output)",
+                "ttnn.add(post_attention_residual,shared_output)",
             ],
             "path": (
-                "decode hidden state -> attn_norm/query projection plus K/V projection/cache append, and "
-                "decode hidden state -> "
-                "ffn_norm/shared expert/residual"
+                "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
+                "deterministic device attention tensor -> grouped wo_a/wo_b/post-attention residual; "
+                "post-attention residual -> ffn_norm/shared expert/residual"
             ),
             "logical_decode_token_policy": (
                 "the first token is the logical decode token; tensor shape is tile-padded/static for trace replay"
@@ -743,7 +826,7 @@ def _base_result(
             "excluded_from_trace": [
                 "K/V RoPE split and final sparse-attention cache read path",
                 "host sparse-attention gather/softmax/reduction",
-                "grouped wo_a attention output projection",
+                "real sparse-attention output production; deterministic attention tensor is uploaded before trace",
                 "router scoring/top-k/hash selection",
                 "routed expert gather/scatter/combine",
                 "cache advancement beyond the fixed traced update index",
@@ -756,6 +839,7 @@ def _base_result(
         "loaded_real_tensor_groups": loaded_groups,
         "payload_bytes": {
             "attention_query": loaded_groups["attention_query"]["payload_bytes"],
+            "attention_output": loaded_groups["attention_output"]["payload_bytes"],
             "kv_projection": loaded_groups["kv_projection"]["payload_bytes"],
             "ffn_norm": loaded_groups["ffn_norm"]["payload_bytes"],
             "shared_expert": loaded_groups["shared_expert"]["payload_bytes"],
@@ -766,6 +850,8 @@ def _base_result(
             "q_norm": _tensor_summary(weights.attention.q_norm),
             "wq_a": _tensor_summary(weights.attention.wq_a),
             "wq_b": _tensor_summary(weights.attention.wq_b),
+            "wo_a": _tensor_summary(weights.attention.wo_a),
+            "wo_b": _tensor_summary(weights.attention.wo_b),
             "wkv": _tensor_summary(weights.kv.wkv),
             "kv_norm": _tensor_summary(weights.kv.kv_norm),
             "kv_cache_initial": _tensor_summary(torch.zeros((1, 1, int(cache_len), _kv_output_dim(config)))),
@@ -790,6 +876,7 @@ def _base_result(
             "guarded_symbols": guarded_labels,
             "ttnn_to_torch_guarded": "ttnn.to_torch" in guarded_labels,
             "host_boundaries_inside_trace": [],
+            "traced_operations": [],
         },
         "trace_capture_attempted": False,
         "trace_capture_passed": False,
@@ -819,6 +906,14 @@ def _base_result(
                 "description": "static-shape decode activation is copied into a preallocated device tensor outside the guard",
             },
             {
+                "name": "attention_output_host_to_device",
+                "location": "before trace capture and before replay",
+                "description": (
+                    "deterministic sparse-attention output placeholder is copied into a preallocated device tensor "
+                    "outside the guard because sparse attention is not yet trace-captured"
+                ),
+            },
+            {
                 "name": "trace_output_readback",
                 "location": "after trace replay",
                 "description": "TTNN outputs are copied to host after replay for accuracy checks only",
@@ -829,6 +924,7 @@ def _base_result(
             "real_weight_decode_to_bf16",
             "kv_cache_zero_init_host_to_device",
             "activation_host_to_device",
+            "attention_output_host_to_device",
             "trace_output_readback",
         ],
         "reference_ops": [
@@ -839,14 +935,19 @@ def _base_result(
             "torch.linear(wkv)",
             "torch.rms_norm_reference(kv_norm)",
             "torch.cache_update_reference",
+            "torch.grouped_output_projection_a",
+            "torch.linear(wo_b)",
+            "torch.add(hidden,attention_projected)",
             "torch.rms_norm_reference(ffn_norm)",
             "torch.shared_swiglu_expert_reference",
-            "torch.add(hidden,shared_output)",
+            "torch.add(post_attention_residual,shared_output)",
         ],
         "ttnn_ops": [],
         "inputs": {
             "capture_activation": _tensor_summary(activation),
+            "capture_attention_output": _tensor_summary(attention_output),
             "replay_activation": _tensor_summary(replay_activation),
+            "replay_attention_output": _tensor_summary(replay_attention_output),
         },
         "reference": {name: _tensor_summary(value) for name, value in reference.items()},
         "replay_reference": {name: _tensor_summary(value) for name, value in replay_reference.items()},
@@ -976,9 +1077,52 @@ def _guard_status(trace_capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _traceable_accuracy_summary(
+    name: str,
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    *,
+    pcc_threshold: float,
+    rtol: float,
+    atol: float,
+) -> dict[str, Any]:
+    projection_outputs = {"attention_projected", "post_attention_residual", "residual_output"}
+    local_rtol = max(float(rtol), ATTENTION_OUTPUT_PROJECTION_RTOL) if name in projection_outputs else float(rtol)
+    local_atol = max(float(atol), ATTENTION_OUTPUT_PROJECTION_ATOL) if name in projection_outputs else float(atol)
+    summary = _accuracy_summary(
+        expected,
+        actual,
+        pcc_threshold=pcc_threshold,
+        rtol=local_rtol,
+        atol=local_atol,
+    )
+    if name in projection_outputs:
+        summary["tolerance_note"] = "grouped wo_a/wo_b projection uses relaxed absolute tolerance; PCC remains enforced"
+    return summary
+
+
 def _replay_activation(activation: torch.Tensor) -> torch.Tensor:
     token_scale = torch.linspace(1.05, 0.95, steps=activation.shape[-2], dtype=torch.float32).reshape(1, 1, -1, 1)
     return (activation.float().flip(-2) * token_scale - 0.03125).to(torch.bfloat16).contiguous()
+
+
+def deterministic_traceable_attention_output(*, q_output_dim: int, seq_len: int) -> torch.Tensor:
+    if q_output_dim <= 0:
+        raise ValueError(f"q_output_dim must be positive, got {q_output_dim}")
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+
+    values = torch.linspace(-0.45, 0.55, steps=seq_len * q_output_dim, dtype=torch.float32)
+    attention = values.reshape(seq_len, q_output_dim)
+    attention = attention - attention.mean(dim=-1, keepdim=True)
+    attention = attention * torch.rsqrt(attention.square().mean(dim=-1, keepdim=True) + 1e-6)
+    token_offsets = torch.linspace(0.03, -0.03, steps=seq_len, dtype=torch.float32).reshape(seq_len, 1)
+    return (attention + token_offsets).reshape(1, 1, seq_len, q_output_dim).to(torch.bfloat16).contiguous()
+
+
+def _replay_attention_output(attention_output: torch.Tensor) -> torch.Tensor:
+    token_scale = torch.linspace(0.9, 1.1, steps=attention_output.shape[-2], dtype=torch.float32).reshape(1, 1, -1, 1)
+    return (attention_output.float().roll(shifts=1, dims=-2) * token_scale + 0.015625).to(torch.bfloat16).contiguous()
 
 
 def _validate_ttnn_hidden_states(hidden_states, *, hidden_size: int) -> None:
@@ -991,6 +1135,16 @@ def _validate_ttnn_hidden_states(hidden_states, *, hidden_size: int) -> None:
         raise ValueError("hidden_states must contain at least one token")
 
 
+def _validate_ttnn_attention_output(attention_output, *, q_output_dim: int) -> None:
+    shape = tuple(attention_output.shape)
+    if len(shape) != 4 or shape[:2] != (1, 1):
+        raise ValueError(f"attention_output must have shape [1, 1, tokens, q_output_dim], got {shape}")
+    if int(shape[-1]) != int(q_output_dim):
+        raise ValueError(f"attention_output width must be {q_output_dim}, got {shape[-1]}")
+    if int(shape[-2]) <= 0:
+        raise ValueError("attention_output must contain at least one token")
+
+
 def _validate_activation(activation: torch.Tensor, *, hidden_size: int) -> None:
     if activation.ndim != 4 or tuple(activation.shape[:2]) != (1, 1):
         raise ValueError(f"activation must have shape [1, 1, tokens, hidden], got {tuple(activation.shape)}")
@@ -998,6 +1152,17 @@ def _validate_activation(activation: torch.Tensor, *, hidden_size: int) -> None:
         raise ValueError(f"activation hidden size must be {hidden_size}, got {activation.shape[-1]}")
     if int(activation.shape[-2]) <= 0:
         raise ValueError("activation must contain at least one token")
+
+
+def _validate_attention_output(attention_output: torch.Tensor, *, q_output_dim: int) -> None:
+    if attention_output.ndim != 4 or tuple(attention_output.shape[:2]) != (1, 1):
+        raise ValueError(
+            f"attention_output must have shape [1, 1, tokens, q_output_dim], got {tuple(attention_output.shape)}"
+        )
+    if int(attention_output.shape[-1]) != int(q_output_dim):
+        raise ValueError(f"attention_output width must be {q_output_dim}, got {attention_output.shape[-1]}")
+    if int(attention_output.shape[-2]) <= 0:
+        raise ValueError("attention_output must contain at least one token")
 
 
 def _validate_smoke_args(

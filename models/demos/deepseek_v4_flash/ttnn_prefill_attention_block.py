@@ -29,9 +29,8 @@ class TtPrefillAttentionBlock(LightweightModule):
     ``topk_idxs`` may still be provided explicitly as a host torch tensor shaped
     ``[batch, seq_len, topk]``; when omitted, the block computes compressed-KV
     sparse indices through ``TtPrefillIndexer``. Compressor overlap pooling,
-    indexer top-k, sparse gather plus sink-softmax reduction, and grouped
-    ``wo_a`` remain host-side fallbacks owned by the underlying stepping-stone
-    modules.
+    indexer top-k, and sparse gather plus sink-softmax reduction remain
+    host-side fallbacks owned by the underlying stepping-stone modules.
     """
 
     def __init__(

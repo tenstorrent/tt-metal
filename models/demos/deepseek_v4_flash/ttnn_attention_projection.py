@@ -30,9 +30,9 @@ class TtAttentionProjection(LightweightModule):
     The q path runs on TTNN as ``wq_a -> RMSNorm(q_rank) -> wq_b`` and returns a
     TTNN tensor shaped ``[batch, 1, tokens, num_heads * head_dim]``.
 
-    The optional output projection is intentionally split: grouped ``wo_a`` runs
-    on host because this slice does not add a grouped TTNN linear primitive, then
-    ``wo_b`` runs as a TTNN linear projection back to hidden size.
+    The optional output projection runs grouped ``wo_a`` as a fixed sequence of
+    per-group TTNN linear ops, concatenates the rank slices on device, then runs
+    ``wo_b`` as a TTNN linear projection back to hidden size.
     """
 
     def __init__(
@@ -74,7 +74,16 @@ class TtAttentionProjection(LightweightModule):
         self.wq_a = _to_tt_linear_weight(weights.wq_a, device=device, dtype=dtype, memory_config=memory_config)
         self.q_norm = _to_tt_norm_weight(weights.q_norm, device=device, dtype=dtype, memory_config=memory_config)
         self.wq_b = _to_tt_linear_weight(weights.wq_b, device=device, dtype=dtype, memory_config=memory_config)
-        self.wo_a = None if weights.wo_a is None else weights.wo_a.float().contiguous()
+        self.wo_a = None
+        if weights.wo_a is not None:
+            self.wo_a = _to_tt_grouped_output_projection_weights(
+                weights.wo_a,
+                o_groups=int(self.o_groups),
+                o_lora_rank=int(self.o_lora_rank),
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
         self.wo_b = (
             None
             if weights.wo_b is None
@@ -143,20 +152,20 @@ class TtAttentionProjection(LightweightModule):
         if self.wo_a is None or self.wo_b is None or self.o_groups is None:
             raise RuntimeError("Output projection weights were not loaded")
 
-        host_output = _ttnn_projection_to_torch_3d(
-            attention_output,
-            expected_width=self.q_output_dim,
-            label="attention_output",
-        )
-        output_rank = grouped_output_projection_a(host_output, self.wo_a, o_groups=self.o_groups)
-        tt_output_rank = ttnn.from_torch(
-            output_rank.unsqueeze(1).to(torch.bfloat16),
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.memory_config,
-        )
-        return ttnn.linear(tt_output_rank, self.wo_b, memory_config=self.memory_config)
+        group_input_dim = self.q_output_dim // self.o_groups
+        output_rank_groups = []
+        for group, group_weight in enumerate(self.wo_a):
+            start = group * group_input_dim
+            end = start + group_input_dim
+            group_attention = ttnn.slice(
+                attention_output,
+                (0, 0, 0, start),
+                (attention_output.shape[0], attention_output.shape[1], attention_output.shape[2], end),
+                memory_config=self.memory_config,
+            )
+            output_rank_groups.append(ttnn.linear(group_attention, group_weight, memory_config=self.memory_config))
+        output_rank = ttnn.concat(output_rank_groups, dim=-1, memory_config=self.memory_config)
+        return ttnn.linear(output_rank, self.wo_b, memory_config=self.memory_config)
 
 
 def load_attention_projection_weights(
@@ -309,6 +318,28 @@ def _to_tt_linear_weight(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=memory_config,
+    )
+
+
+def _to_tt_grouped_output_projection_weights(
+    weight: torch.Tensor,
+    *,
+    o_groups: int,
+    o_lora_rank: int,
+    device,
+    dtype,
+    memory_config,
+):
+    if weight.shape[0] != o_groups * o_lora_rank:
+        raise ValueError(f"wo_a output dim must be {o_groups * o_lora_rank}, got {weight.shape[0]}")
+    return tuple(
+        _to_tt_linear_weight(
+            weight[group * o_lora_rank : (group + 1) * o_lora_rank],
+            device=device,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
+        for group in range(o_groups)
     )
 
 

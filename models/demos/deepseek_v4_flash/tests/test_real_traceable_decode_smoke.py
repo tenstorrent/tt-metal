@@ -74,25 +74,47 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         "ttnn.rms_norm(kv_norm)",
         "ttnn.to_memory_config(kv_update_height_sharded)",
         "ttnn.update_cache(kv_projection_cache)",
+        "TtAttentionProjection.project_output",
+        "ttnn.slice(attention_output_group_0..N)",
+        "ttnn.linear(grouped_wo_a_group_0..N)",
+        "ttnn.concat(grouped_wo_a_rank)",
+        "ttnn.linear(wo_b)",
+        "ttnn.add(hidden,attention_projected)",
         "ttnn.rms_norm(ffn_norm)",
         "TtSharedExpertMLP",
-        "ttnn.add(hidden,shared_output)",
+        "ttnn.add(post_attention_residual,shared_output)",
     ]
     assert "router scoring/top-k/hash selection" in result["traceable_decode_scope"]["excluded_from_trace"]
+    assert (
+        "real sparse-attention output production; deterministic attention tensor is uploaded before trace"
+        in result["traceable_decode_scope"]["excluded_from_trace"]
+    )
     assert result["loaded_tensor_groups"]["attention_query"]["count"] == 4
+    assert result["loaded_tensor_groups"]["attention_output"]["count"] == 2
+    assert result["loaded_tensor_groups"]["attention_output"]["canonical_keys"] == [
+        "layers.3.attn.wo_a.weight",
+        "layers.3.attn.wo_b.weight",
+    ]
     assert result["loaded_tensor_groups"]["kv_projection"]["count"] == 2
     assert result["loaded_tensor_groups"]["ffn_norm"]["canonical_keys"] == ["layers.3.ffn_norm.weight"]
     assert result["loaded_tensor_groups"]["shared_expert"]["count"] == 6
+    assert result["payload_bytes"]["attention_output"] == 5120
     assert result["payload_bytes"]["kv_projection"] == 544
-    assert result["payload_bytes"]["total"] == 9068
+    assert result["payload_bytes"]["total"] == 14188
     assert result["decoded_tensors"]["wq_a"]["shape"] == [16, 32]
     assert result["decoded_tensors"]["wq_b"]["shape"] == [32, 16]
+    assert result["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
+    assert result["decoded_tensors"]["wo_b"]["shape"] == [32, 64]
     assert result["decoded_tensors"]["wkv"]["shape"] == [8, 32]
     assert result["decoded_tensors"]["kv_norm"]["shape"] == [8]
     assert result["decoded_tensors"]["shared_w1"]["shape"] == [32, 32]
+    assert result["inputs"]["capture_attention_output"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["kv_output"]["shape"] == [1, 1, 4, 8]
     assert result["reference"]["kv_cache"]["shape"] == [1, 1, 64, 8]
+    assert result["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
+    assert result["reference"]["post_attention_residual"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["residual_output"]["shape"] == [1, 1, 4, 32]
+    assert "attention_output_host_to_device" in result["host_boundaries_outside_trace"]
     assert result["accuracy"]["cpu_reference"]["passed"] is True
 
 
@@ -129,7 +151,10 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["host_boundaries_inside_trace"] == []
     assert payload["traceable_decode_scope"]["not_full_forward"] is True
     assert payload["cache_update"]["update_index"] == 4
-    assert payload["payload_bytes"]["total"] == 9068
+    assert payload["payload_bytes"]["attention_output"] == 5120
+    assert payload["payload_bytes"]["total"] == 14188
+    assert payload["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
+    assert payload["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
 
 
 def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
@@ -160,4 +185,11 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["guard_status"]["ttnn_to_torch_guarded"] is True
     assert result["host_boundaries_inside_trace"] == []
     assert result["cache_update"]["device_resident_inside_trace"] is True
+    assert "ttnn.linear(grouped_wo_a_group_0..N)" in result["trace_capture"]["traced_operations"]
+    assert (
+        "real sparse-attention output production; deterministic attention tensor is uploaded before trace"
+        in result["traceable_decode_scope"]["excluded_from_trace"]
+    )
+    assert result["accuracy"]["attention_projected"]["passed"] is True
+    assert result["accuracy"]["post_attention_residual"]["passed"] is True
     assert result["accuracy"]["kv_cache"]["passed"] is True
