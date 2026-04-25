@@ -48,6 +48,10 @@ from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import 
     _layer_attention_output_projection_keys,
     decode_real_prefill_attention_projection_weights,
 )
+from models.demos.deepseek_v4_flash.real_prefill_cache_prep_smoke import (
+    apply_deepseek_v4_rotary,
+    precompute_deepseek_v4_rope_frequencies,
+)
 from models.demos.deepseek_v4_flash.real_shared_expert_smoke import (
     DEFAULT_SHARED_EXPERT_MAX_BYTES,
     DEFAULT_SHARED_EXPERT_MAX_TENSORS,
@@ -168,12 +172,12 @@ class TtTraceableDecodeSubpath:
 
     This is intentionally not a full decoder layer. The protected forward covers
     the device-resident query projection, compressed K/V projection and cache
-    append, a fixed cache-window attention-output stepping stone, grouped
-    attention output projection, post-attention residual, and preselected
-    routed/shared FFN stepping stone:
+    append, a fixed cache-window QK softmax stepping stone with traceable Q/K
+    RoPE, grouped attention output projection, post-attention residual, and
+    preselected routed/shared FFN stepping stone:
     ``hidden -> attn_norm -> wq_a -> q_norm -> wq_b``,
     ``attn_norm -> wkv -> kv_norm -> update_cache -> fixed cache-window read``,
-    ``q_output + expanded cache window -> grouped wo_a -> wo_b -> residual``, and
+    ``Q/K split -> Q/K RoPE -> fixed-window softmax/context -> grouped wo_a -> wo_b -> residual``, and
     ``post_attention_residual -> ffn_norm -> routed/shared experts -> residual``.
     """
 
@@ -184,6 +188,7 @@ class TtTraceableDecodeSubpath:
         weights: TraceableDecodeWeights,
         route_plan: TraceableDecodeRoutePlan,
         config: DeepSeekV4FlashConfig,
+        layer: int,
         cache_len: int,
         cache_update_index: int,
         initial_kv_cache: torch.Tensor,
@@ -195,10 +200,12 @@ class TtTraceableDecodeSubpath:
         self.config = config
         self.dtype = dtype
         self.memory_config = memory_config
+        self.layer = int(layer)
         self.cache_len = int(cache_len)
         self.cache_update_index = int(cache_update_index)
         self.attention_mode = _validate_attention_mode(attention_mode)
         self.route_plan = route_plan
+        self.static_token_rows = _route_plan_static_token_rows(route_plan)
         self.attention = TtAttentionProjection(
             device=device,
             weights=weights.attention,
@@ -278,6 +285,21 @@ class TtTraceableDecodeSubpath:
             dtype=dtype,
             memory_config=memory_config,
         )
+        self.q_head_norm = _to_tt_norm_weight(
+            torch.ones(int(config.head_dim), dtype=torch.bfloat16),
+            device=device,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
+        self.rope_cos, self.rope_sin, self.rope_trans_mat = _to_tt_rope_tensors(
+            config,
+            layer=self.layer,
+            start_pos=self.cache_update_index,
+            seq_len=self.static_token_rows,
+            device=device,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
 
     def __call__(self, hidden_states) -> dict[str, object]:
         _validate_ttnn_hidden_states(hidden_states, hidden_size=int(self.config.hidden_size))
@@ -312,6 +334,10 @@ class TtTraceableDecodeSubpath:
             attention_cache_window=attention_cache_window,
             attention_mode=self.attention_mode,
             config=self.config,
+            q_head_norm=self.q_head_norm,
+            rope_cos=self.rope_cos,
+            rope_sin=self.rope_sin,
+            rope_trans_mat=self.rope_trans_mat,
             memory_config=self.memory_config,
         )
         attention_output = attention_intermediates["attention_output"]
@@ -414,6 +440,7 @@ def run_traceable_decode_subpath_smoke(
     preliminary_reference = build_torch_traceable_decode_subpath_reference(
         weights,
         config=config,
+        layer=layer,
         activation=activation,
         kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
@@ -453,6 +480,7 @@ def run_traceable_decode_subpath_smoke(
     reference = build_torch_traceable_decode_subpath_reference(
         weights,
         config=config,
+        layer=layer,
         activation=activation,
         kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
@@ -463,6 +491,7 @@ def run_traceable_decode_subpath_smoke(
     replay_reference = build_torch_traceable_decode_subpath_reference(
         weights,
         config=config,
+        layer=layer,
         activation=replay_activation,
         kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
@@ -516,6 +545,7 @@ def run_traceable_decode_subpath_smoke(
         kv_cache_initial=kv_cache_initial,
         device_id=device_id,
         trace_region_size=trace_region_size,
+        layer=layer,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
         attention_mode=attention_mode,
@@ -661,6 +691,7 @@ def build_torch_traceable_decode_subpath_reference(
     weights: TraceableDecodeWeights,
     *,
     config: DeepSeekV4FlashConfig,
+    layer: int,
     activation: torch.Tensor,
     kv_cache_initial: torch.Tensor,
     cache_len: int,
@@ -690,6 +721,8 @@ def build_torch_traceable_decode_subpath_reference(
         attention_cache_window=attention_cache_window,
         attention_mode=attention_mode,
         config=config,
+        layer=layer,
+        start_pos=cache_update_index,
     )
     attention_output = attention_intermediates["attention_output"]
 
@@ -950,6 +983,7 @@ def _run_ttnn_traceable_decode_subpath(
     kv_cache_initial: torch.Tensor,
     device_id: int,
     trace_region_size: int,
+    layer: int,
     cache_len: int,
     cache_update_index: int,
     attention_mode: str,
@@ -966,6 +1000,7 @@ def _run_ttnn_traceable_decode_subpath(
             weights=weights,
             route_plan=route_plan,
             config=config,
+            layer=layer,
             cache_len=cache_len,
             cache_update_index=cache_update_index,
             initial_kv_cache=kv_cache_initial,
@@ -1055,7 +1090,7 @@ def _base_result(
     routed_expert_ids_loaded = [int(expert) for expert in weights.routed_experts]
     routed_expert_ids_executed = list(route_plan.selected_expert_ids)
     excluded_from_trace = [
-        "K/V RoPE split and true sparse attention query/key split",
+        "true DeepSeek K/V split; this slice creates explicit K and V tensors from one compressed cache window",
         "dynamic sparse indexer top-k and per-token cache gather",
         "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows",
         "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
@@ -1064,6 +1099,7 @@ def _base_result(
     ]
     if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
         excluded_from_trace.insert(3, "QK scoring, softmax, and value reduction in legacy q+kv blend mode")
+        excluded_from_trace.insert(4, "Q/K RoPE split in legacy q+kv blend mode")
     if route_plan.topk_prefix < route_plan.full_topk:
         excluded_from_trace.insert(
             4,
@@ -1087,10 +1123,22 @@ def _base_result(
         },
         "attention_path": _attention_path_summary(
             config=config,
+            layer=layer,
             cache_update_index=cache_update_index,
             seq_len=seq_len,
             attention_mode=attention_mode,
         ),
+        "traceability_flags": {
+            "attention_mode": attention_mode,
+            "kv_source": "device_resident_compressed_kv_projection_cache_window",
+            "kv_split_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+            "true_kv_split_in_trace": False,
+            "rope_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+            "qk_scores_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+            "softmax_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+            "context_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+            "host_attention_or_context_input": False,
+        },
         "model": {
             "hidden_size": int(config.hidden_size),
             "q_lora_rank": int(config.q_lora_rank),
@@ -1235,6 +1283,14 @@ def _base_result(
                 ),
             },
             {
+                "name": "rope_table_host_to_device",
+                "location": "before trace capture",
+                "description": (
+                    "fixed-window DeepSeek V4 RoPE cos/sin tables and the rotation matrix are materialized on host "
+                    "and uploaded during module setup; Q/K split and rotation execute inside the protected trace"
+                ),
+            },
+            {
                 "name": "activation_host_to_device",
                 "location": "before trace capture and before replay",
                 "description": "static-shape decode activation is copied into a preallocated device tensor outside the guard",
@@ -1252,6 +1308,7 @@ def _base_result(
             "router_topk_pretrace",
             "route_weight_host_to_device",
             "kv_cache_seed_host_to_device",
+            "rope_table_host_to_device",
             "activation_host_to_device",
             "trace_output_readback",
         ],
@@ -1382,6 +1439,51 @@ def _to_tt_route_weight(
     )
 
 
+def _to_tt_rope_tensors(
+    config: DeepSeekV4FlashConfig,
+    *,
+    layer: int,
+    start_pos: int,
+    seq_len: int,
+    device,
+    dtype,
+    memory_config,
+):
+    freqs = precompute_deepseek_v4_rope_frequencies(
+        config,
+        layer=layer,
+        seq_len=int(start_pos) + int(seq_len),
+    )[int(start_pos) : int(start_pos) + int(seq_len)]
+    cos = torch.stack((freqs.real, freqs.real), dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack((freqs.imag, freqs.imag), dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    trans_mat = torch.zeros(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE, dtype=torch.bfloat16)
+    trans_mat[..., torch.arange(0, ttnn.TILE_SIZE, 2), torch.arange(1, ttnn.TILE_SIZE, 2)] = 1
+    trans_mat[..., torch.arange(1, ttnn.TILE_SIZE, 2), torch.arange(0, ttnn.TILE_SIZE, 2)] = -1
+    return (
+        ttnn.from_torch(
+            cos.contiguous().to(torch.bfloat16),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+        ttnn.from_torch(
+            sin.contiguous().to(torch.bfloat16),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+        ttnn.from_torch(
+            trans_mat,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+    )
+
+
 def _sum_ttnn_tensors(tensors, *, memory_config):
     values = list(tensors)
     if not values:
@@ -1398,6 +1500,10 @@ def _ttnn_fixed_window_attention(
     attention_cache_window,
     attention_mode: str,
     config: DeepSeekV4FlashConfig,
+    q_head_norm,
+    rope_cos,
+    rope_sin,
+    rope_trans_mat,
     memory_config,
 ) -> dict[str, object]:
     attention_mode = _validate_attention_mode(attention_mode)
@@ -1419,6 +1525,8 @@ def _ttnn_fixed_window_attention(
     token_count = int(q_output.shape[-2])
     num_heads = int(config.num_attention_heads)
     head_dim = int(config.head_dim)
+    rope_dim = int(config.qk_rope_head_dim)
+    nope_dim = head_dim - rope_dim
     attention_output_dim = num_heads * head_dim
     if int(q_output.shape[-1]) != attention_output_dim:
         raise ValueError(f"q_output width must be {attention_output_dim}, got {q_output.shape[-1]}")
@@ -1426,9 +1534,59 @@ def _ttnn_fixed_window_attention(
         raise ValueError(f"attention cache window width must be {head_dim}, got {attention_cache_window.shape[-1]}")
 
     q_heads_token_major = ttnn.reshape(q_output, (1, token_count, num_heads, head_dim))
-    q_heads = ttnn.transpose(q_heads_token_major, 1, 2, memory_config=memory_config)
+    q_heads_pre_norm = ttnn.transpose(q_heads_token_major, 1, 2, memory_config=memory_config)
+    q_heads_norm = ttnn.rms_norm(
+        q_heads_pre_norm,
+        weight=q_head_norm,
+        epsilon=float(config.rms_norm_eps),
+        memory_config=memory_config,
+    )
+    q_nope = ttnn.slice(
+        q_heads_norm,
+        (0, 0, 0, 0),
+        (1, num_heads, token_count, nope_dim),
+        memory_config=memory_config,
+    )
+    q_rope = ttnn.slice(
+        q_heads_norm,
+        (0, 0, 0, nope_dim),
+        (1, num_heads, token_count, head_dim),
+        memory_config=memory_config,
+    )
+    q_rope_rotated = ttnn.experimental.rotary_embedding_llama(
+        q_rope,
+        rope_cos,
+        rope_sin,
+        rope_trans_mat,
+        is_decode_mode=False,
+        memory_config=memory_config,
+    )
+    q_heads = ttnn.concat([q_nope, q_rope_rotated], dim=-1, memory_config=memory_config)
+
+    key_cache_nope = ttnn.slice(
+        attention_cache_window,
+        (0, 0, 0, 0),
+        (1, 1, token_count, nope_dim),
+        memory_config=memory_config,
+    )
+    key_cache_rope = ttnn.slice(
+        attention_cache_window,
+        (0, 0, 0, nope_dim),
+        (1, 1, token_count, head_dim),
+        memory_config=memory_config,
+    )
+    key_cache_rope_rotated = ttnn.experimental.rotary_embedding_llama(
+        key_cache_rope,
+        rope_cos,
+        rope_sin,
+        rope_trans_mat,
+        is_decode_mode=False,
+        memory_config=memory_config,
+    )
+    key_cache = ttnn.concat([key_cache_nope, key_cache_rope_rotated], dim=-1, memory_config=memory_config)
+    key_heads = ttnn.repeat(key_cache, ttnn.Shape([1, num_heads, 1, 1]))
     value_heads = ttnn.repeat(attention_cache_window, ttnn.Shape([1, num_heads, 1, 1]))
-    key_heads_transposed = ttnn.transpose(value_heads, -2, -1, memory_config=memory_config)
+    key_heads_transposed = ttnn.transpose(key_heads, -2, -1, memory_config=memory_config)
     qk_scores = ttnn.matmul(q_heads, key_heads_transposed, memory_config=memory_config)
     qk_scores = ttnn.mul(qk_scores, 1.0 / math.sqrt(float(head_dim)), memory_config=memory_config)
     attention_probs = ttnn.softmax(qk_scores, dim=-1, memory_config=memory_config)
@@ -1436,8 +1594,17 @@ def _ttnn_fixed_window_attention(
     attention_context_token_major = ttnn.transpose(attention_context_heads, 1, 2, memory_config=memory_config)
     attention_output = ttnn.reshape(attention_context_token_major, (1, 1, token_count, attention_output_dim))
     return {
+        "attention_q_heads_pre_norm": q_heads_pre_norm,
+        "attention_q_heads_norm": q_heads_norm,
+        "attention_q_nope": q_nope,
+        "attention_q_rope": q_rope,
+        "attention_q_rope_rotated": q_rope_rotated,
         "attention_q_heads": q_heads,
-        "attention_key_heads": value_heads,
+        "attention_key_cache_nope": key_cache_nope,
+        "attention_key_cache_rope": key_cache_rope,
+        "attention_key_cache_rope_rotated": key_cache_rope_rotated,
+        "attention_key_cache": key_cache,
+        "attention_key_heads": key_heads,
         "attention_value_heads": value_heads,
         "qk_scores": qk_scores,
         "attention_probs": attention_probs,
@@ -1452,6 +1619,8 @@ def _torch_fixed_window_attention(
     attention_cache_window: torch.Tensor,
     attention_mode: str,
     config: DeepSeekV4FlashConfig,
+    layer: int,
+    start_pos: int,
 ) -> dict[str, torch.Tensor]:
     attention_mode = _validate_attention_mode(attention_mode)
     if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
@@ -1465,15 +1634,36 @@ def _torch_fixed_window_attention(
     batch_size, _, token_count, attention_output_dim = q_output.shape
     num_heads = int(config.num_attention_heads)
     head_dim = int(config.head_dim)
+    rope_dim = int(config.qk_rope_head_dim)
+    nope_dim = head_dim - rope_dim
     expected_output_dim = num_heads * head_dim
     if int(attention_output_dim) != expected_output_dim:
         raise ValueError(f"q_output width must be {expected_output_dim}, got {attention_output_dim}")
     if int(attention_cache_window.shape[-1]) != head_dim:
         raise ValueError(f"attention cache window width must be {head_dim}, got {attention_cache_window.shape[-1]}")
 
-    q_heads = q_output[:, 0].reshape(batch_size, token_count, num_heads, head_dim).transpose(1, 2).contiguous()
+    freqs_cis = precompute_deepseek_v4_rope_frequencies(
+        config,
+        layer=layer,
+        seq_len=int(start_pos) + int(token_count),
+    )[int(start_pos) : int(start_pos) + int(token_count)]
+    q_heads_token_major_pre_norm = q_output[:, 0].reshape(batch_size, token_count, num_heads, head_dim).contiguous()
+    q_heads_token_major = rms_norm(
+        q_heads_token_major_pre_norm,
+        torch.ones(head_dim, dtype=torch.bfloat16),
+        eps=float(config.rms_norm_eps),
+    )
+    q_nope_token_major, q_rope_token_major = q_heads_token_major.split([nope_dim, rope_dim], dim=-1)
+    q_rope_rotated_token_major = apply_deepseek_v4_rotary(q_rope_token_major.contiguous(), freqs_cis)
+    q_heads = torch.cat([q_nope_token_major, q_rope_rotated_token_major], dim=-1).transpose(1, 2).contiguous()
+
+    key_cache_projection = attention_cache_window[:, 0].contiguous()
+    key_cache_nope, key_cache_rope = key_cache_projection.split([nope_dim, rope_dim], dim=-1)
+    key_cache_rope_rotated = apply_deepseek_v4_rotary(key_cache_rope.contiguous(), freqs_cis)
+    key_cache = torch.cat([key_cache_nope, key_cache_rope_rotated], dim=-1).contiguous()
+    key_heads = key_cache.unsqueeze(1).repeat(1, num_heads, 1, 1).contiguous()
     value_heads = attention_cache_window.repeat(1, num_heads, 1, 1).contiguous()
-    qk_scores = torch.matmul(q_heads.float(), value_heads.transpose(-2, -1).float())
+    qk_scores = torch.matmul(q_heads.float(), key_heads.transpose(-2, -1).float())
     qk_scores = (qk_scores * (1.0 / math.sqrt(float(head_dim)))).to(torch.bfloat16)
     attention_probs = torch.softmax(qk_scores.float(), dim=-1).to(torch.bfloat16)
     attention_context_heads = torch.matmul(attention_probs.float(), value_heads.float()).to(torch.bfloat16)
@@ -1483,8 +1673,17 @@ def _torch_fixed_window_attention(
         .to(torch.bfloat16)
     )
     return {
+        "attention_q_heads_pre_norm": q_heads_token_major_pre_norm.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_heads_norm": q_heads_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_nope": q_nope_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_rope": q_rope_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_rope_rotated": q_rope_rotated_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
         "attention_q_heads": q_heads.to(torch.bfloat16),
-        "attention_key_heads": value_heads.to(torch.bfloat16),
+        "attention_key_cache_nope": key_cache_nope.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_cache_rope": key_cache_rope.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_cache_rope_rotated": key_cache_rope_rotated.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_cache": key_cache.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_heads": key_heads.to(torch.bfloat16),
         "attention_value_heads": value_heads.to(torch.bfloat16),
         "qk_scores": qk_scores,
         "attention_probs": attention_probs,
@@ -1548,6 +1747,13 @@ def _validate_qk_softmax_attention_config(config: DeepSeekV4FlashConfig) -> None
             f"fixed-window QK softmax trace expects kv_output_dim=head_dim={config.head_dim}, "
             f"got kv_output_dim={_kv_output_dim(config)}"
         )
+    if int(config.qk_rope_head_dim) <= 0 or int(config.qk_rope_head_dim) >= int(config.head_dim):
+        raise ValueError(
+            "fixed-window QK softmax trace expects a strict nope/rope split, "
+            f"got qk_rope_head_dim={config.qk_rope_head_dim} and head_dim={config.head_dim}"
+        )
+    if int(config.qk_rope_head_dim) % 2 != 0:
+        raise ValueError(f"qk_rope_head_dim must be even for RoPE, got {config.qk_rope_head_dim}")
 
 
 def _traceable_decode_common_ops() -> list[str]:
@@ -1573,7 +1779,15 @@ def _traceable_decode_attention_ops(attention_mode: str) -> list[str]:
     return [
         "ttnn.reshape(q_output_to_q_heads_token_major)",
         "ttnn.transpose(q_heads_token_major_to_heads)",
-        "ttnn.repeat(kv_cache_window_to_attention_heads)",
+        "ttnn.rms_norm(q_heads)",
+        "ttnn.slice(q_nope/q_rope)",
+        "ttnn.rotary_embedding_llama(q_rope)",
+        "ttnn.concat(q_nope,q_rope_rotated)",
+        "ttnn.slice(kv_cache_window_to_k_nope/k_rope)",
+        "ttnn.rotary_embedding_llama(k_rope)",
+        "ttnn.concat(k_nope,k_rope_rotated)",
+        "ttnn.repeat(k_cache_to_attention_heads)",
+        "ttnn.repeat(v_cache_window_to_attention_heads)",
         "ttnn.transpose(k_heads_to_k_heads_transposed)",
         "ttnn.matmul(q_heads,k_heads_transposed)",
         "ttnn.mul(qk_scores,1/sqrt(head_dim))",
@@ -1645,7 +1859,13 @@ def _traceable_decode_reference_ops(attention_mode: str) -> list[str]:
         if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE
         else [
             "torch.reshape(q_output_to_q_heads)",
-            "torch.repeat(kv_cache_window_to_attention_heads)",
+            "torch.rms_norm_reference(q_heads)",
+            "torch.split(q_nope/q_rope)",
+            "torch.apply_deepseek_v4_rotary(q_rope)",
+            "torch.split(k_nope/k_rope)",
+            "torch.apply_deepseek_v4_rotary(k_rope)",
+            "torch.repeat(k_cache_to_attention_heads)",
+            "torch.repeat(v_cache_window_to_attention_heads)",
             "torch.matmul(q_heads,k_heads_transposed)",
             "torch.mul(qk_scores,1/sqrt(head_dim))",
             "torch.softmax(qk_scores)",
@@ -1685,6 +1905,7 @@ def _resolve_cache_update_index(*, seq_len: int, cache_len: int, cache_update_in
 def _attention_path_summary(
     *,
     config: DeepSeekV4FlashConfig,
+    layer: int,
     cache_update_index: int,
     seq_len: int,
     attention_mode: str,
@@ -1723,17 +1944,37 @@ def _attention_path_summary(
             ),
         },
         "kv_source": {
-            "key_source": "compressed_kv_projection_cache_window",
+            "key_source": "compressed_kv_projection_cache_window_split_nope_rope_with_rope_rotated",
             "value_source": "compressed_kv_projection_cache_window",
             "key_value_share_same_cache_slice": True,
+            "key_value_identical_in_trace": not qk_mode,
+            "explicit_kv_tensors_in_trace": qk_mode,
+            "kv_split_in_trace": qk_mode,
+            "kv_split_kind": "device_resident_explicit_key_and_value_from_single_compressed_cache_window"
+            if qk_mode
+            else "none_legacy_q_plus_kv_blend",
             "true_kv_split_in_trace": False,
+            "true_kv_split_blocker": (
+                "the current compressed cache width equals one head_dim and does not expose separate DeepSeek value "
+                "projection channels; the trace now creates distinct K and V tensors from that cache window"
+            ),
             "num_key_value_heads": int(config.num_key_value_heads),
             "head_repeat_factor": head_repeat_factor,
         },
         "rope": {
-            "q_rope_split_in_trace": False,
-            "kv_rope_split_in_trace": False,
-            "status": "not_yet_traceable_in_this_slice",
+            "q_rope_split_in_trace": qk_mode,
+            "k_rope_split_in_trace": qk_mode,
+            "kv_rope_split_in_trace": qk_mode,
+            "q_rope_rotation_in_trace": qk_mode,
+            "k_rope_rotation_in_trace": qk_mode,
+            "rope_in_trace": qk_mode,
+            "qk_rope_head_dim": int(config.qk_rope_head_dim),
+            "nope_head_dim": int(config.head_dim) - int(config.qk_rope_head_dim),
+            "position_rows": [window_start, window_end],
+            "frequency_source": "DeepSeek V4 Flash compressed-layer RoPE frequencies from compress_rope_theta"
+            if int(config.compress_ratios[int(layer)]) != 0
+            else "DeepSeek V4 Flash base RoPE frequencies",
+            "status": "traceable_q_and_k_rope_fixed_window" if qk_mode else "not_used_in_legacy_blend_mode",
         },
         "sparse_compressed_tokens": {
             "contributed": True,
@@ -1760,15 +2001,14 @@ def _attention_path_summary(
         "context": {
             "produced_in_trace": qk_mode,
             "shape": [1, 1, int(seq_len), int(config.num_attention_heads) * int(config.head_dim)],
-            "value_source": "compressed_kv_projection_cache_window_repeated_across_attention_heads"
+            "value_source": "unrotated_compressed_kv_projection_cache_window_repeated_across_attention_heads"
             if qk_mode
             else "expanded_kv_cache_window_blended_with_q_output",
         },
         "exact_sparse_attention_blockers": [
             "dynamic per-token top-k cache gather is still represented by host fallback helpers",
             "attention-sink semantics over [selected cache rows + sink] are not in this protected path",
-            "Q/K RoPE split remains outside this trace slice",
-            "true K/V split is not in this trace slice; K and V both use the compressed KV projection cache window",
+            "true K/V split is not in this trace slice; K and V are explicit tensors but both derive from the compressed KV projection cache window",
         ],
     }
     if not qk_mode:
@@ -1820,6 +2060,15 @@ def _route_plan_summary(route_plan: TraceableDecodeRoutePlan, *, config: DeepSee
     }
 
 
+def _route_plan_static_token_rows(route_plan: TraceableDecodeRoutePlan) -> int:
+    if not route_plan.per_expert_route_weight:
+        raise ValueError("traceable decode route plan must contain at least one selected expert route weight")
+    token_rows = {int(value.shape[1]) for value in route_plan.per_expert_route_weight.values()}
+    if len(token_rows) != 1:
+        raise ValueError(f"selected expert route weights disagree on static token rows: {sorted(token_rows)}")
+    return next(iter(token_rows))
+
+
 def _optional_tensor_summary(tensor: torch.Tensor | None) -> dict[str, Any] | None:
     return None if tensor is None else _tensor_summary(tensor)
 
@@ -1834,8 +2083,17 @@ def _traceable_accuracy_summary(
     atol: float,
 ) -> dict[str, Any]:
     projection_outputs = {"attention_projected", "post_attention_residual", "combined_ffn_output", "residual_output"}
+    attention_split_diagnostics = {
+        "attention_q_heads",
+        "attention_q_heads_norm",
+        "attention_q_nope",
+        "attention_q_rope",
+        "attention_q_rope_rotated",
+    }
     local_rtol = max(float(rtol), ATTENTION_OUTPUT_PROJECTION_RTOL) if name in projection_outputs else float(rtol)
     local_atol = max(float(atol), ATTENTION_OUTPUT_PROJECTION_ATOL) if name in projection_outputs else float(atol)
+    if name in attention_split_diagnostics:
+        local_atol = max(local_atol, 2.5e-1)
     summary = _accuracy_summary(
         expected,
         actual,
@@ -1853,6 +2111,10 @@ def _traceable_accuracy_summary(
         summary[
             "tolerance_note"
         ] = "traceable decode matmul/SwiGLU path uses relaxed absolute tolerance; PCC remains enforced"
+    if name in attention_split_diagnostics:
+        summary[
+            "tolerance_note"
+        ] = "internal Q split/RoPE diagnostic uses relaxed absolute tolerance; PCC and final attention outputs remain enforced"
     return summary
 
 

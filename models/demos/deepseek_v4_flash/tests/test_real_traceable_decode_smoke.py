@@ -80,7 +80,15 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         "ttnn.slice(kv_cache_fixed_window)",
         "ttnn.reshape(q_output_to_q_heads_token_major)",
         "ttnn.transpose(q_heads_token_major_to_heads)",
-        "ttnn.repeat(kv_cache_window_to_attention_heads)",
+        "ttnn.rms_norm(q_heads)",
+        "ttnn.slice(q_nope/q_rope)",
+        "ttnn.rotary_embedding_llama(q_rope)",
+        "ttnn.concat(q_nope,q_rope_rotated)",
+        "ttnn.slice(kv_cache_window_to_k_nope/k_rope)",
+        "ttnn.rotary_embedding_llama(k_rope)",
+        "ttnn.concat(k_nope,k_rope_rotated)",
+        "ttnn.repeat(k_cache_to_attention_heads)",
+        "ttnn.repeat(v_cache_window_to_attention_heads)",
         "ttnn.transpose(k_heads_to_k_heads_transposed)",
         "ttnn.matmul(q_heads,k_heads_transposed)",
         "ttnn.mul(qk_scores,1/sqrt(head_dim))",
@@ -110,11 +118,11 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["selected_routing"]["topk_prefix_limit"] == 1
     assert result["selected_routing"]["topk_prefix_is_full"] is False
     assert result["selected_routing"]["full_topk_mode"] is False
-    assert result["selected_routing"]["selected_expert_ids"] == [2]
-    assert result["selected_routing"]["executed_expert_ids"] == [2]
+    assert result["selected_routing"]["selected_expert_ids"] == [3]
+    assert result["selected_routing"]["executed_expert_ids"] == [3]
     assert result["selected_routing"]["route_weights_device_resident_inside_trace"] is True
-    assert result["routed_expert_execution"]["loaded_expert_ids"] == [2]
-    assert result["routed_expert_execution"]["executed_expert_ids"] == [2]
+    assert result["routed_expert_execution"]["loaded_expert_ids"] == [3]
+    assert result["routed_expert_execution"]["executed_expert_ids"] == [3]
     assert result["routed_expert_execution"]["full_topk_executed"] is False
     assert (
         "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows"
@@ -134,8 +142,18 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["attention_path"]["cache_expand"]["repeat_factor"] == 4
     assert result["attention_path"]["cache_expand"]["repeat_axis"] == "attention_heads"
     assert result["attention_path"]["kv_source"]["key_value_share_same_cache_slice"] is True
+    assert result["attention_path"]["kv_source"]["kv_split_in_trace"] is True
+    assert result["attention_path"]["kv_source"]["explicit_kv_tensors_in_trace"] is True
+    assert result["attention_path"]["kv_source"]["key_value_identical_in_trace"] is False
     assert result["attention_path"]["kv_source"]["true_kv_split_in_trace"] is False
-    assert result["attention_path"]["rope"]["q_rope_split_in_trace"] is False
+    assert result["attention_path"]["rope"]["q_rope_split_in_trace"] is True
+    assert result["attention_path"]["rope"]["k_rope_split_in_trace"] is True
+    assert result["attention_path"]["rope"]["q_rope_rotation_in_trace"] is True
+    assert result["attention_path"]["rope"]["k_rope_rotation_in_trace"] is True
+    assert result["attention_path"]["rope"]["rope_in_trace"] is True
+    assert result["traceability_flags"]["kv_split_in_trace"] is True
+    assert result["traceability_flags"]["true_kv_split_in_trace"] is False
+    assert result["traceability_flags"]["rope_in_trace"] is True
     assert result["attention_path"]["sparse_compressed_tokens"]["contributed"] is True
     assert result["attention_path"]["compressed_token_contribution"]["contributed"] is True
     assert result["attention_path"]["softmax"]["qk_scores_in_trace"] is True
@@ -165,13 +183,22 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["decoded_tensors"]["wkv"]["shape"] == [8, 32]
     assert result["decoded_tensors"]["kv_norm"]["shape"] == [8]
     assert result["decoded_tensors"]["router_gate"]["shape"] == [4, 32]
-    assert result["decoded_tensors"]["routed_experts"]["2"]["w1"]["shape"] == [32, 32]
+    assert result["decoded_tensors"]["routed_experts"]["3"]["w1"]["shape"] == [32, 32]
     assert result["decoded_tensors"]["shared_w1"]["shape"] == [32, 32]
     assert result["inputs"]["kv_cache_initial"]["shape"] == [1, 1, 64, 8]
     assert result["reference"]["kv_output"]["shape"] == [1, 1, 4, 8]
     assert result["reference"]["kv_cache"]["shape"] == [1, 1, 64, 8]
     assert result["reference"]["attention_cache_window"]["shape"] == [1, 1, 4, 8]
+    assert result["reference"]["attention_q_heads_pre_norm"]["shape"] == [1, 4, 4, 8]
+    assert result["reference"]["attention_q_heads_norm"]["shape"] == [1, 4, 4, 8]
+    assert result["reference"]["attention_q_nope"]["shape"] == [1, 4, 4, 4]
+    assert result["reference"]["attention_q_rope"]["shape"] == [1, 4, 4, 4]
+    assert result["reference"]["attention_q_rope_rotated"]["shape"] == [1, 4, 4, 4]
     assert result["reference"]["attention_q_heads"]["shape"] == [1, 4, 4, 8]
+    assert result["reference"]["attention_key_cache_nope"]["shape"] == [1, 1, 4, 4]
+    assert result["reference"]["attention_key_cache_rope"]["shape"] == [1, 1, 4, 4]
+    assert result["reference"]["attention_key_cache_rope_rotated"]["shape"] == [1, 1, 4, 4]
+    assert result["reference"]["attention_key_cache"]["shape"] == [1, 1, 4, 8]
     assert result["reference"]["attention_key_heads"]["shape"] == [1, 4, 4, 8]
     assert result["reference"]["attention_value_heads"]["shape"] == [1, 4, 4, 8]
     assert result["reference"]["qk_scores"]["shape"] == [1, 4, 4, 4]
@@ -186,6 +213,7 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert "router_topk_pretrace" in result["host_boundaries_outside_trace"]
     assert "route_weight_host_to_device" in result["host_boundaries_outside_trace"]
     assert "kv_cache_seed_host_to_device" in result["host_boundaries_outside_trace"]
+    assert "rope_table_host_to_device" in result["host_boundaries_outside_trace"]
     assert "attention_output_host_to_device" not in result["host_boundaries_outside_trace"]
     assert result["accuracy"]["cpu_reference"]["passed"] is True
 
@@ -257,10 +285,14 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["selected_routing"]["topk_prefix_is_full"] is True
     assert payload["selected_routing"]["full_topk_mode"] is True
     assert payload["attention_path"]["host_provided_attention_output"] is False
-    assert payload["selected_routing"]["selected_expert_ids"] == [2, 3]
-    assert payload["selected_routing"]["executed_expert_ids"] == [2, 3]
-    assert payload["routed_expert_execution"]["loaded_expert_ids"] == [2, 3]
-    assert payload["routed_expert_execution"]["executed_expert_ids"] == [2, 3]
+    assert payload["attention_path"]["kv_source"]["kv_split_in_trace"] is True
+    assert payload["attention_path"]["kv_source"]["true_kv_split_in_trace"] is False
+    assert payload["attention_path"]["rope"]["rope_in_trace"] is True
+    assert payload["traceability_flags"]["rope_in_trace"] is True
+    assert payload["selected_routing"]["selected_expert_ids"] == [3, 2]
+    assert payload["selected_routing"]["executed_expert_ids"] == [3, 2]
+    assert payload["routed_expert_execution"]["loaded_expert_ids"] == [3, 2]
+    assert payload["routed_expert_execution"]["executed_expert_ids"] == [3, 2]
     assert payload["routed_expert_execution"]["full_topk_executed"] is True
     assert payload["payload_bytes"]["attention_output"] == 5120
     assert payload["payload_bytes"]["routed_experts"] == 3840
@@ -303,6 +335,8 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["host_boundaries_inside_trace"] == []
     assert result["cache_update"]["device_resident_inside_trace"] is True
     assert "ttnn.linear(grouped_wo_a_group_0..N)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.rotary_embedding_llama(q_rope)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.rotary_embedding_llama(k_rope)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.matmul(q_heads,k_heads_transposed)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.softmax(qk_scores)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.matmul(attention_probs,value_heads)" in result["trace_capture"]["traced_operations"]
@@ -317,6 +351,9 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     )
     assert result["attention_path"]["host_provided_attention_output"] is False
     assert result["attention_path"]["mode"] == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+    assert result["attention_path"]["kv_source"]["kv_split_in_trace"] is True
+    assert result["attention_path"]["kv_source"]["true_kv_split_in_trace"] is False
+    assert result["attention_path"]["rope"]["rope_in_trace"] is True
     assert result["attention_path"]["softmax"]["qk_scores_in_trace"] is True
     assert result["attention_path"]["softmax"]["fixed_window_softmax_in_trace"] is True
     assert result["attention_path"]["softmax"]["value_reduction_in_trace"] is True
