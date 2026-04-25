@@ -29,6 +29,7 @@
 // pattern in test_realtime_profiler_sanity.cpp (BASIC tier, single MMIO
 // device, gracefully skips when RT profiler is disabled).
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -264,9 +265,7 @@ TEST(RealtimeProfilerStress, RingBufferOverflowFromTrace) {
                 ++startup_race_skips;
             } else {
                 ++large_negative_skips;
-                if (-static_cast<int64_t>(neg_delta_cycles) < worst_negative_delta) {
-                    worst_negative_delta = -static_cast<int64_t>(neg_delta_cycles);
-                }
+                worst_negative_delta = std::min(-static_cast<int64_t>(neg_delta_cycles), worst_negative_delta);
             }
         }
         if (!(rec.frequency > 0.0)) {
