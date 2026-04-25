@@ -1,0 +1,37 @@
+name: CI Time Budget Check
+
+on:
+  pull_request:
+    paths:
+      - 'tests/pipeline_reorg/**'
+      - '.github/workflows/**'
+      - '.github/time_budgets/**'
+  workflow_dispatch:
+
+jobs:
+  budget-check:
+    name: Budget check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # required for git diff against base
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Check budget delta
+        run: |
+          python3 scripts/budget_check.py --diff ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+
+      - name: Regenerate BUDGET_STATUS.md
+        if: always()
+        run: |
+          python3 scripts/budget_check.py --update-status
+
+      - name: Upload budget status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budget-status
+          path: .github/time_budgets/BUDGET_STATUS.md
