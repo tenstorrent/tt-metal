@@ -1496,11 +1496,6 @@ public:
         device_data.relevel(tt::CoreType::WORKER);
         constexpr uint32_t payload_unit = sizeof(uint32_t);
 
-        // SD ring buffer page budget: dispatch_buffer_pages - 1 (terminate page)
-        const uint32_t page_size = Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
-        const uint32_t dispatch_buffer_pages = Common::SD_DISPATCH_BUFFER_SIZE_BYTES / page_size;
-        uint32_t pages_used = 0;
-
         while (remaining_bytes > payload_unit) {
             uint32_t xfer_size_bytes = payload_generator_->get_random_size(
                 dispatch_buffer_page_size_ / payload_unit, payload_unit, remaining_bytes);
@@ -1518,17 +1513,6 @@ public:
             xfer_size_bytes = clamp_to_max_fetch(
                 xfer_size_bytes, num_sub_cmds, packed_write_max_unicast_sub_cmds, no_stride, l1_alignment);
 
-            // Conservative page budget check: stop before total command bytes exceed the
-            // dispatch ring buffer size (768 KB). Spoof core L1 can hold more, but this
-            // bounds the single-iteration command set to a predictable size.
-            uint32_t num_data_copies = no_stride ? 1u : num_sub_cmds;
-            uint32_t cmd_advance =
-                sizeof(CQDispatchCmd) + sub_cmds_bytes + num_data_copies * tt::align(xfer_size_bytes, l1_alignment);
-            uint32_t cmd_pages = (cmd_advance + page_size - 1) / page_size;
-            if (pages_used + cmd_pages + 1 > dispatch_buffer_pages) {
-                break;  // no room for this command plus the terminate page
-            }
-
             const CoreCoord& fw = worker_cores[0];
             uint32_t common_addr = device_data.get_result_data_addr(fw);
 
@@ -1545,7 +1529,6 @@ public:
                 payload, sub_cmds, common_addr, l1_alignment, packed_write_max_unicast_sub_cmds, no_stride);
 
             commands_per_iteration.push_back(std::move(cmd));
-            pages_used += cmd_pages;
             remaining_bytes -= xfer_size_bytes;
         }
 
@@ -1609,9 +1592,11 @@ TEST_P(DispatchPackedWriteSDTestFixture, WritePackedUnicast) {
 INSTANTIATE_TEST_SUITE_P(
     SlowDispatch,
     DispatchPackedWriteSDTestFixture,
+    // SD sizes are smaller than FD (786432/819200): packed write with 4 worker cores writes
+    // ~4x payload bytes into L1, so max safe payload is ~L1_size/5 (~300KB).
     ::testing::Values(
-        PackedWriteParams{786432, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS},
-        PackedWriteParams{819200, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS}),
+        PackedWriteParams{131072, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS},
+        PackedWriteParams{262144, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
@@ -1682,11 +1667,6 @@ public:
 
         device_data.relevel(worker_range);
 
-        // SD page budget: dispatch_buffer_pages minus one page reserved for terminate
-        const uint32_t page_size = Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
-        const uint32_t dispatch_buffer_pages = Common::SD_DISPATCH_BUFFER_SIZE_BYTES / page_size;
-        uint32_t pages_used = 0;
-
         while (remaining_bytes > 0) {
             const int max_transactions =
                 payload_generator_->get_rand<int>(1, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS);
@@ -1694,18 +1674,6 @@ public:
             TransactionBatch batch =
                 generate_packed_large_transactions(remaining_bytes, max_transactions, l1_alignment);
             if (batch.sizes.empty()) {
-                break;
-            }
-
-            // Estimate ring buffer pages this command will consume
-            size_t sub_cmds_bytes = batch.sizes.size() * sizeof(CQDispatchWritePackedLargeSubCmd);
-            size_t data_start = tt::align(sizeof(CQDispatchCmd) + sub_cmds_bytes, l1_alignment);
-            size_t data_bytes = 0;
-            for (uint32_t sz : batch.sizes) {
-                data_bytes += tt::align(sz, l1_alignment);
-            }
-            uint32_t cmd_pages = (uint32_t)((data_start + data_bytes + page_size - 1) / page_size);
-            if (pages_used + cmd_pages + 1 > dispatch_buffer_pages) {
                 break;
             }
 
@@ -1737,16 +1705,15 @@ public:
 
             log_info(
                 tt::LogTest,
-                "SD: generated packed-large command {} with {} transactions, {} bytes",
+                "Generated packed-large command {} with {} transactions, {} bytes",
                 commands_per_iteration.size(),
                 sub_cmds.size(),
                 batch.total_payload_bytes);
 
             commands_per_iteration.push_back(std::move(cmd));
-            pages_used += cmd_pages;
         }
 
-        log_info(tt::LogTest, "SD: generated {} packed-large commands total", commands_per_iteration.size());
+        log_info(tt::LogTest, "Generated {} packed-large commands total", commands_per_iteration.size());
         return commands_per_iteration;
     }
 
@@ -1787,7 +1754,7 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPackedWriteLargeSDTestFixture,
     ::testing::Values(
         PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
-        // Generator has page budget tracking; stops early if spoof core L1 would overflow.
+
         PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
@@ -1851,11 +1818,6 @@ public:
         std::vector<HostMemDeviceCommand> commands_per_iteration;
         uint32_t remaining_bytes = transfer_size_bytes_;
 
-        // SD page budget: dispatch_buffer_pages minus one page reserved for terminate
-        const uint32_t page_size = Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
-        const uint32_t dispatch_buffer_pages = Common::SD_DISPATCH_BUFFER_SIZE_BYTES / page_size;
-        uint32_t pages_used = 0;
-
         while (remaining_bytes > 0) {
             const int max_transactions =
                 payload_generator_->get_rand<int>(1, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
@@ -1863,18 +1825,6 @@ public:
             TransactionBatch batch =
                 generate_packed_large_unicast_transactions(remaining_bytes, max_transactions, l1_alignment);
             if (batch.sizes.empty()) {
-                break;
-            }
-
-            // Estimate ring buffer pages this command will consume
-            size_t sub_cmds_bytes = batch.sizes.size() * sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
-            size_t data_start = tt::align(sizeof(CQDispatchCmd) + sub_cmds_bytes, l1_alignment);
-            size_t data_bytes = 0;
-            for (uint32_t sz : batch.sizes) {
-                data_bytes += tt::align(sz, l1_alignment);
-            }
-            uint32_t cmd_pages = (uint32_t)((data_start + data_bytes + page_size - 1) / page_size);
-            if (pages_used + cmd_pages + 1 > dispatch_buffer_pages) {
                 break;
             }
 
@@ -1915,16 +1865,15 @@ public:
 
             log_info(
                 tt::LogTest,
-                "SD: generated packed-large unicast command {} with {} transactions, {} bytes",
+                "Generated packed-large unicast command {} with {} transactions, {} bytes",
                 commands_per_iteration.size(),
                 sub_cmds.size(),
                 batch.total_payload_bytes);
 
             commands_per_iteration.push_back(std::move(cmd));
-            pages_used += cmd_pages;
         }
 
-        log_info(tt::LogTest, "SD: generated {} packed-large unicast commands total", commands_per_iteration.size());
+        log_info(tt::LogTest, "Generated {} packed-large unicast commands total", commands_per_iteration.size());
         return commands_per_iteration;
     }
 
@@ -1973,7 +1922,7 @@ INSTANTIATE_TEST_SUITE_P(
     DispatchPackedWriteLargeUnicastSDTestFixture,
     ::testing::Values(
         PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
-        // Generator has page budget tracking; stops early if spoof core L1 would overflow.
+
         PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
