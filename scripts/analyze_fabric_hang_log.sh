@@ -401,10 +401,18 @@ import re, sys
 with open('$CLEAN') as f:
     lines = f.readlines()
 events = []
+raw_statuses = []  # (chan_key, hex_status) tuples in order
 for line in lines:
     if re.search(r'Phase 4.*still waiting.*status=0x|Phase 4.*MUX', line, re.I):
         msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
         events.append(msg[:140])
+        # Extract (chan, status) for stuck-detection
+        chan_m   = re.search(r'chan[= ](\d+)', msg, re.I)
+        status_m = re.search(r'status=(0x[0-9a-fA-F]+)', msg, re.I)
+        chan_key = chan_m.group(1) if chan_m else '?'
+        hex_val  = status_m.group(1).lower() if status_m else None
+        if hex_val:
+            raw_statuses.append((chan_key, hex_val))
 if not events:
     print('  (none detected)')
 else:
@@ -418,6 +426,26 @@ else:
             seen.add(key)
             print(f'  {msg}')
     print(f'  => {len(events)} Phase 4 MUX line(s). Check whether status=0x values progress or repeat (stuck).')
+    # Stuck detection: look for >=3 consecutive identical (chan, status) pairs
+    if raw_statuses:
+        # Group consecutive runs by (chan, status)
+        run_chan, run_val, run_len = raw_statuses[0][0], raw_statuses[0][1], 1
+        stuck_reported = set()
+        for chan_key, hex_val in raw_statuses[1:]:
+            if chan_key == run_chan and hex_val == run_val:
+                run_len += 1
+            else:
+                if run_len >= 3:
+                    key = (run_chan, run_val)
+                    if key not in stuck_reported:
+                        stuck_reported.add(key)
+                        print(f'  [STUCK] MUX status unchanged across {run_len} polls ({run_val}) on chan {run_chan} — MUX is stuck, not slow')
+                run_chan, run_val, run_len = chan_key, hex_val, 1
+        # Check final run
+        if run_len >= 3:
+            key = (run_chan, run_val)
+            if key not in stuck_reported:
+                print(f'  [STUCK] MUX status unchanged across {run_len} polls ({run_val}) on chan {run_chan} — MUX is stuck, not slow')
 "
 echo ""
 
@@ -458,6 +486,31 @@ else:
             if key not in seen:
                 seen.add(key)
                 print(f'    {msg}')
+"
+echo ""
+
+# ─── PHASE 2.5 → PHASE 3 DANGER CHECK ───
+echo "=== PHASE 2.5 → PHASE 3 DANGER CHECK ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+# Find every Phase 2.5 timeout line; then check if a Phase 3 configure line appears
+# within the next 5 lines.  If so, ERISC L1 may have been overwritten while live.
+danger_found = False
+for i, line in enumerate(lines):
+    if re.search(r'Phase 2\.?5.*(timeout|did not terminate)', line, re.I):
+        for j in range(i + 1, min(i + 6, len(lines))):
+            if re.search(r'Phase 3.*(configure|write_launch|entering Phase 3)', lines[j], re.I):
+                danger_found = True
+                timeout_msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+                phase3_msg  = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', lines[j]).rstrip()
+                print(f'  [DANGER] Phase 2.5 timed out but Phase 3 proceeded — ERISC L1 may have been overwritten while ERISC was live')
+                print(f'    timeout: {timeout_msg[:120]}')
+                print(f'    phase3:  {phase3_msg[:120]}')
+                break
+if not danger_found:
+    print('  (no Phase 2.5 timeout → Phase 3 overlap detected)')
 "
 echo ""
 
@@ -653,6 +706,8 @@ FIX_AB=$(grep -cE 'hard-reset.*MMIO|RiscFirmwareInitializer.*teardown|MMIO ETH.*
 FIX_AD=$(grep -cE 'rescue_stuck_dispatch_cores.*hard.*reset|hard BRISC reset|performing hard BRISC reset' "$CLEAN" 2>/dev/null || echo 0)
 FIX_W=$(grep -cE 'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.*clean return' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AA=$(grep -ciE 'FIX AA|relay path broken.*skipping AllGather|skipping AllGather' "$CLEAN" 2>/dev/null || echo 0)
+FIX_V=$(grep -cE 'FIX V|Setting fabric_relay_path_broken_=true to skip relay ops in subsequent quiesce|Phase 5.*timeout.*0x0.*non-MMIO|status still 0x0 on non-MMIO device' "$CLEAN" 2>/dev/null || echo 0)
+RELAY_RESTORED=$(grep -c 'relay-broken flag reset by configure_fabric' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -703,6 +758,12 @@ if [ "${FIX_W:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AA:-0}" -gt 0 ]; then
     echo "  => FIX AA triggered: AllGather skipped due to broken relay path (${FIX_AA} event(s))"
+fi
+if [ "${FIX_V:-0}" -gt 0 ]; then
+    echo "  => [FIX V] triggered: non-MMIO device Phase 5 timeout with status=0x0 — fabric_relay_path_broken_ set (${FIX_V} event(s))"
+fi
+if [ "${RELAY_RESTORED:-0}" -gt 0 ]; then
+    echo "  => [RELAY RESTORED] relay-broken flag cleared by configure_fabric — UMD relay path restored (${RELAY_RESTORED} event(s))"
 fi
 echo ""
 echo "========================================================================"
