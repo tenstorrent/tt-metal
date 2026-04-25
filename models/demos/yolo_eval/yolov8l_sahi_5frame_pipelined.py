@@ -500,6 +500,26 @@ def run_sahi_5frame_pipelined(args):
         flush=True,
     )
 
+    # --- Pre-warm the JIT C++ tile extension --------------------------------
+    # torch.utils.cpp_extension.load() uses a `lock` baton file in
+    # ~/.cache/torch_extensions/.../<ext>/lock.  When a previous process is
+    # killed mid-load, that file is orphaned (no kernel-level lock left) and
+    # a future load() spins forever in FileBaton.wait().  Two-part defense:
+    #   1) Defensively unlink any pre-existing baton at parent startup.
+    #   2) Build the extension once HERE in the parent, so the spawned prep
+    #      worker only has to find the cached .so (no baton dance at all).
+    try:
+        _ext_dir = os.path.expanduser("~/.cache/torch_extensions/py310_cpu/fused_tile_convert")
+        _baton = os.path.join(_ext_dir, "lock")
+        if os.path.exists(_baton):
+            os.unlink(_baton)
+            print(f"{TAG} cleared stale JIT baton {_baton}", flush=True)
+    except Exception as _e:
+        print(f"{TAG} baton cleanup warning: {_e}", flush=True)
+    print(f"{TAG} pre-warming fused_tile_convert C++ ext...", flush=True)
+    _load_fused_tile_ext()
+    print(f"{TAG} C++ ext ready.", flush=True)
+
     # --- Shared memory -------------------------------------------------------
     _ctx = mp.get_context("spawn")
     PRED_RING = 2
