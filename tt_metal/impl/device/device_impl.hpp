@@ -274,6 +274,13 @@ private:
     // Set by FabricFirmwareInitializer::compile_and_configure_fabric().
     bool fabric_is_mmio_dead_peer_device_ = false;
 
+    // Set when Phase 5's relay read throws during wait_for_fabric_workers_ready().
+    // Indicates the UMD relay path to this non-MMIO device is broken (the relay ERISC
+    // on the MMIO device is now running fabric firmware).  Once set, subsequent quiesce
+    // calls (e.g. from GTest TearDown) skip Phase 5 and ENTRY snapshot relay reads
+    // entirely, preventing 5s-per-channel timeout accumulation and indefinite hangs.
+    bool fabric_relay_path_broken_ = false;
+
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
 

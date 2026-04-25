@@ -625,7 +625,45 @@ void Device::quiesce_and_restart_fabric_workers() {
             this->id(),
             active_channels.size(),
             router_sync_addr_diag);
+
+        // Snapshot deadline: if the relay path is already known broken, skip reads
+        // entirely (all would throw 5s timeouts or hang).  Otherwise bound the total
+        // snapshot time to kSnapshotDeadlineMs so a single hanging read cannot block
+        // here indefinitely — the ENTRY snapshot is diagnostic-only and must never
+        // gate the quiesce path.
+        const auto snapshot_start = std::chrono::steady_clock::now();
+        // Allow up to one UMD relay timeout worth of reads (6 s) before bailing.
+        // In practice healthy reads take <1 ms each; this only fires when the relay
+        // path is broken and reads start accumulating 5 s timeouts.
+        constexpr int64_t kSnapshotDeadlineMs = 6000;
+
+        if (fabric_relay_path_broken_) {
+            log_warning(
+                tt::LogMetal,
+                "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                "relay path known broken (fabric_relay_path_broken_) — skipping all "
+                "relay reads to prevent 5s-per-channel timeout accumulation.",
+                this->id());
+        } else {
         for (const auto& [eth_chan_id, direction] : active_channels) {
+            // Per-read deadline: bail once we've spent kSnapshotDeadlineMs on snapshot
+            // reads.  Prevents a single hanging chan (relay ERISC alive but peering with
+            // fabric-firmware peer that never responds) from blocking indefinitely.
+            const auto snapshot_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              std::chrono::steady_clock::now() - snapshot_start)
+                                              .count();
+            if (snapshot_elapsed > kSnapshotDeadlineMs) {
+                log_warning(
+                    tt::LogMetal,
+                    "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
+                    "deadline ({}ms) exceeded after {}ms — skipping remaining channels "
+                    "to prevent indefinite relay hang.",
+                    this->id(),
+                    kSnapshotDeadlineMs,
+                    snapshot_elapsed);
+                break;
+            }
+
             const auto eth_lc_diag = soc_desc_entry.get_eth_core_for_channel(
                 eth_chan_id, CoordSystem::LOGICAL);
             std::vector<uint32_t> diag_buf(1, 0U);
@@ -655,6 +693,7 @@ void Device::quiesce_and_restart_fabric_workers() {
                 eth_lc_diag.str(),
                 diag_buf[0]);
         }
+        }  // end else (!fabric_relay_path_broken_)
     }
 
     // Phase 1: Send IMMEDIATELY_TERMINATE to each MUX worker core
@@ -1203,6 +1242,21 @@ void Device::wait_for_fabric_workers_ready() {
         return;
     }
 
+    // Skip Phase 5 entirely when the relay path to this device is known broken.
+    // fabric_relay_path_broken_ is set on the first quiesce where Phase 5's relay
+    // read threw (UMD relay timeout or relay ERISC on the MMIO device running fabric
+    // firmware).  GTest TearDown triggers a second quiesce — without this guard, that
+    // second call would repeat the same failing/hanging relay reads.
+    if (fabric_relay_path_broken_) {
+        log_warning(
+            tt::LogMetal,
+            "wait_for_fabric_workers_ready: Device {} relay path is known broken — "
+            "skipping Phase 5 + Phase 5b entirely (relay read would hang or throw 5s "
+            "timeout; fabric_relay_path_broken_ set on prior quiesce call).",
+            this->id());
+        return;
+    }
+
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->id());
     const auto& active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
@@ -1356,6 +1410,12 @@ void Device::wait_for_fabric_workers_ready() {
                         this, master_logical_core, router_sync_addr, 4, sync_buf, CoreType::ETH);
                 } catch (const std::exception& e) {
                     phase5_relay_read_threw = true;
+                    // Persist across quiesce calls: TearDown will trigger a second quiesce,
+                    // and without this flag both wait_for_fabric_workers_ready() (Phase 5)
+                    // and quiesce_and_restart_fabric_workers() (ENTRY snapshot) would
+                    // attempt relay reads to a device whose path is now broken — each read
+                    // either accumulates a 5s UMD timeout or hangs indefinitely.
+                    fabric_relay_path_broken_ = true;
                     log_warning(
                         tt::LogMetal,
                         "wait_for_fabric_workers_ready: Device {} Phase 5: read failed on master "
