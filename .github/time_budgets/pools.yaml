@@ -1,0 +1,10 @@
+# Total machine-hours available per SKU per week.
+# This is the denominator for all budget calculations.
+# Update when hardware capacity changes.
+
+N150: 5000
+N300: 2000
+p150b: 1500
+p300b: 800
+LLMBOX: 500
+galaxy: 200
