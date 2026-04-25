@@ -14,7 +14,6 @@ from typing import Any
 import torch
 
 from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v4_flash.cpu_reference import rms_norm, v4_router
 from models.demos.deepseek_v4_flash.real_attention_projection_smoke import deterministic_attention_activation
 from models.demos.deepseek_v4_flash.real_checkpoint_loader import (
     DEFAULT_LAYER_EXPERT_MLP_LAYER,
@@ -23,21 +22,26 @@ from models.demos.deepseek_v4_flash.real_checkpoint_loader import (
     layer_router_norm_keys,
 )
 from models.demos.deepseek_v4_flash.real_expert_smoke import decode_real_expert_weights
+from models.demos.deepseek_v4_flash.real_ffn_fanout_smoke import (
+    DEFAULT_FFN_FANOUT_MAX_BYTES,
+    _fanout_summary,
+    _ordered_activated_expert_ids,
+)
+from models.demos.deepseek_v4_flash.real_ffn_fanout_smoke import _payload_byte_split as _ffn_fanout_payload_byte_split
+from models.demos.deepseek_v4_flash.real_ffn_fanout_smoke import (
+    _run_ttnn_ffn_fanout_slice,
+    build_torch_ffn_fanout_reference,
+    build_torch_ffn_fanout_selector_reference,
+    layer_ffn_fanout_keys,
+    validate_real_ffn_fanout_slice,
+)
 from models.demos.deepseek_v4_flash.real_ffn_smoke import (
-    DEFAULT_FFN_MAX_BYTES,
     DEFAULT_FFN_MAX_TENSORS,
     _accuracy_summary,
     _index_accuracy_summary,
     _metadata_summary,
-)
-from models.demos.deepseek_v4_flash.real_ffn_smoke import _payload_byte_split as _ffn_payload_byte_split
-from models.demos.deepseek_v4_flash.real_ffn_smoke import (
-    _run_ttnn_ffn_slice,
     _selection_summary,
     _tensor_summary,
-    build_torch_ffn_reference,
-    layer_ffn_keys,
-    validate_real_ffn_slice,
 )
 from models.demos.deepseek_v4_flash.real_kv_projection_smoke import decode_real_kv_projection_weights
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
@@ -64,14 +68,23 @@ from models.demos.deepseek_v4_flash.real_prefill_cache_prep_smoke import (
     DEFAULT_SEQUENCE_LENGTH,
     _run_ttnn_prefill_cache_prep,
 )
-from models.demos.deepseek_v4_flash.real_routed_moe_smoke import ROUTED_MOE_TTNN_TILE_MULTIPLE, selected_expert_route
+from models.demos.deepseek_v4_flash.real_routed_moe_smoke import (
+    ROUTED_MOE_TTNN_TILE_MULTIPLE,
+    deterministic_input_ids_for_expert,
+)
 from models.demos.deepseek_v4_flash.real_shared_expert_smoke import decode_real_shared_expert_weights
 
 REAL_PREFILL_DECODER_LAYER_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_PREFILL_DECODER_LAYER = DEFAULT_LAYER_EXPERT_MLP_LAYER
 DEFAULT_PREFILL_DECODER_LAYER_EXPERT: int | None = None
-DEFAULT_PREFILL_DECODER_LAYER_MAX_TENSORS = DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_TENSORS + DEFAULT_FFN_MAX_TENSORS + 8
-DEFAULT_PREFILL_DECODER_LAYER_MAX_BYTES = DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_BYTES + DEFAULT_FFN_MAX_BYTES
+DEFAULT_PREFILL_FFN_FANOUT_MAX_TENSORS = max(DEFAULT_FFN_MAX_TENSORS, 768)
+DEFAULT_PREFILL_FFN_FANOUT_MAX_BYTES = max(DEFAULT_FFN_FANOUT_MAX_BYTES, 2 * 1024 * 1024 * 1024)
+DEFAULT_PREFILL_DECODER_LAYER_MAX_TENSORS = (
+    DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_TENSORS + DEFAULT_PREFILL_FFN_FANOUT_MAX_TENSORS + 8
+)
+DEFAULT_PREFILL_DECODER_LAYER_MAX_BYTES = (
+    DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_BYTES + DEFAULT_PREFILL_FFN_FANOUT_MAX_BYTES
+)
 
 
 def run_real_prefill_decoder_layer_smoke(
@@ -103,8 +116,8 @@ def run_real_prefill_decoder_layer_smoke(
     """Run one real DeepSeek V4 Flash prefill decoder-layer slice.
 
     The slice wires the already-proven real prefill attention runtime into the
-    already-proven real single-expert FFN composition:
-    input -> attn_norm/attention -> residual -> ffn_norm/router/one expert/shared expert -> residual.
+    real full-routed-fanout FFN composition:
+    input -> attn_norm/attention -> residual -> ffn_norm/router/all activated routed experts/shared expert -> residual.
     """
 
     _validate_smoke_args(
@@ -161,40 +174,31 @@ def run_real_prefill_decoder_layer_smoke(
         start_pos=start_pos,
     )
     post_attention_residual = _residual_add(activation, attention_reference["attention_output_projected"])
-    selected_expert, router_preview = _resolve_selected_expert(
-        tensors,
-        config=config,
-        layer=layer,
-        requested_expert=expert,
-        post_attention_residual=post_attention_residual,
-    )
-
-    ffn_keys = layer_ffn_keys(index, layer=layer, expert=selected_expert)
-    tensors, metadata = _load_missing_tensors(
-        index,
+    (
         tensors,
         metadata,
         ffn_keys,
+        activated_experts,
+        router_preview,
+        routed_weights_by_expert,
+        shared_weights,
+        ffn_reference,
+        ffn_input_ids,
+    ) = _prepare_prefill_ffn_fanout(
+        index,
+        tensors,
+        metadata,
+        config=config,
+        layer=layer,
+        requested_expert=expert,
+        activation=post_attention_residual,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
-    validate_real_ffn_slice(tensors, config=config, layer=layer, expert=selected_expert)
-    routed_weights = decode_real_expert_weights(tensors, config=config, layer=layer, expert=selected_expert)
-    shared_weights = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
     reference = build_torch_prefill_decoder_layer_reference(
-        tensors,
-        q_weights,
-        kv_weights,
-        compressor_weights,
-        indexer_weights,
-        routed_weights,
-        shared_weights,
-        config=config,
-        layer=layer,
-        expert=selected_expert,
         activation=activation,
-        start_pos=start_pos,
         attention_reference=attention_reference,
+        ffn_reference=ffn_reference,
     )
     metadata_groups = _metadata_groups(
         metadata,
@@ -205,8 +209,9 @@ def run_real_prefill_decoder_layer_smoke(
     result = _base_result(
         snapshot_dir=snapshot_dir,
         layer=layer,
-        expert=selected_expert,
+        activated_experts=activated_experts,
         requested_expert=expert,
+        ffn_input_ids=ffn_input_ids,
         seq_len=seq_len,
         start_pos=start_pos,
         config=config,
@@ -243,11 +248,11 @@ def run_real_prefill_decoder_layer_smoke(
         kv_weights,
         compressor_weights,
         indexer_weights,
-        routed_weights,
+        routed_weights_by_expert,
         shared_weights,
         config=config,
         layer=layer,
-        expert=selected_expert,
+        input_ids=ffn_input_ids,
         activation=activation,
         start_pos=start_pos,
         device_id=device_id,
@@ -270,11 +275,11 @@ def run_real_prefill_decoder_layer_smoke(
         "host_add(input_hidden_states,attention_output_projected)",
         "ttnn.rms_norm(ffn_norm)",
         "TtRouter(ttnn.linear+host_topk)",
-        "host_gather_selected_expert_tokens",
-        "TtRoutedExpertMLP",
-        "host_scatter_selected_expert_output",
+        "host_gather_activated_expert_tokens",
+        "sequential_TtRoutedExpertMLP_per_activated_expert",
+        "host_scatter_add_activated_expert_outputs",
         "TtSharedExpertMLP",
-        "host_add(routed_expert_output,shared_expert_output)",
+        "host_add(full_routed_output,shared_expert_output)",
         "host_add(post_attention_residual,combined_ffn_output)",
     ]
     result["ttnn"] = {
@@ -284,13 +289,28 @@ def run_real_prefill_decoder_layer_smoke(
         "ffn_norm": _tensor_summary(ttnn_outputs["ffn_norm_output"]),
         "router_weights": _tensor_summary(ttnn_outputs["router_weights"]),
         "router_indices": _tensor_summary(ttnn_outputs["router_indices"]),
-        "selected_route": _selection_summary(ttnn_outputs["selected_route"]),
-        "selected_expert_output": _tensor_summary(ttnn_outputs["selected_expert_output"]),
+        "activated_experts": _fanout_summary(
+            ttnn_outputs["router_weights"],
+            ttnn_outputs["router_indices"],
+            full_topk=config.num_experts_per_tok,
+        ),
+        "per_expert_routes": {
+            str(expert_id): _selection_summary(route) for expert_id, route in ttnn_outputs["per_expert_routes"].items()
+        },
+        "per_expert_padding": {
+            str(expert_id): padding for expert_id, padding in ttnn_outputs["per_expert_padding"].items()
+        },
+        "per_expert_selected_output": {
+            str(expert_id): _tensor_summary(output)
+            for expert_id, output in ttnn_outputs["per_expert_selected_output"].items()
+        },
         "routed_output": _tensor_summary(ttnn_outputs["routed_output"]),
         "shared_output": _tensor_summary(ttnn_outputs["shared_output"]),
         "combined_ffn_output": _tensor_summary(ttnn_outputs["combined_ffn_output"]),
         "post_ffn_residual": _tensor_summary(ttnn_outputs["post_ffn_residual"]),
-        "expert_padding": ttnn_outputs["expert_padding"],
+        "experts_executed": int(len(ttnn_outputs["per_expert_routes"])),
+        "routes_executed": int(ttnn_outputs["router_indices"].numel()),
+        "input_padding": ttnn_outputs["input_padding"],
     }
     result["ttnn_int"] = {
         "window_topk_idxs": _int_tensor_summary(ttnn_outputs["window_topk_idxs"]),
@@ -337,13 +357,6 @@ def run_real_prefill_decoder_layer_smoke(
             reference["ffn"]["router_indices"],
             ttnn_outputs["router_indices"],
             match_threshold=router_index_match,
-        ),
-        "selected_expert_output": _accuracy_summary(
-            reference["ffn"]["selected_expert_output"],
-            ttnn_outputs["selected_expert_output"],
-            pcc_threshold=routed_pcc,
-            rtol=rtol,
-            atol=atol,
         ),
         "routed_output": _accuracy_summary(
             reference["ffn"]["routed_output"],
@@ -403,7 +416,7 @@ def layer_prefill_decoder_layer_keys(
     return _unique_keys(
         [
             *layer_prefill_attention_runtime_keys(index, config=config, layer=layer),
-            *layer_ffn_keys(index, layer=layer, expert=expert),
+            *layer_ffn_fanout_keys(index, layer=layer, experts=(expert,)),
         ]
     )
 
@@ -423,43 +436,17 @@ def layer_prefill_decoder_layer_selector_keys(
 
 
 def build_torch_prefill_decoder_layer_reference(
-    tensors: Mapping[str, torch.Tensor],
-    q_weights,
-    kv_weights,
-    compressor_weights,
-    indexer_weights,
-    routed_weights: Mapping[str, torch.Tensor],
-    shared_weights: Mapping[str, torch.Tensor],
     *,
-    config: DeepSeekV4FlashConfig,
-    layer: int,
-    expert: int,
     activation: torch.Tensor,
-    start_pos: int = 0,
-    attention_reference: dict[str, torch.Tensor] | None = None,
+    attention_reference: Mapping[str, torch.Tensor],
+    ffn_reference: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if attention_reference is None:
-        attention_reference = build_torch_prefill_attention_runtime_reference(
-            tensors,
-            q_weights,
-            kv_weights,
-            compressor_weights,
-            indexer_weights,
-            config=config,
-            layer=layer,
-            activation=activation,
-            start_pos=start_pos,
-        )
     post_attention_residual = _residual_add(activation, attention_reference["attention_output_projected"])
-    ffn_reference = build_torch_ffn_reference(
-        tensors,
-        routed_weights,
-        shared_weights,
-        config=config,
-        layer=layer,
-        expert=expert,
-        activation=post_attention_residual,
-    )
+    if tuple(ffn_reference["residual_output"].shape) != tuple(post_attention_residual.shape):
+        raise ValueError(
+            "FFN fanout residual shape mismatch: "
+            f"{tuple(ffn_reference['residual_output'].shape)} vs {tuple(post_attention_residual.shape)}"
+        )
     return {
         "input_hidden_states": activation,
         "attention": attention_reference,
@@ -479,7 +466,7 @@ def main() -> None:
         "--expert",
         type=int,
         default=None,
-        help="Routed expert to materialize. Omit to choose the most active expert after the attention residual.",
+        help="Expert used to choose deterministic input ids for hash-routed layers; ignored for bias-routed layers.",
     )
     parser.add_argument("--seq-len", type=int, default=DEFAULT_SEQUENCE_LENGTH)
     parser.add_argument("--start-pos", type=int, default=0)
@@ -577,75 +564,122 @@ def _load_missing_tensors(
     return tensors, [*metadata, *loaded_metadata]
 
 
-def _resolve_selected_expert(
-    tensors: Mapping[str, torch.Tensor],
+def _prepare_prefill_ffn_fanout(
+    index: RealCheckpointTensorIndex,
+    tensors: dict[str, torch.Tensor],
+    metadata: list[TensorMetadata],
     *,
     config: DeepSeekV4FlashConfig,
     layer: int,
     requested_expert: int | None,
-    post_attention_residual: torch.Tensor,
-) -> tuple[int, dict[str, Any]]:
-    router_weights, router_indices = _build_post_attention_router_preview(
+    activation: torch.Tensor,
+    max_tensors: int,
+    max_bytes: int,
+) -> tuple[
+    dict[str, torch.Tensor],
+    list[TensorMetadata],
+    list[str],
+    list[int],
+    dict[str, Any],
+    dict[int, Mapping[str, torch.Tensor]],
+    Mapping[str, torch.Tensor],
+    dict[str, Any],
+    torch.Tensor | None,
+]:
+    input_ids = _prefill_fanout_input_ids_for_activation(
+        tensors,
+        layer=layer,
+        requested_expert=requested_expert,
+        seq_len=int(activation.shape[-2]),
+    )
+    selector_reference = build_torch_ffn_fanout_selector_reference(
         tensors,
         config=config,
         layer=layer,
-        requested_expert=requested_expert,
-        post_attention_residual=post_attention_residual,
+        activation=activation,
+        input_ids=input_ids,
     )
-    counts = _expert_route_counts(router_indices, n_routed_experts=config.n_routed_experts)
-    if requested_expert is None:
-        if tensors.get(f"layers.{layer}.ffn.gate.tid2eid") is not None:
-            raise ValueError("Auto expert selection is not supported for hash-routed layers; pass --expert")
-        selected_expert = _most_active_expert(counts)
-    else:
-        selected_expert = int(requested_expert)
-    selected_route = selected_expert_route(router_weights, router_indices, expert=selected_expert)
-    return selected_expert, {
-        "source": "torch_router_on_post_attention_residual",
-        "requested_expert": requested_expert,
-        "selected_expert": selected_expert,
-        "topk": int(config.num_experts_per_tok),
-        "top_expert_counts": counts[:16],
-        "selected_route": _selection_summary(selected_route),
+    activated_experts = _ordered_activated_expert_ids(selector_reference["router_indices"])
+    ffn_keys = layer_ffn_fanout_keys(index, layer=layer, experts=activated_experts)
+    tensors, metadata = _load_missing_tensors(
+        index,
+        tensors,
+        metadata,
+        ffn_keys,
+        max_tensors=max_tensors,
+        max_bytes=max_bytes,
+    )
+    validate_real_ffn_fanout_slice(tensors, config=config, layer=layer, experts=activated_experts)
+    routed_weights_by_expert = {
+        expert_id: decode_real_expert_weights(tensors, config=config, layer=layer, expert=expert_id)
+        for expert_id in activated_experts
     }
+    shared_weights = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
+    ffn_reference = build_torch_ffn_fanout_reference(
+        tensors,
+        routed_weights_by_expert,
+        shared_weights,
+        config=config,
+        layer=layer,
+        activation=activation,
+        input_ids=input_ids,
+    )
+    router_preview = _prefill_fanout_preview(
+        requested_expert=requested_expert,
+        input_ids=input_ids,
+        reference=ffn_reference,
+        config=config,
+    )
+    return (
+        tensors,
+        metadata,
+        ffn_keys,
+        activated_experts,
+        router_preview,
+        routed_weights_by_expert,
+        shared_weights,
+        ffn_reference,
+        input_ids,
+    )
 
 
-def _build_post_attention_router_preview(
+def _prefill_fanout_input_ids_for_activation(
     tensors: Mapping[str, torch.Tensor],
     *,
-    config: DeepSeekV4FlashConfig,
     layer: int,
     requested_expert: int | None,
-    post_attention_residual: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    prefix = f"layers.{layer}"
-    norm_output = rms_norm(
-        post_attention_residual[:, 0],
-        tensors[f"{prefix}.ffn_norm.weight"].to(torch.bfloat16),
-        eps=config.rms_norm_eps,
-    ).unsqueeze(1)
-    tid2eid = tensors.get(f"{prefix}.ffn.gate.tid2eid")
-    input_ids = None
-    if tid2eid is not None:
-        if requested_expert is None:
-            raise ValueError("Hash-routed layer preview requires an explicit expert")
-        from models.demos.deepseek_v4_flash.real_routed_moe_smoke import deterministic_input_ids_for_expert
+    seq_len: int,
+) -> torch.Tensor | None:
+    tid2eid = tensors.get(f"layers.{layer}.ffn.gate.tid2eid")
+    if tid2eid is None:
+        return None
+    if requested_expert is None:
+        raise ValueError("Hash-routed prefill FFN fanout requires --expert to choose deterministic input ids")
+    return deterministic_input_ids_for_expert(tid2eid=tid2eid, expert=int(requested_expert), seq_len=seq_len)
 
-        input_ids = deterministic_input_ids_for_expert(
-            tid2eid=tid2eid,
-            expert=int(requested_expert),
-            seq_len=post_attention_residual.shape[-2],
-        )
-    return v4_router(
-        norm_output[:, 0],
-        tensors[f"{prefix}.ffn.gate.weight"].to(torch.bfloat16),
-        topk=config.num_experts_per_tok,
-        route_scale=config.routed_scaling_factor,
-        scoring_func=config.scoring_func,
-        bias=tensors.get(f"{prefix}.ffn.gate.bias"),
-        input_ids=input_ids,
-        tid2eid=tid2eid,
-    )
+
+def _prefill_fanout_preview(
+    *,
+    requested_expert: int | None,
+    input_ids: torch.Tensor | None,
+    reference: Mapping[str, Any],
+    config: DeepSeekV4FlashConfig,
+) -> dict[str, Any]:
+    router_weights = reference["router_weights"]
+    router_indices = reference["router_indices"]
+    counts = _expert_route_counts(router_indices, n_routed_experts=config.n_routed_experts)
+    return {
+        "source": "torch_router_full_topk_on_post_attention_prefill_residual",
+        "requested_expert": requested_expert,
+        "input_id_anchor_expert": requested_expert if input_ids is not None else None,
+        "topk": int(config.num_experts_per_tok),
+        "routes_executed": int(router_indices.numel()),
+        "activated_experts": _fanout_summary(router_weights, router_indices, full_topk=config.num_experts_per_tok),
+        "top_expert_counts": counts[:16],
+        "per_expert_routes": {
+            str(expert_id): _selection_summary(values["route"]) for expert_id, values in reference["per_expert"].items()
+        },
+    }
 
 
 def _run_ttnn_prefill_decoder_layer_slice(
@@ -654,12 +688,12 @@ def _run_ttnn_prefill_decoder_layer_slice(
     kv_weights,
     compressor_weights,
     indexer_weights,
-    routed_weights: Mapping[str, torch.Tensor],
+    routed_weights_by_expert: Mapping[int, Mapping[str, torch.Tensor]],
     shared_weights: Mapping[str, torch.Tensor],
     *,
     config: DeepSeekV4FlashConfig,
     layer: int,
-    expert: int,
+    input_ids: torch.Tensor | None,
     activation: torch.Tensor,
     start_pos: int,
     device_id: int,
@@ -687,14 +721,14 @@ def _run_ttnn_prefill_decoder_layer_slice(
         device_id=device_id,
     )
     post_attention_residual = _residual_add(activation, attention_outputs["attention_output_projected"])
-    ffn_outputs = _run_ttnn_ffn_slice(
+    ffn_outputs = _run_ttnn_ffn_fanout_slice(
         tensors,
-        routed_weights,
+        routed_weights_by_expert,
         shared_weights,
         config=config,
         layer=layer,
-        expert=expert,
         activation=post_attention_residual,
+        input_ids=input_ids,
         device_id=device_id,
     )
     return {
@@ -704,13 +738,14 @@ def _run_ttnn_prefill_decoder_layer_slice(
         "ffn_norm_output": ffn_outputs["norm_output"],
         "router_weights": ffn_outputs["router_weights"],
         "router_indices": ffn_outputs["router_indices"],
-        "selected_route": ffn_outputs["selected_route"],
-        "selected_expert_output": ffn_outputs["selected_expert_output"],
+        "per_expert_routes": ffn_outputs["per_expert_routes"],
+        "per_expert_padding": ffn_outputs["per_expert_padding"],
+        "per_expert_selected_output": ffn_outputs["per_expert_selected_output"],
         "routed_output": ffn_outputs["routed_output"],
         "shared_output": ffn_outputs["shared_output"],
         "combined_ffn_output": ffn_outputs["combined_output"],
         "post_ffn_residual": ffn_outputs["residual_output"],
-        "expert_padding": ffn_outputs["expert_padding"],
+        "input_padding": ffn_outputs["input_padding"],
     }
 
 
@@ -718,8 +753,9 @@ def _base_result(
     *,
     snapshot_dir: Path,
     layer: int,
-    expert: int,
+    activated_experts: Sequence[int],
     requested_expert: int | None,
+    ffn_input_ids: torch.Tensor | None,
     seq_len: int,
     start_pos: int,
     config: DeepSeekV4FlashConfig,
@@ -734,7 +770,7 @@ def _base_result(
     attention_metadata = metadata_groups["attention_runtime"]
     ffn_metadata = metadata_groups["ffn"]
     attention_payload = _attention_payload_byte_split(attention_metadata)
-    ffn_payload = _ffn_payload_byte_split(ffn_metadata)
+    ffn_payload = _ffn_fanout_payload_byte_split(ffn_metadata)
     total_payload = sum(item.nbytes for item in metadata)
     return {
         "schema_version": REAL_PREFILL_DECODER_LAYER_SMOKE_SCHEMA_VERSION,
@@ -742,7 +778,7 @@ def _base_result(
         "snapshot_dir": str(snapshot_dir),
         "layer": int(layer),
         "requested_expert": requested_expert,
-        "expert": int(expert),
+        "input_id_anchor_expert": requested_expert if ffn_input_ids is not None else None,
         "sequence_length": int(seq_len),
         "start_pos": int(start_pos),
         "model": {
@@ -770,10 +806,10 @@ def _base_result(
         "decoder_scope": {
             "path": (
                 "input hidden states -> attn_norm + real prefill attention runtime -> attention residual -> "
-                "ffn_norm + router + one selected routed expert + shared expert -> FFN residual"
+                "ffn_norm + router + all activated routed experts + shared expert -> FFN residual"
             ),
             "layer_choice": "layer 3 is the default because real attention runtime and real FFN are proven there",
-            "full_expert_fanout": "excluded; one routed expert is materialized and compared explicitly",
+            "full_expert_fanout": "enabled for every router top-k expert selected by every prefill token",
             "embeddings_logits_vllm_evals": "excluded",
         },
         "selected_source_keys": [item.source_key for item in metadata],
@@ -803,13 +839,25 @@ def _base_result(
             "attention_output_projected": list(reference["attention"]["attention_output_projected"].shape),
             "post_attention_residual": list(reference["post_attention_residual"].shape),
             "ffn_norm": list(reference["ffn"]["norm_output"].shape),
-            "selected_expert_output": list(reference["ffn"]["selected_expert_output"].shape),
+            "per_expert_selected_output": {
+                str(expert_id): list(values["selected_expert_output"].shape)
+                for expert_id, values in reference["ffn"]["per_expert"].items()
+            },
             "routed_output": list(reference["ffn"]["routed_output"].shape),
             "shared_output": list(reference["ffn"]["shared_output"].shape),
             "combined_ffn_output": list(reference["ffn"]["combined_output"].shape),
             "post_ffn_residual": list(reference["post_ffn_residual"].shape),
         },
-        "selected_expert_info": router_preview,
+        "prefill_fanout_info": router_preview,
+        "fanout_scope": {
+            "full_expert_fanout": True,
+            "activated_expert_ids": [int(expert_id) for expert_id in activated_experts],
+            "activated_expert_count": len(activated_experts),
+            "topk": int(config.num_experts_per_tok),
+            "routes_executed": int(reference["ffn"]["router_indices"].numel()),
+            "tokens": int(seq_len),
+            "unique_expert_cap": None,
+        },
         "sparse_attention_inputs": {
             "window_topk_idxs": _int_tensor_summary(reference["attention"]["window_topk_idxs"]),
             "compress_topk_idxs": _int_tensor_summary(reference["attention"]["compress_topk_idxs"]),
@@ -849,9 +897,9 @@ def _base_result(
                 "description": "attention projection output is added to the input hidden states on host",
             },
             {
-                "name": "selected_expert_slice_selection",
+                "name": "activated_expert_slice_selection",
                 "location": "before loading routed expert weights",
-                "description": "one routed expert is selected from the post-attention router preview for this smoke",
+                "description": "all unique experts selected by the post-attention router preview are loaded",
             },
             {
                 "name": "routed_fp4_decode_to_bf16",
@@ -864,19 +912,19 @@ def _base_result(
                 "description": "router scores leave device for host DeepSeek top-k/hash selection",
             },
             {
-                "name": "selected_expert_gather",
+                "name": "activated_expert_gather",
                 "location": "between router and routed expert",
-                "description": "selected expert token activations and route weights are gathered on host",
+                "description": "token activations and route weights are gathered on host for each activated expert",
             },
             {
-                "name": "selected_expert_scatter",
+                "name": "activated_expert_scatter_add",
                 "location": "after TtRoutedExpertMLP",
-                "description": "single-expert contribution is scattered back to full sequence shape on host",
+                "description": "activated expert contributions are scattered back to full sequence shape and accumulated on host",
             },
             {
                 "name": "ffn_host_combine",
                 "location": "after routed and shared experts",
-                "description": "routed and shared expert contributions are added on host",
+                "description": "full routed fanout and shared expert contributions are added on host",
             },
             {
                 "name": "ffn_residual_host_add",
@@ -890,15 +938,18 @@ def _base_result(
             "host_add(input_hidden_states,attention_output_projected)",
             "torch.rms_norm_reference(ffn_norm)",
             "torch.router_reference",
-            "host_gather_selected_expert_tokens",
-            "torch.routed_swiglu_expert_reference",
-            "host_scatter_selected_expert_output",
+            "host_gather_activated_expert_tokens",
+            "torch.routed_swiglu_expert_reference_per_activated_expert",
+            "host_scatter_add_activated_expert_outputs",
             "torch.shared_swiglu_expert_reference",
-            "host_add(routed_expert_output,shared_expert_output)",
+            "host_add(full_routed_output,shared_expert_output)",
             "host_add(post_attention_residual,combined_ffn_output)",
         ],
         "ttnn_ops": [],
-        "inputs": {"hidden_states": _tensor_summary(activation)},
+        "inputs": {
+            "hidden_states": _tensor_summary(activation),
+            "ffn_input_ids": _tensor_summary(ffn_input_ids),
+        },
         "reference": {
             "attention_output": _tensor_summary(reference["attention"]["attention_output"]),
             "attention_output_projected": _tensor_summary(reference["attention"]["attention_output_projected"]),
@@ -906,8 +957,19 @@ def _base_result(
             "ffn_norm": _tensor_summary(reference["ffn"]["norm_output"]),
             "router_weights": _tensor_summary(reference["ffn"]["router_weights"]),
             "router_indices": _tensor_summary(reference["ffn"]["router_indices"]),
-            "selected_route": _selection_summary(reference["ffn"]["selected_route"]),
-            "selected_expert_output": _tensor_summary(reference["ffn"]["selected_expert_output"]),
+            "activated_experts": _fanout_summary(
+                reference["ffn"]["router_weights"],
+                reference["ffn"]["router_indices"],
+                full_topk=config.num_experts_per_tok,
+            ),
+            "per_expert_routes": {
+                str(expert_id): _selection_summary(values["route"])
+                for expert_id, values in reference["ffn"]["per_expert"].items()
+            },
+            "per_expert_selected_output": {
+                str(expert_id): _tensor_summary(values["selected_expert_output"])
+                for expert_id, values in reference["ffn"]["per_expert"].items()
+            },
             "routed_output": _tensor_summary(reference["ffn"]["routed_output"]),
             "shared_output": _tensor_summary(reference["ffn"]["shared_output"]),
             "combined_ffn_output": _tensor_summary(reference["ffn"]["combined_output"]),
@@ -956,15 +1018,6 @@ def _expert_route_counts(router_indices: torch.Tensor, *, n_routed_experts: int)
             }
         )
     return sorted(counts, key=lambda item: (-item["selected_token_count"], -item["hit_count"], item["expert"]))
-
-
-def _most_active_expert(counts: Sequence[Mapping[str, int]]) -> int:
-    if not counts:
-        raise ValueError("Router preview did not select any experts")
-    selected_count = int(counts[0]["selected_token_count"])
-    if selected_count <= 0:
-        raise ValueError("Router preview did not select any tokens for any expert")
-    return int(counts[0]["expert"])
 
 
 def _residual_add(residual: torch.Tensor, update: torch.Tensor) -> torch.Tensor:

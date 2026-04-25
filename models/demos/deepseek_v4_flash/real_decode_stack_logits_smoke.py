@@ -37,18 +37,14 @@ from models.demos.deepseek_v4_flash.real_decode_logits_smoke import (
     build_torch_decode_logits_reference,
     load_decode_logits_weights,
 )
-from models.demos.deepseek_v4_flash.real_expert_smoke import decode_real_expert_weights
 from models.demos.deepseek_v4_flash.real_ffn_smoke import (
     _accuracy_summary,
     _metadata_summary,
     _selection_summary,
     _tensor_summary,
-    layer_ffn_keys,
-    validate_real_ffn_slice,
 )
 from models.demos.deepseek_v4_flash.real_kv_projection_smoke import decode_real_kv_projection_weights
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
-    DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_BYTES,
     PREFILL_ATTENTION_RUNTIME_TTNN_TILE_MULTIPLE,
     _query_projection_weights_only,
     build_torch_prefill_attention_runtime_reference,
@@ -61,21 +57,24 @@ from models.demos.deepseek_v4_flash.real_prefill_cache_prep_smoke import (
     build_torch_prefill_cache_prep_reference,
 )
 from models.demos.deepseek_v4_flash.real_prefill_decoder_layer_smoke import (
+    DEFAULT_PREFILL_DECODER_LAYER_MAX_BYTES,
+    DEFAULT_PREFILL_DECODER_LAYER_MAX_TENSORS,
     _load_missing_tensors,
     _metadata_groups,
+    _prepare_prefill_ffn_fanout,
     _residual_add,
-    _resolve_selected_expert,
     _run_ttnn_prefill_decoder_layer_slice,
     _unique_keys,
     build_torch_prefill_decoder_layer_reference,
 )
-from models.demos.deepseek_v4_flash.real_shared_expert_smoke import decode_real_shared_expert_weights
 
 REAL_DECODE_STACK_LOGITS_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_DECODE_STACK_LAYERS = (2, 3)
-DEFAULT_DECODE_STACK_MAX_TENSORS = 2 * DEFAULT_DECODE_DECODER_LAYER_MAX_TENSORS + 12
+DEFAULT_DECODE_STACK_MAX_TENSORS = (
+    DEFAULT_PREFILL_DECODER_LAYER_MAX_TENSORS + 2 * DEFAULT_DECODE_DECODER_LAYER_MAX_TENSORS + 12
+)
 DEFAULT_DECODE_STACK_MAX_BYTES = (
-    DEFAULT_PREFILL_ATTENTION_RUNTIME_MAX_BYTES + 2 * DEFAULT_DECODE_DECODER_LAYER_MAX_BYTES + 2 * 1024 * 1024 * 1024
+    DEFAULT_PREFILL_DECODER_LAYER_MAX_BYTES + 2 * DEFAULT_DECODE_DECODER_LAYER_MAX_BYTES + 2 * 1024 * 1024 * 1024
 )
 
 
@@ -86,8 +85,9 @@ class _LayerRuntime:
     kv_weights: Any
     compressor_weights: Any
     indexer_weights: Any
-    prefill_expert: int | None
-    prefill_routed_weights: Mapping[str, torch.Tensor] | None
+    prefill_activated_experts: Sequence[int]
+    prefill_input_ids: torch.Tensor | None
+    prefill_routed_weights_by_expert: Mapping[int, Mapping[str, torch.Tensor]] | None
     prefill_shared_weights: Mapping[str, torch.Tensor] | None
     decode_activated_experts: Sequence[int]
     decode_input_ids: torch.Tensor | None
@@ -411,9 +411,10 @@ def _build_reference_layer_step(
     )
 
     prefill_reference = None
-    prefill_expert = None
+    prefill_activated_experts: Sequence[int] = ()
+    prefill_input_ids = None
     prefill_router_preview = _not_materialized_prefill_summary(layer=layer)
-    prefill_routed_weights = None
+    prefill_routed_weights_by_expert = None
     prefill_shared_weights = None
     prefill_ffn_keys: list[str] = []
     if materialize_prefill_output:
@@ -431,39 +432,31 @@ def _build_reference_layer_step(
         prefill_post_attention_residual = _residual_add(
             prefill_hidden, prefill_cache_reference["attention_output_projected"]
         )
-        prefill_expert, prefill_router_preview = _resolve_selected_expert(
-            tensors,
-            config=config,
-            layer=layer,
-            requested_expert=_default_requested_expert(tensors, layer=layer),
-            post_attention_residual=prefill_post_attention_residual,
-        )
-        prefill_ffn_keys = layer_ffn_keys(index, layer=layer, expert=prefill_expert)
-        tensors, metadata = _load_missing_tensors(
-            index,
+        (
             tensors,
             metadata,
             prefill_ffn_keys,
+            prefill_activated_experts,
+            prefill_router_preview,
+            prefill_routed_weights_by_expert,
+            prefill_shared_weights,
+            prefill_ffn_reference,
+            prefill_input_ids,
+        ) = _prepare_prefill_ffn_fanout(
+            index,
+            tensors,
+            metadata,
+            config=config,
+            layer=layer,
+            requested_expert=_default_requested_expert(tensors, layer=layer),
+            activation=prefill_post_attention_residual,
             max_tensors=max_tensors,
             max_bytes=max_bytes,
         )
-        validate_real_ffn_slice(tensors, config=config, layer=layer, expert=prefill_expert)
-        prefill_routed_weights = decode_real_expert_weights(tensors, config=config, layer=layer, expert=prefill_expert)
-        prefill_shared_weights = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
         prefill_reference = build_torch_prefill_decoder_layer_reference(
-            tensors,
-            q_weights,
-            kv_weights,
-            compressor_weights,
-            indexer_weights,
-            prefill_routed_weights,
-            prefill_shared_weights,
-            config=config,
-            layer=layer,
-            expert=prefill_expert,
             activation=prefill_hidden,
-            start_pos=0,
             attention_reference=prefill_cache_reference,
+            ffn_reference=prefill_ffn_reference,
         )
         next_prefill_hidden = prefill_reference["post_ffn_residual"]
     else:
@@ -536,8 +529,9 @@ def _build_reference_layer_step(
         kv_weights=kv_weights,
         compressor_weights=compressor_weights,
         indexer_weights=indexer_weights,
-        prefill_expert=prefill_expert,
-        prefill_routed_weights=prefill_routed_weights,
+        prefill_activated_experts=prefill_activated_experts,
+        prefill_input_ids=prefill_input_ids,
+        prefill_routed_weights_by_expert=prefill_routed_weights_by_expert,
         prefill_shared_weights=prefill_shared_weights,
         decode_activated_experts=decode_activated_experts,
         decode_input_ids=decode_input_ids,
@@ -581,18 +575,18 @@ def _run_ttnn_stack(
     decode_hidden_by_layer: dict[int, torch.Tensor] = {}
     for layer_index, runtime in enumerate(layer_runtimes):
         is_last_layer = layer_index == len(layer_runtimes) - 1
-        if runtime.prefill_routed_weights is not None and runtime.prefill_shared_weights is not None:
+        if runtime.prefill_routed_weights_by_expert is not None and runtime.prefill_shared_weights is not None:
             prefill_outputs = _run_ttnn_prefill_decoder_layer_slice(
                 tensors,
                 runtime.q_weights,
                 runtime.kv_weights,
                 runtime.compressor_weights,
                 runtime.indexer_weights,
-                runtime.prefill_routed_weights,
+                runtime.prefill_routed_weights_by_expert,
                 runtime.prefill_shared_weights,
                 config=config,
                 layer=runtime.layer,
-                expert=int(runtime.prefill_expert),
+                input_ids=runtime.prefill_input_ids,
                 activation=prefill_hidden,
                 start_pos=0,
                 device_id=device_id,
@@ -695,8 +689,7 @@ def _base_result(
                 "enabled for every router top-k expert selected by each materialized decode token"
             ),
             "prefill_ffn_full_expert_fanout": (
-                "not expanded in this stack smoke; layer 2 prefill output still uses the existing single selected "
-                "routed expert plus shared expert path to keep cache/handoff scope bounded"
+                "enabled for every router top-k expert selected by each materialized layer-2 prefill token"
             ),
             "embeddings_vllm_evals": "excluded",
         },
@@ -837,11 +830,18 @@ def _layer_summary(
             "decode": decode_router_preview,
         },
         "fanout_scope": {
+            "prefill_activated_expert_ids": [int(expert_id) for expert_id in runtime.prefill_activated_experts],
+            "prefill_activated_expert_count": len(runtime.prefill_activated_experts),
+            "prefill_topk": int(config.num_experts_per_tok),
+            "prefill_routes_executed": 0
+            if runtime.prefill_reference is None
+            else int(runtime.prefill_reference["ffn"]["router_indices"].numel()),
+            "prefill_full_fanout_materialized": runtime.prefill_reference is not None,
             "decode_activated_expert_ids": [int(expert_id) for expert_id in runtime.decode_activated_experts],
             "decode_activated_expert_count": len(runtime.decode_activated_experts),
             "decode_topk": int(config.num_experts_per_tok),
-            "decode_topk_is_full": len(runtime.decode_activated_experts) == int(config.num_experts_per_tok),
-            "prefill_full_fanout_materialized": False,
+            "decode_routes_executed": int(runtime.decode_reference["ffn"]["router_indices"].numel()),
+            "unique_expert_cap": None,
         },
         "output_shapes": {
             "prefill_post_ffn_residual": (
@@ -872,6 +872,16 @@ def _ttnn_layer_summary(
             "shape": list(decode_outputs["attention"]["runtime_topk_idxs"].shape),
             "valid_count": int((decode_outputs["attention"]["runtime_topk_idxs"] >= 0).sum().item()),
         },
+        "prefill_activated_experts": []
+        if prefill_outputs is None
+        else [int(expert_id) for expert_id in prefill_outputs["per_expert_routes"].keys()],
+        "prefill_per_expert_routes": {}
+        if prefill_outputs is None
+        else {
+            str(expert_id): _selection_summary(route)
+            for expert_id, route in prefill_outputs["per_expert_routes"].items()
+        },
+        "prefill_experts_executed": 0 if prefill_outputs is None else int(len(prefill_outputs["per_expert_routes"])),
         "decode_activated_experts": [int(expert_id) for expert_id in decode_outputs["per_expert_routes"].keys()],
         "decode_per_expert_routes": {
             str(expert_id): _selection_summary(route)
@@ -979,11 +989,10 @@ def _host_boundaries(vocab_mode: VocabMode) -> list[dict[str, str]]:
             ),
         },
         {
-            "name": "prefill_single_expert_ffn_boundary",
+            "name": "prefill_activated_expert_gather_scatter",
             "location": "layer 2 prefill FFN path",
             "description": (
-                "prefill FFN remains on the existing selected-expert path; full fanout is integrated only for "
-                "decode tokens"
+                "all layer-2 prefill activated experts are gathered, executed sequentially, and scatter-added on host"
             ),
         },
         {
@@ -1011,7 +1020,7 @@ def _reference_ops(layer_runtimes: Sequence[_LayerRuntime], vocab_mode: VocabMod
             ops.extend(
                 [
                     f"{prefix}: torch.real_prefill_attention_runtime_reference",
-                    f"{prefix}: torch.prefill_ffn_reference",
+                    f"{prefix}: torch.prefill_ffn_full_routed_fanout_reference",
                 ]
             )
         else:
@@ -1040,7 +1049,7 @@ def _ttnn_ops_summary(layer_runtimes: Sequence[_LayerRuntime], vocab_mode: Vocab
                     f"{prefix}: TtPrefillCompressor.build_compressed_kv_cache",
                     f"{prefix}: host_indexer_topk(prefill)",
                     f"{prefix}: TtSparsePrefillAttention(prefill)",
-                    f"{prefix}: TtRoutedExpertMLP(prefill)",
+                    f"{prefix}: sequential_TtRoutedExpertMLP_per_activated_expert(prefill)",
                     f"{prefix}: TtSharedExpertMLP(prefill)",
                 ]
             )

@@ -45,9 +45,11 @@ def test_cpu_real_decode_stack_logits_smoke_composes_layer2_layer3_and_logits(tm
     assert result["layers_detail"][0]["decode_cache"]["compressed_cache_length"] == 1
     assert result["layers_detail"][0]["decode_cache"]["compress_topk_valid_count"] > 0
     assert result["layers_detail"][0]["decode_cache"]["attention_cache_length"] == 6
+    assert result["layers_detail"][0]["fanout_scope"]["prefill_full_fanout_materialized"] is True
+    assert result["layers_detail"][0]["fanout_scope"]["prefill_activated_expert_count"] == 2
+    assert result["layers_detail"][0]["fanout_scope"]["prefill_routes_executed"] == 8
     assert result["layers_detail"][0]["fanout_scope"]["decode_activated_expert_count"] == 2
     assert result["layers_detail"][1]["fanout_scope"]["decode_activated_expert_count"] == 2
-    assert result["layers_detail"][0]["fanout_scope"]["prefill_full_fanout_materialized"] is False
     assert result["layers_detail"][1]["prefill_cache"]["sliding_window_cache_length"] == 4
     assert result["layers_detail"][1]["decode_cache"]["attention_cache_length"] == 5
     assert result["cache_handoff"]["layer_3_prefill_cache_source"] == "layer_2_prefill_post_ffn_residual"
@@ -66,6 +68,7 @@ def test_cpu_real_decode_stack_logits_smoke_composes_layer2_layer3_and_logits(tm
         "layer2_prefill_output_readback",
         "layer2_decode_output_readback",
         "layer2_decode_indexer_host_topk",
+        "prefill_activated_expert_gather_scatter",
         "final_logits_readback",
     }
     assert result["ttnn_ops"] == []
@@ -119,6 +122,8 @@ def test_cpu_real_decode_stack_logits_smoke_cli_outputs_json(tmp_path: Path) -> 
     assert payload["reference"]["top_k"][0]["id"] >= 8
     assert payload["reference"]["top_k"][0]["id"] < 24
     assert payload["layer2_compressed_tokens_contributed"] is True
+    assert payload["layers_detail"][0]["fanout_scope"]["prefill_full_fanout_materialized"] is True
+    assert payload["layers_detail"][0]["fanout_scope"]["prefill_routes_executed"] == 8
     assert payload["layers_detail"][0]["fanout_scope"]["decode_activated_expert_count"] == 2
     assert payload["ttnn_ops"] == []
     assert payload["host_boundaries"][-1]["name"] == "lm_head_vocab_slice"
@@ -159,6 +164,14 @@ def test_real_decode_stack_logits_smoke_ttnn_real_snapshot_matches_torch() -> No
     assert result["current_position"] == 32
     assert result["layer2_compressed_tokens_contributed"] is True
     assert result["layers_detail"][0]["decode_cache"]["compressed_cache_length"] > 0
+    assert result["layers_detail"][0]["fanout_scope"]["prefill_full_fanout_materialized"] is True
+    assert result["layers_detail"][0]["fanout_scope"]["prefill_routes_executed"] == (
+        32 * result["model"]["num_experts_per_tok"]
+    )
+    assert (
+        result["ttnn"]["layers"][0]["prefill_experts_executed"]
+        == result["layers_detail"][0]["fanout_scope"]["prefill_activated_expert_count"]
+    )
     assert all(
         layer["fanout_scope"]["decode_activated_expert_count"] == result["model"]["num_experts_per_tok"]
         for layer in result["layers_detail"]
