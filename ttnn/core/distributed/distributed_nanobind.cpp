@@ -1049,7 +1049,7 @@ void py_module(nb::module_& mod) {
     // Blocking point-to-point: send raw bytes to dest rank.
     mod.def(
         "send_bytes",
-        [](nb::bytes data, int dest, int tag) {
+        [](const nb::bytes& data, int dest, int tag) {
             if (!DistributedContext::is_initialized()) {
                 throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
