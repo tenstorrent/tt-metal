@@ -81,10 +81,22 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         "ttnn.linear(wo_b)",
         "ttnn.add(hidden,attention_projected)",
         "ttnn.rms_norm(ffn_norm)",
+        "TtRoutedExpertMLP(selected_topk_prefix)",
+        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.add(routed_expert_outputs)",
         "TtSharedExpertMLP",
-        "ttnn.add(post_attention_residual,shared_output)",
+        "ttnn.add(shared_output,routed_output)",
+        "ttnn.add(post_attention_residual,combined_ffn_output)",
     ]
-    assert "router scoring/top-k/hash selection" in result["traceable_decode_scope"]["excluded_from_trace"]
+    assert (
+        "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host"
+        in result["traceable_decode_scope"]["excluded_from_trace"]
+    )
+    assert result["selected_routing"]["selection_boundary"] == "host_pretrace_router_topk"
+    assert result["selected_routing"]["topk_prefix_limit"] == 1
+    assert result["selected_routing"]["topk_prefix_is_full"] is False
+    assert result["selected_routing"]["selected_expert_ids"] == [2]
+    assert result["selected_routing"]["route_weights_device_resident_inside_trace"] is True
     assert (
         "real sparse-attention output production; deterministic attention tensor is uploaded before trace"
         in result["traceable_decode_scope"]["excluded_from_trace"]
@@ -97,23 +109,33 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     ]
     assert result["loaded_tensor_groups"]["kv_projection"]["count"] == 2
     assert result["loaded_tensor_groups"]["ffn_norm"]["canonical_keys"] == ["layers.3.ffn_norm.weight"]
+    assert result["loaded_tensor_groups"]["router_selector"]["count"] == 2
     assert result["loaded_tensor_groups"]["shared_expert"]["count"] == 6
+    assert result["loaded_tensor_groups"]["routed_experts"]["count"] == 6
     assert result["payload_bytes"]["attention_output"] == 5120
     assert result["payload_bytes"]["kv_projection"] == 544
-    assert result["payload_bytes"]["total"] == 14188
+    assert result["payload_bytes"]["router_selector"] == 272
+    assert result["payload_bytes"]["routed_experts"] == 1920
+    assert result["payload_bytes"]["total"] == 16380
     assert result["decoded_tensors"]["wq_a"]["shape"] == [16, 32]
     assert result["decoded_tensors"]["wq_b"]["shape"] == [32, 16]
     assert result["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
     assert result["decoded_tensors"]["wo_b"]["shape"] == [32, 64]
     assert result["decoded_tensors"]["wkv"]["shape"] == [8, 32]
     assert result["decoded_tensors"]["kv_norm"]["shape"] == [8]
+    assert result["decoded_tensors"]["router_gate"]["shape"] == [4, 32]
+    assert result["decoded_tensors"]["routed_experts"]["2"]["w1"]["shape"] == [32, 32]
     assert result["decoded_tensors"]["shared_w1"]["shape"] == [32, 32]
     assert result["inputs"]["capture_attention_output"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["kv_output"]["shape"] == [1, 1, 4, 8]
     assert result["reference"]["kv_cache"]["shape"] == [1, 1, 64, 8]
     assert result["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["post_attention_residual"]["shape"] == [1, 1, 4, 32]
+    assert result["reference"]["routed_output"]["shape"] == [1, 1, 4, 32]
+    assert result["reference"]["combined_ffn_output"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["residual_output"]["shape"] == [1, 1, 4, 32]
+    assert "router_topk_pretrace" in result["host_boundaries_outside_trace"]
+    assert "route_weight_host_to_device" in result["host_boundaries_outside_trace"]
     assert "attention_output_host_to_device" in result["host_boundaries_outside_trace"]
     assert result["accuracy"]["cpu_reference"]["passed"] is True
 
@@ -151,9 +173,13 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["host_boundaries_inside_trace"] == []
     assert payload["traceable_decode_scope"]["not_full_forward"] is True
     assert payload["cache_update"]["update_index"] == 4
+    assert payload["selected_routing"]["topk_prefix_limit"] == 1
+    assert payload["selected_routing"]["selected_expert_ids"] == [2]
     assert payload["payload_bytes"]["attention_output"] == 5120
-    assert payload["payload_bytes"]["total"] == 14188
+    assert payload["payload_bytes"]["routed_experts"] == 1920
+    assert payload["payload_bytes"]["total"] == 16380
     assert payload["decoded_tensors"]["wo_a"]["shape"] == [64, 8]
+    assert payload["decoded_tensors"]["routed_experts"]["2"]["w2"]["shape"] == [32, 32]
     assert payload["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
 
 
@@ -186,10 +212,16 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["host_boundaries_inside_trace"] == []
     assert result["cache_update"]["device_resident_inside_trace"] is True
     assert "ttnn.linear(grouped_wo_a_group_0..N)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.linear(routed_w1_selected_topk_prefix)" in result["trace_capture"]["traced_operations"]
+    assert result["selected_routing"]["topk_prefix_limit"] == 1
+    assert result["selected_routing"]["route_weights_device_resident_inside_trace"] is True
     assert (
         "real sparse-attention output production; deterministic attention tensor is uploaded before trace"
         in result["traceable_decode_scope"]["excluded_from_trace"]
     )
     assert result["accuracy"]["attention_projected"]["passed"] is True
     assert result["accuracy"]["post_attention_residual"]["passed"] is True
+    assert result["accuracy"]["routed_output"]["passed"] is True
+    assert result["accuracy"]["combined_ffn_output"]["passed"] is True
+    assert result["accuracy"]["residual_output"]["passed"] is True
     assert result["accuracy"]["kv_cache"]["passed"] is True

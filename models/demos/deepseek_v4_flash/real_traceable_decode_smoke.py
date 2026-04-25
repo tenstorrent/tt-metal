@@ -19,7 +19,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
-from models.demos.deepseek_v4_flash.cpu_reference import rms_norm, swiglu_expert
+from models.demos.deepseek_v4_flash.cpu_reference import rms_norm, swiglu_expert, v4_router
 from models.demos.deepseek_v4_flash.real_attention_projection_smoke import (
     DEFAULT_ATTENTION_PROJECTION_MAX_BYTES,
     DEFAULT_ATTENTION_PROJECTION_MAX_TENSORS,
@@ -32,8 +32,10 @@ from models.demos.deepseek_v4_flash.real_attention_projection_smoke import (
 from models.demos.deepseek_v4_flash.real_checkpoint_loader import (
     RealCheckpointTensorIndex,
     TensorMetadata,
+    layer_expert_mlp_keys,
     layer_shared_expert_mlp_keys,
 )
+from models.demos.deepseek_v4_flash.real_expert_smoke import decode_real_expert_weights
 from models.demos.deepseek_v4_flash.real_kv_projection_smoke import (
     DEFAULT_KV_PROJECTION_MAX_BYTES,
     DEFAULT_KV_PROJECTION_MAX_TENSORS,
@@ -56,12 +58,14 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     TtAttentionProjection,
     grouped_output_projection_a,
 )
+from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 
 REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_TRACEABLE_DECODE_LAYER = 3
 DEFAULT_TRACEABLE_DECODE_SEQ_LEN = 32
 DEFAULT_TRACEABLE_DECODE_CACHE_LEN = 64
+DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX = 1
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS = 4
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES = 96 * 1024 * 1024
 DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
@@ -69,6 +73,8 @@ DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
     + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS
     + DEFAULT_KV_PROJECTION_MAX_TENSORS
     + DEFAULT_SHARED_EXPERT_MAX_TENSORS
+    + 3
+    + 6 * DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX
     + 1
 )
 DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
@@ -76,6 +82,7 @@ DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
     + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES
     + DEFAULT_KV_PROJECTION_MAX_BYTES
     + DEFAULT_SHARED_EXPERT_MAX_BYTES
+    + 64 * 1024 * 1024 * DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX
     + 4096
 )
 DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE = 64 * 1024 * 1024
@@ -89,7 +96,28 @@ class TraceableDecodeWeights:
     kv: KvProjectionWeights
     attn_norm: torch.Tensor
     ffn_norm: torch.Tensor
+    router_gate: torch.Tensor
+    router_bias: torch.Tensor | None
+    router_tid2eid: torch.Tensor | None
     shared_expert: dict[str, torch.Tensor]
+    routed_experts: dict[int, dict[str, torch.Tensor]]
+
+
+@dataclass(frozen=True)
+class TraceableDecodeRoutePlan:
+    decode_token_index: int
+    topk_prefix: int
+    full_topk: int
+    router_weights: torch.Tensor
+    router_indices: torch.Tensor
+    selected_weights: torch.Tensor
+    selected_indices: torch.Tensor
+    input_ids: torch.Tensor | None
+    per_expert_route_weight: dict[int, torch.Tensor]
+
+    @property
+    def selected_expert_ids(self) -> tuple[int, ...]:
+        return tuple(int(value) for value in self.selected_indices.reshape(-1).tolist())
 
 
 @dataclass(frozen=True)
@@ -132,11 +160,11 @@ class TtTraceableDecodeSubpath:
     This is intentionally not a full decoder layer. The protected forward covers
     the device-resident query projection, compressed K/V projection and cache
     append, grouped attention output projection, post-attention residual, and
-    shared-expert FFN stepping stone:
+    preselected routed/shared FFN stepping stone:
     ``hidden -> attn_norm -> wq_a -> q_norm -> wq_b``,
     ``attn_norm -> wkv -> kv_norm -> update_cache``,
     ``attention_output -> grouped wo_a -> wo_b -> residual``, and
-    ``post_attention_residual -> ffn_norm -> shared expert -> residual``.
+    ``post_attention_residual -> ffn_norm -> routed/shared experts -> residual``.
     """
 
     def __init__(
@@ -144,6 +172,7 @@ class TtTraceableDecodeSubpath:
         *,
         device,
         weights: TraceableDecodeWeights,
+        route_plan: TraceableDecodeRoutePlan,
         config: DeepSeekV4FlashConfig,
         cache_len: int,
         cache_update_index: int,
@@ -156,6 +185,7 @@ class TtTraceableDecodeSubpath:
         self.memory_config = memory_config
         self.cache_len = int(cache_len)
         self.cache_update_index = int(cache_update_index)
+        self.route_plan = route_plan
         self.attention = TtAttentionProjection(
             device=device,
             weights=weights.attention,
@@ -178,6 +208,29 @@ class TtTraceableDecodeSubpath:
             memory_config=memory_config,
             swiglu_limit=float(config.swiglu_limit),
         )
+        self.routed_experts: dict[int, TtRoutedExpertMLP] = {}
+        self.routed_route_weights: dict[int, object] = {}
+        for expert in route_plan.selected_expert_ids:
+            if expert not in weights.routed_experts:
+                raise KeyError(f"Missing routed expert weights for selected expert {expert}")
+            expert_weights = weights.routed_experts[expert]
+            routed_module = TtRoutedExpertMLP(
+                device=device,
+                w1=expert_weights["w1"],
+                w2=expert_weights["w2"],
+                w3=expert_weights["w3"],
+                dtype=dtype,
+                memory_config=memory_config,
+                swiglu_limit=float(config.swiglu_limit),
+            )
+            self.routed_experts[expert] = routed_module
+            self.routed_route_weights[expert] = _to_tt_route_weight(
+                route_plan.per_expert_route_weight[expert],
+                intermediate_size=routed_module.intermediate_size,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
         self.kv_output_dim = _kv_output_dim(config)
         self.wkv = _to_tt_linear_weight(
             weights.kv.wkv,
@@ -245,7 +298,19 @@ class TtTraceableDecodeSubpath:
             memory_config=self.memory_config,
         )
         shared_output = self.shared_expert(ffn_norm_output)
-        residual_output = ttnn.add(post_attention_residual, shared_output, memory_config=self.memory_config)
+        routed_expert_outputs = {
+            f"routed_expert_{expert}_output": routed_module(
+                ffn_norm_output,
+                route_weight=self.routed_route_weights[expert],
+            )
+            for expert, routed_module in self.routed_experts.items()
+        }
+        routed_output = _sum_ttnn_tensors(
+            routed_expert_outputs.values(),
+            memory_config=self.memory_config,
+        )
+        combined_ffn_output = ttnn.add(shared_output, routed_output, memory_config=self.memory_config)
+        residual_output = ttnn.add(post_attention_residual, combined_ffn_output, memory_config=self.memory_config)
         return {
             "attn_norm_output": attn_norm_output,
             "q_rank_norm": q_rank_norm,
@@ -257,6 +322,9 @@ class TtTraceableDecodeSubpath:
             "post_attention_residual": post_attention_residual,
             "ffn_norm_output": ffn_norm_output,
             "shared_output": shared_output,
+            **routed_expert_outputs,
+            "routed_output": routed_output,
+            "combined_ffn_output": combined_ffn_output,
             "residual_output": residual_output,
         }
 
@@ -266,6 +334,7 @@ def run_traceable_decode_subpath_smoke(
     *,
     layer: int = DEFAULT_TRACEABLE_DECODE_LAYER,
     seq_len: int = DEFAULT_TRACEABLE_DECODE_SEQ_LEN,
+    routed_topk_prefix: int = DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX,
     max_tensors: int = DEFAULT_TRACEABLE_DECODE_MAX_TENSORS,
     max_bytes: int = DEFAULT_TRACEABLE_DECODE_MAX_BYTES,
     cpu_only: bool = False,
@@ -287,6 +356,7 @@ def run_traceable_decode_subpath_smoke(
         trace_region_size=trace_region_size,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        routed_topk_prefix=routed_topk_prefix,
         pcc=pcc,
     )
     cache_update_index = _resolve_cache_update_index(
@@ -310,6 +380,44 @@ def run_traceable_decode_subpath_smoke(
     )
     replay_activation = _replay_activation(activation)
     replay_attention_output = _replay_attention_output(attention_output)
+    preliminary_reference = build_torch_traceable_decode_subpath_reference(
+        weights,
+        config=config,
+        activation=activation,
+        attention_output=attention_output,
+        cache_len=cache_len,
+        cache_update_index=cache_update_index,
+        route_plan=None,
+    )
+    route_plan = build_traceable_decode_route_plan(
+        weights,
+        config=config,
+        seq_len=seq_len,
+        ffn_norm_output=preliminary_reference["ffn_norm_output"],
+        routed_topk_prefix=routed_topk_prefix,
+    )
+    if route_plan.selected_expert_ids:
+        index = RealCheckpointTensorIndex.from_snapshot(snapshot_dir)
+        routed_expert_keys = [
+            key
+            for expert in route_plan.selected_expert_ids
+            for key in layer_expert_mlp_keys(index, layer=layer, expert=expert)
+        ]
+        keys["routed_experts"] = routed_expert_keys
+        tensors, metadata = _load_missing_tensors(
+            index,
+            tensors,
+            metadata,
+            routed_expert_keys,
+            max_tensors=max_tensors,
+            max_bytes=max_bytes,
+        )
+        weights = decode_traceable_decode_subpath_weights(
+            tensors,
+            config=config,
+            layer=layer,
+            selected_experts=route_plan.selected_expert_ids,
+        )
     reference = build_torch_traceable_decode_subpath_reference(
         weights,
         config=config,
@@ -317,6 +425,7 @@ def run_traceable_decode_subpath_smoke(
         attention_output=attention_output,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        route_plan=route_plan,
     )
     replay_reference = build_torch_traceable_decode_subpath_reference(
         weights,
@@ -325,6 +434,7 @@ def run_traceable_decode_subpath_smoke(
         attention_output=replay_attention_output,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        route_plan=route_plan,
     )
     metadata_groups = _metadata_groups(metadata, keys)
     result = _base_result(
@@ -341,6 +451,7 @@ def run_traceable_decode_subpath_smoke(
         attention_output=attention_output,
         replay_activation=replay_activation,
         replay_attention_output=replay_attention_output,
+        route_plan=route_plan,
         reference=reference,
         replay_reference=replay_reference,
         max_tensors=max_tensors,
@@ -364,6 +475,7 @@ def run_traceable_decode_subpath_smoke(
 
     ttnn_outputs, trace_info = _run_ttnn_traceable_decode_subpath(
         weights,
+        route_plan=route_plan,
         config=config,
         activation=activation,
         attention_output=attention_output,
@@ -400,7 +512,14 @@ def run_traceable_decode_subpath_smoke(
         "ttnn.linear(shared_w3)",
         "ttnn.mul(silu(shared_gate),shared_up)",
         "ttnn.linear(shared_w2)",
-        "ttnn.add(post_attention_residual,shared_output)",
+        "ttnn.linear(routed_w1_selected_topk_prefix)",
+        "ttnn.linear(routed_w3_selected_topk_prefix)",
+        "ttnn.mul(silu(routed_gate),routed_up)",
+        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.linear(routed_w2_selected_topk_prefix)",
+        "ttnn.add(routed_expert_outputs)",
+        "ttnn.add(shared_output,routed_output)",
+        "ttnn.add(post_attention_residual,combined_ffn_output)",
     ]
     result["trace_capture"]["traced_operations"] = list(result["ttnn_ops"])
     result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs.items()}
@@ -428,6 +547,7 @@ def load_traceable_decode_subpath_slice(
     snapshot_dir: str | Path,
     *,
     layer: int,
+    routed_experts: Sequence[int] = (),
     max_tensors: int = DEFAULT_TRACEABLE_DECODE_MAX_TENSORS,
     max_bytes: int = DEFAULT_TRACEABLE_DECODE_MAX_BYTES,
 ) -> tuple[dict[str, torch.Tensor], list[TensorMetadata], dict[str, list[str]]]:
@@ -438,20 +558,52 @@ def load_traceable_decode_subpath_slice(
     ffn_norm_keys = [f"layers.{layer}.ffn_norm.weight"]
     for key in ffn_norm_keys:
         index.location(key)
+    router_keys = layer_traceable_decode_router_keys(index, layer=layer)
     shared_expert_keys = layer_shared_expert_mlp_keys(index, layer=layer)
+    routed_expert_keys = [
+        key for expert in routed_experts for key in layer_expert_mlp_keys(index, layer=layer, expert=int(expert))
+    ]
     keys = {
         "attention_query": attention_keys,
         "attention_output": attention_output_keys,
         "kv_projection": kv_keys,
         "ffn_norm": ffn_norm_keys,
+        "router_selector": router_keys,
         "shared_expert": shared_expert_keys,
+        "routed_experts": routed_expert_keys,
     }
     tensors, metadata = index.load_tensors(
-        _unique_keys([*attention_keys, *attention_output_keys, *kv_keys, *ffn_norm_keys, *shared_expert_keys]),
+        _unique_keys(
+            [
+                *attention_keys,
+                *attention_output_keys,
+                *kv_keys,
+                *ffn_norm_keys,
+                *router_keys,
+                *shared_expert_keys,
+                *routed_expert_keys,
+            ]
+        ),
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
     return tensors, metadata, keys
+
+
+def layer_traceable_decode_router_keys(index: RealCheckpointTensorIndex, *, layer: int) -> list[str]:
+    if layer < 0:
+        raise ValueError(f"layer must be non-negative, got {layer}")
+    prefix = f"layers.{layer}"
+    keys = [f"{prefix}.ffn.gate.weight"]
+    bias_key = f"{prefix}.ffn.gate.bias"
+    tid2eid_key = f"{prefix}.ffn.gate.tid2eid"
+    if index.has_tensor(bias_key):
+        keys.append(bias_key)
+    elif index.has_tensor(tid2eid_key):
+        keys.append(tid2eid_key)
+    else:
+        raise KeyError(f"Layer {layer} has neither router bias nor tid2eid tensor in {index.snapshot_dir}")
+    return keys
 
 
 def decode_traceable_decode_subpath_weights(
@@ -459,9 +611,11 @@ def decode_traceable_decode_subpath_weights(
     *,
     config: DeepSeekV4FlashConfig,
     layer: int,
+    selected_experts: Sequence[int] = (),
 ) -> TraceableDecodeWeights:
     attention = decode_real_prefill_attention_projection_weights(tensors, config=config, layer=layer)
     kv = decode_real_kv_projection_weights(tensors, config=config, layer=layer)
+    _validate_traceable_decode_router_tensors(tensors, config=config, layer=layer)
     ffn_norm_key = f"layers.{layer}.ffn_norm.weight"
     if ffn_norm_key not in tensors:
         raise KeyError(f"Missing required FFN norm tensor {ffn_norm_key!r}")
@@ -470,12 +624,29 @@ def decode_traceable_decode_subpath_weights(
             f"Expected {ffn_norm_key} shape {(int(config.hidden_size),)}, " f"got {tuple(tensors[ffn_norm_key].shape)}"
         )
     shared_expert = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
+    routed_experts = {
+        int(expert): decode_real_expert_weights(tensors, config=config, layer=layer, expert=int(expert))
+        for expert in selected_experts
+    }
+    prefix = f"layers.{layer}"
     return TraceableDecodeWeights(
         attention=attention,
         kv=kv,
         attn_norm=tensors[f"layers.{layer}.attn_norm.weight"].contiguous().to(torch.bfloat16),
         ffn_norm=tensors[ffn_norm_key].contiguous().to(torch.bfloat16),
+        router_gate=tensors[f"{prefix}.ffn.gate.weight"].contiguous().to(torch.bfloat16),
+        router_bias=(
+            tensors[f"{prefix}.ffn.gate.bias"].contiguous().to(torch.bfloat16)
+            if f"{prefix}.ffn.gate.bias" in tensors
+            else None
+        ),
+        router_tid2eid=(
+            tensors[f"{prefix}.ffn.gate.tid2eid"].contiguous().to(torch.long)
+            if f"{prefix}.ffn.gate.tid2eid" in tensors
+            else None
+        ),
         shared_expert=shared_expert,
+        routed_experts=routed_experts,
     )
 
 
@@ -487,6 +658,7 @@ def build_torch_traceable_decode_subpath_reference(
     attention_output: torch.Tensor,
     cache_len: int,
     cache_update_index: int,
+    route_plan: TraceableDecodeRoutePlan | None,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
     _validate_attention_output(attention_output, q_output_dim=int(config.num_attention_heads) * int(config.head_dim))
@@ -526,7 +698,35 @@ def build_torch_traceable_decode_subpath_reference(
         .reshape(activation.shape[0], activation.shape[-2], int(config.hidden_size))
         .unsqueeze(1)
     )
-    residual_output = (post_attention_residual.float() + shared_output.float()).to(torch.bfloat16)
+    if route_plan is None:
+        routed_output = torch.zeros_like(shared_output)
+        routed_expert_outputs: dict[str, torch.Tensor] = {}
+    else:
+        routed_output_float = torch.zeros_like(shared_output, dtype=torch.float32)
+        routed_expert_outputs = {}
+        for expert in route_plan.selected_expert_ids:
+            if expert not in weights.routed_experts:
+                raise KeyError(f"Missing routed expert weights for selected expert {expert}")
+            expert_weights = weights.routed_experts[expert]
+            route_weight = route_plan.per_expert_route_weight[expert].reshape(-1, 1)
+            expert_output = (
+                swiglu_expert(
+                    ffn_norm_output[:, 0].reshape(-1, int(config.hidden_size)),
+                    expert_weights["w1"],
+                    expert_weights["w2"],
+                    expert_weights["w3"],
+                    route_weight=route_weight,
+                    swiglu_limit=float(config.swiglu_limit),
+                )
+                .reshape(activation.shape[0], activation.shape[-2], int(config.hidden_size))
+                .unsqueeze(1)
+                .to(torch.bfloat16)
+            )
+            routed_expert_outputs[f"routed_expert_{expert}_output"] = expert_output
+            routed_output_float += expert_output.float()
+        routed_output = routed_output_float.to(torch.bfloat16)
+    combined_ffn_output = (shared_output.float() + routed_output.float()).to(torch.bfloat16)
+    residual_output = (post_attention_residual.float() + combined_ffn_output.float()).to(torch.bfloat16)
     return {
         "attn_norm_output": attn_norm_output.to(torch.bfloat16),
         "q_rank_norm": q_rank_norm.to(torch.bfloat16),
@@ -538,8 +738,70 @@ def build_torch_traceable_decode_subpath_reference(
         "post_attention_residual": post_attention_residual.to(torch.bfloat16),
         "ffn_norm_output": ffn_norm_output.to(torch.bfloat16),
         "shared_output": shared_output.to(torch.bfloat16),
+        **routed_expert_outputs,
+        "routed_output": routed_output.to(torch.bfloat16),
+        "combined_ffn_output": combined_ffn_output.to(torch.bfloat16),
         "residual_output": residual_output,
     }
+
+
+def build_traceable_decode_route_plan(
+    weights: TraceableDecodeWeights,
+    *,
+    config: DeepSeekV4FlashConfig,
+    seq_len: int,
+    ffn_norm_output: torch.Tensor,
+    routed_topk_prefix: int,
+    decode_token_index: int = 0,
+) -> TraceableDecodeRoutePlan:
+    _validate_activation(ffn_norm_output, hidden_size=int(config.hidden_size))
+    if int(ffn_norm_output.shape[-2]) != int(seq_len):
+        raise ValueError(f"ffn_norm_output token count must be {seq_len}, got {ffn_norm_output.shape[-2]}")
+    if not 0 <= int(decode_token_index) < int(seq_len):
+        raise ValueError(f"decode_token_index must be in [0, {seq_len}), got {decode_token_index}")
+    full_topk = int(config.num_experts_per_tok)
+    topk_prefix = int(routed_topk_prefix)
+    if topk_prefix <= 0:
+        raise ValueError(f"routed_topk_prefix must be positive, got {routed_topk_prefix}")
+    if topk_prefix > full_topk:
+        raise ValueError(f"routed_topk_prefix {topk_prefix} exceeds num_experts_per_tok {full_topk}")
+
+    input_ids = _traceable_decode_input_ids(weights.router_tid2eid, seq_len=seq_len)
+    token_input_ids = None if input_ids is None else input_ids[:, int(decode_token_index) : int(decode_token_index) + 1]
+    token = ffn_norm_output[:, 0, int(decode_token_index) : int(decode_token_index) + 1, :]
+    router_weights, router_indices = v4_router(
+        token,
+        weights.router_gate,
+        topk=full_topk,
+        route_scale=float(config.routed_scaling_factor),
+        scoring_func=str(config.scoring_func),
+        bias=weights.router_bias,
+        input_ids=token_input_ids,
+        tid2eid=weights.router_tid2eid,
+    )
+    selected_weights = router_weights[..., :topk_prefix].contiguous().to(torch.bfloat16)
+    selected_indices = router_indices[..., :topk_prefix].contiguous().to(torch.long)
+    selected_ids = [int(value) for value in selected_indices.reshape(-1).tolist()]
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError(f"Traceable decode route prefix selected duplicate experts: {selected_ids}")
+
+    per_expert_route_weight: dict[int, torch.Tensor] = {}
+    for slot, expert in enumerate(selected_ids):
+        route_weight = torch.zeros((1, int(seq_len), 1), dtype=torch.bfloat16)
+        route_weight[0, int(decode_token_index), 0] = selected_weights[0, 0, slot]
+        per_expert_route_weight[int(expert)] = route_weight.contiguous()
+
+    return TraceableDecodeRoutePlan(
+        decode_token_index=int(decode_token_index),
+        topk_prefix=topk_prefix,
+        full_topk=full_topk,
+        router_weights=router_weights.contiguous(),
+        router_indices=router_indices.contiguous().to(torch.long),
+        selected_weights=selected_weights,
+        selected_indices=selected_indices,
+        input_ids=input_ids,
+        per_expert_route_weight=per_expert_route_weight,
+    )
 
 
 def default_guarded_symbols() -> tuple[GuardedSymbol, ...]:
@@ -607,6 +869,7 @@ def main() -> None:
     parser.add_argument("--snapshot-dir", required=True, type=Path)
     parser.add_argument("--layer", type=int, default=DEFAULT_TRACEABLE_DECODE_LAYER)
     parser.add_argument("--seq-len", type=int, default=DEFAULT_TRACEABLE_DECODE_SEQ_LEN)
+    parser.add_argument("--routed-topk-prefix", type=int, default=DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX)
     parser.add_argument("--max-tensors", type=int, default=DEFAULT_TRACEABLE_DECODE_MAX_TENSORS)
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_TRACEABLE_DECODE_MAX_BYTES)
     parser.add_argument("--device-id", type=int, default=0)
@@ -628,6 +891,7 @@ def main() -> None:
         args.snapshot_dir,
         layer=args.layer,
         seq_len=args.seq_len,
+        routed_topk_prefix=args.routed_topk_prefix,
         max_tensors=args.max_tensors,
         max_bytes=args.max_bytes,
         cpu_only=args.cpu_only,
@@ -647,6 +911,7 @@ def main() -> None:
 def _run_ttnn_traceable_decode_subpath(
     weights: TraceableDecodeWeights,
     *,
+    route_plan: TraceableDecodeRoutePlan,
     config: DeepSeekV4FlashConfig,
     activation: torch.Tensor,
     attention_output: torch.Tensor,
@@ -667,6 +932,7 @@ def _run_ttnn_traceable_decode_subpath(
         module = TtTraceableDecodeSubpath(
             device=device,
             weights=weights,
+            route_plan=route_plan,
             config=config,
             cache_len=cache_len,
             cache_update_index=cache_update_index,
@@ -744,6 +1010,7 @@ def _base_result(
     attention_output: torch.Tensor,
     replay_activation: torch.Tensor,
     replay_attention_output: torch.Tensor,
+    route_plan: TraceableDecodeRoutePlan,
     reference: Mapping[str, torch.Tensor],
     replay_reference: Mapping[str, torch.Tensor],
     max_tensors: int,
@@ -787,6 +1054,10 @@ def _base_result(
             "o_lora_rank": int(config.o_lora_rank),
             "attention_output_rank_dim": int(config.o_groups) * int(config.o_lora_rank),
             "moe_intermediate_size": int(config.moe_intermediate_size),
+            "n_routed_experts": int(config.n_routed_experts),
+            "num_experts_per_tok": int(config.num_experts_per_tok),
+            "scoring_func": str(config.scoring_func),
+            "routed_scaling_factor": float(config.routed_scaling_factor),
             "n_shared_experts": int(config.n_shared_experts),
             "shared_intermediate_size": int(config.moe_intermediate_size) * int(config.n_shared_experts),
             "rms_norm_eps": float(config.rms_norm_eps),
@@ -812,13 +1083,17 @@ def _base_result(
                 "ttnn.linear(wo_b)",
                 "ttnn.add(hidden,attention_projected)",
                 "ttnn.rms_norm(ffn_norm)",
+                "TtRoutedExpertMLP(selected_topk_prefix)",
+                "ttnn.mul(routed_hidden,preselected_route_weight)",
+                "ttnn.add(routed_expert_outputs)",
                 "TtSharedExpertMLP",
-                "ttnn.add(post_attention_residual,shared_output)",
+                "ttnn.add(shared_output,routed_output)",
+                "ttnn.add(post_attention_residual,combined_ffn_output)",
             ],
             "path": (
                 "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
                 "deterministic device attention tensor -> grouped wo_a/wo_b/post-attention residual; "
-                "post-attention residual -> ffn_norm/shared expert/residual"
+                "post-attention residual -> ffn_norm/preselected routed experts plus shared expert/residual"
             ),
             "logical_decode_token_policy": (
                 "the first token is the logical decode token; tensor shape is tile-padded/static for trace replay"
@@ -827,12 +1102,13 @@ def _base_result(
                 "K/V RoPE split and final sparse-attention cache read path",
                 "host sparse-attention gather/softmax/reduction",
                 "real sparse-attention output production; deterministic attention tensor is uploaded before trace",
-                "router scoring/top-k/hash selection",
-                "routed expert gather/scatter/combine",
+                "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
+                "routed experts outside the configured top-k prefix when topk_prefix_limit is less than full top-k",
                 "cache advancement beyond the fixed traced update index",
                 "embedding and logits",
             ],
         },
+        "selected_routing": _route_plan_summary(route_plan, config=config),
         "selected_source_keys": [item.source_key for item in metadata],
         "loaded_tensors": [_metadata_summary(item) for item in metadata],
         "loaded_tensor_groups": loaded_groups,
@@ -842,7 +1118,9 @@ def _base_result(
             "attention_output": loaded_groups["attention_output"]["payload_bytes"],
             "kv_projection": loaded_groups["kv_projection"]["payload_bytes"],
             "ffn_norm": loaded_groups["ffn_norm"]["payload_bytes"],
+            "router_selector": loaded_groups["router_selector"]["payload_bytes"],
             "shared_expert": loaded_groups["shared_expert"]["payload_bytes"],
+            "routed_experts": loaded_groups["routed_experts"]["payload_bytes"],
             "total": sum(item.nbytes for item in metadata),
         },
         "decoded_tensors": {
@@ -856,9 +1134,16 @@ def _base_result(
             "kv_norm": _tensor_summary(weights.kv.kv_norm),
             "kv_cache_initial": _tensor_summary(torch.zeros((1, 1, int(cache_len), _kv_output_dim(config)))),
             "ffn_norm": _tensor_summary(weights.ffn_norm),
+            "router_gate": _tensor_summary(weights.router_gate),
+            "router_bias": _optional_tensor_summary(weights.router_bias),
+            "router_tid2eid": _optional_tensor_summary(weights.router_tid2eid),
             "shared_w1": _tensor_summary(weights.shared_expert["w1"]),
             "shared_w2": _tensor_summary(weights.shared_expert["w2"]),
             "shared_w3": _tensor_summary(weights.shared_expert["w3"]),
+            "routed_experts": {
+                str(expert): {projection: _tensor_summary(weight) for projection, weight in expert_weights.items()}
+                for expert, expert_weights in weights.routed_experts.items()
+            },
         },
         "budget": {
             "max_tensors": int(max_tensors),
@@ -896,6 +1181,24 @@ def _base_result(
                 "description": "FP8 attention/KV/shared-expert weights and scales are decoded on host before TTNN module setup",
             },
             {
+                "name": "routed_fp4_decode_to_bf16",
+                "location": "before protected traceable decode region",
+                "description": "preselected routed expert FP4 weights and scales are decoded on host before TTNN module setup",
+            },
+            {
+                "name": "router_topk_pretrace",
+                "location": "before protected traceable decode region",
+                "description": (
+                    "router scoring/top-k runs on host for the logical decode token; the protected trace receives "
+                    "fixed selected expert ids and route weights"
+                ),
+            },
+            {
+                "name": "route_weight_host_to_device",
+                "location": "before trace capture",
+                "description": "precomputed route weights are expanded and uploaded as device tensors during module setup",
+            },
+            {
                 "name": "kv_cache_zero_init_host_to_device",
                 "location": "before trace capture",
                 "description": "the compressed K/V projection cache is zero-initialized on host and uploaded during module setup",
@@ -922,6 +1225,9 @@ def _base_result(
         "host_boundaries_inside_trace": [],
         "host_boundaries_outside_trace": [
             "real_weight_decode_to_bf16",
+            "routed_fp4_decode_to_bf16",
+            "router_topk_pretrace",
+            "route_weight_host_to_device",
             "kv_cache_zero_init_host_to_device",
             "activation_host_to_device",
             "attention_output_host_to_device",
@@ -939,8 +1245,10 @@ def _base_result(
             "torch.linear(wo_b)",
             "torch.add(hidden,attention_projected)",
             "torch.rms_norm_reference(ffn_norm)",
+            "torch.routed_swiglu_expert_reference(preselected_topk_prefix)",
             "torch.shared_swiglu_expert_reference",
-            "torch.add(post_attention_residual,shared_output)",
+            "torch.add(shared_output,routed_output)",
+            "torch.add(post_attention_residual,combined_ffn_output)",
         ],
         "ttnn_ops": [],
         "inputs": {
@@ -1039,6 +1347,41 @@ def _to_tt_kv_cache(
     )
 
 
+def _to_tt_route_weight(
+    route_weight: torch.Tensor,
+    *,
+    intermediate_size: int,
+    device,
+    dtype,
+    memory_config,
+):
+    if route_weight.ndim != 3 or tuple(route_weight.shape[:1]) != (1,) or int(route_weight.shape[-1]) != 1:
+        raise ValueError(f"route_weight must have shape [1, tokens, 1], got {tuple(route_weight.shape)}")
+    expanded = (
+        route_weight.reshape(1, 1, int(route_weight.shape[-2]), 1)
+        .expand(1, 1, int(route_weight.shape[-2]), int(intermediate_size))
+        .contiguous()
+        .to(torch.bfloat16)
+    )
+    return ttnn.from_torch(
+        expanded,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _sum_ttnn_tensors(tensors, *, memory_config):
+    values = list(tensors)
+    if not values:
+        raise ValueError("at least one routed expert output is required")
+    result = values[0]
+    for value in values[1:]:
+        result = ttnn.add(result, value, memory_config=memory_config)
+    return result
+
+
 def _kv_update_memory_config(*, device, token_rows: int, width: int):
     if token_rows <= 0:
         raise ValueError(f"token_rows must be positive, got {token_rows}")
@@ -1077,6 +1420,39 @@ def _guard_status(trace_capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _route_plan_summary(route_plan: TraceableDecodeRoutePlan, *, config: DeepSeekV4FlashConfig) -> dict[str, Any]:
+    selected_weights = [float(value) for value in route_plan.selected_weights.reshape(-1).float().tolist()]
+    selected_indices = [int(value) for value in route_plan.selected_indices.reshape(-1).tolist()]
+    full_weights = [float(value) for value in route_plan.router_weights.reshape(-1).float().tolist()]
+    full_indices = [int(value) for value in route_plan.router_indices.reshape(-1).tolist()]
+    return {
+        "selection_boundary": "host_pretrace_router_topk",
+        "decode_token_index": int(route_plan.decode_token_index),
+        "logical_decode_token_only": True,
+        "static_token_rows_in_trace": int(next(iter(route_plan.per_expert_route_weight.values())).shape[1]),
+        "padded_static_rows_have_zero_routed_weight": True,
+        "full_topk": int(route_plan.full_topk),
+        "topk_prefix_limit": int(route_plan.topk_prefix),
+        "topk_prefix_is_full": int(route_plan.topk_prefix) == int(route_plan.full_topk),
+        "selected_expert_ids": selected_indices,
+        "selected_route_weights": selected_weights,
+        "full_router_indices_for_decode_token": full_indices,
+        "full_router_weights_for_decode_token": full_weights,
+        "route_weights_device_resident_inside_trace": True,
+        "router_scoring_func": str(config.scoring_func),
+        "routed_scaling_factor": float(config.routed_scaling_factor),
+        "input_ids": _optional_tensor_summary(route_plan.input_ids),
+        "limitation": (
+            "router/top-k is host-computed before trace; this trace replays a fixed top-k prefix route plan "
+            "for the logical decode token"
+        ),
+    }
+
+
+def _optional_tensor_summary(tensor: torch.Tensor | None) -> dict[str, Any] | None:
+    return None if tensor is None else _tensor_summary(tensor)
+
+
 def _traceable_accuracy_summary(
     name: str,
     expected: torch.Tensor,
@@ -1086,7 +1462,7 @@ def _traceable_accuracy_summary(
     rtol: float,
     atol: float,
 ) -> dict[str, Any]:
-    projection_outputs = {"attention_projected", "post_attention_residual", "residual_output"}
+    projection_outputs = {"attention_projected", "post_attention_residual", "combined_ffn_output", "residual_output"}
     local_rtol = max(float(rtol), ATTENTION_OUTPUT_PROJECTION_RTOL) if name in projection_outputs else float(rtol)
     local_atol = max(float(atol), ATTENTION_OUTPUT_PROJECTION_ATOL) if name in projection_outputs else float(atol)
     summary = _accuracy_summary(
@@ -1097,7 +1473,9 @@ def _traceable_accuracy_summary(
         atol=local_atol,
     )
     if name in projection_outputs:
-        summary["tolerance_note"] = "grouped wo_a/wo_b projection uses relaxed absolute tolerance; PCC remains enforced"
+        summary[
+            "tolerance_note"
+        ] = "traceable decode matmul/SwiGLU path uses relaxed absolute tolerance; PCC remains enforced"
     return summary
 
 
@@ -1165,6 +1543,46 @@ def _validate_attention_output(attention_output: torch.Tensor, *, q_output_dim: 
         raise ValueError("attention_output must contain at least one token")
 
 
+def _validate_traceable_decode_router_tensors(
+    tensors: Mapping[str, torch.Tensor],
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+) -> None:
+    prefix = f"layers.{layer}"
+    gate_key = f"{prefix}.ffn.gate.weight"
+    if gate_key not in tensors:
+        raise KeyError(f"Missing required router tensor {gate_key!r}")
+    expected_gate_shape = (int(config.n_routed_experts), int(config.hidden_size))
+    if tuple(tensors[gate_key].shape) != expected_gate_shape:
+        raise ValueError(f"Expected {gate_key} shape {expected_gate_shape}, got {tuple(tensors[gate_key].shape)}")
+
+    bias_key = f"{prefix}.ffn.gate.bias"
+    tid2eid_key = f"{prefix}.ffn.gate.tid2eid"
+    has_bias = bias_key in tensors
+    has_tid2eid = tid2eid_key in tensors
+    if has_bias == has_tid2eid:
+        raise ValueError(f"Expected exactly one of {bias_key!r} or {tid2eid_key!r}")
+    if has_bias and tuple(tensors[bias_key].shape) != (int(config.n_routed_experts),):
+        raise ValueError(
+            f"Expected {bias_key} shape {(int(config.n_routed_experts),)}, got {tuple(tensors[bias_key].shape)}"
+        )
+    if has_tid2eid:
+        expected_tid2eid_shape = (int(config.vocab_size), int(config.num_experts_per_tok))
+        if tuple(tensors[tid2eid_key].shape) != expected_tid2eid_shape:
+            raise ValueError(
+                f"Expected {tid2eid_key} shape {expected_tid2eid_shape}, got {tuple(tensors[tid2eid_key].shape)}"
+            )
+
+
+def _traceable_decode_input_ids(tid2eid: torch.Tensor | None, *, seq_len: int) -> torch.Tensor | None:
+    if tid2eid is None:
+        return None
+    if seq_len <= 0:
+        raise ValueError(f"seq_len must be positive, got {seq_len}")
+    return torch.zeros((1, int(seq_len)), dtype=torch.long)
+
+
 def _validate_smoke_args(
     *,
     layer: int,
@@ -1174,6 +1592,7 @@ def _validate_smoke_args(
     trace_region_size: int,
     cache_len: int,
     cache_update_index: int | None,
+    routed_topk_prefix: int,
     pcc: float,
 ) -> None:
     if layer < 0:
@@ -1192,8 +1611,32 @@ def _validate_smoke_args(
         _resolve_cache_update_index(seq_len=seq_len, cache_len=cache_len, cache_update_index=cache_update_index)
     elif seq_len >= cache_len:
         raise ValueError(f"default cache_update_index seq_len={seq_len} must be less than cache_len {cache_len}")
+    if routed_topk_prefix <= 0:
+        raise ValueError(f"routed_topk_prefix must be positive, got {routed_topk_prefix}")
     if not 0.0 <= pcc <= 1.0:
         raise ValueError(f"pcc must be in [0, 1], got {pcc}")
+
+
+def _load_missing_tensors(
+    index: RealCheckpointTensorIndex,
+    tensors: dict[str, torch.Tensor],
+    metadata: list[TensorMetadata],
+    keys: Sequence[str],
+    *,
+    max_tensors: int,
+    max_bytes: int,
+) -> tuple[dict[str, torch.Tensor], list[TensorMetadata]]:
+    missing_keys = [key for key in keys if key not in tensors]
+    if not missing_keys:
+        return tensors, metadata
+    used_bytes = sum(item.nbytes for item in metadata)
+    loaded_tensors, loaded_metadata = index.load_tensors(
+        missing_keys,
+        max_tensors=max_tensors - len(metadata),
+        max_bytes=max_bytes - used_bytes,
+    )
+    tensors.update(loaded_tensors)
+    return tensors, [*metadata, *loaded_metadata]
 
 
 def _unique_keys(keys: Sequence[str]) -> list[str]:
