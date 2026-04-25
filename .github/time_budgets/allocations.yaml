@@ -1,39 +1,49 @@
 # Fractional allocation of each SKU pool per team.
 # Values per SKU must sum to <= 1.0.
 # Teams not listed get 0 allocation on that SKU.
+#
+# Team names must match the "team:" field used in tests/pipeline_reorg/*.yaml
+# (and the normalized CODEOWNERS team slug for non-pipeline_reorg workflows).
+# Current pipeline_reorg teams: models, runtime, scaleout, shield, ttnn
 
 N150:
-  team_infra:    0.25
-  team_llk:      0.25
-  team_models:   0.25
-  team_runtime:  0.25
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
 
 N300:
-  team_infra:    0.25
-  team_llk:      0.25
-  team_models:   0.25
-  team_runtime:  0.25
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
 
 p150b:
-  team_infra:    0.25
-  team_llk:      0.25
-  team_models:   0.25
-  team_runtime:  0.25
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
 
 p300b:
-  team_infra:    0.25
-  team_llk:      0.25
-  team_models:   0.25
-  team_runtime:  0.25
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
 
 LLMBOX:
-  team_infra:    0.25
-  team_llk:      0.25
-  team_models:   0.25
-  team_runtime:  0.25
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
 
 galaxy:
-  team_infra:    0.25
-  team_llk:      0.25
-  team_models:   0.25
-  team_runtime:  0.25
+  models:    0.20
+  runtime:   0.20
+  scaleout:  0.20
+  shield:    0.20
+  ttnn:      0.20
