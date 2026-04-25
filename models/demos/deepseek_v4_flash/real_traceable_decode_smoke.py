@@ -102,6 +102,13 @@ TRACEABLE_DECODE_ATTENTION_MODES = (
     TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
 )
 DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE = TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR = "update_cache"
+TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR = "paged_update_cache"
+TRACEABLE_DECODE_CACHE_UPDATE_APIS = (
+    TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
+    TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+)
+DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API = TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
 
 
 @dataclass(frozen=True)
@@ -192,7 +199,10 @@ class TtTraceableDecodeSubpath:
         layer: int,
         cache_len: int,
         cache_update_index: int,
-        initial_kv_cache: torch.Tensor | None,
+        cache_update_api: str = DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
+        cache_update_idxs_tensor=None,
+        attention_cache_window_index: int | None = None,
+        initial_kv_cache: torch.Tensor | None = None,
         kv_cache=None,
         attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
         dtype=ttnn.bfloat16,
@@ -205,6 +215,13 @@ class TtTraceableDecodeSubpath:
         self.layer = int(layer)
         self.cache_len = int(cache_len)
         self.cache_update_index = int(cache_update_index)
+        self.cache_update_api = _validate_cache_update_api(cache_update_api)
+        self.cache_update_idxs_tensor = cache_update_idxs_tensor
+        self.attention_cache_window_index = (
+            int(cache_update_index) if attention_cache_window_index is None else int(attention_cache_window_index)
+        )
+        if self.cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR and cache_update_idxs_tensor is None:
+            raise ValueError("cache_update_idxs_tensor is required for paged_update_cache trace replay")
         self.attention_mode = _validate_attention_mode(attention_mode)
         self.route_plan = route_plan
         self.static_token_rows = _route_plan_static_token_rows(route_plan)
@@ -329,7 +346,7 @@ class TtTraceableDecodeSubpath:
         self.rope_cos, self.rope_sin, self.rope_trans_mat = _to_tt_rope_tensors(
             config,
             layer=self.layer,
-            start_pos=self.cache_update_index,
+            start_pos=self.attention_cache_window_index,
             seq_len=self.static_token_rows,
             device=device,
             dtype=dtype,
@@ -353,15 +370,34 @@ class TtTraceableDecodeSubpath:
             epsilon=float(self.config.rms_norm_eps),
             memory_config=self.memory_config,
         )
-        kv_update = ttnn.to_memory_config(
-            kv_output,
-            _kv_update_memory_config(device=self.device, token_rows=int(kv_output.shape[-2]), width=self.kv_output_dim),
-        )
-        self.kv_cache = ttnn.update_cache(self.kv_cache, kv_update, self.cache_update_index)
+        if self.cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR:
+            kv_update = ttnn.to_memory_config(
+                kv_output,
+                _kv_update_memory_config(
+                    device=self.device, token_rows=int(kv_output.shape[-2]), width=self.kv_output_dim
+                ),
+            )
+            self.kv_cache = ttnn.update_cache(self.kv_cache, kv_update, self.cache_update_index)
+        else:
+            kv_update_decode_token = ttnn.slice(
+                kv_output,
+                (0, 0, 0, 0),
+                (1, 1, 1, self.kv_output_dim),
+                memory_config=self.memory_config,
+            )
+            kv_update = ttnn.to_memory_config(
+                kv_update_decode_token,
+                _single_core_height_sharded_memory_config(kv_update_decode_token, device=self.device),
+            )
+            self.kv_cache = ttnn.experimental.paged_update_cache(
+                self.kv_cache,
+                kv_update,
+                update_idxs_tensor=self.cache_update_idxs_tensor,
+            )
         attention_cache_window = ttnn.slice(
             self.kv_cache,
-            (0, 0, self.cache_update_index, 0),
-            (1, 1, self.cache_update_index + int(hidden_states.shape[-2]), self.kv_output_dim),
+            (0, 0, self.attention_cache_window_index, 0),
+            (1, 1, self.attention_cache_window_index + int(hidden_states.shape[-2]), self.kv_output_dim),
             memory_config=self.memory_config,
         )
         attention_intermediates = _ttnn_fixed_window_attention(
@@ -481,6 +517,7 @@ def run_traceable_decode_subpath_smoke(
     cache_update_index: int | None = None,
     decode_steps: int = DEFAULT_TRACEABLE_DECODE_STEPS,
     attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
+    cache_update_api: str = DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
     pcc: float = 0.99,
     rtol: float = 8e-2,
     atol: float = 8e-2,
@@ -505,6 +542,7 @@ def run_traceable_decode_subpath_smoke(
         cache_update_index=cache_update_index,
     )
     attention_mode = _validate_attention_mode(attention_mode)
+    cache_update_api = _validate_cache_update_api(cache_update_api)
     snapshot_dir = Path(snapshot_dir).expanduser().resolve()
     config = DeepSeekV4FlashConfig.from_model_path(snapshot_dir)
     tensors, metadata, keys = load_traceable_decode_subpath_slice(
@@ -525,6 +563,12 @@ def run_traceable_decode_subpath_smoke(
     activations = tuple(_decode_step_activation(activation, step) for step in range(int(decode_steps)))
     replay_activations = tuple(_replay_activation(step_activation) for step_activation in activations)
     cache_update_indices = tuple(int(cache_update_index) + step for step in range(int(decode_steps)))
+    static_attention_index = int(cache_update_indices[0])
+    attention_window_indices = (
+        tuple(static_attention_index for _ in cache_update_indices)
+        if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+        else cache_update_indices
+    )
 
     route_plans: list[TraceableDecodeRoutePlan] = []
     preliminary_cache = kv_cache_initial
@@ -537,6 +581,7 @@ def run_traceable_decode_subpath_smoke(
             kv_cache_initial=preliminary_cache,
             cache_len=cache_len,
             cache_update_index=cache_update_indices[step],
+            attention_cache_window_index=attention_window_indices[step],
             attention_mode=attention_mode,
             route_plan=None,
         )
@@ -550,6 +595,9 @@ def run_traceable_decode_subpath_smoke(
             )
         )
         preliminary_cache = preliminary_reference["kv_cache"]
+        if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR:
+            route_plans.extend([route_plans[0] for _ in range(1, int(decode_steps))])
+            break
 
     selected_expert_ids = _unique_ints(
         expert for route_plan in route_plans for expert in route_plan.selected_expert_ids
@@ -587,6 +635,7 @@ def run_traceable_decode_subpath_smoke(
             kv_cache_initial=reference_cache,
             cache_len=cache_len,
             cache_update_index=cache_update_indices[step],
+            attention_cache_window_index=attention_window_indices[step],
             attention_mode=attention_mode,
             route_plan=route_plan,
         )
@@ -600,6 +649,7 @@ def run_traceable_decode_subpath_smoke(
             kv_cache_initial=replay_reference_cache,
             cache_len=cache_len,
             cache_update_index=cache_update_indices[step],
+            attention_cache_window_index=attention_window_indices[step],
             attention_mode=attention_mode,
             route_plan=route_plan,
         )
@@ -629,6 +679,8 @@ def run_traceable_decode_subpath_smoke(
         references=references,
         replay_references=replay_references,
         attention_mode=attention_mode,
+        cache_update_api=cache_update_api,
+        attention_window_indices=attention_window_indices,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
         trace_region_size=trace_region_size,
@@ -676,16 +728,33 @@ def run_traceable_decode_subpath_smoke(
         cache_len=cache_len,
         cache_update_indices=cache_update_indices,
         attention_mode=attention_mode,
+        cache_update_api=cache_update_api,
+        attention_window_index=static_attention_index,
     )
     result["mode"] = "ttnn-trace"
     result["device_id"] = int(device_id)
     result["trace_capture"].update(trace_info)
+    result["one_trace_capture_replayed_across_positions"] = bool(trace_info["single_capture_replayed_across_positions"])
+    result["cache_update"]["single_capture_replay_across_positions"] = bool(
+        trace_info["single_capture_replayed_across_positions"]
+    )
+    result["multi_position_replay"]["single_capture_replayed_across_positions"] = bool(
+        trace_info["single_capture_replayed_across_positions"]
+    )
+    result["multi_position_replay"]["recaptured_per_position"] = bool(trace_info["recaptured_per_position"])
+    result["multi_position_replay"]["cache_update_index_dynamic"] = bool(trace_info["cache_update_index_dynamic"])
+    for step_detail in result["decode_steps_detail"]:
+        step_detail["cache_update_index_kind"] = trace_info["cache_update_index_kind"]
+        step_detail["single_capture_replayed_across_this_position"] = bool(
+            trace_info["single_capture_replayed_across_positions"]
+        )
     result["trace_capture_attempted"] = bool(result["trace_capture"]["attempted"])
     result["trace_capture_passed"] = bool(result["trace_capture"]["capture_passed"])
     result["trace_execute_replay_passed"] = bool(result["trace_capture"]["execute_replay_passed"])
     result["guard_status"] = _guard_status(result["trace_capture"])
     result["ttnn_ops"] = _traceable_decode_ttnn_ops(
         attention_mode,
+        cache_update_api=cache_update_api,
         config=config,
         weights=weights,
         route_plan=route_plans[0],
@@ -864,8 +933,9 @@ def build_torch_traceable_decode_subpath_reference(
     kv_cache_initial: torch.Tensor,
     cache_len: int,
     cache_update_index: int,
-    attention_mode: str,
-    route_plan: TraceableDecodeRoutePlan | None,
+    attention_cache_window_index: int | None = None,
+    attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
+    route_plan: TraceableDecodeRoutePlan | None = None,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
     _validate_kv_cache_initial(kv_cache_initial, cache_len=cache_len, kv_output_dim=_kv_output_dim(config))
@@ -881,8 +951,11 @@ def build_torch_traceable_decode_subpath_reference(
     kv_output = rms_norm(kv_linear, weights.kv.kv_norm, eps=float(config.rms_norm_eps)).unsqueeze(1)
     kv_cache = kv_cache_initial.clone().to(torch.bfloat16)
     kv_cache[:, :, int(cache_update_index) : int(cache_update_index) + 1, :] = kv_output[:, :, :1, :]
+    attention_cache_window_index = (
+        int(cache_update_index) if attention_cache_window_index is None else int(attention_cache_window_index)
+    )
     attention_cache_window = kv_cache[
-        :, :, int(cache_update_index) : int(cache_update_index) + int(activation.shape[-2]), :
+        :, :, attention_cache_window_index : attention_cache_window_index + int(activation.shape[-2]), :
     ].contiguous()
     attention_intermediates = _torch_fixed_window_attention(
         q_output=q_output,
@@ -890,7 +963,7 @@ def build_torch_traceable_decode_subpath_reference(
         attention_mode=attention_mode,
         config=config,
         layer=layer,
-        start_pos=cache_update_index,
+        start_pos=attention_cache_window_index,
     )
     attention_output = attention_intermediates["attention_output"]
 
@@ -1200,6 +1273,15 @@ def main() -> None:
         default=DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
         help="Traceable fixed-window attention implementation to use; qk-softmax is the default.",
     )
+    parser.add_argument(
+        "--cache-update-api",
+        choices=TRACEABLE_DECODE_CACHE_UPDATE_APIS,
+        default=DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
+        help=(
+            "Cache write primitive for the protected decode body. Use paged_update_cache to replay one trace while "
+            "mutating update_idxs_tensor outside the guard."
+        ),
+    )
     parser.add_argument("--cpu-only", action="store_true")
     parser.add_argument("--pcc", type=float, default=0.99)
     parser.add_argument("--rtol", type=float, default=8e-2)
@@ -1225,6 +1307,7 @@ def main() -> None:
         cache_update_index=args.cache_update_index,
         decode_steps=args.decode_steps,
         attention_mode=args.attention_mode,
+        cache_update_api=args.cache_update_api,
         pcc=args.pcc,
         rtol=args.rtol,
         atol=args.atol,
@@ -1248,6 +1331,8 @@ def _run_ttnn_traceable_decode_subpath(
     cache_len: int,
     cache_update_indices: Sequence[int],
     attention_mode: str,
+    cache_update_api: str,
+    attention_window_index: int,
 ) -> tuple[list[dict[str, torch.Tensor]], dict[str, Any]]:
     if not route_plans:
         raise ValueError("at least one route plan is required")
@@ -1255,6 +1340,7 @@ def _run_ttnn_traceable_decode_subpath(
         raise ValueError(
             "route_plans, activations, replay_activations, and cache_update_indices must have matching lengths"
         )
+    cache_update_api = _validate_cache_update_api(cache_update_api)
     device = ttnn.open_device(
         device_id=int(device_id),
         num_command_queues=1,
@@ -1279,6 +1365,87 @@ def _run_ttnn_traceable_decode_subpath(
         )
         outputs_by_step: list[dict[str, torch.Tensor]] = []
         guarded_labels: list[str] = []
+        if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR:
+            update_idxs_tensor = _to_tt_cache_update_idxs_tensor(
+                int(cache_update_indices[0]),
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            module = TtTraceableDecodeSubpath(
+                device=device,
+                weights=weights,
+                route_plan=route_plans[0],
+                config=config,
+                layer=layer,
+                cache_len=cache_len,
+                cache_update_index=int(cache_update_indices[0]),
+                cache_update_api=cache_update_api,
+                cache_update_idxs_tensor=update_idxs_tensor,
+                attention_cache_window_index=int(attention_window_index),
+                initial_kv_cache=None,
+                kv_cache=kv_cache,
+                attention_mode=attention_mode,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _copy_activation_to_device(activations[0], tt_input)
+            _copy_cache_update_idx_to_device(int(cache_update_indices[0]), update_idxs_tensor)
+            module(tt_input)
+            ttnn.synchronize_device(device)
+            kv_cache = module.kv_cache
+
+            with TraceableDecodeHostGuard() as guard:
+                trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                output_tensors = module(tt_input)
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            trace_ids.append(trace_id)
+            allocated_trace_count += 1
+            guarded_labels = guard.guarded_labels
+            kv_cache = module.kv_cache
+            ttnn.synchronize_device(device)
+
+            for replay_activation, cache_update_index in zip(replay_activations, cache_update_indices):
+                _copy_activation_to_device(replay_activation, tt_input)
+                _copy_cache_update_idx_to_device(int(cache_update_index), update_idxs_tensor)
+                ttnn.synchronize_device(device)
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+                ttnn.synchronize_device(device)
+                outputs_by_step.append(
+                    {name: ttnn.to_torch(tensor).contiguous() for name, tensor in output_tensors.items()}
+                )
+                kv_cache = module.kv_cache
+
+            ttnn.release_trace(device, trace_id)
+            trace_ids.remove(trace_id)
+            trace_info = {
+                "attempted": True,
+                "capture_passed": True,
+                "execute_replay_attempted": True,
+                "execute_replay_passed": True,
+                "trace_id_allocated": True,
+                "trace_ids_allocated": allocated_trace_count,
+                "guard_enabled": True,
+                "guarded_symbols": guarded_labels,
+                "ttnn_to_torch_guarded": "ttnn.to_torch" in guarded_labels,
+                "host_boundaries_inside_trace": [],
+                "decode_step_count": len(route_plans),
+                "capture_count": allocated_trace_count,
+                "positions_used": [int(value) for value in cache_update_indices],
+                "one_trace_capture_replayed_across_positions": len(route_plans) > 1,
+                "single_capture_replayed_across_positions": len(route_plans) > 1,
+                "recaptured_per_position": False,
+                "carried_device_kv_cache_state": True,
+                "cache_update_api": cache_update_api,
+                "update_index_source": "device_tensor",
+                "cache_update_index_dynamic": True,
+                "cache_update_index_kind": "replay_mutable_device_tensor",
+                "cache_read_window_dynamic": False,
+                "cache_read_window_status": "static_single_capture_initial_position",
+                "rope_position_dynamic": False,
+                "rope_position_status": "static_single_capture_initial_position",
+            }
+            return outputs_by_step, trace_info
+
         for step, (route_plan, activation, replay_activation, cache_update_index) in enumerate(
             zip(route_plans, activations, replay_activations, cache_update_indices)
         ):
@@ -1290,6 +1457,8 @@ def _run_ttnn_traceable_decode_subpath(
                 layer=layer,
                 cache_len=cache_len,
                 cache_update_index=int(cache_update_index),
+                cache_update_api=cache_update_api,
+                attention_cache_window_index=int(cache_update_index),
                 initial_kv_cache=None,
                 kv_cache=kv_cache,
                 attention_mode=attention_mode,
@@ -1336,11 +1505,18 @@ def _run_ttnn_traceable_decode_subpath(
             "decode_step_count": len(route_plans),
             "capture_count": allocated_trace_count,
             "positions_used": [int(value) for value in cache_update_indices],
+            "one_trace_capture_replayed_across_positions": False,
             "single_capture_replayed_across_positions": False,
             "recaptured_per_position": len(route_plans) > 1,
             "carried_device_kv_cache_state": True,
+            "cache_update_api": cache_update_api,
+            "update_index_source": "host_scalar",
             "cache_update_index_dynamic": False,
             "cache_update_index_kind": "static_host_argument_per_trace_capture",
+            "cache_read_window_dynamic": False,
+            "cache_read_window_status": "static_per_trace_capture",
+            "rope_position_dynamic": False,
+            "rope_position_status": "static_per_trace_capture",
         }
         return outputs_by_step, trace_info
     finally:
@@ -1356,6 +1532,30 @@ def _copy_activation_to_device(activation: torch.Tensor, tt_input) -> None:
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.copy_host_to_device_tensor(host_tensor, tt_input)
+
+
+def _to_tt_cache_update_idxs_tensor(
+    cache_update_index: int,
+    *,
+    device,
+    memory_config,
+):
+    return ttnn.from_torch(
+        torch.tensor([int(cache_update_index)], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _copy_cache_update_idx_to_device(cache_update_index: int, tt_update_idxs) -> None:
+    host_tensor = ttnn.from_torch(
+        torch.tensor([int(cache_update_index)], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    ttnn.copy_host_to_device_tensor(host_tensor, tt_update_idxs)
 
 
 def _base_result(
@@ -1382,6 +1582,8 @@ def _base_result(
     references: Sequence[Mapping[str, torch.Tensor]],
     replay_references: Sequence[Mapping[str, torch.Tensor]],
     attention_mode: str,
+    cache_update_api: str,
+    attention_window_indices: Sequence[int],
     max_tensors: int,
     max_bytes: int,
     trace_region_size: int,
@@ -1396,6 +1598,18 @@ def _base_result(
     }
     guarded_labels = [symbol.label for symbol in default_guarded_symbols()]
     route_plan = route_plans[0]
+    cache_update_api = _validate_cache_update_api(cache_update_api)
+    uses_device_update_index = cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+    update_index_source = "device_tensor" if uses_device_update_index else "host_scalar"
+    update_index_kind = (
+        "replay_mutable_device_tensor" if uses_device_update_index else "static_host_argument_per_trace_capture"
+    )
+    cache_read_window_status = (
+        "static_single_capture_initial_position" if uses_device_update_index else "static_per_trace_capture"
+    )
+    rope_position_status = (
+        "static_single_capture_initial_position" if uses_device_update_index else "static_per_trace_capture"
+    )
     routed_expert_ids_loaded = [int(expert) for expert in weights.routed_experts]
     routed_expert_ids_executed = _unique_ints(
         expert for step_route_plan in route_plans for expert in step_route_plan.selected_expert_ids
@@ -1406,9 +1620,11 @@ def _base_result(
         "dynamic sparse indexer top-k and per-token cache gather",
         "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows",
         "dynamic MoE expert dispatch; selected expert modules are statically instantiated from a host preflight plan",
-        "cache advancement beyond the fixed traced update index",
+        "dynamic cache read-window and RoPE position advancement beyond the fixed traced window",
         "embedding and logits",
     ]
+    if not uses_device_update_index:
+        excluded_from_trace.insert(4, "cache write advancement beyond the fixed traced update index")
     if not router_summary["topk_in_trace"]:
         excluded_from_trace.insert(
             4,
@@ -1429,26 +1645,45 @@ def _base_result(
         "layer": int(layer),
         "logical_decode_tokens": 1,
         "decode_step_count": int(decode_steps),
+        "positions": [int(value) for value in cache_update_indices],
         "positions_used": [int(value) for value in cache_update_indices],
         "decode_positions": [int(value) for value in cache_update_indices],
+        "one_trace_capture_replayed_across_positions": False,
+        "cache_update_api": cache_update_api,
+        "update_index_source": update_index_source,
+        "per_step_cache_rows_updated": [[int(value)] for value in cache_update_indices],
+        "cache_read_window_dynamic": False,
+        "cache_read_window_status": cache_read_window_status,
+        "rope_position_dynamic": False,
+        "rope_position_status": rope_position_status,
         "tensor_sequence_length": int(seq_len),
         "cache_update": {
             "name": "compressed_kv_projection_cache_append",
+            "cache_update_api": cache_update_api,
+            "update_index_source": update_index_source,
             "cache_len": int(cache_len),
             "update_index": int(cache_update_index),
             "update_indices": [int(value) for value in cache_update_indices],
             "updated_rows": [int(value) for value in cache_update_indices],
+            "per_step_updated_rows": [[int(value)] for value in cache_update_indices],
             "updated_tokens": 1,
             "updated_tokens_per_step": 1,
             "decode_steps": int(decode_steps),
-            "update_index_kind": "static_host_argument_per_trace_capture",
-            "dynamic_update_index_in_trace": False,
+            "update_index_kind": update_index_kind,
+            "dynamic_update_index_in_trace": uses_device_update_index,
             "single_capture_replay_across_positions": False,
             "input_layout": "[seq=1, heads=1, batch_padded=32, kv_output_dim]",
             "cache_layout": "[batch=1, heads=1, cache_len, kv_output_dim]",
             "device_resident_inside_trace": True,
+            "cache_read_window_dynamic": False,
+            "cache_read_window_status": cache_read_window_status,
+            "rope_position_dynamic": False,
+            "rope_position_status": rope_position_status,
             "limitation": (
-                "ttnn.update_cache takes update_idx as a Python scalar in this path; the cache slice bounds and "
+                "ttnn.experimental.paged_update_cache reads update_idxs_tensor from device memory, so the cache write "
+                "row can change across replay; the cache slice bounds and RoPE table positions remain static"
+                if uses_device_update_index
+                else "ttnn.update_cache takes update_idx as a Python scalar in this path; the cache slice bounds and "
                 "RoPE table positions are also static trace-capture inputs, so one captured trace is not claimed "
                 "to advance across decode positions"
             ),
@@ -1460,35 +1695,55 @@ def _base_result(
             "single_capture_replayed_across_positions": False,
             "recaptured_per_position": int(decode_steps) > 1,
             "identical_guarded_body_per_position": True,
-            "cache_update_index": "static_host_argument_per_trace_capture",
-            "cache_update_index_dynamic": False,
+            "cache_update_api": cache_update_api,
+            "update_index_source": update_index_source,
+            "cache_update_index": update_index_kind,
+            "cache_update_index_dynamic": uses_device_update_index,
             "current_position_dynamic": False,
+            "cache_read_window_dynamic": False,
+            "cache_read_window_status": cache_read_window_status,
+            "rope_position_dynamic": False,
+            "rope_position_status": rope_position_status,
             "strongest_landed_subpiece": (
-                "one guarded TTNN body can be captured per static position while reusing the same device-resident "
+                "one guarded TTNN body can be captured once and replayed while a device update index tensor advances "
+                "cache write rows"
+                if uses_device_update_index
+                else "one guarded TTNN body can be captured per static position while reusing the same device-resident "
                 "KV cache tensor across steps"
             ),
             "single_capture_blockers": [
-                "ttnn.update_cache exposes update_idx as a host uint32 argument, not a mutable TTNN tensor input",
+                *(
+                    []
+                    if uses_device_update_index
+                    else [
+                        "ttnn.update_cache exposes update_idx as a host uint32 argument, not a mutable TTNN tensor input"
+                    ]
+                ),
                 "ttnn.slice cache-window start/end are Python shape arguments baked into the traced op sequence",
                 "RoPE cos/sin tables are materialized for a fixed start_pos before trace capture",
+                "static MoE expert dispatch is built from a host preflight route plan",
             ],
         },
         "attention_path": _attention_path_summary(
             config=config,
             layer=layer,
-            cache_update_index=cache_update_index,
+            cache_update_index=int(attention_window_indices[0]),
             seq_len=seq_len,
             attention_mode=attention_mode,
+            cache_write_index=cache_update_index,
+            cache_update_api=cache_update_api,
         ),
         "attention_path_by_step": [
             _attention_path_summary(
                 config=config,
                 layer=layer,
-                cache_update_index=int(step_cache_update_index),
+                cache_update_index=int(attention_window_indices[step]),
                 seq_len=seq_len,
                 attention_mode=attention_mode,
+                cache_write_index=int(cache_update_indices[step]),
+                cache_update_api=cache_update_api,
             )
-            for step_cache_update_index in cache_update_indices
+            for step in range(len(cache_update_indices))
         ],
         "traceability_flags": {
             "attention_mode": attention_mode,
@@ -1500,6 +1755,11 @@ def _base_result(
             "softmax_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "context_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "host_attention_or_context_input": False,
+            "cache_update_api": cache_update_api,
+            "cache_update_index_source": update_index_source,
+            "cache_write_index_dynamic_in_trace": uses_device_update_index,
+            "cache_read_window_dynamic_in_trace": False,
+            "rope_position_dynamic_in_trace": False,
             "router_mode": router_summary["mode"],
             "router_gate_matmul_in_trace": router_summary["gate_matmul_in_trace"],
             "router_scoring_in_trace": router_summary["scoring_in_trace"],
@@ -1537,6 +1797,7 @@ def _base_result(
             "not_full_forward": True,
             "inside_trace": _traceable_decode_inside_trace_ops(
                 attention_mode,
+                cache_update_api=cache_update_api,
                 config=config,
                 weights=weights,
                 route_plan=route_plan,
@@ -1550,6 +1811,11 @@ def _base_result(
                 "the first token is the logical decode token; tensor shape is tile-padded/static for trace replay"
             ),
             "excluded_from_trace": excluded_from_trace,
+            "cache_write_position": "replay_mutable_device_tensor"
+            if uses_device_update_index
+            else "static_host_scalar",
+            "cache_read_window": cache_read_window_status,
+            "rope_position": rope_position_status,
         },
         "router_trace": router_summary,
         "selected_routing": _route_plan_summary(route_plan, config=config),
@@ -1571,8 +1837,10 @@ def _base_result(
             references=references,
             replay_references=replay_references,
             cache_update_indices=cache_update_indices,
+            attention_window_indices=attention_window_indices,
             seq_len=seq_len,
             attention_mode=attention_mode,
+            cache_update_api=cache_update_api,
         ),
         "selected_source_keys": [item.source_key for item in metadata],
         "loaded_tensors": [_metadata_summary(item) for item in metadata],
@@ -1630,10 +1898,17 @@ def _base_result(
             "decode_step_count": int(decode_steps),
             "capture_count": 0,
             "positions_used": [int(value) for value in cache_update_indices],
+            "one_trace_capture_replayed_across_positions": False,
             "single_capture_replayed_across_positions": False,
             "recaptured_per_position": False,
-            "cache_update_index_dynamic": False,
-            "cache_update_index_kind": "static_host_argument_per_trace_capture",
+            "cache_update_api": cache_update_api,
+            "update_index_source": update_index_source,
+            "cache_update_index_dynamic": uses_device_update_index,
+            "cache_update_index_kind": update_index_kind,
+            "cache_read_window_dynamic": False,
+            "cache_read_window_status": cache_read_window_status,
+            "rope_position_dynamic": False,
+            "rope_position_status": rope_position_status,
         },
         "trace_capture_attempted": False,
         "trace_capture_passed": False,
@@ -1695,15 +1970,30 @@ def _base_result(
                 "location": "before trace capture and before replay",
                 "description": "static-shape decode activation is copied into a preallocated device tensor outside the guard",
             },
-            {
-                "name": "trace_recapture_per_position",
-                "location": "outside protected trace body",
-                "description": (
-                    "multi-position smoke captures the same guarded TTNN body once per static cache index because "
-                    "the current path does not expose cache index, cache slice bounds, or RoPE position as "
-                    "replay-mutable device inputs"
-                ),
-            },
+            *(
+                [
+                    {
+                        "name": "cache_update_index_host_to_device",
+                        "location": "before trace capture and before each replay",
+                        "description": (
+                            "update_idxs_tensor contents are copied from host into a preallocated device tensor "
+                            "outside the guard; the captured paged_update_cache op reads that tensor during replay"
+                        ),
+                    }
+                ]
+                if uses_device_update_index
+                else [
+                    {
+                        "name": "trace_recapture_per_position",
+                        "location": "outside protected trace body",
+                        "description": (
+                            "multi-position smoke captures the same guarded TTNN body once per static cache index "
+                            "because the scalar update_cache path does not expose the cache write index as a "
+                            "replay-mutable device input"
+                        ),
+                    }
+                ]
+            ),
             {
                 "name": "trace_output_readback",
                 "location": "after trace replay",
@@ -1719,7 +2009,7 @@ def _base_result(
             "kv_cache_seed_host_to_device",
             "rope_table_host_to_device",
             "activation_host_to_device",
-            "trace_recapture_per_position",
+            "cache_update_index_host_to_device" if uses_device_update_index else "trace_recapture_per_position",
             "trace_output_readback",
         ],
         "reference_ops": _traceable_decode_reference_ops(
@@ -1782,22 +2072,37 @@ def _decode_steps_detail(
     references: Sequence[Mapping[str, torch.Tensor]],
     replay_references: Sequence[Mapping[str, torch.Tensor]],
     cache_update_indices: Sequence[int],
+    attention_window_indices: Sequence[int],
     seq_len: int,
     attention_mode: str,
+    cache_update_api: str,
 ) -> list[dict[str, Any]]:
+    cache_update_api = _validate_cache_update_api(cache_update_api)
+    update_index_kind = (
+        "replay_mutable_device_tensor"
+        if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+        else "static_host_argument_per_trace_capture"
+    )
     details = []
-    for step, (route_plan, reference, replay_reference, cache_update_index) in enumerate(
-        zip(route_plans, references, replay_references, cache_update_indices)
+    for step, (route_plan, reference, replay_reference, cache_update_index, attention_window_index) in enumerate(
+        zip(route_plans, references, replay_references, cache_update_indices, attention_window_indices)
     ):
         position = int(cache_update_index)
+        window_start = int(attention_window_index)
         details.append(
             {
                 "step": step,
                 "position": position,
                 "cache_update_index": position,
-                "cache_update_index_kind": "static_host_argument_per_trace_capture",
+                "cache_update_api": cache_update_api,
+                "update_index_source": "device_tensor"
+                if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+                else "host_scalar",
+                "cache_update_index_kind": update_index_kind,
                 "cache_rows_updated": [position],
-                "cache_window_rows": [position, position + int(seq_len)],
+                "cache_window_rows": [window_start, window_start + int(seq_len)],
+                "cache_read_window_dynamic": False,
+                "rope_position_dynamic": False,
                 "single_capture_replayed_across_this_position": False,
                 "carried_device_kv_cache_state": True,
                 "attention_path_stayed_in_trace": True,
@@ -2376,6 +2681,23 @@ def _kv_update_memory_config(*, device, token_rows: int, width: int):
     )
 
 
+def _single_core_height_sharded_memory_config(tensor, *, device):
+    padded_width = int(tensor.padded_shape[-1])
+    if padded_width <= 0:
+        raise ValueError(f"tensor padded width must be positive, got {padded_width}")
+    shard_height = int(tensor.volume()) // padded_width
+    if shard_height <= 0:
+        raise ValueError(f"tensor shard height must be positive, got {shard_height}")
+    grid_size = device.compute_with_storage_grid_size()
+    shard_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)
+    shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [shard_height, padded_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
 def _kv_output_dim(config: DeepSeekV4FlashConfig) -> int:
     return int(config.num_key_value_heads) * int(config.head_dim)
 
@@ -2403,6 +2725,14 @@ def _validate_attention_mode(attention_mode: str) -> str:
     return str(attention_mode)
 
 
+def _validate_cache_update_api(cache_update_api: str) -> str:
+    if cache_update_api not in TRACEABLE_DECODE_CACHE_UPDATE_APIS:
+        raise ValueError(
+            f"cache_update_api must be one of {TRACEABLE_DECODE_CACHE_UPDATE_APIS}, got {cache_update_api!r}"
+        )
+    return str(cache_update_api)
+
+
 def _validate_qk_softmax_attention_config(config: DeepSeekV4FlashConfig) -> None:
     if int(config.num_key_value_heads) != 1:
         raise ValueError(
@@ -2424,17 +2754,32 @@ def _validate_qk_softmax_attention_config(config: DeepSeekV4FlashConfig) -> None
         raise ValueError(f"qk_rope_head_dim must be even for RoPE, got {config.qk_rope_head_dim}")
 
 
-def _traceable_decode_common_ops() -> list[str]:
-    return [
+def _traceable_decode_common_ops(cache_update_api: str) -> list[str]:
+    cache_update_api = _validate_cache_update_api(cache_update_api)
+    ops = [
         "ttnn.rms_norm(attn_norm)",
         "TtAttentionProjection.project_q_rank",
         "TtAttentionProjection.project_q_from_rank",
         "ttnn.linear(wkv)",
         "ttnn.rms_norm(kv_norm)",
-        "ttnn.to_memory_config(kv_update_height_sharded)",
-        "ttnn.update_cache(kv_projection_cache)",
-        "ttnn.slice(kv_cache_fixed_window)",
     ]
+    if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR:
+        ops.extend(
+            [
+                "ttnn.slice(kv_update_decode_token)",
+                "ttnn.to_memory_config(kv_update_decode_token_height_sharded)",
+                "ttnn.experimental.paged_update_cache(kv_projection_cache,update_idxs_tensor)",
+            ]
+        )
+    else:
+        ops.extend(
+            [
+                "ttnn.to_memory_config(kv_update_height_sharded)",
+                "ttnn.update_cache(kv_projection_cache)",
+            ]
+        )
+    ops.append("ttnn.slice(kv_cache_fixed_window)")
+    return ops
 
 
 def _traceable_decode_attention_ops(attention_mode: str) -> list[str]:
@@ -2525,12 +2870,13 @@ def _traceable_decode_projection_and_ffn_ops(
 def _traceable_decode_inside_trace_ops(
     attention_mode: str,
     *,
+    cache_update_api: str,
     config: DeepSeekV4FlashConfig,
     weights: TraceableDecodeWeights,
     route_plan: TraceableDecodeRoutePlan,
 ) -> list[str]:
     return [
-        *_traceable_decode_common_ops(),
+        *_traceable_decode_common_ops(cache_update_api),
         *_traceable_decode_attention_ops(attention_mode),
         *_traceable_decode_projection_and_ffn_ops(config=config, weights=weights, route_plan=route_plan),
     ]
@@ -2539,12 +2885,13 @@ def _traceable_decode_inside_trace_ops(
 def _traceable_decode_ttnn_ops(
     attention_mode: str,
     *,
+    cache_update_api: str,
     config: DeepSeekV4FlashConfig,
     weights: TraceableDecodeWeights,
     route_plan: TraceableDecodeRoutePlan,
 ) -> list[str]:
     return [
-        *_traceable_decode_common_ops(),
+        *_traceable_decode_common_ops(cache_update_api),
         *_traceable_decode_attention_ops(attention_mode),
         "ttnn.slice(attention_output_group_0..N)",
         "ttnn.linear(grouped_wo_a_group_0..N)",
@@ -2657,12 +3004,16 @@ def _attention_path_summary(
     cache_update_index: int,
     seq_len: int,
     attention_mode: str,
+    cache_write_index: int | None = None,
+    cache_update_api: str = DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
 ) -> dict[str, Any]:
     attention_mode = _validate_attention_mode(attention_mode)
+    cache_update_api = _validate_cache_update_api(cache_update_api)
     width_repeat_factor = _attention_cache_repeat_factor(config)
     head_repeat_factor = _attention_head_repeat_factor(config)
     window_start = int(cache_update_index)
     window_end = window_start + int(seq_len)
+    cache_write_index = window_start if cache_write_index is None else int(cache_write_index)
     qk_mode = attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
     summary = {
         "mode": attention_mode,
@@ -2671,6 +3022,14 @@ def _attention_path_summary(
         "device_q_projection_contributes": True,
         "device_kv_projection_update_contributes": True,
         "device_kv_cache_read_contributes": True,
+        "cache_update_api": cache_update_api,
+        "cache_write_index": cache_write_index,
+        "cache_write_index_source": "device_tensor"
+        if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+        else "host_scalar",
+        "cache_write_index_dynamic": cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+        "cache_read_window_dynamic": False,
+        "cache_read_window_position_source": "static_python_slice_bounds",
         "cache_window": {
             "start": window_start,
             "end_exclusive": window_end,
@@ -2719,6 +3078,8 @@ def _attention_path_summary(
             "qk_rope_head_dim": int(config.qk_rope_head_dim),
             "nope_head_dim": int(config.head_dim) - int(config.qk_rope_head_dim),
             "position_rows": [window_start, window_end],
+            "position_dynamic": False,
+            "position_source": "static_host_materialized_tables",
             "frequency_source": "DeepSeek V4 Flash compressed-layer RoPE frequencies from compress_rope_theta"
             if int(config.compress_ratios[int(layer)]) != 0
             else "DeepSeek V4 Flash base RoPE frequencies",

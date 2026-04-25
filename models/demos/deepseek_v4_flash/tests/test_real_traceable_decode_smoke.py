@@ -18,6 +18,8 @@ import ttnn
 from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
     TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+    TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+    TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
     TraceableDecodeHostFallbackError,
     TraceableDecodeHostGuard,
     run_traceable_decode_subpath_smoke,
@@ -25,6 +27,89 @@ from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 REAL_SNAPSHOT_DIR = Path("/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf")
+
+
+def _trace_replay_paged_update_cache_two_positions(device_id: int = 0) -> dict[str, object]:
+    device = ttnn.open_device(device_id=int(device_id), num_command_queues=1, trace_region_size=32 * 1024 * 1024)
+    trace_id = None
+    try:
+        cache = ttnn.from_torch(
+            torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_input = _to_sharded_paged_update_input(
+            torch.full((1, 1, 1, 32), 11.0, dtype=torch.bfloat16),
+            device=device,
+        )
+        update_idxs = ttnn.from_torch(
+            torch.tensor([4], dtype=torch.int32),
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        ttnn.experimental.paged_update_cache(cache, tt_input, update_idxs_tensor=update_idxs)
+        ttnn.synchronize_device(device)
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        ttnn.experimental.paged_update_cache(cache, tt_input, update_idxs_tensor=update_idxs)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        replay_steps = [(4, 21.0), (5, 31.0)]
+        for position, value in replay_steps:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.full((1, 1, 1, 32), value, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                ),
+                tt_input,
+            )
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor([position], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                update_idxs,
+            )
+            ttnn.synchronize_device(device)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            ttnn.synchronize_device(device)
+
+        got = ttnn.to_torch(cache).float()
+        return {
+            "trace_count": 1,
+            "positions": [position for position, _ in replay_steps],
+            "row4": got[0, 0, 4, :].clone(),
+            "row5": got[0, 0, 5, :].clone(),
+            "row6": got[0, 0, 6, :].clone(),
+        }
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(device, trace_id)
+        ttnn.close_device(device)
+
+
+def _to_sharded_paged_update_input(torch_input: torch.Tensor, *, device):
+    host = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    shard_grid = ttnn.num_cores_to_corerangeset(1, device.compute_with_storage_grid_size(), row_wise=True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [host.volume() // host.padded_shape[-1], host.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        input_shard_spec,
+    )
+    return host.to(device, input_memory_config)
 
 
 def test_traceable_decode_guard_rejects_ttnn_to_torch_inside_region() -> None:
@@ -44,6 +129,19 @@ def test_traceable_decode_guard_rejects_known_attention_host_helper() -> None:
             )
 
 
+def test_paged_update_cache_tensor_index_replays_one_trace_across_positions() -> None:
+    if os.environ.get("DSV4_FLASH_TRACEABLE_DECODE", "0") != "1":
+        pytest.skip("Set DSV4_FLASH_TRACEABLE_DECODE=1 to run the paged_update_cache trace replay primitive")
+
+    result = _trace_replay_paged_update_cache_two_positions(device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")))
+
+    assert result["trace_count"] == 1
+    assert result["positions"] == [4, 5]
+    assert torch.equal(result["row4"], torch.full((32,), 21.0))
+    assert torch.equal(result["row5"], torch.full((32,), 31.0))
+    assert torch.equal(result["row6"], torch.zeros((32,)))
+
+
 def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path: Path) -> None:
     snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
 
@@ -59,25 +157,35 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["mode"] == "cpu-reference"
     assert result["passed"] is True
     assert result["decode_step_count"] == 1
+    assert result["positions"] == [4]
     assert result["positions_used"] == [4]
+    assert result["one_trace_capture_replayed_across_positions"] is False
     assert result["trace_capture"]["attempted"] is False
     assert result["trace_capture_attempted"] is False
     assert result["trace_capture_passed"] is False
     assert result["trace_capture"]["single_capture_replayed_across_positions"] is False
+    assert result["trace_capture"]["one_trace_capture_replayed_across_positions"] is False
     assert result["trace_capture"]["cache_update_index_dynamic"] is False
     assert result["trace_capture"]["ttnn_to_torch_guarded"] is True
     assert result["guard_status"]["ttnn_to_torch_guarded"] is True
     assert result["host_boundaries_inside_trace"] == []
     assert result["cache_update"]["name"] == "compressed_kv_projection_cache_append"
+    assert result["cache_update"]["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
+    assert result["cache_update"]["update_index_source"] == "host_scalar"
     assert result["cache_update"]["cache_len"] == 64
     assert result["cache_update"]["update_index"] == 4
     assert result["cache_update"]["update_indices"] == [4]
     assert result["cache_update"]["updated_rows"] == [4]
+    assert result["cache_update"]["per_step_updated_rows"] == [[4]]
     assert result["cache_update"]["dynamic_update_index_in_trace"] is False
+    assert result["cache_update"]["cache_read_window_dynamic"] is False
+    assert result["cache_update"]["rope_position_dynamic"] is False
     assert result["cache_update"]["single_capture_replay_across_positions"] is False
     assert result["cache_update"]["device_resident_inside_trace"] is True
     assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
     assert result["multi_position_replay"]["cache_update_index_dynamic"] is False
+    assert result["cache_read_window_dynamic"] is False
+    assert result["rope_position_dynamic"] is False
     assert result["traceable_decode_scope"]["not_full_forward"] is True
     assert result["traceable_decode_scope"]["inside_trace"] == [
         "ttnn.rms_norm(attn_norm)",
@@ -277,11 +385,17 @@ def test_cpu_traceable_decode_subpath_reports_two_static_cache_positions(tmp_pat
 
     assert result["passed"] is True
     assert result["decode_step_count"] == 2
+    assert result["positions"] == [4, 5]
     assert result["positions_used"] == [4, 5]
+    assert result["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
+    assert result["update_index_source"] == "host_scalar"
     assert result["cache_update"]["update_indices"] == [4, 5]
     assert result["cache_update"]["updated_rows"] == [4, 5]
+    assert result["cache_update"]["per_step_updated_rows"] == [[4], [5]]
     assert result["cache_update"]["update_index_kind"] == "static_host_argument_per_trace_capture"
     assert result["cache_update"]["dynamic_update_index_in_trace"] is False
+    assert result["cache_read_window_dynamic"] is False
+    assert result["rope_position_dynamic"] is False
     assert result["multi_position_replay"]["carried_device_kv_cache_state"] is True
     assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
     assert result["multi_position_replay"]["recaptured_per_position"] is True
@@ -351,6 +465,8 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == 1
     assert payload["mode"] == "cpu-reference"
+    assert payload["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
+    assert payload["update_index_source"] == "host_scalar"
     assert payload["trace_capture"]["attempted"] is False
     assert payload["trace_capture_attempted"] is False
     assert payload["trace_capture"]["ttnn_to_torch_guarded"] is True
@@ -358,6 +474,7 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["host_boundaries_inside_trace"] == []
     assert payload["traceable_decode_scope"]["not_full_forward"] is True
     assert payload["cache_update"]["update_index"] == 4
+    assert payload["cache_update"]["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
     assert payload["attention_path"]["mode"] == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
     assert payload["attention_path"]["softmax"]["qk_scores_in_trace"] is True
     assert payload["attention_path"]["context"]["produced_in_trace"] is True
@@ -412,6 +529,7 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
         decode_steps=decode_steps,
         device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
         trace_region_size=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_TRACE_REGION_SIZE", str(64 * 1024 * 1024))),
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
     )
 
     assert result["passed"], json.dumps(result["accuracy"], indent=2, sort_keys=True)
@@ -422,6 +540,8 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["decode_step_count"] == decode_steps
     assert len(result["positions_used"]) == result["decode_step_count"]
     assert result["trace_capture"]["capture_count"] == result["decode_step_count"]
+    assert result["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
+    assert result["update_index_source"] == "host_scalar"
     assert result["trace_capture"]["single_capture_replayed_across_positions"] is False
     assert result["trace_capture"]["recaptured_per_position"] is (decode_steps > 1)
     assert result["trace_capture"]["cache_update_index_dynamic"] is False
@@ -484,3 +604,54 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
         assert step["accuracy"]["combined_ffn_output"]["passed"] is True
         assert step["accuracy"]["residual_output"]["passed"] is True
         assert step["accuracy"]["kv_cache"]["passed"] is True
+
+
+def test_traceable_decode_subpath_gated_galaxy_paged_cache_write_single_capture_replay() -> None:
+    if os.environ.get("DSV4_FLASH_TRACEABLE_DECODE", "0") != "1":
+        pytest.skip("Set DSV4_FLASH_TRACEABLE_DECODE=1 to run the Galaxy paged cache-write replay smoke")
+
+    snapshot = Path(os.environ.get("DSV4_FLASH_REAL_SNAPSHOT_DIR", str(REAL_SNAPSHOT_DIR)))
+    if not snapshot.is_dir():
+        pytest.fail(f"Real DeepSeek V4 Flash snapshot is missing: {snapshot}")
+
+    decode_steps = int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_STEPS", "2"))
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_LAYER", "3")),
+        seq_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_SEQ_LEN", "32")),
+        cache_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_CACHE_LEN", str(96))),
+        decode_steps=decode_steps,
+        device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
+        trace_region_size=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_TRACE_REGION_SIZE", str(64 * 1024 * 1024))),
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+    )
+
+    assert result["passed"], json.dumps(result["accuracy_by_step"], indent=2, sort_keys=True)
+    assert result["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+    assert result["update_index_source"] == "device_tensor"
+    assert result["one_trace_capture_replayed_across_positions"] is (decode_steps > 1)
+    assert result["trace_capture"]["capture_count"] == 1
+    assert result["trace_capture"]["single_capture_replayed_across_positions"] is (decode_steps > 1)
+    assert result["trace_capture"]["recaptured_per_position"] is False
+    assert result["trace_capture"]["cache_update_index_dynamic"] is True
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is True
+    assert result["cache_update"]["single_capture_replay_across_positions"] is (decode_steps > 1)
+    assert result["cache_update"]["per_step_updated_rows"] == [[position] for position in result["positions_used"]]
+    assert result["cache_read_window_dynamic"] is False
+    assert result["rope_position_dynamic"] is False
+    assert result["attention_path_by_step"][0]["cache_window"]["start"] == result["positions_used"][0]
+    assert all(
+        item["cache_window"]["start"] == result["positions_used"][0] for item in result["attention_path_by_step"]
+    )
+    assert all(item["rope"]["position_dynamic"] is False for item in result["attention_path_by_step"])
+    assert "cache_update_index_host_to_device" in result["host_boundaries_outside_trace"]
+    assert "trace_recapture_per_position" not in result["host_boundaries_outside_trace"]
+    assert result["host_boundaries_inside_trace"] == []
+    assert "ttnn.experimental.paged_update_cache(kv_projection_cache,update_idxs_tensor)" in result["ttnn_ops"]
+    assert len(result["accuracy_by_step"]) == decode_steps
+    for step in result["accuracy_by_step"]:
+        assert step["accuracy"]["kv_cache"]["passed"] is True
+        assert step["accuracy"]["attention_cache_window"]["passed"] is True
+        assert step["accuracy"]["attention_output"]["passed"] is True
+        assert step["accuracy"]["combined_ffn_output"]["passed"] is True
+        assert step["accuracy"]["residual_output"]["passed"] is True
