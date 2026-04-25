@@ -464,7 +464,7 @@ class TtMoe(LightweightModule):
             metadata,
             tt_expert_token_counts,
         )
-        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
+        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
