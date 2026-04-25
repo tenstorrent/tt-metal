@@ -13,6 +13,7 @@ from safetensors import safe_open
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
+from models.demos.deepseek_v4_flash.ttnn_decode_cache import Batch1DecodeLayerCache
 from models.demos.deepseek_v4_flash.ttnn_moe_block import TtMoEFeedForwardBlock
 from models.demos.deepseek_v4_flash.ttnn_prefill_attention_block import TtPrefillAttentionBlock
 
@@ -173,6 +174,90 @@ class TtDecoderLayer(LightweightModule):
         ffn_output = self.ffn(tt_ffn_input, input_ids=input_ids)
         return (hidden_after_attention.float() + ffn_output.float()).to(hidden_after_attention.dtype)
 
+    def prefill_with_decode_cache(
+        self,
+        hidden_states,
+        *,
+        input_ids: torch.Tensor | None = None,
+        topk_idxs: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, Batch1DecodeLayerCache]:
+        validate_decoder_layer_input(
+            hidden_states,
+            input_ids=input_ids,
+            topk_idxs=topk_idxs,
+            hidden_size=self.hidden_size,
+            compress_ratio=self.attention.compressor.compress_ratio,
+        )
+        torch_hidden_states, tt_hidden_states = self._materialize_hidden_states(hidden_states)
+
+        tt_attn_input = ttnn.rms_norm(
+            tt_hidden_states,
+            weight=self.attn_norm,
+            epsilon=self.norm_eps,
+            memory_config=self.memory_config,
+        )
+        layer_cache = self.attention.build_decode_cache(tt_attn_input)
+        attention_output = ttnn.to_torch(self.attention(tt_attn_input, topk_idxs=topk_idxs)).contiguous()
+        hidden_after_attention = (torch_hidden_states.float() + attention_output.float()).to(torch_hidden_states.dtype)
+
+        tt_ffn_residual = ttnn.from_torch(
+            hidden_after_attention,
+            device=self.primary_submesh,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+        tt_ffn_input = ttnn.rms_norm(
+            tt_ffn_residual,
+            weight=self.ffn_norm,
+            epsilon=self.norm_eps,
+            memory_config=self.memory_config,
+        )
+        ffn_output = self.ffn(tt_ffn_input, input_ids=input_ids)
+        return (hidden_after_attention.float() + ffn_output.float()).to(hidden_after_attention.dtype), layer_cache
+
+    def decode_step(
+        self,
+        hidden_states,
+        *,
+        input_ids: torch.Tensor,
+        cache: Batch1DecodeLayerCache,
+    ) -> tuple[torch.Tensor, Batch1DecodeLayerCache]:
+        validate_decoder_layer_decode_step_input(
+            hidden_states,
+            input_ids=input_ids,
+            cache=cache,
+            hidden_size=self.hidden_size,
+            layer=self.layer,
+        )
+        torch_hidden_states, tt_hidden_states = self._materialize_hidden_states(hidden_states)
+
+        tt_attn_input = ttnn.rms_norm(
+            tt_hidden_states,
+            weight=self.attn_norm,
+            epsilon=self.norm_eps,
+            memory_config=self.memory_config,
+        )
+        attention_output, next_cache = self.attention.decode_step(tt_attn_input, cache=cache)
+        attention_output = ttnn.to_torch(attention_output).contiguous()
+        hidden_after_attention = (torch_hidden_states.float() + attention_output.float()).to(torch_hidden_states.dtype)
+
+        tt_ffn_residual = ttnn.from_torch(
+            hidden_after_attention,
+            device=self.primary_submesh,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+        tt_ffn_input = ttnn.rms_norm(
+            tt_ffn_residual,
+            weight=self.ffn_norm,
+            epsilon=self.norm_eps,
+            memory_config=self.memory_config,
+        )
+        ffn_output = self.ffn(tt_ffn_input, input_ids=input_ids)
+        return (hidden_after_attention.float() + ffn_output.float()).to(hidden_after_attention.dtype), next_cache
+
     def _materialize_hidden_states(self, hidden_states) -> tuple[torch.Tensor, object]:
         if isinstance(hidden_states, torch.Tensor):
             torch_hidden_states = hidden_states.contiguous()
@@ -269,6 +354,29 @@ def validate_decoder_layer_input(
             raise ValueError(f"topk_idxs batch/tokens must be {(1, tokens)}, got {tuple(topk_idxs.shape[:2])}")
         if topk_idxs.dtype not in (torch.int32, torch.int64):
             raise ValueError(f"topk_idxs dtype must be int32 or int64, got {topk_idxs.dtype}")
+
+
+def validate_decoder_layer_decode_step_input(
+    hidden_states,
+    *,
+    input_ids: torch.Tensor,
+    cache: Batch1DecodeLayerCache,
+    hidden_size: int,
+    layer: int,
+) -> None:
+    shape = tuple(hidden_states.shape)
+    if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[2] != 1:
+        raise ValueError(f"decode hidden_states must have shape [1, 1, 1, hidden], got {shape}")
+    if shape[-1] != hidden_size:
+        raise ValueError(f"decode hidden_states hidden dim must be {hidden_size}, got {shape[-1]}")
+    if tuple(input_ids.shape) != (1, 1):
+        raise ValueError(f"decode input_ids must have shape (1, 1), got {tuple(input_ids.shape)}")
+    if input_ids.dtype not in (torch.int32, torch.int64):
+        raise ValueError(f"decode input_ids dtype must be int32 or int64, got {input_ids.dtype}")
+    if cache.layer_id != layer:
+        raise ValueError(f"decode cache layer_id {cache.layer_id} does not match decoder layer {layer}")
+    if cache.hidden_size != hidden_size:
+        raise ValueError(f"decode cache hidden_size {cache.hidden_size} does not match {hidden_size}")
 
 
 def _validate_layer_index(config: dict, layer: int) -> None:

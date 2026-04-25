@@ -29,6 +29,7 @@ DEFAULT_LAYER = 2
 DEFAULT_TOP_K = 5
 DEFAULT_WARMUP_RUNS = 1
 DEFAULT_MEASURE_RUNS = 1
+DEFAULT_DECODE_STEPS = 0
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class DemoTimings:
     warmup_s: float
     run_s: float
     total_s: float
+    decode_s: float = 0.0
 
 
 def create_arg_parser() -> argparse.ArgumentParser:
@@ -86,6 +88,12 @@ def create_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MEASURE_RUNS,
         help="Number of measured forwards. The last logits are summarized.",
     )
+    parser.add_argument(
+        "--decode-steps",
+        type=_nonnegative_int,
+        default=DEFAULT_DECODE_STEPS,
+        help="Run this many deterministic batch-1 decode steps after the prefill input.",
+    )
     return parser
 
 
@@ -101,6 +109,8 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
         manifest = load_tt_manifest(checkpoint.preprocessed_path)
         vocab_size = int(manifest["config"]["vocab_size"])
         input_ids = deterministic_input_ids(tokens=args.tokens, vocab_size=vocab_size)
+        decode_input_ids = deterministic_decode_input_ids(tokens=args.decode_steps, vocab_size=vocab_size)
+        decode_requested = args.decode_steps > 0
         setup_s = time.perf_counter() - setup_start
 
         ttnn = _import_ttnn()
@@ -128,15 +138,38 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
 
             warmup_start = time.perf_counter()
             for _ in range(args.warmup_runs):
-                model(input_ids)
+                if decode_requested:
+                    _run_prefill_decode_sequence(
+                        model,
+                        input_ids=input_ids,
+                        decode_input_ids=decode_input_ids,
+                        ttnn_module=ttnn,
+                        mesh_device=mesh_device,
+                    )
+                else:
+                    model(input_ids)
+                    _synchronize_submeshes(ttnn, mesh_device)
+            if args.warmup_runs == 0:
                 _synchronize_submeshes(ttnn, mesh_device)
             warmup_s = time.perf_counter() - warmup_start
 
             logits = None
+            decode_logits = None
+            decode_s = 0.0
             run_start = time.perf_counter()
             for _ in range(args.measure_runs):
-                logits = model(input_ids)
-                _synchronize_submeshes(ttnn, mesh_device)
+                if decode_requested:
+                    logits, decode_logits, measured_decode_s = _run_prefill_decode_sequence(
+                        model,
+                        input_ids=input_ids,
+                        decode_input_ids=decode_input_ids,
+                        ttnn_module=ttnn,
+                        mesh_device=mesh_device,
+                    )
+                    decode_s += measured_decode_s
+                else:
+                    logits = model(input_ids)
+                    _synchronize_submeshes(ttnn, mesh_device)
             run_s = time.perf_counter() - run_start
         finally:
             model = None
@@ -161,10 +194,12 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
             model_init_s=model_init_s,
             warmup_s=warmup_s,
             run_s=run_s,
+            decode_s=decode_s,
             total_s=time.perf_counter() - total_start,
         )
         return summarize_demo_result(
             logits=logits,
+            decode_logits=decode_logits,
             input_ids=input_ids,
             timings=timings,
             checkpoint=checkpoint,
@@ -172,6 +207,7 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
             top_k=args.top_k,
             warmup_runs=args.warmup_runs,
             measure_runs=args.measure_runs,
+            decode_steps=args.decode_steps,
         )
 
 
@@ -212,15 +248,27 @@ def deterministic_input_ids(*, tokens: int, vocab_size: int) -> torch.Tensor:
     return torch.zeros(1, tokens, dtype=torch.int64)
 
 
+def deterministic_decode_input_ids(*, tokens: int, vocab_size: int) -> torch.Tensor:
+    if tokens < 0:
+        raise ValueError(f"decode tokens must be non-negative, got {tokens}")
+    if vocab_size <= 0:
+        raise ValueError(f"vocab_size must be positive, got {vocab_size}")
+    if tokens == 0:
+        return torch.empty(1, 0, dtype=torch.int64)
+    return deterministic_input_ids(tokens=tokens, vocab_size=vocab_size)
+
+
 def summarize_demo_result(
     *,
     logits: torch.Tensor,
+    decode_logits: torch.Tensor | None = None,
     input_ids: torch.Tensor,
     timings: DemoTimings,
     checkpoint: PreparedCheckpoint,
     top_k: int,
     warmup_runs: int,
     measure_runs: int,
+    decode_steps: int = 0,
     layer: int | None = None,
     layer_ids: tuple[int, ...] | None = None,
 ) -> dict:
@@ -234,13 +282,15 @@ def summarize_demo_result(
         layer_ids = (int(layer),)
     if not layer_ids:
         raise ValueError("layer_ids must be non-empty")
+    if decode_steps < 0:
+        raise ValueError(f"decode_steps must be non-negative, got {decode_steps}")
 
     first_token = logits[0, 0].float()
     top_count = min(top_k, first_token.shape[0])
     top_values, top_indices = torch.topk(first_token, k=top_count)
     checksum = float(logits.float().sum().item())
 
-    return {
+    summary = {
         "demo": DEMO_NAME,
         "note": DEMO_NOTE,
         "checkpoint": {
@@ -254,6 +304,7 @@ def summarize_demo_result(
             "layer_ids": [int(layer_id) for layer_id in layer_ids],
             "warmup_runs": int(warmup_runs),
             "measure_runs": int(measure_runs),
+            "decode_steps": int(decode_steps),
         },
         "logits": {
             "shape": list(logits.shape),
@@ -271,6 +322,49 @@ def summarize_demo_result(
             "total": _round_float(timings.total_s),
         },
     }
+    if decode_logits is not None:
+        if decode_logits.ndim != 3 or decode_logits.shape[0] != 1:
+            raise ValueError(
+                f"decode_logits must have shape [1, decode_steps, vocab], got {tuple(decode_logits.shape)}"
+            )
+        if int(decode_logits.shape[1]) != decode_steps:
+            raise ValueError(f"decode_logits token count {decode_logits.shape[1]} does not match {decode_steps}")
+        final_token = decode_logits[0, -1].float()
+        decode_top_count = min(top_k, final_token.shape[0])
+        decode_top_values, decode_top_indices = torch.topk(final_token, k=decode_top_count)
+        summary["decode_logits"] = {
+            "shape": list(decode_logits.shape),
+            "checksum": _round_float(float(decode_logits.float().sum().item())),
+            "final_token_top_k": [
+                {"id": int(index.item()), "value": _round_float(float(value.item()))}
+                for index, value in zip(decode_top_indices, decode_top_values)
+            ],
+        }
+        summary["timing_s"]["decode"] = _round_float(timings.decode_s)
+    return summary
+
+
+def _run_prefill_decode_sequence(
+    model,
+    *,
+    input_ids: torch.Tensor,
+    decode_input_ids: torch.Tensor,
+    ttnn_module,
+    mesh_device,
+) -> tuple[torch.Tensor, torch.Tensor, float]:
+    prefill_logits, cache = model.prefill_with_decode_cache(input_ids)
+    _synchronize_submeshes(ttnn_module, mesh_device)
+    decode_start = time.perf_counter()
+    decode_logits = []
+    for token_index in range(decode_input_ids.shape[1]):
+        step_logits, cache = model.decode_step(
+            decode_input_ids[:, token_index : token_index + 1],
+            cache=cache,
+        )
+        _synchronize_submeshes(ttnn_module, mesh_device)
+        decode_logits.append(step_logits)
+    decode_s = time.perf_counter() - decode_start
+    return prefill_logits, torch.cat(decode_logits, dim=1), decode_s
 
 
 def require_t3k_available(ttnn_module) -> None:

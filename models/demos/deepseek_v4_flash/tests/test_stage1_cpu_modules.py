@@ -29,9 +29,15 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     load_attention_projection_weights,
     validate_attention_projection_weights,
 )
+from models.demos.deepseek_v4_flash.ttnn_decode_cache import (
+    Batch1DecodeCache,
+    Batch1DecodeLayerCache,
+    advance_batch1_decode_layer_cache,
+)
 from models.demos.deepseek_v4_flash.ttnn_decoder_layer import (
     DecoderLayerNormWeights,
     load_decoder_layer_norm_weights,
+    validate_decoder_layer_decode_step_input,
     validate_decoder_layer_input,
     validate_decoder_layer_norm_weights,
 )
@@ -444,6 +450,139 @@ def test_indexer_topk_and_sparse_attention_decode():
         probs = torch.softmax(torch.cat([scores, attn_sink[head : head + 1]]), dim=0)[:2]
         manual[0, 0, head] = probs @ gathered
     torch.testing.assert_close(out, manual)
+
+
+def test_batch1_decode_cache_shape_contract_and_transition():
+    cache = Batch1DecodeLayerCache(
+        layer_id=2,
+        current_position=8,
+        batch_size=1,
+        hidden_size=32,
+        compress_ratio=4,
+        head_dim=8,
+        index_n_heads=4,
+        index_head_dim=8,
+        index_topk=8,
+        attention_input_history=torch.zeros(1, 8, 32, dtype=torch.bfloat16),
+        compressed_kv=torch.zeros(1, 2, 8, dtype=torch.bfloat16),
+        index_compressed_kv=torch.zeros(1, 2, 8, dtype=torch.bfloat16),
+    )
+    model_cache = Batch1DecodeCache(layer_caches=(cache,))
+
+    assert model_cache.batch_size == 1
+    assert model_cache.current_position == 8
+    assert model_cache.layer_ids == (2,)
+    assert cache.compressed_cache_length == 2
+
+    next_cache = advance_batch1_decode_layer_cache(
+        cache,
+        attention_input_token=torch.ones(1, 1, 32, dtype=torch.bfloat16),
+        compressed_kv=torch.zeros(1, 2, 8, dtype=torch.bfloat16),
+        index_compressed_kv=torch.zeros(1, 2, 8, dtype=torch.bfloat16),
+        last_topk_idxs=torch.tensor([[[1, 0]]], dtype=torch.int64),
+    )
+
+    assert next_cache.current_position == 9
+    assert next_cache.attention_input_history.shape == (1, 9, 32)
+    assert next_cache.compressed_kv.shape == (1, 2, 8)
+    torch.testing.assert_close(next_cache.attention_input_history[:, -1], torch.ones(1, 32, dtype=torch.bfloat16))
+    torch.testing.assert_close(next_cache.last_topk_idxs, torch.tensor([[[1, 0]]], dtype=torch.int64))
+
+    with pytest.raises(ValueError, match="compressed_kv must have shape"):
+        Batch1DecodeLayerCache(
+            layer_id=2,
+            current_position=8,
+            batch_size=1,
+            hidden_size=32,
+            compress_ratio=4,
+            head_dim=8,
+            index_n_heads=4,
+            index_head_dim=8,
+            index_topk=8,
+            attention_input_history=torch.zeros(1, 8, 32),
+            compressed_kv=torch.zeros(1, 3, 8),
+            index_compressed_kv=torch.zeros(1, 2, 8),
+        )
+    with pytest.raises(ValueError, match="same current_position"):
+        Batch1DecodeCache(
+            layer_caches=(
+                cache,
+                Batch1DecodeLayerCache(
+                    layer_id=3,
+                    current_position=9,
+                    batch_size=1,
+                    hidden_size=32,
+                    compress_ratio=4,
+                    head_dim=8,
+                    index_n_heads=4,
+                    index_head_dim=8,
+                    index_topk=8,
+                    attention_input_history=torch.zeros(1, 9, 32),
+                    compressed_kv=torch.zeros(1, 2, 8),
+                    index_compressed_kv=torch.zeros(1, 2, 8),
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="attention_input_token must have shape"):
+        advance_batch1_decode_layer_cache(
+            cache,
+            attention_input_token=torch.ones(1, 2, 32),
+            compressed_kv=torch.zeros(1, 2, 8),
+            index_compressed_kv=torch.zeros(1, 2, 8),
+            last_topk_idxs=torch.zeros(1, 1, 1, dtype=torch.int64),
+        )
+
+
+def test_decoder_layer_decode_step_contract_validation():
+    hidden_states = torch.zeros(1, 1, 1, 32)
+    input_ids = torch.zeros(1, 1, dtype=torch.int64)
+    cache = Batch1DecodeLayerCache(
+        layer_id=2,
+        current_position=8,
+        batch_size=1,
+        hidden_size=32,
+        compress_ratio=4,
+        head_dim=8,
+        index_n_heads=4,
+        index_head_dim=8,
+        index_topk=8,
+        attention_input_history=torch.zeros(1, 8, 32),
+        compressed_kv=torch.zeros(1, 2, 8),
+        index_compressed_kv=torch.zeros(1, 2, 8),
+    )
+
+    validate_decoder_layer_decode_step_input(
+        hidden_states,
+        input_ids=input_ids,
+        cache=cache,
+        hidden_size=32,
+        layer=2,
+    )
+
+    with pytest.raises(ValueError, match="decode hidden_states must have shape"):
+        validate_decoder_layer_decode_step_input(
+            torch.zeros(1, 1, 2, 32),
+            input_ids=input_ids,
+            cache=cache,
+            hidden_size=32,
+            layer=2,
+        )
+    with pytest.raises(ValueError, match="decode input_ids must have shape"):
+        validate_decoder_layer_decode_step_input(
+            hidden_states,
+            input_ids=torch.zeros(1, 2, dtype=torch.int64),
+            cache=cache,
+            hidden_size=32,
+            layer=2,
+        )
+    with pytest.raises(ValueError, match="decode cache layer_id"):
+        validate_decoder_layer_decode_step_input(
+            hidden_states,
+            input_ids=input_ids,
+            cache=cache,
+            hidden_size=32,
+            layer=1,
+        )
 
 
 def test_sparse_attention_contract_validation_errors():

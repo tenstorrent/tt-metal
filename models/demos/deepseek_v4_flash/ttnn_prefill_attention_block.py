@@ -13,6 +13,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
 from models.demos.deepseek_v4_flash.ttnn_attention_projection import TtAttentionProjection
+from models.demos.deepseek_v4_flash.ttnn_decode_cache import Batch1DecodeLayerCache, advance_batch1_decode_layer_cache
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import TtPrefillCompressor
 from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import TtPrefillIndexer
 from models.demos.deepseek_v4_flash.ttnn_sparse_attention import TtSparsePrefillAttention
@@ -41,6 +42,7 @@ class TtPrefillAttentionBlock(LightweightModule):
         indexer: TtPrefillIndexer,
         sparse_attention: TtSparsePrefillAttention,
         attn_sink: torch.Tensor,
+        layer: int = 0,
     ):
         validate_prefill_attention_block_config(
             attention_projection=attention_projection,
@@ -54,6 +56,7 @@ class TtPrefillAttentionBlock(LightweightModule):
         self.indexer = indexer
         self.sparse_attention = sparse_attention
         self.attn_sink = attn_sink.float().contiguous()
+        self.layer = int(layer)
 
     @classmethod
     def from_preprocessed(
@@ -107,6 +110,7 @@ class TtPrefillAttentionBlock(LightweightModule):
                 memory_config=memory_config,
             ),
             attn_sink=load_attention_sink(preprocessed_path, manifest=manifest, layer=layer),
+            layer=layer,
         )
 
     def forward(self, hidden_states, *, topk_idxs: torch.Tensor | None = None):
@@ -128,6 +132,96 @@ class TtPrefillAttentionBlock(LightweightModule):
             topk_idxs=topk_idxs,
         )
         return self.attention_projection.project_output(attention_output)
+
+    def build_decode_cache(self, hidden_states) -> Batch1DecodeLayerCache:
+        """Build host-owned compressed cache state from prefill attention inputs.
+
+        This is a stepping-stone cache: it stores normalized attention-input
+        history and compressed-KV equivalents, then rebuilds those compressed
+        tensors during decode. It does not claim to be the final optimized
+        DeepSeek V4 sparse decode cache layout.
+        """
+
+        validate_attention_block_decode_cache_input(
+            hidden_states,
+            hidden_size=self.attention_projection.hidden_size,
+            compress_ratio=self.compressor.compress_ratio,
+        )
+        attention_history = ttnn.to_torch(hidden_states)[:, 0].contiguous()
+        compressed_kv = self.compressor.build_compressed_kv_cache(hidden_states)
+        index_compressed_kv = self.indexer.build_index_kv_cache(hidden_states)
+        return Batch1DecodeLayerCache(
+            layer_id=self.layer,
+            current_position=int(attention_history.shape[1]),
+            batch_size=1,
+            hidden_size=self.attention_projection.hidden_size,
+            compress_ratio=self.compressor.compress_ratio,
+            head_dim=self.compressor.head_dim,
+            index_n_heads=self.indexer.index_n_heads,
+            index_head_dim=self.indexer.index_head_dim,
+            index_topk=self.indexer.index_topk,
+            attention_input_history=attention_history,
+            compressed_kv=compressed_kv,
+            index_compressed_kv=index_compressed_kv,
+        )
+
+    def decode_step(
+        self,
+        hidden_states,
+        *,
+        cache: Batch1DecodeLayerCache,
+    ) -> tuple[object, Batch1DecodeLayerCache]:
+        validate_attention_block_decode_step_input(
+            hidden_states,
+            cache=cache,
+            layer=self.layer,
+            hidden_size=self.attention_projection.hidden_size,
+            compress_ratio=self.compressor.compress_ratio,
+            head_dim=self.compressor.head_dim,
+            index_head_dim=self.indexer.index_head_dim,
+        )
+        q_rank = self.attention_projection.project_q_rank(hidden_states)
+        q = self.attention_projection.project_q_from_rank(q_rank)
+
+        attention_input_token = ttnn.to_torch(hidden_states)[:, 0].contiguous()
+        next_history = torch.cat([cache.attention_input_history, attention_input_token], dim=1).contiguous()
+        tt_history = ttnn.from_torch(
+            next_history.unsqueeze(1).to(torch.bfloat16),
+            device=self.attention_projection.device,
+            dtype=self.attention_projection.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.attention_projection.memory_config,
+        )
+        compressed_kv = self.compressor.build_compressed_kv_cache(tt_history)
+        index_compressed_kv = self.indexer.build_index_kv_cache(tt_history)
+        topk_idxs = self.indexer.topk_from_q_rank_and_cache(
+            hidden_states,
+            q_rank=q_rank,
+            index_kv_cache=index_compressed_kv,
+            start_pos=cache.current_position,
+            offset=0,
+        )
+        tt_compressed_kv = ttnn.from_torch(
+            compressed_kv.unsqueeze(1).to(torch.bfloat16),
+            device=self.attention_projection.device,
+            dtype=self.attention_projection.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.attention_projection.memory_config,
+        )
+        attention_output = self.sparse_attention(
+            q,
+            tt_compressed_kv,
+            attn_sink=self.attn_sink,
+            topk_idxs=topk_idxs,
+        )
+        next_cache = advance_batch1_decode_layer_cache(
+            cache,
+            attention_input_token=attention_input_token,
+            compressed_kv=compressed_kv,
+            index_compressed_kv=index_compressed_kv,
+            last_topk_idxs=topk_idxs,
+        )
+        return self.attention_projection.project_output(attention_output), next_cache
 
 
 def load_attention_sink(
@@ -232,3 +326,49 @@ def validate_prefill_attention_block_input(
         raise ValueError(f"Expected topk_idxs dtype int32 or int64, got {topk_idxs.dtype}")
     if tuple(topk_idxs.shape[:2]) != (batch_size, seq_len):
         raise ValueError(f"Expected topk_idxs batch/seq {(batch_size, seq_len)}, got {tuple(topk_idxs.shape[:2])}")
+
+
+def validate_attention_block_decode_cache_input(
+    hidden_states,
+    *,
+    hidden_size: int,
+    compress_ratio: int,
+) -> None:
+    shape = tuple(hidden_states.shape)
+    if len(shape) != 4 or shape[0] != 1 or shape[1] != 1:
+        raise ValueError(f"Expected hidden_states shape [1, 1, tokens, hidden], got {shape}")
+    if shape[-1] != hidden_size:
+        raise ValueError(f"Expected hidden_states hidden size {hidden_size}, got {shape[-1]}")
+    if shape[-2] < compress_ratio:
+        raise ValueError(f"Expected tokens >= compress_ratio {compress_ratio}, got {shape[-2]}")
+
+
+def validate_attention_block_decode_step_input(
+    hidden_states,
+    *,
+    cache: Batch1DecodeLayerCache,
+    layer: int,
+    hidden_size: int,
+    compress_ratio: int,
+    head_dim: int,
+    index_head_dim: int,
+) -> None:
+    shape = tuple(hidden_states.shape)
+    if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[2] != 1:
+        raise ValueError(f"Expected decode hidden_states shape [1, 1, 1, hidden], got {shape}")
+    if shape[-1] != hidden_size:
+        raise ValueError(f"Expected hidden_states hidden size {hidden_size}, got {shape[-1]}")
+    if cache.layer_id != layer:
+        raise ValueError(f"cache layer_id {cache.layer_id} does not match attention layer {layer}")
+    if cache.batch_size != 1:
+        raise ValueError(f"decode cache batch_size must be 1, got {cache.batch_size}")
+    if cache.hidden_size != hidden_size:
+        raise ValueError(f"cache hidden_size {cache.hidden_size} does not match {hidden_size}")
+    if cache.compress_ratio != compress_ratio:
+        raise ValueError(f"cache compress_ratio {cache.compress_ratio} does not match {compress_ratio}")
+    if cache.head_dim != head_dim:
+        raise ValueError(f"cache head_dim {cache.head_dim} does not match {head_dim}")
+    if cache.index_head_dim != index_head_dim:
+        raise ValueError(f"cache index_head_dim {cache.index_head_dim} does not match {index_head_dim}")
+    if cache.current_position < compress_ratio:
+        raise ValueError(f"decode cache current_position must be >= compress_ratio {compress_ratio}")

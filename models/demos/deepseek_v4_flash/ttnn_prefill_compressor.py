@@ -95,6 +95,18 @@ class TtPrefillCompressor(LightweightModule):
         )
 
     def forward(self, hidden_states):
+        compressed = self.build_compressed_kv_cache(hidden_states)
+        return ttnn.from_torch(
+            compressed.unsqueeze(1).to(torch.bfloat16),
+            device=self.device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.memory_config,
+        )
+
+    def build_compressed_kv_cache(self, hidden_states) -> torch.Tensor:
+        """Build host compressed-KV state from a TTNN hidden-state history."""
+
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [batch, 1, seq_len, hidden], got {input_shape}")
@@ -118,13 +130,7 @@ class TtPrefillCompressor(LightweightModule):
             norm_eps=self.norm_eps,
             overlap=self.overlap,
         )
-        return ttnn.from_torch(
-            compressed.unsqueeze(1).to(torch.bfloat16),
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.memory_config,
-        )
+        return compressed.contiguous()
 
 
 def load_prefill_compressor_weights(

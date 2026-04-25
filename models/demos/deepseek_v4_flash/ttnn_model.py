@@ -15,6 +15,7 @@ from safetensors import safe_open
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v4_flash.manifest import load_tt_manifest
+from models.demos.deepseek_v4_flash.ttnn_decode_cache import Batch1DecodeCache
 from models.demos.deepseek_v4_flash.ttnn_decoder_layer import TtDecoderLayer
 
 DEFAULT_TINY_MODEL_LAYER = 2
@@ -36,7 +37,8 @@ class TtDeepSeekV4FlashTinyModel(LightweightModule):
 
     The public output is a host torch tensor shaped ``[1, tokens, vocab]``. This
     is intentionally not the full model: it does not add hyperconnections, all
-    layers, generation/cache semantics, or tensor caches.
+    layers, or an optimized tensor-cache decode kernel. The opt-in decode API
+    owns host cache state explicitly for batch-1 tiny-model smoke tests.
     """
 
     def __init__(
@@ -124,6 +126,39 @@ class TtDeepSeekV4FlashTinyModel(LightweightModule):
         hidden_states = embed_input_ids_host(input_ids, self.embed_weight).unsqueeze(1)
         for decoder_layer in self.decoder_layers:
             hidden_states = decoder_layer(hidden_states, input_ids=input_ids)
+        return self.project_logits(hidden_states, token_count=input_ids.shape[1])
+
+    def prefill_with_decode_cache(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, Batch1DecodeCache]:
+        validate_model_input_ids(input_ids, vocab_size=self.vocab_size)
+        hidden_states = embed_input_ids_host(input_ids, self.embed_weight).unsqueeze(1)
+        layer_caches = []
+        for decoder_layer in self.decoder_layers:
+            hidden_states, layer_cache = decoder_layer.prefill_with_decode_cache(hidden_states, input_ids=input_ids)
+            layer_caches.append(layer_cache)
+        return self.project_logits(hidden_states, token_count=input_ids.shape[1]), Batch1DecodeCache(
+            layer_caches=tuple(layer_caches)
+        )
+
+    def decode_step(
+        self,
+        input_ids: torch.Tensor,
+        *,
+        cache: Batch1DecodeCache,
+    ) -> tuple[torch.Tensor, Batch1DecodeCache]:
+        validate_model_decode_step_input_ids(input_ids, vocab_size=self.vocab_size)
+        validate_tiny_model_decode_cache(cache, layer_ids=self.layer_ids)
+        hidden_states = embed_input_ids_host(input_ids, self.embed_weight).unsqueeze(1)
+        layer_caches = []
+        for decoder_layer, layer_cache in zip(self.decoder_layers, cache.layer_caches):
+            hidden_states, next_layer_cache = decoder_layer.decode_step(
+                hidden_states,
+                input_ids=input_ids,
+                cache=layer_cache,
+            )
+            layer_caches.append(next_layer_cache)
+        return self.project_logits(hidden_states, token_count=1), Batch1DecodeCache(layer_caches=tuple(layer_caches))
+
+    def project_logits(self, hidden_states: torch.Tensor, *, token_count: int) -> torch.Tensor:
         tt_hidden = ttnn.from_torch(
             hidden_states.contiguous(),
             device=self.primary_submesh,
@@ -133,7 +168,7 @@ class TtDeepSeekV4FlashTinyModel(LightweightModule):
         )
         tt_logits = ttnn.linear(tt_hidden, self.lm_head_weight, memory_config=self.memory_config)
         logits = ttnn.to_torch(tt_logits)
-        expected_shape = (1, 1, input_ids.shape[1], self.vocab_size)
+        expected_shape = (1, 1, token_count, self.vocab_size)
         if tuple(logits.shape) != expected_shape:
             raise RuntimeError(f"LM head returned shape {tuple(logits.shape)}, expected {expected_shape}")
         return logits[:, 0].contiguous()
@@ -253,6 +288,19 @@ def validate_model_input_ids(input_ids: torch.Tensor, *, vocab_size: int | None 
         max_id = int(input_ids.max().item())
         if min_id < 0 or max_id >= vocab_size:
             raise ValueError(f"input_ids values must be in [0, {vocab_size}), got min={min_id}, max={max_id}")
+
+
+def validate_model_decode_step_input_ids(input_ids: torch.Tensor, *, vocab_size: int | None = None) -> None:
+    validate_model_input_ids(input_ids, vocab_size=vocab_size)
+    if input_ids.shape[1] != 1:
+        raise ValueError(f"decode input_ids must have shape [1, 1], got {tuple(input_ids.shape)}")
+
+
+def validate_tiny_model_decode_cache(cache: Batch1DecodeCache, *, layer_ids: tuple[int, ...]) -> None:
+    if not isinstance(cache, Batch1DecodeCache):
+        raise TypeError(f"cache must be a Batch1DecodeCache, got {type(cache).__name__}")
+    if cache.layer_ids != layer_ids:
+        raise ValueError(f"decode cache layer_ids {cache.layer_ids} do not match model layer_ids {layer_ids}")
 
 
 def _normalize_layer_id(layer_id: int) -> int:

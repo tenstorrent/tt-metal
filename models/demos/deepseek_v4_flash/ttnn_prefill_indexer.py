@@ -173,13 +173,8 @@ class TtPrefillIndexer(LightweightModule):
         kv = ttnn.linear(hidden_states, self.compressor_wkv, memory_config=self.memory_config)
         score = ttnn.linear(hidden_states, self.compressor_wgate, memory_config=self.memory_config)
 
-        q_host = _ttnn_prefill_to_torch_3d(index_q).reshape(
-            -1,
-            int(hidden_states.shape[2]),
-            self.index_n_heads,
-            self.index_head_dim,
-        )
-        weights_host = _ttnn_prefill_to_torch_3d(weights).float() * self.index_weight_scale
+        q_host = self._index_q_to_host(index_q, tokens=int(hidden_states.shape[2]))
+        weights_host = self._index_weights_to_host(weights)
         compressed_kv = _compress_projected_prefill(
             _ttnn_prefill_to_torch_3d(kv),
             _ttnn_prefill_to_torch_3d(score),
@@ -199,6 +194,72 @@ class TtPrefillIndexer(LightweightModule):
             start_pos=start_pos,
             offset=offset,
         )
+
+    def build_index_kv_cache(self, hidden_states) -> torch.Tensor:
+        """Build host compressed-KV state for index selection from hidden history."""
+
+        validate_prefill_indexer_cache_input(
+            hidden_states,
+            hidden_size=self.hidden_size,
+            compress_ratio=self.compress_ratio,
+        )
+        kv = ttnn.linear(hidden_states, self.compressor_wkv, memory_config=self.memory_config)
+        score = ttnn.linear(hidden_states, self.compressor_wgate, memory_config=self.memory_config)
+        return _compress_projected_prefill(
+            _ttnn_prefill_to_torch_3d(kv),
+            _ttnn_prefill_to_torch_3d(score),
+            ape=self.compressor_ape,
+            norm_weight=self.compressor_norm_weight,
+            compress_ratio=self.compress_ratio,
+            head_dim=self.index_head_dim,
+            norm_eps=self.norm_eps,
+            overlap=self.overlap,
+        ).contiguous()
+
+    def topk_from_q_rank_and_cache(
+        self,
+        hidden_states,
+        *,
+        q_rank,
+        index_kv_cache: torch.Tensor,
+        start_pos: int,
+        offset: int = 0,
+    ) -> torch.Tensor:
+        """Select decode top-k indices from an explicit host index-KV cache."""
+
+        validate_decode_indexer_input(
+            hidden_states,
+            q_rank=q_rank,
+            index_kv_cache=index_kv_cache,
+            hidden_size=self.hidden_size,
+            q_lora_rank=self.q_lora_rank,
+            index_head_dim=self.index_head_dim,
+            compress_ratio=self.compress_ratio,
+            start_pos=start_pos,
+            offset=offset,
+        )
+        index_q = ttnn.linear(q_rank, self.wq_b, memory_config=self.memory_config)
+        weights = ttnn.linear(hidden_states, self.weights_proj, memory_config=self.memory_config)
+        return indexer_topk(
+            self._index_q_to_host(index_q, tokens=1),
+            index_kv_cache,
+            self._index_weights_to_host(weights),
+            index_topk=self.index_topk,
+            compress_ratio=self.compress_ratio,
+            start_pos=start_pos,
+            offset=offset,
+        )
+
+    def _index_q_to_host(self, index_q, *, tokens: int) -> torch.Tensor:
+        return _ttnn_prefill_to_torch_3d(index_q).reshape(
+            -1,
+            tokens,
+            self.index_n_heads,
+            self.index_head_dim,
+        )
+
+    def _index_weights_to_host(self, weights) -> torch.Tensor:
+        return _ttnn_prefill_to_torch_3d(weights).float() * self.index_weight_scale
 
 
 def load_prefill_indexer_weights(
@@ -316,3 +377,54 @@ def validate_prefill_indexer_input(
     expected_shape = (shape[0], 1, shape[2], q_lora_rank)
     if q_rank_shape != expected_shape:
         raise ValueError(f"Expected q_rank shape {expected_shape}, got {q_rank_shape}")
+
+
+def validate_prefill_indexer_cache_input(
+    hidden_states,
+    *,
+    hidden_size: int,
+    compress_ratio: int,
+) -> None:
+    shape = tuple(hidden_states.shape)
+    if len(shape) != 4 or shape[0] != 1 or shape[1] != 1:
+        raise ValueError(f"Expected hidden_states shape [1, 1, seq_len, hidden], got {shape}")
+    if shape[-1] != hidden_size:
+        raise ValueError(f"Expected hidden_states hidden size {hidden_size}, got {shape[-1]}")
+    if shape[-2] < compress_ratio:
+        raise ValueError(f"Expected seq_len >= compress_ratio {compress_ratio}, got {shape[-2]}")
+
+
+def validate_decode_indexer_input(
+    hidden_states,
+    *,
+    q_rank,
+    index_kv_cache: torch.Tensor,
+    hidden_size: int,
+    q_lora_rank: int,
+    index_head_dim: int,
+    compress_ratio: int,
+    start_pos: int,
+    offset: int,
+) -> None:
+    shape = tuple(hidden_states.shape)
+    if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[2] != 1:
+        raise ValueError(f"Expected decode hidden_states shape [1, 1, 1, hidden], got {shape}")
+    if shape[-1] != hidden_size:
+        raise ValueError(f"Expected hidden_states hidden size {hidden_size}, got {shape[-1]}")
+    q_rank_shape = tuple(q_rank.shape)
+    expected_q_rank_shape = (1, 1, 1, q_lora_rank)
+    if q_rank_shape != expected_q_rank_shape:
+        raise ValueError(f"Expected q_rank shape {expected_q_rank_shape}, got {q_rank_shape}")
+    if index_kv_cache.ndim != 3:
+        raise ValueError(
+            f"Expected index_kv_cache shape [1, cache_len, index_head_dim], got {tuple(index_kv_cache.shape)}"
+        )
+    end_pos = start_pos + 1
+    expected_cache_len = end_pos // compress_ratio
+    expected_cache_shape = (1, expected_cache_len, index_head_dim)
+    if tuple(index_kv_cache.shape) != expected_cache_shape:
+        raise ValueError(f"Expected index_kv_cache shape {expected_cache_shape}, got {tuple(index_kv_cache.shape)}")
+    if start_pos < compress_ratio:
+        raise ValueError(f"decode start_pos must be >= compress_ratio {compress_ratio}, got {start_pos}")
+    if offset != 0:
+        raise ValueError("Decode indexer stepping stone only supports offset=0")
