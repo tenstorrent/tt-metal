@@ -209,31 +209,10 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             is_balanced=True,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
-            q_chunk_sizes=[160],  # Tuned for each sequence length
-            k_chunk_sizes=[160],
-            seq_len=3200,
-        )
-    )
-
-    configs.append(
-        ModelConfig(
-            name="mla_100k_straddle",  # k_chunk doesn't divide seq_len
-            nhq=mla_nhq,
-            nhk=1,
-            nhv=mla_nhq,
-            d_q=576,
-            d_k=576,
-            d_v=128,
-            is_causal=True,
-            is_balanced=True,
-            q_dtype=ttnn.bfloat16,
-            kv_dtype=ttnn.bfloat8_b,
             q_chunk_sizes=[160],
-            k_chunk_sizes=[256],
+            # k=160 -> Sk_chunk_t=5; k=256 straddles (3200%256=128); k=320 -> Sk_chunk_t=10 with kt-sub=2.
+            k_chunk_sizes=[160, 256, 320],
             seq_len=3200,
-            # Sk_chunk_t=8 straddle-mask branch exceeds default kernel config buffer.
-            # Empirically tuned to give +5 KiB headroom on this shape.
-            worker_l1_size=1456640,
         )
     )
 
