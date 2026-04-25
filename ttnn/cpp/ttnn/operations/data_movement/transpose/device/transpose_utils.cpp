@@ -102,14 +102,19 @@ std::optional<ShardSpec> adjust_shard_spec_to_shape(
     // products can exceed 2^32). Returning nullopt on non-exact division lets callers fall back
     // gracefully (generate_transpose_shard_spec or interleaved) instead of crashing a valid user
     // call, and avoids the silent-truncation pitfall of blind uint division.
+    // Transpose preserves rank, so callers must pass equal-rank shapes. Enforce this explicitly:
+    // mismatched ranks would silently produce inconsistent volume math (the two accumulation loops
+    // below run for different counts) and yield a valid-looking but wrong shard.
+    TT_FATAL(
+        from_shape.rank() == to_shape.rank(),
+        "adjust_shard_spec_to_shape: from_shape rank ({}) and to_shape rank ({}) must match.",
+        from_shape.rank(),
+        to_shape.rank());
     uint64_t from_volume_except_width = 1;
     uint64_t to_volume_except_width = 1;
-    const auto from_rank = static_cast<int>(from_shape.rank());
-    const auto to_rank = static_cast<int>(to_shape.rank());
-    for (int i = 0; i < from_rank - 1; ++i) {
+    const auto rank = static_cast<int>(from_shape.rank());
+    for (int i = 0; i < rank - 1; ++i) {
         from_volume_except_width *= static_cast<uint64_t>(from_shape[i]);
-    }
-    for (int i = 0; i < to_rank - 1; ++i) {
         to_volume_except_width *= static_cast<uint64_t>(to_shape[i]);
     }
     const uint64_t from_width = static_cast<uint64_t>(from_shape[-1]);

@@ -103,9 +103,7 @@ L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.Buf
 DRAM_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
 
-# ---------------------------------------------------------------------------
-# 1. Block-sharded input → interleaved output  (WH)
-# ---------------------------------------------------------------------------
+# 1. WH: block-sharded input → interleaved output.
 def test_transpose_block_sharded_to_interleaved_wh(device):
     shape = (1, 1, 64, 64)
     run_transpose_test(
@@ -118,9 +116,7 @@ def test_transpose_block_sharded_to_interleaved_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 2. Block-sharded input → interleaved output  (CN, needs N,C > 1)
-# ---------------------------------------------------------------------------
+# 2. CN: block-sharded input → interleaved output.
 def test_transpose_block_sharded_to_interleaved_cn(device):
     shape = (2, 4, 32, 64)
     run_transpose_test(
@@ -133,9 +129,7 @@ def test_transpose_block_sharded_to_interleaved_cn(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 3. Width-sharded input → interleaved output  (WH)
-# ---------------------------------------------------------------------------
+# 3. WH: width-sharded input → interleaved output.
 def test_transpose_width_sharded_to_interleaved_wh(device):
     shape = (1, 1, 64, 128)
     run_transpose_test(
@@ -148,9 +142,7 @@ def test_transpose_width_sharded_to_interleaved_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 4. Interleaved input → height-sharded output  (WH)
-# ---------------------------------------------------------------------------
+# 4. WH: interleaved input → height-sharded output.
 def test_transpose_interleaved_to_height_sharded(device):
     shape = (1, 1, 64, 128)
     out_shape = (1, 1, 128, 64)
@@ -164,9 +156,7 @@ def test_transpose_interleaved_to_height_sharded(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 5. Interleaved input → block-sharded output  (WH)
-# ---------------------------------------------------------------------------
+# 5. WH: interleaved input → block-sharded output.
 def test_transpose_interleaved_to_block_sharded(device):
     shape = (1, 1, 64, 64)
     run_transpose_test(
@@ -179,9 +169,7 @@ def test_transpose_interleaved_to_block_sharded(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 6. Block-sharded input → height-sharded output  (WH)
-# ---------------------------------------------------------------------------
+# 6. WH: block-sharded input → height-sharded output.
 def test_transpose_block_to_height_sharded(device):
     shape = (1, 1, 64, 128)
     out_shape = (1, 1, 128, 64)
@@ -195,9 +183,7 @@ def test_transpose_block_to_height_sharded(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 7. Width-sharded input → height-sharded output  (WH, cross shard-type)
-# ---------------------------------------------------------------------------
+# 7. WH: width-sharded input → height-sharded output (cross shard-type).
 def test_transpose_width_to_height_sharded(device):
     shape = (1, 1, 64, 128)
     out_shape = (1, 1, 128, 64)
@@ -211,9 +197,7 @@ def test_transpose_width_to_height_sharded(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 8. HC transpose: height-sharded input → interleaved output
-# ---------------------------------------------------------------------------
+# 8. HC: height-sharded input → interleaved output.
 def test_transpose_hc_height_sharded(device):
     shape = (1, 4, 32, 64)
     run_transpose_test(
@@ -226,9 +210,7 @@ def test_transpose_hc_height_sharded(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 9. CN transpose: height-sharded input → interleaved output
-# ---------------------------------------------------------------------------
+# 9. CN: height-sharded input → interleaved output.
 def test_transpose_cn_height_sharded(device):
     shape = (2, 4, 32, 64)
     run_transpose_test(
@@ -241,9 +223,7 @@ def test_transpose_cn_height_sharded(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 10. Default output derivation: block-sharded input, no explicit output
-# ---------------------------------------------------------------------------
+# 10. Block-sharded input with no explicit output config (default output derivation).
 def test_transpose_block_sharded_default_output(device):
     shape = (1, 1, 64, 64)
     run_transpose_test(
@@ -255,9 +235,7 @@ def test_transpose_block_sharded_default_output(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 11. Default output derivation: height-sharded input, no explicit output
-# ---------------------------------------------------------------------------
+# 11. Height-sharded input with no explicit output config (default output derivation).
 def test_transpose_height_sharded_default_output(device):
     shape = (2, 4, 32, 64)
     run_transpose_test(
@@ -269,9 +247,7 @@ def test_transpose_height_sharded_default_output(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 12. Sharded output without shard_spec (system derives it)
-# ---------------------------------------------------------------------------
+# 12. Height-sharded input → height-sharded output without shard_spec.
 def test_transpose_sharded_output_no_shard_spec(device):
     shape = (1, 1, 128, 64)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
@@ -285,9 +261,7 @@ def test_transpose_sharded_output_no_shard_spec(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 13. Native L1 height-sharded (verifies native path still selected)
-# ---------------------------------------------------------------------------
+# 13. WH: native L1 height-sharded path regression guard.
 def test_transpose_native_height_sharded_wh(device):
     shape = (1, 1, 32, 64)
     run_transpose_test(
@@ -299,18 +273,13 @@ def test_transpose_native_height_sharded_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 14. Interleaved baseline (sanity)
-# ---------------------------------------------------------------------------
+# 14. Interleaved baseline (sanity).
 def test_transpose_interleaved_baseline(device):
     shape = (2, 3, 64, 96)
     run_transpose_test(shape, 2, 3, device)
 
 
-# ---------------------------------------------------------------------------
-# 15. ROW_MAJOR height-sharded input (exercises ROW_MAJOR branch in
-# get_transpose_shard_specs / is_shard_tile_aligned)
-# ---------------------------------------------------------------------------
+# 15. HC transpose: ROW_MAJOR height-sharded input → interleaved output.
 def test_transpose_row_major_height_sharded_hc(device):
     shape = (1, 4, 32, 64)
     run_transpose_test(
@@ -324,10 +293,7 @@ def test_transpose_row_major_height_sharded_hc(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 16. DRAM-sharded input falls back to interleaved
-# (is_native_transpose_sharding rejects BufferType::DRAM)
-# ---------------------------------------------------------------------------
+# 16. DRAM-sharded input falls back to L1 interleaved output.
 def test_transpose_dram_sharded_fallback(device):
     shape = (1, 1, 128, 64)
     dram_sharded = _height_shard_config(shape, device, buffer_type=ttnn.BufferType.DRAM)
@@ -349,10 +315,7 @@ def test_transpose_dram_sharded_fallback(device):
     assert passing, f"Transpose mismatch for DRAM-sharded fallback, shape={shape}"
 
 
-# ---------------------------------------------------------------------------
-# 17. Block-sharded output without shard_spec — exercises the block-shard
-# branch of generate_transpose_shard_spec (interleaved input, no spec)
-# ---------------------------------------------------------------------------
+# 17. Interleaved input → BLOCK_SHARDED output requested without shard_spec.
 def test_transpose_block_sharded_output_no_shard_spec(device):
     shape = (1, 1, 128, 128)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
@@ -366,13 +329,7 @@ def test_transpose_block_sharded_output_no_shard_spec(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 17b. Non-native sharded input + user-requested sharded output without
-# shard_spec — exercises the else-if ordering in `detail::transpose_` that
-# honors the user's `memory_layout` over the non-native default-to-interleaved
-# fallback. Before this ordering, a TILE BLOCK_SHARDED input paired with a
-# sharded no-spec output (any layout) would silently return L1 INTERLEAVED.
-# ---------------------------------------------------------------------------
+# 17b. Non-native (BLOCK) sharded input → user-requested sharded output without shard_spec.
 @pytest.mark.parametrize(
     "requested_out_layout",
     [
@@ -393,12 +350,7 @@ def test_transpose_non_native_sharded_input_to_sharded_nospec(requested_out_layo
     )
 
 
-# ---------------------------------------------------------------------------
-# 18. ROW_MAJOR + BLOCK_SHARDED input → interleaved (WH)
-# Composite fallback: sharded→interleaved hop before transpose. Neither the
-# native sharded kernels nor prim::permute handle block-sharded RM pages that
-# span multiple cores.
-# ---------------------------------------------------------------------------
+# 18. WH: ROW_MAJOR + BLOCK_SHARDED input → interleaved output (composite fallback).
 def test_transpose_row_major_block_sharded_to_interleaved_wh(device):
     shape = (1, 1, 64, 64)
     run_transpose_test(
@@ -412,10 +364,7 @@ def test_transpose_row_major_block_sharded_to_interleaved_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 19. ROW_MAJOR + WIDTH_SHARDED input → interleaved (WH)
-# Composite fallback. Width sharding on RM also splits pages across cores.
-# ---------------------------------------------------------------------------
+# 19. WH: ROW_MAJOR + WIDTH_SHARDED input → interleaved output (composite fallback).
 def test_transpose_row_major_width_sharded_to_interleaved_wh(device):
     shape = (1, 1, 32, 128)
     run_transpose_test(
@@ -429,11 +378,7 @@ def test_transpose_row_major_width_sharded_to_interleaved_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 20. ROW_MAJOR interleaved input → BLOCK_SHARDED output requested (WH)
-# Composite fallback goes through interleaved output, then reshards to the
-# requested block-sharded memory config.
-# ---------------------------------------------------------------------------
+# 20. WH: ROW_MAJOR interleaved input → BLOCK_SHARDED output (composite fallback).
 def test_transpose_row_major_interleaved_to_block_sharded_wh(device):
     shape = (1, 1, 64, 64)
     out_shape = (1, 1, 64, 64)
@@ -448,10 +393,7 @@ def test_transpose_row_major_interleaved_to_block_sharded_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 21. ROW_MAJOR interleaved input → WIDTH_SHARDED output requested (WH)
-# Composite fallback — mirror of 20 for width sharding output.
-# ---------------------------------------------------------------------------
+# 21. WH: ROW_MAJOR interleaved input → WIDTH_SHARDED output (composite fallback).
 def test_transpose_row_major_interleaved_to_width_sharded_wh(device):
     shape = (1, 1, 64, 128)
     out_shape = (1, 1, 128, 64)
@@ -466,11 +408,7 @@ def test_transpose_row_major_interleaved_to_width_sharded_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 22. ROW_MAJOR + BLOCK_SHARDED input → BLOCK_SHARDED output (WH)
-# Both conditions of the composite-fallback guard fire: input needs an
-# interleaved hop in, and output needs a reshard out.
-# ---------------------------------------------------------------------------
+# 22. WH: ROW_MAJOR + BLOCK_SHARDED input → BLOCK_SHARDED output (composite fallback both ends).
 def test_transpose_row_major_block_sharded_to_block_sharded_wh(device):
     shape = (1, 1, 64, 64)
     out_shape = (1, 1, 64, 64)
@@ -485,12 +423,7 @@ def test_transpose_row_major_block_sharded_to_block_sharded_wh(device):
     )
 
 
-# ---------------------------------------------------------------------------
-# 23. ROW_MAJOR + HEIGHT_SHARDED input → interleaved (WH)
-# NOT part of the composite fallback — HEIGHT_SHARDED RM keeps pages on a
-# single core and is handled natively. Included here as a regression guard so
-# the fallback predicate stays narrow.
-# ---------------------------------------------------------------------------
+# 23. WH: ROW_MAJOR + HEIGHT_SHARDED input → interleaved output (regression guard, not composite fallback).
 def test_transpose_row_major_height_sharded_to_interleaved_wh(device):
     shape = (1, 1, 64, 32)
     run_transpose_test(
@@ -504,12 +437,7 @@ def test_transpose_row_major_height_sharded_to_interleaved_wh(device):
     )
 
 
-# ===========================================================================
-# Irregular-shape coverage for interleaved inputs (TILE and ROW_MAJOR).
-# Shapes include:
-#   - last-two dims not multiples of TILE_HEIGHT / TILE_WIDTH (tile padding)
-#   - non-power-of-two C for HC (transposed_padded_shape rounding)
-# ===========================================================================
+# Interleaved input with irregular shapes (TILE and ROW_MAJOR) across WH/HC/CN.
 @pytest.mark.parametrize(
     "shape, dim0, dim1",
     [
@@ -528,12 +456,7 @@ def test_transpose_irregular_shapes_interleaved(shape, dim0, dim1, input_layout,
     run_transpose_test(shape, dim0, dim1, device, input_layout=input_layout)
 
 
-# ===========================================================================
-# ROW_MAJOR interleaved input + sharded (BLOCK/WIDTH) output WITHOUT shard_spec.
-# Exercises the RM branch of `transposed_padded_shape`
-# (transpose_device_operation.cpp) and the composite-fallback spec-synthesis
-# path in `transpose.cpp` that populates a shard_spec before the reshard.
-# ===========================================================================
+# ROW_MAJOR interleaved input → BLOCK/WIDTH sharded output without shard_spec.
 @pytest.mark.parametrize(
     "shape, dim0, dim1, memory_layout",
     [
@@ -556,11 +479,7 @@ def test_transpose_row_major_sharded_output_no_shard_spec(shape, dim0, dim1, mem
     )
 
 
-# ===========================================================================
-# TILE + sharded output WITHOUT shard_spec, irregular C for HC.
-# Exercises `transposed_padded_shape` with `C_p = round_up(C, tile_height)`
-# in transpose_device_operation.cpp.
-# ===========================================================================
+# HC TILE with irregular C, interleaved input → BLOCK_SHARDED output without shard_spec.
 @pytest.mark.parametrize(
     "shape, dim0, dim1",
     [
@@ -582,22 +501,8 @@ def test_transpose_tile_hc_irregular_c_sharded_output_no_shard_spec(shape, dim0,
     )
 
 
-# ===========================================================================
-# Sharded inputs with shapes that don't divide evenly.
-#
-# Two categories:
-#
-#  (a) Logical shape has dims < tile multiple but padded shape is tile-aligned
-#      and divides evenly into a tile-aligned shard. The native shard path
-#      still runs; the irregular logical dim must be round-tripped correctly.
-#
-#  (b) Uneven sharding: padded shape does NOT divide evenly into the shard
-#      shape (last shard partially filled). `is_native_transpose_sharding`
-#      returns false via `is_uneven`, so the op falls through to interleaved
-#      factories with TensorAccessorArgs.
-#
-# RM inputs additionally exercise the composite fallback from transpose.cpp.
-# ===========================================================================
+# Sharded inputs with shapes that don't divide evenly — covers (a) tile-aligned padded shape with
+# irregular logical dim and (b) uneven sharding (padded shape doesn't divide into shard shape).
 
 
 def _explicit_block_shard_config(device, grid_y, grid_x, sh, sw):
@@ -640,7 +545,7 @@ def _explicit_width_shard_config(device, ncores, sh, sw):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
 
 
-# (a) TILE + sharded inputs with IRREGULAR logical shape but tile-aligned padded + shard.
+# (a) TILE + sharded input with irregular logical shape (padded shape and shard are tile-aligned).
 @pytest.mark.parametrize(
     "shape, dim0, dim1, mc_factory",
     [
@@ -661,9 +566,7 @@ def test_transpose_tile_sharded_irregular_shapes(shape, dim0, dim1, mc_factory, 
     run_transpose_test(shape, dim0, dim1, device, input_layout=ttnn.TILE_LAYOUT, input_mem_config=mc_factory(device))
 
 
-# (a) ROW_MAJOR + BLOCK/WIDTH sharded inputs with IRREGULAR W.
-# These exercise the composite fallback (transpose.cpp is_block_or_width_sharded_mc guard)
-# with shapes whose last dim is not a tile multiple.
+# (a) ROW_MAJOR + BLOCK/WIDTH sharded input with irregular W (composite fallback).
 @pytest.mark.parametrize(
     "shape, dim0, dim1, mc_factory",
     [
@@ -679,9 +582,7 @@ def test_transpose_row_major_sharded_irregular_shapes(shape, dim0, dim1, mc_fact
     )
 
 
-# (b) TILE UNEVEN sharding — padded shape doesn't divide evenly into the shard
-# shape. `is_native_transpose_sharding` returns false; op routes through the
-# interleaved factories' TensorAccessor fallback.
+# (b) TILE uneven sharding — padded shape doesn't divide evenly into the shard shape.
 @pytest.mark.parametrize(
     "shape, dim0, dim1, mc_factory",
     [
@@ -697,17 +598,10 @@ def test_transpose_tile_sharded_uneven(shape, dim0, dim1, mc_factory, device):
     run_transpose_test(shape, dim0, dim1, device, input_layout=ttnn.TILE_LAYOUT, input_mem_config=mc_factory(device))
 
 
-# ===========================================================================
 # Additional regression guards for transpose-specific code paths.
-# Dtype, COL_MAJOR, identity, non-canonical dims, DRAM no-spec, etc. are not
-# duplicated here — they are exercised by generic ttnn tests or by the
-# existing universal I/O tests above.
-# ===========================================================================
 
 
-# CN + ROW_MAJOR + BLOCK/WIDTH sharded input.
-# Exercises the composite fallback in transpose_impl for the CN dim (the guard
-# is keyed on memory layout, not dim).
+# CN: ROW_MAJOR + BLOCK/WIDTH sharded input (composite fallback for non-WH dim).
 @pytest.mark.parametrize(
     "shape, mc_factory",
     [
@@ -719,8 +613,7 @@ def test_transpose_cn_row_major_block_width_sharded(shape, mc_factory, device):
     run_transpose_test(shape, 0, 1, device, input_layout=ttnn.ROW_MAJOR_LAYOUT, input_mem_config=mc_factory(device))
 
 
-# N>1 and/or C>1 with sharded input for WH transpose.
-# Exercises shard-geometry helpers that flatten over the leading dims.
+# WH transpose with N>1 and/or C>1 sharded inputs.
 @pytest.mark.parametrize(
     "shape, layout, mc_factory",
     [
@@ -748,13 +641,7 @@ def test_transpose_multi_batch_channel_sharded_wh(shape, layout, mc_factory, dev
     run_transpose_test(shape, 2, 3, device, input_layout=layout, input_mem_config=mc_factory(device))
 
 
-# ROW_MAJOR HEIGHT_SHARDED inputs whose shard element count (shard_h * shard_w) is NOT a
-# multiple of the tile footprint (32 * 32 = 1024). Before the is_native_transpose_sharding
-# fix, these silently hit the native RM height-sharded kernel and produced garbage or hit a
-# CB allocation failure. After the fix, the predicate returns false for such shards and the
-# device op selects the interleaved WH factory, which reads/writes the sharded buffer
-# directly over NOC via TensorAccessorArgs (no physical reshard). Tile-aligned RM HS
-# (e.g. (32,64)) remains on the fast specialized native path.
+# WH: ROW_MAJOR HEIGHT_SHARDED input with non-tile-aligned shard (shard_h * shard_w not a tile multiple).
 @pytest.mark.parametrize(
     "shape, shard_shape",
     [
@@ -768,10 +655,7 @@ def test_transpose_row_major_height_sharded_nontile_aligned_wh(shape, shard_shap
     run_transpose_test(shape, 2, 3, device, input_layout=ttnn.ROW_MAJOR_LAYOUT, input_mem_config=imc)
 
 
-# CN TILE with sharded output (no shard_spec provided by caller). Exercises
-# `derive_effective_output_memory_config`'s spec-synthesis path for CN through
-# `TransposeCNProgramFactory`, which uses TensorAccessorArgs on the writer.
-# Covers both interleaved→sharded-output and height-sharded→sharded-output.
+# CN TILE → HEIGHT_SHARDED output without shard_spec, from interleaved and height-sharded inputs.
 @pytest.mark.parametrize(
     "input_mem_factory",
     [
@@ -793,11 +677,7 @@ def test_transpose_cn_sharded_output(input_mem_factory, device):
     )
 
 
-# DRAM interleaved input + DRAM interleaved output. Verifies the full NOC-based
-# TensorAccessor path works end-to-end when both sides live in DRAM rather than L1.
-DRAM_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-
-
+# DRAM interleaved input → DRAM interleaved output across WH/HC/CN.
 @pytest.mark.parametrize(
     "dim0, dim1",
     [
@@ -818,13 +698,7 @@ def test_transpose_dram_interleaved(dim0, dim1, device):
     )
 
 
-# WH transpose on tile-aligned height-sharded inputs whose transposed width legitimately shrinks
-# below a tile. A naive `std::max(scaled, TILE_*)` clamp in `adjust_shard_spec_to_shape` oversizes
-# the output shard for these shapes (scaled_h = 16 gets clamped up to 32, claiming 1024 elements
-# of capacity for a shard that should only hold 512), producing silent correctness regressions.
-# The fix returns the exact ratio-scaled shape, then the device op's post-check detects the
-# sub-tile TILE shard and falls through to `generate_transpose_shard_spec` for a tile-aligned
-# fresh spec. Verifies both small single-batch cases and asymmetric N>1 shapes.
+# WH on tile-aligned height-sharded inputs whose transposed width shrinks below a tile.
 @pytest.mark.parametrize(
     "shape, ncores, shard_shape",
     [
@@ -839,11 +713,7 @@ def test_transpose_wh_shrink_sub_tile_sharded(shape, ncores, shard_shape, device
     run_transpose_test(shape, 2, 3, device, input_layout=ttnn.TILE_LAYOUT, input_mem_config=imc)
 
 
-# HC TILE transpose with an irregular logical H (last tile partial) and a tile-aligned
-# height-sharded input. The padded H is rounded up to TILE_HEIGHT, so the shard geometry must
-# remain tile-aligned; the op rotates the padded H into output dim[1] and pads new dim[2] to
-# TILE_HEIGHT from the logical C. Exercises the HC TILE sharded path end-to-end against an
-# input whose logical shape doesn't divide evenly.
+# HC TILE transpose with irregular logical C and a tile-aligned height-sharded input.
 @pytest.mark.parametrize(
     "shape, ncores, shard_shape",
     [
@@ -854,3 +724,32 @@ def test_transpose_wh_shrink_sub_tile_sharded(shape, ncores, shard_shape, device
 def test_transpose_hc_tile_irregular_sharded_input(shape, ncores, shard_shape, device):
     imc = _explicit_height_shard_config(device, ncores, shard_shape[0], shard_shape[1])
     run_transpose_test(shape, 1, 2, device, input_layout=ttnn.TILE_LAYOUT, input_mem_config=imc)
+
+
+# HC/CN: ROW_MAJOR BLOCK/WIDTH-sharded input → BLOCK/WIDTH-sharded output (composite fallback round-trip).
+@pytest.mark.parametrize(
+    "shape, dim0, dim1, input_factory, output_layout",
+    [
+        pytest.param(
+            (1, 1, 64, 64), 1, 2, _block_shard_config, ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="HC_block_to_block"
+        ),
+        pytest.param(
+            (1, 1, 64, 64), 1, 2, _width_shard_config, ttnn.TensorMemoryLayout.WIDTH_SHARDED, id="HC_width_to_width"
+        ),
+        pytest.param(
+            (2, 2, 64, 64), 0, 1, _block_shard_config, ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="CN_block_to_block"
+        ),
+    ],
+)
+def test_transpose_rm_block_or_width_sharded_to_sharded(shape, dim0, dim1, input_factory, output_layout, device):
+    input_mem_config = input_factory(shape, device)
+    output_mem_config = ttnn.MemoryConfig(output_layout, ttnn.BufferType.L1)
+    run_transpose_test(
+        shape,
+        dim0,
+        dim1,
+        device,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_mem_config=input_mem_config,
+        output_mem_config=output_mem_config,
+    )
