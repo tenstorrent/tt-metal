@@ -110,7 +110,22 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+        # HOST tensor — create without placing on device.  On mesh devices the
+        # master trace still records mesh metadata (distribution_shape, mesh_device_shape).
+        # Pass mesh_mapper so the tensor carries the correct topology.
+        if is_mesh_device and input_a_tensor_placement:
+            from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
+            # Create on device with replicate topology, then move to host
+            input_tensor_a = replicate_with_topology(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.unsqueeze_to_4D(input_tensor_a)
