@@ -3458,4 +3458,142 @@ TEST_F(AsyncTeardownFabric2DRepeatFixture, ForceResetChannels_ClassifiedAsDegrad
     // paths in verify_all_fabric_channels_healthy(): DEGRADED (M), clean (AA).
 }
 
+// ---------------------------------------------------------------------------
+// Scenario AB: Multi-iteration quiesce stress test.
+//
+// Motivation (opus audit 2026-04-25):
+//   The race condition this branch fixes manifests on iteration 2+ of the
+//   quiesce/restart cycle: the first quiesce leaves stale state (broken relay
+//   path, ERISC channels in unexpected EDMStatus), and the second quiesce
+//   hangs indefinitely on Phase 2.5/3 relay ops for non-MMIO devices.
+//   None of the existing tests run >=3 consecutive quiesce cycles — this test
+//   exercises 5 back-to-back quiesce cycles without closing the device.
+//
+// What quiesce_devices() exercises per cycle:
+//   - quiesce_and_restart_fabric_workers() per device:
+//       Phase 1: terminate Tensix MUX BRISC
+//       Phase 2: poll for MUX TERMINATED (with force-reset on timeout)
+//       Phase 2.5: read/terminate ERISCs for non-MMIO devices
+//       Phase 3: relaunch fabric cores via configure_fabric_cores()
+//   - wait_for_fabric_workers_ready() per device:
+//       Phase 4: poll for MUX ACTIVE
+//       Phase 5: ETH router READY_FOR_TRAFFIC handshake
+//       Phase 5b: diagnostic reads on still-pending channels
+//
+// Key regression targets:
+//   1. fabric_relay_path_broken_ must reset in configure_fabric() (Fix T) so
+//      iteration 2+ does not falsely skip Phase 2.5/3/5 for non-MMIO devices.
+//   2. ENTRY snapshot deadline guard must set fabric_relay_path_broken_ (Fix S)
+//      so that timed-out relay reads on any non-MMIO device propagate the skip.
+//   3. No state accumulation: after kCycles quiesce cycles, a fresh dispatch +
+//      buffer round-trip must succeed with no data corruption.
+//
+// FABRIC_2D is required (quiesce_devices() is a no-op for DISABLED fabric).
+// Requires >= 2 devices. Skips gracefully on single-chip systems.
+//
+// Time budget: each quiesce cycle takes 10-30s on T3K in the worst case
+// (if ERISCs time out and fall back to force-reset paths). We use a 5-minute
+// (300s) watchdog to allow for the slowest observed case.
+//
+// Pass = all kCycles complete + final dispatch + buffer round-trip succeed.
+// Fail = hang (watchdog kills), crash on any quiesce cycle, or data corruption.
+// ---------------------------------------------------------------------------
+
+class QuiesceStressFixture : public MeshDeviceFixtureBase {
+protected:
+    QuiesceStressFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+              .test_budget_ms = 300000,  // 5 minutes: worst-case quiesce × 5 cycles
+          }) {}
+
+    void SetUp() override {
+        const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+        if (num_devices < 2) {
+            GTEST_SKIP() << "QuiesceStressFixture requires >= 2 devices (FABRIC_2D)";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
+TEST_F(QuiesceStressFixture, MultiIterationQuiesceCycles) {
+    // 5 cycles exercises the iteration-2+ regression path with headroom.
+    constexpr int kCycles = 5;
+    auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+
+    for (int cycle = 0; cycle < kCycles; cycle++) {
+        log_info(tt::LogTest, "[Scenario AB] Quiesce cycle {}/{} — dispatch + quiesce", cycle + 1, kCycles);
+
+        // Dispatch a blank workload (blocking=false) before quiesce.
+        // quiesce_devices() must drain in-flight workloads and then cycle
+        // through Phase 1-5 for every device in the mesh.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        }
+
+        // Explicit quiesce — this is the path that hangs on iteration 2+ if
+        // fabric_relay_path_broken_ is not reset between cycles (Fix T) or if
+        // the ENTRY snapshot deadline does not set the flag (Fix S).
+        log_info(tt::LogTest, "[Scenario AB] Calling quiesce_devices() for cycle {}", cycle + 1);
+        ASSERT_NO_THROW(mesh_device_->quiesce_devices())
+            << "[Scenario AB] quiesce_devices() threw on cycle " << (cycle + 1);
+
+        // Immediately dispatch again (blocking=true) to verify fabric came back up.
+        {
+            auto program = create_blank_program(cores);
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+            auto& cq = mesh_device_->mesh_command_queue();
+            log_info(
+                tt::LogTest,
+                "[Scenario AB] Post-quiesce verification dispatch (blocking=true) — cycle {}",
+                cycle + 1);
+            ASSERT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
+                << "[Scenario AB] Post-quiesce dispatch threw on cycle " << (cycle + 1);
+        }
+    }
+
+    // Final buffer round-trip: verify no accumulated ERISC L1/DRAM corruption
+    // across kCycles of quiesce → reinit → dispatch.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xA0A00000 | (i & 0xFFFF));
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+
+        ASSERT_EQ(dst.size(), src.size())
+            << "[Scenario AB] Buffer size mismatch after " << kCycles << " quiesce cycles";
+        for (size_t i = 0; i < src.size(); i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[Scenario AB] Corruption at index " << i << " after " << kCycles << " quiesce cycles";
+        }
+        log_info(
+            tt::LogTest,
+            "[Scenario AB] Buffer round-trip clean after {} quiesce cycles — no accumulated state corruption",
+            kCycles);
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
