@@ -1387,6 +1387,321 @@ void Device::quiesce_and_restart_fabric_workers() {
         (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done");
 }
 
+bool Device::phase5b_erisc_health_check(
+    const std::set<std::pair<tt::tt_fabric::chan_id_t, tt::tt_fabric::eth_chan_directions>>& active_channels,
+    const metal_SocDescriptor& soc_desc_p5,
+    uint32_t router_sync_addr,
+    uint32_t expected_ready) {
+    // Maps a raw EDMStatus uint32 to its enum name for log readability.
+    // Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
+    auto edm_status_str = [](uint32_t v) -> const char* {
+        switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
+            case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:      return "INITIALIZATION_STARTED";
+            case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
+            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:    return "LOCAL_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:   return "REMOTE_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:           return "READY_FOR_TRAFFIC";
+            case tt::tt_fabric::EDMStatus::TERMINATED:                  return "TERMINATED";
+            case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:             return "TXQ_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:      return "STREAM_REG_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED: return "DOWNSTREAM_EDM_SETUP_STARTED";
+            case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:      return "EDM_VCS_SETUP_COMPLETE";
+            case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE: return "ETHERNET_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::VCS_OPENED:                  return "VCS_OPENED";
+            case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:   return "ROUTING_TABLE_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
+            default: break;
+        }
+        if (v == 0xDEAD5B5B) return "(deadline-skipped)";
+        if (v == 0xDEADECE7) return "(read-exception)";
+        return "(unknown)";
+    };
+
+    constexpr uint32_t kHealthCheckTimeoutMs = 2000;
+    // Log unhealthy channels every 200ms for observability.
+    constexpr uint32_t kHCIntermediateLogMs = 200;
+    constexpr uint32_t kSpinLimit = 64U;
+
+    struct UnhealthyChannel {
+        uint32_t eth_chan_id;
+        uint32_t actual_status;
+    };
+
+    struct ChanToCheck {
+        uint32_t eth_chan_id;
+        CoreCoord eth_logical_core;
+    };
+    std::vector<ChanToCheck> chans;
+    for (const auto& [eth_chan_id, direction] : active_channels) {
+        const auto eth_logical_core =
+            soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
+        chans.push_back({eth_chan_id, eth_logical_core});
+    }
+
+    // Poll all channels until healthy or timeout.
+    std::vector<size_t> pending;
+    pending.reserve(chans.size());
+    for (size_t i = 0; i < chans.size(); i++) {
+        pending.push_back(i);
+    }
+    const size_t total_chans = chans.size();
+    size_t chans_checked = 0;  // channels for which a read was attempted (vs deadline-skipped)
+
+    std::vector<UnhealthyChannel> unhealthy;
+    const auto hc_start = std::chrono::steady_clock::now();
+    uint32_t hc_spin = 0U;
+    int64_t last_hc_log_ms = -1;
+    while (!pending.empty()) {
+        std::vector<size_t> still_pending;
+        std::vector<std::pair<uint32_t, uint32_t>> still_pending_statuses;  // (chan, status)
+        for (size_t idx : pending) {
+            const auto& ch = chans[idx];
+            std::vector<uint32_t> status_buf(1, 0);
+
+            // Per-read deadline guard: if the Phase 5b budget has already been
+            // consumed before this read begins, mark the channel unhealthy and skip
+            // the read entirely.  This prevents accumulating kHealthCheckTimeoutMs
+            // per remaining channel when a prior read in the same round took the full
+            // UMD relay timeout (~5 s each), which would otherwise block for
+            // (N_remaining_channels × 5 s) before the outer timeout fires.
+            //
+            // NOTE: this guard does not protect against a read that *starts* within
+            // budget but then hangs indefinitely (e.g., relay ERISC alive but
+            // forwarding to a peer running fabric firmware).  That scenario requires
+            // either a non-blocking UMD probe API or a thread-based read timeout,
+            // neither of which is implemented here.  The primary defence against that
+            // hang is the phase5_relay_read_threw guard in the caller (Phase 5b is
+            // skipped entirely when Phase 5's own read threw).
+            const auto pre_read_elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - hc_start)
+                    .count();
+            if (pre_read_elapsed > kHealthCheckTimeoutMs) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline "
+                    "exceeded ({}ms) before reading chan {} — treating as "
+                    "not-READY_FOR_TRAFFIC without attempting read "
+                    "({}/{} channels checked so far)",
+                    this->id(),
+                    pre_read_elapsed,
+                    ch.eth_chan_id,
+                    chans_checked,
+                    total_chans);
+                still_pending.push_back(idx);
+                // 0xDEAD5B5B: Phase 5b per-iteration deadline exceeded — read was skipped.
+                still_pending_statuses.push_back({ch.eth_chan_id, 0xDEAD5B5B});
+                continue;
+            }
+            chans_checked++;
+
+            try {
+                detail::ReadFromDeviceL1(
+                    this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
+            } catch (const std::exception& e) {
+                // Non-MMIO relay read timed out — treat this channel as not-ready.
+                // Without this catch, the exception propagates uncaught through
+                // quiesce_devices(), causing GTest TearDown to call quiesce again on
+                // already-degraded hardware, which accumulates 5s timeouts and hangs.
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5b: read failed on "
+                    "chan {} — treating as not-READY_FOR_TRAFFIC: {}",
+                    this->id(),
+                    ch.eth_chan_id,
+                    e.what());
+                // 0xDEADECE7: Phase 5b relay read threw an exception.
+                status_buf[0] = 0xDEADECE7;
+            }
+            if (status_buf[0] != expected_ready) {
+                still_pending.push_back(idx);
+                still_pending_statuses.push_back({ch.eth_chan_id, status_buf[0]});
+            }
+        }
+        pending = std::move(still_pending);
+        if (pending.empty()) {
+            break;
+        }
+        const auto hc_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - hc_start)
+                                    .count();
+        // Log every kHCIntermediateLogMs to observe actual time-to-healthy
+        if (hc_elapsed / kHCIntermediateLogMs >
+            last_hc_log_ms / static_cast<int64_t>(kHCIntermediateLogMs)) {
+            last_hc_log_ms = hc_elapsed;
+            std::string pending_str;
+            for (const auto& [cid, st] : still_pending_statuses) {
+                pending_str += fmt::format(" chan{}=0x{:08x}({})", cid, st, edm_status_str(st));
+            }
+            log_info(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5b: {}ms elapsed, "
+                "{} channel(s) still not READY_FOR_TRAFFIC:{}",
+                this->id(),
+                hc_elapsed,
+                still_pending_statuses.size(),
+                pending_str);
+        }
+        if (hc_elapsed > kHealthCheckTimeoutMs) {
+            // Final diagnostic read — best-effort snapshot of each remaining channel.
+            // Apply the same per-read deadline guard: skip the read and record a
+            // distinct sentinel if the diagnostic budget is exhausted.
+            for (size_t idx : pending) {
+                const auto& ch = chans[idx];
+                std::vector<uint32_t> status_buf(1, 0);
+                const auto diag_elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - hc_start)
+                        .count();
+                constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
+                if (diag_elapsed > kDiagBudgetMs) {
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
+                        "diagnostic deadline ({}ms) exceeded before reading chan {} — "
+                        "recording as 0xDEAD5B5B without read",
+                        this->id(),
+                        kDiagBudgetMs,
+                        ch.eth_chan_id);
+                    // 0xDEAD5B5B: Phase 5b deadline exceeded — read skipped.
+                    status_buf[0] = 0xDEAD5B5B;
+                } else {
+                    try {
+                        detail::ReadFromDeviceL1(
+                            this,
+                            ch.eth_logical_core,
+                            router_sync_addr,
+                            4,
+                            status_buf,
+                            CoreType::ETH);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
+                            "diagnostic read failed on chan {} — recording as 0xDEADECE7: {}",
+                            this->id(),
+                            ch.eth_chan_id,
+                            e.what());
+                        // 0xDEADECE7: Phase 5b relay read threw an exception.
+                        status_buf[0] = 0xDEADECE7;
+                    }
+                }
+                unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
+            }
+            break;
+        }
+        if (++hc_spin >= kSpinLimit) {
+            hc_spin = 0U;
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+
+    if (!unhealthy.empty()) {
+        // FIX P2 (#42429): Separate pre-known-dead channels from genuinely new failures.
+        // Pre-dead channels were identified during configure_fabric() (probe timed out or
+        // corrupt state) and never received firmware — they will never reach READY_FOR_TRAFFIC.
+        // Only channels that WERE loaded with firmware but failed to become healthy are errors.
+        std::vector<UnhealthyChannel> truly_unhealthy;
+        std::vector<UnhealthyChannel> pre_dead_unhealthy;
+        for (const auto& u : unhealthy) {
+            if (fabric_pre_dead_channels_.count(u.eth_chan_id)) {
+                pre_dead_unhealthy.push_back(u);
+            } else {
+                truly_unhealthy.push_back(u);
+            }
+        }
+        if (!pre_dead_unhealthy.empty()) {
+            std::string dead_details;
+            for (const auto& u : pre_dead_unhealthy) {
+                dead_details += fmt::format(
+                    "  dev={} chan={} status=0x{:08x}({})\n",
+                    this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
+            }
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5: {} pre-known-dead ERISC "
+                "channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) — expected, no firmware was "
+                "loaded for these channels (#42429):\n{}",
+                this->id(),
+                pre_dead_unhealthy.size(),
+                expected_ready,
+                dead_details);
+        }
+        if (!truly_unhealthy.empty()) {
+            std::string details;
+            for (const auto& u : truly_unhealthy) {
+                details += fmt::format(
+                    "  dev={} chan={} status=0x{:08x}({})\n",
+                    this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
+            }
+            // FIX V/W (#42429): If ALL truly-unhealthy channels are at 0x0,
+            // 0xDEAD5B5B (deadline-skipped), or 0xDEADECE7 (read exception), the
+            // device's ETH channels never booted fabric firmware after Phase 3.
+            // For non-MMIO devices this means the UMD relay path is broken (FIX V).
+            // For MMIO devices this means a cascade from a peer device's relay failure
+            // caused the firmware never to respond (FIX W).  In both cases TT_THROW
+            // is wrong: it triggers a teardown second quiesce that hits
+            // rescue_stuck_dispatch_cores via the still-broken UMD relay on non-MMIO
+            // devices, accumulating 5-second timeouts per stream for 8+ minutes.
+            // Instead: log_error + return cleanly.
+            const bool all_dead = std::all_of(
+                truly_unhealthy.begin(),
+                truly_unhealthy.end(),
+                [](const UnhealthyChannel& u) {
+                    return u.actual_status == 0x0 ||
+                           u.actual_status == 0xDEAD5B5B ||
+                           u.actual_status == 0xDEADECE7;
+                });
+            if (all_dead) {
+                if (!this->is_mmio_capable()) {
+                    // Non-MMIO: set flag so Phase 2.5/3/5 relay ops are skipped in
+                    // subsequent quiesce (reads through UMD relay would hang).
+                    fabric_relay_path_broken_ = true;
+                }
+                log_error(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5b: all {} truly-unhealthy "
+                    "channel(s) stuck at 0x0/0xDEAD5B5B/0xDEADECE7 (mmio={}) — "
+                    "ETH firmware did not boot after Phase 3, probable cascade from peer "
+                    "device relay failure.  Returning cleanly to prevent teardown "
+                    "rescue_stuck_dispatch_cores cascade.  (FIX W: #42429)\n{}",
+                    this->id(),
+                    truly_unhealthy.size(),
+                    this->is_mmio_capable(),
+                    details);
+                return true;  // early exit — caller should return
+            }
+            // Interpret the observed status before throwing so the reader knows
+            // whether this is a timing issue or genuine hardware/firmware failure.
+            // STARTED (0xa0b0c0d0) = launched but handshake not complete → timing issue
+            // 0x0 = launch message never arrived → firmware loading failure
+            // 0x49705180 = L1 corrupt (prior crash left garbage) → needs tt-smi -r
+            // Other values = unexpected firmware state
+            TT_THROW(
+                "Fabric health check failed after quiesce restart on Device {} — "
+                "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) after {}ms. "
+                "Check status values: STARTED=0xa0b0c0d0 (handshake incomplete, timing issue); "
+                "0x0 (launch msg lost); 0x49705180 (L1 corrupt — run tt-smi -r); "
+                "other = unexpected firmware state.\n{}",
+                this->id(),
+                truly_unhealthy.size(),
+                expected_ready,
+                kHealthCheckTimeoutMs,
+                details);
+        }
+    }
+
+    log_info(
+        tt::LogMetal,
+        "wait_for_fabric_workers_ready: Device {} Phase 5: {} ERISC channels healthy, "
+        "{} pre-known dead (no firmware, skipped)",
+        this->id(),
+        chans.size() - fabric_pre_dead_channels_.size(),
+        fabric_pre_dead_channels_.size());
+    return false;  // success — caller should continue to success log
+}
+
 void Device::wait_for_fabric_workers_ready() {
     // This method is the second pass of the two-pass quiesce restart.
     // quiesce_and_restart_fabric_workers() (first pass) terminates and relaunches ALL cores
@@ -1810,286 +2125,11 @@ void Device::wait_for_fabric_workers_ready() {
                 fabric_relay_path_broken_.load());
             return;
         } else {
-        constexpr uint32_t kHealthCheckTimeoutMs = 2000;
-        // Log unhealthy channels every 200ms for observability.
-        constexpr uint32_t kHCIntermediateLogMs = 200;
-
-        struct UnhealthyChannel {
-            uint32_t eth_chan_id;
-            uint32_t actual_status;
-        };
-
-        struct ChanToCheck {
-            uint32_t eth_chan_id;
-            CoreCoord eth_logical_core;
-        };
-        std::vector<ChanToCheck> chans;
-        for (const auto& [eth_chan_id, direction] : active_channels) {
-            const auto eth_logical_core =
-                soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
-            chans.push_back({eth_chan_id, eth_logical_core});
-        }
-
-        // Poll all channels until healthy or timeout.
-        std::vector<size_t> pending;
-        pending.reserve(chans.size());
-        for (size_t i = 0; i < chans.size(); i++) {
-            pending.push_back(i);
-        }
-        const size_t total_chans = chans.size();
-        size_t chans_checked = 0;  // channels for which a read was attempted (vs deadline-skipped)
-
-        std::vector<UnhealthyChannel> unhealthy;
-        const auto hc_start = std::chrono::steady_clock::now();
-        uint32_t hc_spin = 0U;
-        int64_t last_hc_log_ms = -1;
-        while (!pending.empty()) {
-            std::vector<size_t> still_pending;
-            std::vector<std::pair<uint32_t, uint32_t>> still_pending_statuses;  // (chan, status)
-            for (size_t idx : pending) {
-                const auto& ch = chans[idx];
-                std::vector<uint32_t> status_buf(1, 0);
-
-                // Per-read deadline guard: if the Phase 5b budget has already been
-                // consumed before this read begins, mark the channel unhealthy and skip
-                // the read entirely.  This prevents accumulating kHealthCheckTimeoutMs
-                // per remaining channel when a prior read in the same round took the full
-                // UMD relay timeout (~5 s each), which would otherwise block for
-                // (N_remaining_channels × 5 s) before the outer timeout fires.
-                //
-                // NOTE: this guard does not protect against a read that *starts* within
-                // budget but then hangs indefinitely (e.g., relay ERISC alive but
-                // forwarding to a peer running fabric firmware).  That scenario requires
-                // either a non-blocking UMD probe API or a thread-based read timeout,
-                // neither of which is implemented here.  The primary defence against that
-                // hang is the phase5_relay_read_threw guard above (Phase 5b is skipped
-                // entirely when Phase 5's own read threw).
-                const auto pre_read_elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - hc_start)
-                        .count();
-                if (pre_read_elapsed > kHealthCheckTimeoutMs) {
-                    log_warning(
-                        tt::LogMetal,
-                        "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline "
-                        "exceeded ({}ms) before reading chan {} — treating as "
-                        "not-READY_FOR_TRAFFIC without attempting read "
-                        "({}/{} channels checked so far)",
-                        this->id(),
-                        pre_read_elapsed,
-                        ch.eth_chan_id,
-                        chans_checked,
-                        total_chans);
-                    still_pending.push_back(idx);
-                    // 0xDEAD5B5B: Phase 5b per-iteration deadline exceeded — read was skipped.
-                    still_pending_statuses.push_back({ch.eth_chan_id, 0xDEAD5B5B});
-                    continue;
-                }
-                chans_checked++;
-
-                try {
-                    detail::ReadFromDeviceL1(
-                        this, ch.eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
-                } catch (const std::exception& e) {
-                    // Non-MMIO relay read timed out — treat this channel as not-ready.
-                    // Without this catch, the exception propagates uncaught through
-                    // quiesce_devices(), causing GTest TearDown to call quiesce again on
-                    // already-degraded hardware, which accumulates 5s timeouts and hangs.
-                    log_warning(
-                        tt::LogMetal,
-                        "wait_for_fabric_workers_ready: Device {} Phase 5b: read failed on "
-                        "chan {} — treating as not-READY_FOR_TRAFFIC: {}",
-                        this->id(),
-                        ch.eth_chan_id,
-                        e.what());
-                    // 0xDEADECE7: Phase 5b relay read threw an exception.
-                    status_buf[0] = 0xDEADECE7;
-                }
-                if (status_buf[0] != expected_ready) {
-                    still_pending.push_back(idx);
-                    still_pending_statuses.push_back({ch.eth_chan_id, status_buf[0]});
-                }
+            // Phase 5b: Per-channel ERISC health check.
+            // Extracted to Device::phase5b_erisc_health_check() for readability.
+            if (phase5b_erisc_health_check(active_channels, soc_desc_p5, router_sync_addr, expected_ready)) {
+                return;
             }
-            pending = std::move(still_pending);
-            if (pending.empty()) {
-                break;
-            }
-            const auto hc_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        std::chrono::steady_clock::now() - hc_start)
-                                        .count();
-            // Log every kHCIntermediateLogMs to observe actual time-to-healthy
-            if (hc_elapsed / kHCIntermediateLogMs >
-                last_hc_log_ms / static_cast<int64_t>(kHCIntermediateLogMs)) {
-                last_hc_log_ms = hc_elapsed;
-                std::string pending_str;
-                for (const auto& [cid, st] : still_pending_statuses) {
-                    pending_str += fmt::format(" chan{}=0x{:08x}({})", cid, st, edm_status_str(st));
-                }
-                log_info(
-                    tt::LogMetal,
-                    "wait_for_fabric_workers_ready: Device {} Phase 5b: {}ms elapsed, "
-                    "{} channel(s) still not READY_FOR_TRAFFIC:{}",
-                    this->id(),
-                    hc_elapsed,
-                    still_pending_statuses.size(),
-                    pending_str);
-            }
-            if (hc_elapsed > kHealthCheckTimeoutMs) {
-                // Final diagnostic read — best-effort snapshot of each remaining channel.
-                // Apply the same per-read deadline guard: skip the read and record a
-                // distinct sentinel if the diagnostic budget is exhausted.
-                for (size_t idx : pending) {
-                    const auto& ch = chans[idx];
-                    std::vector<uint32_t> status_buf(1, 0);
-                    const auto diag_elapsed =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - hc_start)
-                            .count();
-                    constexpr int64_t kDiagBudgetMs = kHealthCheckTimeoutMs + 6000;
-                    if (diag_elapsed > kDiagBudgetMs) {
-                        log_warning(
-                            tt::LogMetal,
-                            "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
-                            "diagnostic deadline ({}ms) exceeded before reading chan {} — "
-                            "recording as 0xDEAD5B5B without read",
-                            this->id(),
-                            kDiagBudgetMs,
-                            ch.eth_chan_id);
-                        // 0xDEAD5B5B: Phase 5b deadline exceeded — read skipped.
-                        status_buf[0] = 0xDEAD5B5B;
-                    } else {
-                        try {
-                            detail::ReadFromDeviceL1(
-                                this,
-                                ch.eth_logical_core,
-                                router_sync_addr,
-                                4,
-                                status_buf,
-                                CoreType::ETH);
-                        } catch (const std::exception& e) {
-                            log_warning(
-                                tt::LogMetal,
-                                "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
-                                "diagnostic read failed on chan {} — recording as 0xDEADECE7: {}",
-                                this->id(),
-                                ch.eth_chan_id,
-                                e.what());
-                            // 0xDEADECE7: Phase 5b relay read threw an exception.
-                            status_buf[0] = 0xDEADECE7;
-                        }
-                    }
-                    unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
-                }
-                break;
-            }
-            if (++hc_spin >= kSpinLimit) {
-                hc_spin = 0U;
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-            }
-        }
-
-        if (!unhealthy.empty()) {
-            // FIX P2 (#42429): Separate pre-known-dead channels from genuinely new failures.
-            // Pre-dead channels were identified during configure_fabric() (probe timed out or
-            // corrupt state) and never received firmware — they will never reach READY_FOR_TRAFFIC.
-            // Only channels that WERE loaded with firmware but failed to become healthy are errors.
-            std::vector<UnhealthyChannel> truly_unhealthy;
-            std::vector<UnhealthyChannel> pre_dead_unhealthy;
-            for (const auto& u : unhealthy) {
-                if (fabric_pre_dead_channels_.count(u.eth_chan_id)) {
-                    pre_dead_unhealthy.push_back(u);
-                } else {
-                    truly_unhealthy.push_back(u);
-                }
-            }
-            if (!pre_dead_unhealthy.empty()) {
-                std::string dead_details;
-                for (const auto& u : pre_dead_unhealthy) {
-                    dead_details += fmt::format(
-                        "  dev={} chan={} status=0x{:08x}({})\n",
-                        this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
-                }
-                log_warning(
-                    tt::LogMetal,
-                    "wait_for_fabric_workers_ready: Device {} Phase 5: {} pre-known-dead ERISC "
-                    "channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) — expected, no firmware was "
-                    "loaded for these channels (#42429):\n{}",
-                    this->id(),
-                    pre_dead_unhealthy.size(),
-                    expected_ready,
-                    dead_details);
-            }
-            if (!truly_unhealthy.empty()) {
-                std::string details;
-                for (const auto& u : truly_unhealthy) {
-                    details += fmt::format(
-                        "  dev={} chan={} status=0x{:08x}({})\n",
-                        this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
-                }
-                // FIX V/W (#42429): If ALL truly-unhealthy channels are at 0x0,
-                // 0xDEAD5B5B (deadline-skipped), or 0xDEADECE7 (read exception), the
-                // device's ETH channels never booted fabric firmware after Phase 3.
-                // For non-MMIO devices this means the UMD relay path is broken (FIX V).
-                // For MMIO devices this means a cascade from a peer device's relay failure
-                // caused the firmware never to respond (FIX W).  In both cases TT_THROW
-                // is wrong: it triggers a teardown second quiesce that hits
-                // rescue_stuck_dispatch_cores via the still-broken UMD relay on non-MMIO
-                // devices, accumulating 5-second timeouts per stream for 8+ minutes.
-                // Instead: log_error + return cleanly.
-                const bool all_dead = std::all_of(
-                    truly_unhealthy.begin(),
-                    truly_unhealthy.end(),
-                    [](const UnhealthyChannel& u) {
-                        return u.actual_status == 0x0 ||
-                               u.actual_status == 0xDEAD5B5B ||
-                               u.actual_status == 0xDEADECE7;
-                    });
-                if (all_dead) {
-                    if (!this->is_mmio_capable()) {
-                        // Non-MMIO: set flag so Phase 2.5/3/5 relay ops are skipped in
-                        // subsequent quiesce (reads through UMD relay would hang).
-                        fabric_relay_path_broken_ = true;
-                    }
-                    log_error(
-                        tt::LogMetal,
-                        "wait_for_fabric_workers_ready: Device {} Phase 5b: all {} truly-unhealthy "
-                        "channel(s) stuck at 0x0/0xDEAD5B5B/0xDEADECE7 (mmio={}) — "
-                        "ETH firmware did not boot after Phase 3, probable cascade from peer "
-                        "device relay failure.  Returning cleanly to prevent teardown "
-                        "rescue_stuck_dispatch_cores cascade.  (FIX W: #42429)\n{}",
-                        this->id(),
-                        truly_unhealthy.size(),
-                        this->is_mmio_capable(),
-                        details);
-                    return;
-                }
-                // Interpret the observed status before throwing so the reader knows
-                // whether this is a timing issue or genuine hardware/firmware failure.
-                // STARTED (0xa0b0c0d0) = launched but handshake not complete → timing issue
-                // 0x0 = launch message never arrived → firmware loading failure
-                // 0x49705180 = L1 corrupt (prior crash left garbage) → needs tt-smi -r
-                // Other values = unexpected firmware state
-                TT_THROW(
-                    "Fabric health check failed after quiesce restart on Device {} — "
-                    "{} ERISC channel(s) not at READY_FOR_TRAFFIC (0x{:08x}) after {}ms. "
-                    "Check status values: STARTED=0xa0b0c0d0 (handshake incomplete, timing issue); "
-                    "0x0 (launch msg lost); 0x49705180 (L1 corrupt — run tt-smi -r); "
-                    "other = unexpected firmware state.\n{}",
-                    this->id(),
-                    truly_unhealthy.size(),
-                    expected_ready,
-                    kHealthCheckTimeoutMs,
-                    details);
-            }
-        }
-
-        log_info(
-            tt::LogMetal,
-            "wait_for_fabric_workers_ready: Device {} Phase 5: {} ERISC channels healthy, "
-            "{} pre-known dead (no firmware, skipped)",
-            this->id(),
-            chans.size() - fabric_pre_dead_channels_.size(),
-            fabric_pre_dead_channels_.size());
         }  // end else (!phase5_relay_read_threw && !fabric_relay_path_broken_)
     }
 

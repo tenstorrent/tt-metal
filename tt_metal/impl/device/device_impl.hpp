@@ -7,7 +7,10 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <unordered_set>
+
+#include <hostdevcommon/fabric_common.h>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -22,6 +25,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/device.hpp>
+
+struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
@@ -252,6 +257,26 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
+    // Phase 5b of wait_for_fabric_workers_ready(): per-channel ERISC health check.
+    //
+    // Polls all active ETH channels until they reach READY_FOR_TRAFFIC (2-second budget).
+    // Separates pre-known-dead channels from genuinely unhealthy ones — pre-dead channels
+    // never received firmware and are expected to be absent from READY_FOR_TRAFFIC.
+    //
+    // Returns true  → caller should return early (all-dead cascade prevention path).
+    // Returns false → health check passed; caller should continue to success log.
+    // TT_THROW       → genuine firmware failure; propagates to caller.
+    //
+    // active_channels: set of (chan_id, direction) pairs for this device's active fabric links.
+    // soc_desc_p5:     SoC descriptor used to map channel IDs to logical ETH core coordinates.
+    // router_sync_addr: L1 address of the EDM status word polled for READY_FOR_TRAFFIC.
+    // expected_ready:   The READY_FOR_TRAFFIC sentinel value (EDMStatus::READY_FOR_TRAFFIC).
+    bool phase5b_erisc_health_check(
+        const std::set<std::pair<tt::tt_fabric::chan_id_t, tt::tt_fabric::eth_chan_directions>>& active_channels,
+        const metal_SocDescriptor& soc_desc_p5,
+        uint32_t router_sync_addr,
+        uint32_t expected_ready);
+
     // TODO: Remove this member in favor of passing in dependencies directly
     MetalContext* context_ = nullptr;  // Runtime state
     MetalEnv* env_;                    // Lower level state
@@ -288,11 +313,36 @@ private:
     // Set by FabricFirmwareInitializer::compile_and_configure_fabric().
     bool fabric_is_mmio_dead_peer_device_ = false;
 
-    // Set when Phase 5's relay read throws during wait_for_fabric_workers_ready().
-    // Indicates the UMD relay path to this non-MMIO device is broken (the relay ERISC
-    // on the MMIO device is now running fabric firmware).  Once set, subsequent quiesce
-    // calls (e.g. from GTest TearDown) skip Phase 5 and ENTRY snapshot relay reads
-    // entirely, preventing 5s-per-channel timeout accumulation and indefinite hangs.
+    // fabric_relay_path_broken_ — state machine:
+    //
+    //   CLEAR (false)  ──[SET sites (5)]──►  SET (true)
+    //
+    //   SET site 1 (quiesce_and_restart_fabric_workers, ENTRY snapshot deadline):
+    //     ENTRY snapshot timed out reading all-channel statuses before quiesce begins.
+    //     The relay ERISC is suspected dead or unresponsive.
+    //
+    //   SET site 2 (quiesce_and_restart_fabric_workers, Phase 5 catch non-MMIO):
+    //     Phase 5 relay read threw an exception on a non-MMIO device.
+    //     Relay ERISC is now running fabric firmware; UMD relay is gone.
+    //
+    //   SET site 3 (quiesce_and_restart_fabric_workers, Phase 5 timeout 0x0 non-MMIO):
+    //     Phase 5 status read returned 0x0 (BRISC reset) on a non-MMIO device.
+    //     FIX V path — relay peer is unreachable.
+    //
+    //   SET site 4 (quiesce_and_restart_fabric_workers, Phase 2.5 non-MMIO relay read):
+    //     Phase 2.5 relay read threw or timed out, setting relay_path_broken for this
+    //     device before proceeding to Phase 3 re-launch.
+    //
+    //   SET site 5 (wait_for_fabric_workers_ready, Phase 5b relay read exception):
+    //     Phase 5b health-check relay read threw; relay ERISC confirmed non-functional.
+    //
+    //   CLEAR site (configure_fabric, top of function):
+    //     Fresh fabric firmware is loaded on all ETH channels.  Relay is restored.
+    //     Cleared unconditionally at the top of configure_fabric() so that the next
+    //     quiesce starts from a clean state regardless of prior session outcome.
+    //
+    // Must be std::atomic<bool>: read by fd_mesh_command_queue.cpp dispatch thread
+    // (FIX Z fast-throw) while quiesce writes it from a different thread.
     std::atomic<bool> fabric_relay_path_broken_{false};
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
