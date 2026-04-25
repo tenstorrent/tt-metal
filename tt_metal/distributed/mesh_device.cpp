@@ -160,6 +160,14 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
     TT_THROW("Failed to find offset for mesh device view");
 }
 
+// Real-time profiler ring buffer sizing. Must match RT_PROFILER_RING_CAPACITY /
+// RT_PROFILER_ENTRY_SIZE in tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp.
+// The ring lives in the user-allocatable L1 of the reserved profiler tensix core, so it has to
+// fit inside one L1 bank — `evaluate_realtime_profiler_eligibility` enforces that precondition.
+constexpr uint32_t kRingBufferCapacity = 4096;
+constexpr uint32_t kRingBufferEntrySize = 64;
+constexpr uint32_t kRingBufferSize = 64 + kRingBufferCapacity * kRingBufferEntrySize;  // 64 B header + entries
+
 // Result of evaluating whether the real-time profiler can be brought up on a given device.
 struct RealtimeProfilerEligibility {
     bool enabled = false;
@@ -201,6 +209,12 @@ struct RealtimeProfilerEligibility {
 //      run, so every host sync would time out (~40s wasted per MeshDevice).
 //      Both host and device profiling are meaningless in this mode anyway
 //      because the user kernels being timed are themselves stubs.
+//   7. The L1 bank on the reserved profiler core has room for the
+//      ~256 KB BRISC↔NCRISC ring buffer. Fixtures that intentionally shrink
+//      `worker_l1_size` to stress the kernel-config region (e.g. the dispatch
+//      KernelSizeTestBigBuffer suite, which sets it to 64 KB) leave too little
+//      user-allocatable L1 for the ring; we disable cleanly instead of
+//      OOM-faulting in MeshDevice setup.
 RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* device) {
     auto device_id = device->id();
     auto& metal = MetalContext::instance();
@@ -292,6 +306,32 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
             "would be replaced with a stub and could not respond to host syncs, and "
             "there are no real user kernels to profile in this mode.",
             device_id);
+        return {};
+    }
+
+    // 7. L1 bank on the reserved profiler core must have room for the ring buffer.
+    //    The ring is allocated as a single-bank L1 buffer in init_realtime_profiler_socket;
+    //    when worker_l1_size has been shrunk below the ring size we'd OOM at allocation
+    //    time. Skip cleanly (with the size figures in the message) so the user knows
+    //    exactly how much L1 they need to free up to re-enable the profiler.
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    const uint32_t ring_buffer_size_aligned = tt::align(kRingBufferSize, l1_alignment);
+    const DeviceAddr l1_bank_size = device->allocator()->get_bank_size(BufferType::L1);
+    if (l1_bank_size < ring_buffer_size_aligned) {
+        log_warning(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: not enough user-allocatable L1 on the "
+            "reserved profiler core ({}, {}) for the BRISC<->NCRISC ring buffer "
+            "(need {} B, L1 bank size is {} B). This typically means worker_l1_size was set "
+            "well below the default (e.g. a stress test pinning it at 64 KB to maximize the "
+            "kernel-config region). Increase worker_l1_size by at least {} B (or leave it at "
+            "the default) to re-enable RT profiler.",
+            device_id,
+            core.x,
+            core.y,
+            ring_buffer_size_aligned,
+            l1_bank_size,
+            ring_buffer_size_aligned - l1_bank_size);
         return {};
     }
 
@@ -1972,11 +2012,9 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     const std::string realtime_profiler_push_kernel_path =
         "tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp";
 
-    // Ring buffer: 64-byte header + N entries × 64 bytes each.
-    // Must match RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
-    constexpr uint32_t kRingBufferCapacity = 4096;
-    constexpr uint32_t kRingBufferEntrySize = 64;
-    constexpr uint32_t kRingBufferSize = 64 + kRingBufferCapacity * kRingBufferEntrySize;
+    // Ring buffer constants (kRingBufferCapacity, kRingBufferEntrySize, kRingBufferSize)
+    // live at file scope so evaluate_realtime_profiler_eligibility can use the same values
+    // when checking whether the L1 bank has room for the ring.
 
     // Set up real-time profiler for each local device in the mesh
     for (const auto& coord : MeshCoordinateRange(view_->shape())) {
