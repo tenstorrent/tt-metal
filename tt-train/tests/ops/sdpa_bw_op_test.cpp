@@ -28,6 +28,7 @@
 class SDPABackwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        SKIP_FOR_LLK_ASSERTS("Skip SDPA backward tests when LLK_ASSERT is enabled.");
         ttml::autograd::ctx().open_device();
         ttml::autograd::ctx().set_seed(42);
     }

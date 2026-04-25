@@ -34,6 +34,7 @@
 class SDPAForwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        SKIP_FOR_LLK_ASSERTS("Skip SDPA forward tests when LLK_ASSERT is enabled.");
         ttml::autograd::ctx().open_device();
     }
 

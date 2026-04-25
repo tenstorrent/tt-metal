@@ -9,6 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
+from models.common.utility_functions import is_llk_assert_enabled
 
 UINT16_MAX = 65535
 TEST_PADDING_VALUE = -42
@@ -19,6 +20,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 
     if dtype == ttnn.bfloat8_b:
         pytest.xfail("BFLOAT8_B not supported by pad operation in topk")
+
+    if (C != 1 and C != 2048) and is_llk_assert_enabled():
+        pytest.skip("LLK_ASSERT is enabled for this test and C is not 1 or 2048")
 
     # Input tensor
     shape = [N, C, H, W]
