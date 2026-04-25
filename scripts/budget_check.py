@@ -161,13 +161,13 @@ def parse_pipeline_reorg_yaml(path: Path, content: str | None = None) -> list[di
     Parse a tests/pipeline_reorg/*.yaml file into a list of test entries.
 
     Expected schema (file-level defaults can be overridden per entry):
-      team: team_runtime         # file-level default (optional)
+      team: runtime              # file-level default (optional)
       sku: N150                  # file-level default (optional)
       tests:
         - name: test_foo
           timeout: 30            # minutes — REQUIRED for cost calculation
           sku: N150              # overrides file-level
-          team: team_runtime     # overrides file-level
+          team: runtime          # overrides file-level
           shards: 2              # optional, default 1
     """
     if content is None:
