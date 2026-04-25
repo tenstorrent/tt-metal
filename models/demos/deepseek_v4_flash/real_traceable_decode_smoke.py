@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -89,6 +90,13 @@ DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
 DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE = 64 * 1024 * 1024
 ATTENTION_OUTPUT_PROJECTION_ATOL = 5e-1
 ATTENTION_OUTPUT_PROJECTION_RTOL = 8e-2
+TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE = "traceable_fixed_cache_window_qk_softmax"
+TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE = "traceable_fixed_cache_window_q_plus_kv_blend"
+TRACEABLE_DECODE_ATTENTION_MODES = (
+    TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+    TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
+)
+DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE = TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
 
 
 @dataclass(frozen=True)
@@ -179,6 +187,7 @@ class TtTraceableDecodeSubpath:
         cache_len: int,
         cache_update_index: int,
         initial_kv_cache: torch.Tensor,
+        attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -188,6 +197,7 @@ class TtTraceableDecodeSubpath:
         self.memory_config = memory_config
         self.cache_len = int(cache_len)
         self.cache_update_index = int(cache_update_index)
+        self.attention_mode = _validate_attention_mode(attention_mode)
         self.route_plan = route_plan
         self.attention = TtAttentionProjection(
             device=device,
@@ -297,14 +307,14 @@ class TtTraceableDecodeSubpath:
             (1, 1, self.cache_update_index + int(hidden_states.shape[-2]), self.kv_output_dim),
             memory_config=self.memory_config,
         )
-        if self.attention_cache_repeat_factor == 1:
-            expanded_attention_cache = attention_cache_window
-        else:
-            expanded_attention_cache = ttnn.repeat(
-                attention_cache_window,
-                ttnn.Shape([1, 1, 1, self.attention_cache_repeat_factor]),
-            )
-        attention_output = ttnn.add(q_output, expanded_attention_cache, memory_config=self.memory_config)
+        attention_intermediates = _ttnn_fixed_window_attention(
+            q_output=q_output,
+            attention_cache_window=attention_cache_window,
+            attention_mode=self.attention_mode,
+            config=self.config,
+            memory_config=self.memory_config,
+        )
+        attention_output = attention_intermediates["attention_output"]
         attention_projected = self.attention.project_output(attention_output)
         post_attention_residual = ttnn.add(hidden_states, attention_projected, memory_config=self.memory_config)
         ffn_norm_output = ttnn.rms_norm(
@@ -335,8 +345,7 @@ class TtTraceableDecodeSubpath:
             "kv_output": kv_output,
             "kv_cache": self.kv_cache,
             "attention_cache_window": attention_cache_window,
-            "expanded_attention_cache": expanded_attention_cache,
-            "attention_output": attention_output,
+            **attention_intermediates,
             "attention_projected": attention_projected,
             "post_attention_residual": post_attention_residual,
             "ffn_norm_output": ffn_norm_output,
@@ -361,6 +370,7 @@ def run_traceable_decode_subpath_smoke(
     trace_region_size: int = DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE,
     cache_len: int = DEFAULT_TRACEABLE_DECODE_CACHE_LEN,
     cache_update_index: int | None = None,
+    attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
     pcc: float = 0.99,
     rtol: float = 8e-2,
     atol: float = 8e-2,
@@ -383,6 +393,7 @@ def run_traceable_decode_subpath_smoke(
         cache_len=cache_len,
         cache_update_index=cache_update_index,
     )
+    attention_mode = _validate_attention_mode(attention_mode)
     snapshot_dir = Path(snapshot_dir).expanduser().resolve()
     config = DeepSeekV4FlashConfig.from_model_path(snapshot_dir)
     tensors, metadata, keys = load_traceable_decode_subpath_slice(
@@ -407,6 +418,7 @@ def run_traceable_decode_subpath_smoke(
         kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        attention_mode=attention_mode,
         route_plan=None,
     )
     route_plan = build_traceable_decode_route_plan(
@@ -445,6 +457,7 @@ def run_traceable_decode_subpath_smoke(
         kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        attention_mode=attention_mode,
         route_plan=route_plan,
     )
     replay_reference = build_torch_traceable_decode_subpath_reference(
@@ -454,6 +467,7 @@ def run_traceable_decode_subpath_smoke(
         kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        attention_mode=attention_mode,
         route_plan=route_plan,
     )
     metadata_groups = _metadata_groups(metadata, keys)
@@ -473,6 +487,7 @@ def run_traceable_decode_subpath_smoke(
         route_plan=route_plan,
         reference=reference,
         replay_reference=replay_reference,
+        attention_mode=attention_mode,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
         trace_region_size=trace_region_size,
@@ -503,6 +518,7 @@ def run_traceable_decode_subpath_smoke(
         trace_region_size=trace_region_size,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        attention_mode=attention_mode,
     )
     result["mode"] = "ttnn-trace"
     result["device_id"] = int(device_id)
@@ -511,37 +527,7 @@ def run_traceable_decode_subpath_smoke(
     result["trace_capture_passed"] = bool(result["trace_capture"]["capture_passed"])
     result["trace_execute_replay_passed"] = bool(result["trace_capture"]["execute_replay_passed"])
     result["guard_status"] = _guard_status(result["trace_capture"])
-    result["ttnn_ops"] = [
-        "ttnn.rms_norm(attn_norm)",
-        "ttnn.linear(wq_a)",
-        "ttnn.rms_norm(q_norm)",
-        "ttnn.linear(wq_b)",
-        "ttnn.linear(wkv)",
-        "ttnn.rms_norm(kv_norm)",
-        "ttnn.to_memory_config(kv_update_height_sharded)",
-        "ttnn.update_cache(kv_projection_cache)",
-        "ttnn.slice(kv_cache_fixed_window)",
-        "ttnn.repeat(kv_cache_window_to_attention_width)",
-        "ttnn.add(q_output,expanded_kv_cache_window)",
-        "ttnn.slice(attention_output_group_0..N)",
-        "ttnn.linear(grouped_wo_a_group_0..N)",
-        "ttnn.concat(grouped_wo_a_rank)",
-        "ttnn.linear(wo_b)",
-        "ttnn.add(hidden,attention_projected)",
-        "ttnn.rms_norm(ffn_norm)",
-        "ttnn.linear(shared_w1)",
-        "ttnn.linear(shared_w3)",
-        "ttnn.mul(silu(shared_gate),shared_up)",
-        "ttnn.linear(shared_w2)",
-        "ttnn.linear(routed_w1_selected_topk_prefix)",
-        "ttnn.linear(routed_w3_selected_topk_prefix)",
-        "ttnn.mul(silu(routed_gate),routed_up)",
-        "ttnn.mul(routed_hidden,preselected_route_weight)",
-        "ttnn.linear(routed_w2_selected_topk_prefix)",
-        "ttnn.add(routed_expert_outputs)",
-        "ttnn.add(shared_output,routed_output)",
-        "ttnn.add(post_attention_residual,combined_ffn_output)",
-    ]
+    result["ttnn_ops"] = _traceable_decode_ttnn_ops(attention_mode)
     result["trace_capture"]["traced_operations"] = list(result["ttnn_ops"])
     result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs.items()}
     result["accuracy"] = {
@@ -679,6 +665,7 @@ def build_torch_traceable_decode_subpath_reference(
     kv_cache_initial: torch.Tensor,
     cache_len: int,
     cache_update_index: int,
+    attention_mode: str,
     route_plan: TraceableDecodeRoutePlan | None,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
@@ -698,8 +685,13 @@ def build_torch_traceable_decode_subpath_reference(
     attention_cache_window = kv_cache[
         :, :, int(cache_update_index) : int(cache_update_index) + int(activation.shape[-2]), :
     ].contiguous()
-    expanded_attention_cache = attention_cache_window.repeat(1, 1, 1, _attention_cache_repeat_factor(config))
-    attention_output = (q_output.float() + expanded_attention_cache.float()).to(torch.bfloat16)
+    attention_intermediates = _torch_fixed_window_attention(
+        q_output=q_output,
+        attention_cache_window=attention_cache_window,
+        attention_mode=attention_mode,
+        config=config,
+    )
+    attention_output = attention_intermediates["attention_output"]
 
     if weights.attention.wo_a is None or weights.attention.wo_b is None:
         raise ValueError("Traceable decode reference requires output projection weights")
@@ -761,8 +753,7 @@ def build_torch_traceable_decode_subpath_reference(
         "kv_output": kv_output.to(torch.bfloat16),
         "kv_cache": kv_cache,
         "attention_cache_window": attention_cache_window,
-        "expanded_attention_cache": expanded_attention_cache,
-        "attention_output": attention_output,
+        **attention_intermediates,
         "attention_projected": attention_projected.to(torch.bfloat16),
         "post_attention_residual": post_attention_residual.to(torch.bfloat16),
         "ffn_norm_output": ffn_norm_output.to(torch.bfloat16),
@@ -910,6 +901,12 @@ def main() -> None:
     parser.add_argument("--trace-region-size", type=int, default=DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE)
     parser.add_argument("--cache-len", type=int, default=DEFAULT_TRACEABLE_DECODE_CACHE_LEN)
     parser.add_argument("--cache-update-index", type=int, default=None)
+    parser.add_argument(
+        "--attention-mode",
+        choices=TRACEABLE_DECODE_ATTENTION_MODES,
+        default=DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
+        help="Traceable fixed-window attention implementation to use; qk-softmax is the default.",
+    )
     parser.add_argument("--cpu-only", action="store_true")
     parser.add_argument("--pcc", type=float, default=0.99)
     parser.add_argument("--rtol", type=float, default=8e-2)
@@ -933,6 +930,7 @@ def main() -> None:
         trace_region_size=args.trace_region_size,
         cache_len=args.cache_len,
         cache_update_index=args.cache_update_index,
+        attention_mode=args.attention_mode,
         pcc=args.pcc,
         rtol=args.rtol,
         atol=args.atol,
@@ -954,6 +952,7 @@ def _run_ttnn_traceable_decode_subpath(
     trace_region_size: int,
     cache_len: int,
     cache_update_index: int,
+    attention_mode: str,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
     device = ttnn.open_device(
         device_id=int(device_id),
@@ -970,6 +969,7 @@ def _run_ttnn_traceable_decode_subpath(
             cache_len=cache_len,
             cache_update_index=cache_update_index,
             initial_kv_cache=kv_cache_initial,
+            attention_mode=attention_mode,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -1038,6 +1038,7 @@ def _base_result(
     route_plan: TraceableDecodeRoutePlan,
     reference: Mapping[str, torch.Tensor],
     replay_reference: Mapping[str, torch.Tensor],
+    attention_mode: str,
     max_tensors: int,
     max_bytes: int,
     trace_region_size: int,
@@ -1056,11 +1057,13 @@ def _base_result(
     excluded_from_trace = [
         "K/V RoPE split and true sparse attention query/key split",
         "dynamic sparse indexer top-k and per-token cache gather",
-        "attention-sink QK scoring, softmax, and value reduction",
+        "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows",
         "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
         "cache advancement beyond the fixed traced update index",
         "embedding and logits",
     ]
+    if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
+        excluded_from_trace.insert(3, "QK scoring, softmax, and value reduction in legacy q+kv blend mode")
     if route_plan.topk_prefix < route_plan.full_topk:
         excluded_from_trace.insert(
             4,
@@ -1086,6 +1089,7 @@ def _base_result(
             config=config,
             cache_update_index=cache_update_index,
             seq_len=seq_len,
+            attention_mode=attention_mode,
         ),
         "model": {
             "hidden_size": int(config.hidden_size),
@@ -1113,31 +1117,7 @@ def _base_result(
         "traceable_decode_scope": {
             "name": "traceable_decode_subpath",
             "not_full_forward": True,
-            "inside_trace": [
-                "ttnn.rms_norm(attn_norm)",
-                "TtAttentionProjection.project_q_rank",
-                "TtAttentionProjection.project_q_from_rank",
-                "ttnn.linear(wkv)",
-                "ttnn.rms_norm(kv_norm)",
-                "ttnn.to_memory_config(kv_update_height_sharded)",
-                "ttnn.update_cache(kv_projection_cache)",
-                "ttnn.slice(kv_cache_fixed_window)",
-                "ttnn.repeat(kv_cache_window_to_attention_width)",
-                "ttnn.add(q_output,expanded_kv_cache_window)",
-                "TtAttentionProjection.project_output",
-                "ttnn.slice(attention_output_group_0..N)",
-                "ttnn.linear(grouped_wo_a_group_0..N)",
-                "ttnn.concat(grouped_wo_a_rank)",
-                "ttnn.linear(wo_b)",
-                "ttnn.add(hidden,attention_projected)",
-                "ttnn.rms_norm(ffn_norm)",
-                "TtRoutedExpertMLP(selected_topk_prefix)",
-                "ttnn.mul(routed_hidden,preselected_route_weight)",
-                "ttnn.add(routed_expert_outputs)",
-                "TtSharedExpertMLP",
-                "ttnn.add(shared_output,routed_output)",
-                "ttnn.add(post_attention_residual,combined_ffn_output)",
-            ],
+            "inside_trace": _traceable_decode_inside_trace_ops(attention_mode),
             "path": (
                 "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
                 "fixed device cache-window read plus q projection -> grouped wo_a/wo_b/post-attention residual; "
@@ -1275,25 +1255,7 @@ def _base_result(
             "activation_host_to_device",
             "trace_output_readback",
         ],
-        "reference_ops": [
-            "torch.rms_norm_reference(attn_norm)",
-            "torch.linear(wq_a)",
-            "torch.rms_norm_reference(q_norm)",
-            "torch.linear(wq_b)",
-            "torch.linear(wkv)",
-            "torch.rms_norm_reference(kv_norm)",
-            "torch.cache_update_reference",
-            "torch.fixed_cache_window_repeat",
-            "torch.add(q_output,expanded_kv_cache_window)",
-            "torch.grouped_output_projection_a",
-            "torch.linear(wo_b)",
-            "torch.add(hidden,attention_projected)",
-            "torch.rms_norm_reference(ffn_norm)",
-            "torch.routed_swiglu_expert_reference(preselected_topk_prefix)",
-            "torch.shared_swiglu_expert_reference",
-            "torch.add(shared_output,routed_output)",
-            "torch.add(post_attention_residual,combined_ffn_output)",
-        ],
+        "reference_ops": _traceable_decode_reference_ops(attention_mode),
         "ttnn_ops": [],
         "inputs": {
             "capture_activation": _tensor_summary(activation),
@@ -1430,6 +1392,107 @@ def _sum_ttnn_tensors(tensors, *, memory_config):
     return result
 
 
+def _ttnn_fixed_window_attention(
+    *,
+    q_output,
+    attention_cache_window,
+    attention_mode: str,
+    config: DeepSeekV4FlashConfig,
+    memory_config,
+) -> dict[str, object]:
+    attention_mode = _validate_attention_mode(attention_mode)
+    if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
+        repeat_factor = _attention_cache_repeat_factor(config)
+        if repeat_factor == 1:
+            expanded_attention_cache = attention_cache_window
+        else:
+            expanded_attention_cache = ttnn.repeat(
+                attention_cache_window,
+                ttnn.Shape([1, 1, 1, repeat_factor]),
+            )
+        return {
+            "expanded_attention_cache": expanded_attention_cache,
+            "attention_output": ttnn.add(q_output, expanded_attention_cache, memory_config=memory_config),
+        }
+
+    _validate_qk_softmax_attention_config(config)
+    token_count = int(q_output.shape[-2])
+    num_heads = int(config.num_attention_heads)
+    head_dim = int(config.head_dim)
+    attention_output_dim = num_heads * head_dim
+    if int(q_output.shape[-1]) != attention_output_dim:
+        raise ValueError(f"q_output width must be {attention_output_dim}, got {q_output.shape[-1]}")
+    if int(attention_cache_window.shape[-1]) != head_dim:
+        raise ValueError(f"attention cache window width must be {head_dim}, got {attention_cache_window.shape[-1]}")
+
+    q_heads_token_major = ttnn.reshape(q_output, (1, token_count, num_heads, head_dim))
+    q_heads = ttnn.transpose(q_heads_token_major, 1, 2, memory_config=memory_config)
+    value_heads = ttnn.repeat(attention_cache_window, ttnn.Shape([1, num_heads, 1, 1]))
+    key_heads_transposed = ttnn.transpose(value_heads, -2, -1, memory_config=memory_config)
+    qk_scores = ttnn.matmul(q_heads, key_heads_transposed, memory_config=memory_config)
+    qk_scores = ttnn.mul(qk_scores, 1.0 / math.sqrt(float(head_dim)), memory_config=memory_config)
+    attention_probs = ttnn.softmax(qk_scores, dim=-1, memory_config=memory_config)
+    attention_context_heads = ttnn.matmul(attention_probs, value_heads, memory_config=memory_config)
+    attention_context_token_major = ttnn.transpose(attention_context_heads, 1, 2, memory_config=memory_config)
+    attention_output = ttnn.reshape(attention_context_token_major, (1, 1, token_count, attention_output_dim))
+    return {
+        "attention_q_heads": q_heads,
+        "attention_key_heads": value_heads,
+        "attention_value_heads": value_heads,
+        "qk_scores": qk_scores,
+        "attention_probs": attention_probs,
+        "attention_context_heads": attention_context_heads,
+        "attention_output": attention_output,
+    }
+
+
+def _torch_fixed_window_attention(
+    *,
+    q_output: torch.Tensor,
+    attention_cache_window: torch.Tensor,
+    attention_mode: str,
+    config: DeepSeekV4FlashConfig,
+) -> dict[str, torch.Tensor]:
+    attention_mode = _validate_attention_mode(attention_mode)
+    if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
+        expanded_attention_cache = attention_cache_window.repeat(1, 1, 1, _attention_cache_repeat_factor(config))
+        return {
+            "expanded_attention_cache": expanded_attention_cache,
+            "attention_output": (q_output.float() + expanded_attention_cache.float()).to(torch.bfloat16),
+        }
+
+    _validate_qk_softmax_attention_config(config)
+    batch_size, _, token_count, attention_output_dim = q_output.shape
+    num_heads = int(config.num_attention_heads)
+    head_dim = int(config.head_dim)
+    expected_output_dim = num_heads * head_dim
+    if int(attention_output_dim) != expected_output_dim:
+        raise ValueError(f"q_output width must be {expected_output_dim}, got {attention_output_dim}")
+    if int(attention_cache_window.shape[-1]) != head_dim:
+        raise ValueError(f"attention cache window width must be {head_dim}, got {attention_cache_window.shape[-1]}")
+
+    q_heads = q_output[:, 0].reshape(batch_size, token_count, num_heads, head_dim).transpose(1, 2).contiguous()
+    value_heads = attention_cache_window.repeat(1, num_heads, 1, 1).contiguous()
+    qk_scores = torch.matmul(q_heads.float(), value_heads.transpose(-2, -1).float())
+    qk_scores = (qk_scores * (1.0 / math.sqrt(float(head_dim)))).to(torch.bfloat16)
+    attention_probs = torch.softmax(qk_scores.float(), dim=-1).to(torch.bfloat16)
+    attention_context_heads = torch.matmul(attention_probs.float(), value_heads.float()).to(torch.bfloat16)
+    attention_output = (
+        attention_context_heads.transpose(1, 2)
+        .reshape(batch_size, 1, token_count, attention_output_dim)
+        .to(torch.bfloat16)
+    )
+    return {
+        "attention_q_heads": q_heads.to(torch.bfloat16),
+        "attention_key_heads": value_heads.to(torch.bfloat16),
+        "attention_value_heads": value_heads.to(torch.bfloat16),
+        "qk_scores": qk_scores,
+        "attention_probs": attention_probs,
+        "attention_context_heads": attention_context_heads,
+        "attention_output": attention_output,
+    }
+
+
 def _kv_update_memory_config(*, device, token_rows: int, width: int):
     if token_rows <= 0:
         raise ValueError(f"token_rows must be positive, got {token_rows}")
@@ -1458,6 +1521,158 @@ def _attention_cache_repeat_factor(config: DeepSeekV4FlashConfig) -> int:
     return q_output_dim // kv_output_dim
 
 
+def _attention_head_repeat_factor(config: DeepSeekV4FlashConfig) -> int:
+    if int(config.num_attention_heads) % int(config.num_key_value_heads) != 0:
+        raise ValueError(
+            "num_attention_heads must be divisible by num_key_value_heads, "
+            f"got {config.num_attention_heads} and {config.num_key_value_heads}"
+        )
+    return int(config.num_attention_heads) // int(config.num_key_value_heads)
+
+
+def _validate_attention_mode(attention_mode: str) -> str:
+    if attention_mode not in TRACEABLE_DECODE_ATTENTION_MODES:
+        raise ValueError(f"attention_mode must be one of {TRACEABLE_DECODE_ATTENTION_MODES}, got {attention_mode!r}")
+    return str(attention_mode)
+
+
+def _validate_qk_softmax_attention_config(config: DeepSeekV4FlashConfig) -> None:
+    if int(config.num_key_value_heads) != 1:
+        raise ValueError(
+            "fixed-window QK softmax trace currently expects one compressed KV head, "
+            f"got num_key_value_heads={config.num_key_value_heads}; use "
+            f"{TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE!r} for the legacy stepping stone"
+        )
+    if _kv_output_dim(config) != int(config.head_dim):
+        raise ValueError(
+            f"fixed-window QK softmax trace expects kv_output_dim=head_dim={config.head_dim}, "
+            f"got kv_output_dim={_kv_output_dim(config)}"
+        )
+
+
+def _traceable_decode_common_ops() -> list[str]:
+    return [
+        "ttnn.rms_norm(attn_norm)",
+        "TtAttentionProjection.project_q_rank",
+        "TtAttentionProjection.project_q_from_rank",
+        "ttnn.linear(wkv)",
+        "ttnn.rms_norm(kv_norm)",
+        "ttnn.to_memory_config(kv_update_height_sharded)",
+        "ttnn.update_cache(kv_projection_cache)",
+        "ttnn.slice(kv_cache_fixed_window)",
+    ]
+
+
+def _traceable_decode_attention_ops(attention_mode: str) -> list[str]:
+    attention_mode = _validate_attention_mode(attention_mode)
+    if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
+        return [
+            "ttnn.repeat(kv_cache_window_to_attention_width)",
+            "ttnn.add(q_output,expanded_kv_cache_window)",
+        ]
+    return [
+        "ttnn.reshape(q_output_to_q_heads_token_major)",
+        "ttnn.transpose(q_heads_token_major_to_heads)",
+        "ttnn.repeat(kv_cache_window_to_attention_heads)",
+        "ttnn.transpose(k_heads_to_k_heads_transposed)",
+        "ttnn.matmul(q_heads,k_heads_transposed)",
+        "ttnn.mul(qk_scores,1/sqrt(head_dim))",
+        "ttnn.softmax(qk_scores)",
+        "ttnn.matmul(attention_probs,value_heads)",
+        "ttnn.transpose(context_heads_to_token_major)",
+        "ttnn.reshape(context_heads_to_attention_output)",
+    ]
+
+
+def _traceable_decode_projection_and_ffn_ops() -> list[str]:
+    return [
+        "TtAttentionProjection.project_output",
+        "ttnn.slice(attention_output_group_0..N)",
+        "ttnn.linear(grouped_wo_a_group_0..N)",
+        "ttnn.concat(grouped_wo_a_rank)",
+        "ttnn.linear(wo_b)",
+        "ttnn.add(hidden,attention_projected)",
+        "ttnn.rms_norm(ffn_norm)",
+        "TtRoutedExpertMLP(selected_topk_prefix)",
+        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.add(routed_expert_outputs)",
+        "TtSharedExpertMLP",
+        "ttnn.add(shared_output,routed_output)",
+        "ttnn.add(post_attention_residual,combined_ffn_output)",
+    ]
+
+
+def _traceable_decode_inside_trace_ops(attention_mode: str) -> list[str]:
+    return [
+        *_traceable_decode_common_ops(),
+        *_traceable_decode_attention_ops(attention_mode),
+        *_traceable_decode_projection_and_ffn_ops(),
+    ]
+
+
+def _traceable_decode_ttnn_ops(attention_mode: str) -> list[str]:
+    return [
+        *_traceable_decode_common_ops(),
+        *_traceable_decode_attention_ops(attention_mode),
+        "ttnn.slice(attention_output_group_0..N)",
+        "ttnn.linear(grouped_wo_a_group_0..N)",
+        "ttnn.concat(grouped_wo_a_rank)",
+        "ttnn.linear(wo_b)",
+        "ttnn.add(hidden,attention_projected)",
+        "ttnn.rms_norm(ffn_norm)",
+        "ttnn.linear(shared_w1)",
+        "ttnn.linear(shared_w3)",
+        "ttnn.mul(silu(shared_gate),shared_up)",
+        "ttnn.linear(shared_w2)",
+        "ttnn.linear(routed_w1_selected_topk_prefix)",
+        "ttnn.linear(routed_w3_selected_topk_prefix)",
+        "ttnn.mul(silu(routed_gate),routed_up)",
+        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.linear(routed_w2_selected_topk_prefix)",
+        "ttnn.add(routed_expert_outputs)",
+        "ttnn.add(shared_output,routed_output)",
+        "ttnn.add(post_attention_residual,combined_ffn_output)",
+    ]
+
+
+def _traceable_decode_reference_ops(attention_mode: str) -> list[str]:
+    attention_mode = _validate_attention_mode(attention_mode)
+    attention_ops = (
+        [
+            "torch.fixed_cache_window_repeat",
+            "torch.add(q_output,expanded_kv_cache_window)",
+        ]
+        if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE
+        else [
+            "torch.reshape(q_output_to_q_heads)",
+            "torch.repeat(kv_cache_window_to_attention_heads)",
+            "torch.matmul(q_heads,k_heads_transposed)",
+            "torch.mul(qk_scores,1/sqrt(head_dim))",
+            "torch.softmax(qk_scores)",
+            "torch.matmul(attention_probs,value_heads)",
+            "torch.reshape(context_heads_to_attention_output)",
+        ]
+    )
+    return [
+        "torch.rms_norm_reference(attn_norm)",
+        "torch.linear(wq_a)",
+        "torch.rms_norm_reference(q_norm)",
+        "torch.linear(wq_b)",
+        "torch.linear(wkv)",
+        "torch.rms_norm_reference(kv_norm)",
+        "torch.cache_update_reference",
+        *attention_ops,
+        "torch.grouped_output_projection_a",
+        "torch.linear(wo_b)",
+        "torch.add(hidden,attention_projected)",
+        "torch.rms_norm_reference(ffn_norm)",
+        "torch.routed_swiglu_expert_reference(preselected_topk_prefix)",
+        "torch.shared_swiglu_expert_reference",
+        "torch.add(shared_output,routed_output)",
+        "torch.add(post_attention_residual,combined_ffn_output)",
+    ]
+
+
 def _resolve_cache_update_index(*, seq_len: int, cache_len: int, cache_update_index: int | None) -> int:
     update_index = int(seq_len) if cache_update_index is None else int(cache_update_index)
     if update_index < 0:
@@ -1472,12 +1687,16 @@ def _attention_path_summary(
     config: DeepSeekV4FlashConfig,
     cache_update_index: int,
     seq_len: int,
+    attention_mode: str,
 ) -> dict[str, Any]:
-    repeat_factor = _attention_cache_repeat_factor(config)
+    attention_mode = _validate_attention_mode(attention_mode)
+    width_repeat_factor = _attention_cache_repeat_factor(config)
+    head_repeat_factor = _attention_head_repeat_factor(config)
     window_start = int(cache_update_index)
     window_end = window_start + int(seq_len)
-    return {
-        "mode": "traceable_fixed_cache_window_q_plus_kv_blend",
+    qk_mode = attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+    summary = {
+        "mode": attention_mode,
         "attention_output_source": "in_trace_from_q_projection_and_device_kv_cache_window",
         "host_provided_attention_output": False,
         "device_q_projection_contributes": True,
@@ -1487,6 +1706,7 @@ def _attention_path_summary(
             "start": window_start,
             "end_exclusive": window_end,
             "length": int(seq_len),
+            "rows": [window_start, window_end],
             "logical_decode_row": int(cache_update_index),
             "updated_row_is_first_window_row": True,
             "static_padding_rows": max(int(seq_len) - 1, 0),
@@ -1494,8 +1714,21 @@ def _attention_path_summary(
         "cache_expand": {
             "kv_output_dim": _kv_output_dim(config),
             "attention_output_dim": int(config.num_attention_heads) * int(config.head_dim),
-            "repeat_factor": repeat_factor,
-            "op": "ttnn.repeat(..., Shape([1, 1, 1, repeat_factor]))",
+            "repeat_factor": head_repeat_factor if qk_mode else width_repeat_factor,
+            "repeat_axis": "attention_heads" if qk_mode else "attention_width",
+            "op": (
+                "ttnn.repeat(..., Shape([1, num_attention_heads, 1, 1]))"
+                if qk_mode
+                else "ttnn.repeat(..., Shape([1, 1, 1, repeat_factor]))"
+            ),
+        },
+        "kv_source": {
+            "key_source": "compressed_kv_projection_cache_window",
+            "value_source": "compressed_kv_projection_cache_window",
+            "key_value_share_same_cache_slice": True,
+            "true_kv_split_in_trace": False,
+            "num_key_value_heads": int(config.num_key_value_heads),
+            "head_repeat_factor": head_repeat_factor,
         },
         "rope": {
             "q_rope_split_in_trace": False,
@@ -1507,17 +1740,42 @@ def _attention_path_summary(
             "source": "device-resident compressed K/V cache window with row 0 updated from real wkv/kv_norm projection",
             "real_sparse_indexer_selected_tokens": False,
         },
+        "compressed_token_contribution": {
+            "contributed": True,
+            "source": "device-resident compressed K/V cache window",
+            "updated_row_from_real_kv_projection": True,
+        },
         "softmax": {
-            "qk_scores_in_trace": False,
+            "qk_scores_in_trace": qk_mode,
+            "fixed_window_softmax_in_trace": qk_mode,
             "attention_sink_softmax_in_trace": False,
-            "value_reduction_in_trace": False,
+            "value_reduction_in_trace": qk_mode,
+            "context_in_trace": qk_mode,
+        },
+        "qk_scores": {
+            "produced_in_trace": qk_mode,
+            "shape": [1, int(config.num_attention_heads), int(seq_len), int(seq_len)] if qk_mode else None,
+            "scale": f"1/sqrt(head_dim={int(config.head_dim)})" if qk_mode else None,
+        },
+        "context": {
+            "produced_in_trace": qk_mode,
+            "shape": [1, 1, int(seq_len), int(config.num_attention_heads) * int(config.head_dim)],
+            "value_source": "compressed_kv_projection_cache_window_repeated_across_attention_heads"
+            if qk_mode
+            else "expanded_kv_cache_window_blended_with_q_output",
         },
         "exact_sparse_attention_blockers": [
             "dynamic per-token top-k cache gather is still represented by host fallback helpers",
-            "attention-sink softmax over [selected cache rows + sink] is not in this protected path",
-            "Q/K RoPE split and sparse value reduction remain outside this trace slice",
+            "attention-sink semantics over [selected cache rows + sink] are not in this protected path",
+            "Q/K RoPE split remains outside this trace slice",
+            "true K/V split is not in this trace slice; K and V both use the compressed KV projection cache window",
         ],
     }
+    if not qk_mode:
+        summary["exact_sparse_attention_blockers"].append(
+            "legacy mode does not compute QK scores, softmax, or value reduction"
+        )
+    return summary
 
 
 def _guard_status(trace_capture: Mapping[str, Any]) -> dict[str, Any]:
@@ -1585,6 +1843,12 @@ def _traceable_accuracy_summary(
         rtol=local_rtol,
         atol=local_atol,
     )
+    if name == "attention_probs" and summary["allclose"]:
+        summary["passed"] = True
+        summary["pcc_note"] = (
+            "softmax probabilities are reported with PCC, but pass/fail is gated by allclose because "
+            "near-uniform probability rows can have low-variance PCC despite small absolute error"
+        )
     if name in projection_outputs:
         summary[
             "tolerance_note"
