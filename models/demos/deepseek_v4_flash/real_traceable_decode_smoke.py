@@ -160,11 +160,12 @@ class TtTraceableDecodeSubpath:
 
     This is intentionally not a full decoder layer. The protected forward covers
     the device-resident query projection, compressed K/V projection and cache
-    append, grouped attention output projection, post-attention residual, and
-    preselected routed/shared FFN stepping stone:
+    append, a fixed cache-window attention-output stepping stone, grouped
+    attention output projection, post-attention residual, and preselected
+    routed/shared FFN stepping stone:
     ``hidden -> attn_norm -> wq_a -> q_norm -> wq_b``,
-    ``attn_norm -> wkv -> kv_norm -> update_cache``,
-    ``attention_output -> grouped wo_a -> wo_b -> residual``, and
+    ``attn_norm -> wkv -> kv_norm -> update_cache -> fixed cache-window read``,
+    ``q_output + expanded cache window -> grouped wo_a -> wo_b -> residual``, and
     ``post_attention_residual -> ffn_norm -> routed/shared experts -> residual``.
     """
 
@@ -177,6 +178,7 @@ class TtTraceableDecodeSubpath:
         config: DeepSeekV4FlashConfig,
         cache_len: int,
         cache_update_index: int,
+        initial_kv_cache: torch.Tensor,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
@@ -233,6 +235,7 @@ class TtTraceableDecodeSubpath:
                 memory_config=memory_config,
             )
         self.kv_output_dim = _kv_output_dim(config)
+        self.attention_cache_repeat_factor = _attention_cache_repeat_factor(config)
         self.wkv = _to_tt_linear_weight(
             weights.kv.wkv,
             device=device,
@@ -248,6 +251,7 @@ class TtTraceableDecodeSubpath:
         self.kv_cache = _to_tt_kv_cache(
             cache_len=self.cache_len,
             kv_output_dim=self.kv_output_dim,
+            initial_cache=initial_kv_cache,
             device=device,
             dtype=dtype,
             memory_config=memory_config,
@@ -265,11 +269,8 @@ class TtTraceableDecodeSubpath:
             memory_config=memory_config,
         )
 
-    def __call__(self, hidden_states, attention_output) -> dict[str, object]:
+    def __call__(self, hidden_states) -> dict[str, object]:
         _validate_ttnn_hidden_states(hidden_states, hidden_size=int(self.config.hidden_size))
-        _validate_ttnn_attention_output(
-            attention_output, q_output_dim=int(self.config.num_attention_heads) * int(self.config.head_dim)
-        )
         attn_norm_output = ttnn.rms_norm(
             hidden_states,
             weight=self.attn_norm,
@@ -290,6 +291,20 @@ class TtTraceableDecodeSubpath:
             _kv_update_memory_config(device=self.device, token_rows=int(kv_output.shape[-2]), width=self.kv_output_dim),
         )
         self.kv_cache = ttnn.update_cache(self.kv_cache, kv_update, self.cache_update_index)
+        attention_cache_window = ttnn.slice(
+            self.kv_cache,
+            (0, 0, self.cache_update_index, 0),
+            (1, 1, self.cache_update_index + int(hidden_states.shape[-2]), self.kv_output_dim),
+            memory_config=self.memory_config,
+        )
+        if self.attention_cache_repeat_factor == 1:
+            expanded_attention_cache = attention_cache_window
+        else:
+            expanded_attention_cache = ttnn.repeat(
+                attention_cache_window,
+                ttnn.Shape([1, 1, 1, self.attention_cache_repeat_factor]),
+            )
+        attention_output = ttnn.add(q_output, expanded_attention_cache, memory_config=self.memory_config)
         attention_projected = self.attention.project_output(attention_output)
         post_attention_residual = ttnn.add(hidden_states, attention_projected, memory_config=self.memory_config)
         ffn_norm_output = ttnn.rms_norm(
@@ -319,6 +334,9 @@ class TtTraceableDecodeSubpath:
             "kv_linear": kv_linear,
             "kv_output": kv_output,
             "kv_cache": self.kv_cache,
+            "attention_cache_window": attention_cache_window,
+            "expanded_attention_cache": expanded_attention_cache,
+            "attention_output": attention_output,
             "attention_projected": attention_projected,
             "post_attention_residual": post_attention_residual,
             "ffn_norm_output": ffn_norm_output,
@@ -375,17 +393,18 @@ def run_traceable_decode_subpath_smoke(
     )
     weights = decode_traceable_decode_subpath_weights(tensors, config=config, layer=layer)
     activation = deterministic_attention_activation(hidden_size=int(config.hidden_size), seq_len=seq_len)
-    attention_output = deterministic_traceable_attention_output(
-        q_output_dim=int(config.num_attention_heads) * int(config.head_dim),
+    kv_cache_initial = deterministic_traceable_kv_cache_seed(
+        cache_len=cache_len,
+        kv_output_dim=_kv_output_dim(config),
+        cache_update_index=cache_update_index,
         seq_len=seq_len,
     )
     replay_activation = _replay_activation(activation)
-    replay_attention_output = _replay_attention_output(attention_output)
     preliminary_reference = build_torch_traceable_decode_subpath_reference(
         weights,
         config=config,
         activation=activation,
-        attention_output=attention_output,
+        kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
         route_plan=None,
@@ -423,7 +442,7 @@ def run_traceable_decode_subpath_smoke(
         weights,
         config=config,
         activation=activation,
-        attention_output=attention_output,
+        kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
         route_plan=route_plan,
@@ -432,7 +451,7 @@ def run_traceable_decode_subpath_smoke(
         weights,
         config=config,
         activation=replay_activation,
-        attention_output=replay_attention_output,
+        kv_cache_initial=kv_cache_initial,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
         route_plan=route_plan,
@@ -449,9 +468,8 @@ def run_traceable_decode_subpath_smoke(
         metadata_groups=metadata_groups,
         weights=weights,
         activation=activation,
-        attention_output=attention_output,
+        kv_cache_initial=kv_cache_initial,
         replay_activation=replay_activation,
-        replay_attention_output=replay_attention_output,
         route_plan=route_plan,
         reference=reference,
         replay_reference=replay_reference,
@@ -479,9 +497,8 @@ def run_traceable_decode_subpath_smoke(
         route_plan=route_plan,
         config=config,
         activation=activation,
-        attention_output=attention_output,
         replay_activation=replay_activation,
-        replay_attention_output=replay_attention_output,
+        kv_cache_initial=kv_cache_initial,
         device_id=device_id,
         trace_region_size=trace_region_size,
         cache_len=cache_len,
@@ -503,6 +520,9 @@ def run_traceable_decode_subpath_smoke(
         "ttnn.rms_norm(kv_norm)",
         "ttnn.to_memory_config(kv_update_height_sharded)",
         "ttnn.update_cache(kv_projection_cache)",
+        "ttnn.slice(kv_cache_fixed_window)",
+        "ttnn.repeat(kv_cache_window_to_attention_width)",
+        "ttnn.add(q_output,expanded_kv_cache_window)",
         "ttnn.slice(attention_output_group_0..N)",
         "ttnn.linear(grouped_wo_a_group_0..N)",
         "ttnn.concat(grouped_wo_a_rank)",
@@ -656,13 +676,13 @@ def build_torch_traceable_decode_subpath_reference(
     *,
     config: DeepSeekV4FlashConfig,
     activation: torch.Tensor,
-    attention_output: torch.Tensor,
+    kv_cache_initial: torch.Tensor,
     cache_len: int,
     cache_update_index: int,
     route_plan: TraceableDecodeRoutePlan | None,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
-    _validate_attention_output(attention_output, q_output_dim=int(config.num_attention_heads) * int(config.head_dim))
+    _validate_kv_cache_initial(kv_cache_initial, cache_len=cache_len, kv_output_dim=_kv_output_dim(config))
     attn_norm_output = rms_norm(
         activation[:, 0],
         weights.attn_norm,
@@ -670,11 +690,16 @@ def build_torch_traceable_decode_subpath_reference(
     ).unsqueeze(1)
     q_rank_linear = F.linear(attn_norm_output[:, 0].float(), weights.attention.wq_a.float()).to(torch.bfloat16)
     q_rank_norm = rms_norm(q_rank_linear, weights.attention.q_norm, eps=float(config.rms_norm_eps)).unsqueeze(1)
-    q_output = F.linear(q_rank_norm[:, 0].float(), weights.attention.wq_b.float()).unsqueeze(1)
+    q_output = F.linear(q_rank_norm[:, 0].float(), weights.attention.wq_b.float()).unsqueeze(1).to(torch.bfloat16)
     kv_linear = F.linear(attn_norm_output[:, 0].float(), weights.kv.wkv.float()).to(torch.bfloat16)
     kv_output = rms_norm(kv_linear, weights.kv.kv_norm, eps=float(config.rms_norm_eps)).unsqueeze(1)
-    kv_cache = torch.zeros((1, 1, int(cache_len), _kv_output_dim(config)), dtype=torch.bfloat16)
+    kv_cache = kv_cache_initial.clone().to(torch.bfloat16)
     kv_cache[:, :, int(cache_update_index) : int(cache_update_index) + 1, :] = kv_output[:, :, :1, :]
+    attention_cache_window = kv_cache[
+        :, :, int(cache_update_index) : int(cache_update_index) + int(activation.shape[-2]), :
+    ].contiguous()
+    expanded_attention_cache = attention_cache_window.repeat(1, 1, 1, _attention_cache_repeat_factor(config))
+    attention_output = (q_output.float() + expanded_attention_cache.float()).to(torch.bfloat16)
 
     if weights.attention.wo_a is None or weights.attention.wo_b is None:
         raise ValueError("Traceable decode reference requires output projection weights")
@@ -735,6 +760,9 @@ def build_torch_traceable_decode_subpath_reference(
         "kv_linear": kv_linear.unsqueeze(1).to(torch.bfloat16),
         "kv_output": kv_output.to(torch.bfloat16),
         "kv_cache": kv_cache,
+        "attention_cache_window": attention_cache_window,
+        "expanded_attention_cache": expanded_attention_cache,
+        "attention_output": attention_output,
         "attention_projected": attention_projected.to(torch.bfloat16),
         "post_attention_residual": post_attention_residual.to(torch.bfloat16),
         "ffn_norm_output": ffn_norm_output.to(torch.bfloat16),
@@ -920,9 +948,8 @@ def _run_ttnn_traceable_decode_subpath(
     route_plan: TraceableDecodeRoutePlan,
     config: DeepSeekV4FlashConfig,
     activation: torch.Tensor,
-    attention_output: torch.Tensor,
     replay_activation: torch.Tensor,
-    replay_attention_output: torch.Tensor,
+    kv_cache_initial: torch.Tensor,
     device_id: int,
     trace_region_size: int,
     cache_len: int,
@@ -942,6 +969,7 @@ def _run_ttnn_traceable_decode_subpath(
             config=config,
             cache_len=cache_len,
             cache_update_index=cache_update_index,
+            initial_kv_cache=kv_cache_initial,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -951,25 +979,17 @@ def _run_ttnn_traceable_decode_subpath(
             ttnn.TILE_LAYOUT,
             device,
         )
-        tt_attention_output = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(tuple(attention_output.shape)),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            device,
-        )
         _copy_activation_to_device(activation, tt_input)
-        _copy_activation_to_device(attention_output, tt_attention_output)
-        module(tt_input, tt_attention_output)
+        module(tt_input)
         ttnn.synchronize_device(device)
 
         with TraceableDecodeHostGuard() as guard:
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            output_tensors = module(tt_input, tt_attention_output)
+            output_tensors = module(tt_input)
             ttnn.end_trace_capture(device, trace_id, cq_id=0)
         ttnn.synchronize_device(device)
 
         _copy_activation_to_device(replay_activation, tt_input)
-        _copy_activation_to_device(replay_attention_output, tt_attention_output)
         ttnn.synchronize_device(device)
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(device)
@@ -1013,9 +1033,8 @@ def _base_result(
     metadata_groups: Mapping[str, Sequence[TensorMetadata]],
     weights: TraceableDecodeWeights,
     activation: torch.Tensor,
-    attention_output: torch.Tensor,
+    kv_cache_initial: torch.Tensor,
     replay_activation: torch.Tensor,
-    replay_attention_output: torch.Tensor,
     route_plan: TraceableDecodeRoutePlan,
     reference: Mapping[str, torch.Tensor],
     replay_reference: Mapping[str, torch.Tensor],
@@ -1035,9 +1054,9 @@ def _base_result(
     routed_expert_ids_loaded = [int(expert) for expert in weights.routed_experts]
     routed_expert_ids_executed = list(route_plan.selected_expert_ids)
     excluded_from_trace = [
-        "K/V RoPE split and final sparse-attention cache read path",
-        "host sparse-attention gather/softmax/reduction",
-        "real sparse-attention output production; deterministic attention tensor is uploaded before trace",
+        "K/V RoPE split and true sparse attention query/key split",
+        "dynamic sparse indexer top-k and per-token cache gather",
+        "attention-sink QK scoring, softmax, and value reduction",
         "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
         "cache advancement beyond the fixed traced update index",
         "embedding and logits",
@@ -1063,6 +1082,11 @@ def _base_result(
             "cache_layout": "[batch=1, heads=1, cache_len, kv_output_dim]",
             "device_resident_inside_trace": True,
         },
+        "attention_path": _attention_path_summary(
+            config=config,
+            cache_update_index=cache_update_index,
+            seq_len=seq_len,
+        ),
         "model": {
             "hidden_size": int(config.hidden_size),
             "q_lora_rank": int(config.q_lora_rank),
@@ -1097,6 +1121,9 @@ def _base_result(
                 "ttnn.rms_norm(kv_norm)",
                 "ttnn.to_memory_config(kv_update_height_sharded)",
                 "ttnn.update_cache(kv_projection_cache)",
+                "ttnn.slice(kv_cache_fixed_window)",
+                "ttnn.repeat(kv_cache_window_to_attention_width)",
+                "ttnn.add(q_output,expanded_kv_cache_window)",
                 "TtAttentionProjection.project_output",
                 "ttnn.slice(attention_output_group_0..N)",
                 "ttnn.linear(grouped_wo_a_group_0..N)",
@@ -1113,7 +1140,7 @@ def _base_result(
             ],
             "path": (
                 "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
-                "deterministic device attention tensor -> grouped wo_a/wo_b/post-attention residual; "
+                "fixed device cache-window read plus q projection -> grouped wo_a/wo_b/post-attention residual; "
                 "post-attention residual -> ffn_norm/preselected routed top-k fanout plus shared expert/residual"
             ),
             "logical_decode_token_policy": (
@@ -1153,7 +1180,7 @@ def _base_result(
             "wo_b": _tensor_summary(weights.attention.wo_b),
             "wkv": _tensor_summary(weights.kv.wkv),
             "kv_norm": _tensor_summary(weights.kv.kv_norm),
-            "kv_cache_initial": _tensor_summary(torch.zeros((1, 1, int(cache_len), _kv_output_dim(config)))),
+            "kv_cache_initial": _tensor_summary(kv_cache_initial),
             "ffn_norm": _tensor_summary(weights.ffn_norm),
             "router_gate": _tensor_summary(weights.router_gate),
             "router_bias": _optional_tensor_summary(weights.router_bias),
@@ -1220,22 +1247,17 @@ def _base_result(
                 "description": "precomputed route weights are expanded and uploaded as device tensors during module setup",
             },
             {
-                "name": "kv_cache_zero_init_host_to_device",
+                "name": "kv_cache_seed_host_to_device",
                 "location": "before trace capture",
-                "description": "the compressed K/V projection cache is zero-initialized on host and uploaded during module setup",
+                "description": (
+                    "a deterministic compressed K/V cache seed is uploaded during module setup; the protected trace "
+                    "updates and reads a fixed cache window from this device-resident cache"
+                ),
             },
             {
                 "name": "activation_host_to_device",
                 "location": "before trace capture and before replay",
                 "description": "static-shape decode activation is copied into a preallocated device tensor outside the guard",
-            },
-            {
-                "name": "attention_output_host_to_device",
-                "location": "before trace capture and before replay",
-                "description": (
-                    "deterministic sparse-attention output placeholder is copied into a preallocated device tensor "
-                    "outside the guard because sparse attention is not yet trace-captured"
-                ),
             },
             {
                 "name": "trace_output_readback",
@@ -1249,9 +1271,8 @@ def _base_result(
             "routed_fp4_decode_to_bf16",
             "router_topk_pretrace",
             "route_weight_host_to_device",
-            "kv_cache_zero_init_host_to_device",
+            "kv_cache_seed_host_to_device",
             "activation_host_to_device",
-            "attention_output_host_to_device",
             "trace_output_readback",
         ],
         "reference_ops": [
@@ -1262,6 +1283,8 @@ def _base_result(
             "torch.linear(wkv)",
             "torch.rms_norm_reference(kv_norm)",
             "torch.cache_update_reference",
+            "torch.fixed_cache_window_repeat",
+            "torch.add(q_output,expanded_kv_cache_window)",
             "torch.grouped_output_projection_a",
             "torch.linear(wo_b)",
             "torch.add(hidden,attention_projected)",
@@ -1274,9 +1297,8 @@ def _base_result(
         "ttnn_ops": [],
         "inputs": {
             "capture_activation": _tensor_summary(activation),
-            "capture_attention_output": _tensor_summary(attention_output),
+            "kv_cache_initial": _tensor_summary(kv_cache_initial),
             "replay_activation": _tensor_summary(replay_activation),
-            "replay_attention_output": _tensor_summary(replay_attention_output),
         },
         "reference": {name: _tensor_summary(value) for name, value in reference.items()},
         "replay_reference": {name: _tensor_summary(value) for name, value in replay_reference.items()},
@@ -1354,11 +1376,16 @@ def _to_tt_kv_cache(
     *,
     cache_len: int,
     kv_output_dim: int,
+    initial_cache: torch.Tensor | None = None,
     device,
     dtype,
     memory_config,
 ):
-    cache = torch.zeros((1, 1, int(cache_len), int(kv_output_dim)), dtype=torch.bfloat16)
+    if initial_cache is None:
+        cache = torch.zeros((1, 1, int(cache_len), int(kv_output_dim)), dtype=torch.bfloat16)
+    else:
+        _validate_kv_cache_initial(initial_cache, cache_len=cache_len, kv_output_dim=kv_output_dim)
+        cache = initial_cache.contiguous().to(torch.bfloat16)
     return ttnn.from_torch(
         cache,
         device=device,
@@ -1423,6 +1450,14 @@ def _kv_output_dim(config: DeepSeekV4FlashConfig) -> int:
     return int(config.num_key_value_heads) * int(config.head_dim)
 
 
+def _attention_cache_repeat_factor(config: DeepSeekV4FlashConfig) -> int:
+    q_output_dim = int(config.num_attention_heads) * int(config.head_dim)
+    kv_output_dim = _kv_output_dim(config)
+    if q_output_dim % kv_output_dim != 0:
+        raise ValueError(f"q_output_dim {q_output_dim} must be divisible by kv_output_dim {kv_output_dim}")
+    return q_output_dim // kv_output_dim
+
+
 def _resolve_cache_update_index(*, seq_len: int, cache_len: int, cache_update_index: int | None) -> int:
     update_index = int(seq_len) if cache_update_index is None else int(cache_update_index)
     if update_index < 0:
@@ -1430,6 +1465,59 @@ def _resolve_cache_update_index(*, seq_len: int, cache_len: int, cache_update_in
     if update_index >= int(cache_len):
         raise ValueError(f"cache_update_index {update_index} must be less than cache_len {cache_len}")
     return update_index
+
+
+def _attention_path_summary(
+    *,
+    config: DeepSeekV4FlashConfig,
+    cache_update_index: int,
+    seq_len: int,
+) -> dict[str, Any]:
+    repeat_factor = _attention_cache_repeat_factor(config)
+    window_start = int(cache_update_index)
+    window_end = window_start + int(seq_len)
+    return {
+        "mode": "traceable_fixed_cache_window_q_plus_kv_blend",
+        "attention_output_source": "in_trace_from_q_projection_and_device_kv_cache_window",
+        "host_provided_attention_output": False,
+        "device_q_projection_contributes": True,
+        "device_kv_projection_update_contributes": True,
+        "device_kv_cache_read_contributes": True,
+        "cache_window": {
+            "start": window_start,
+            "end_exclusive": window_end,
+            "length": int(seq_len),
+            "logical_decode_row": int(cache_update_index),
+            "updated_row_is_first_window_row": True,
+            "static_padding_rows": max(int(seq_len) - 1, 0),
+        },
+        "cache_expand": {
+            "kv_output_dim": _kv_output_dim(config),
+            "attention_output_dim": int(config.num_attention_heads) * int(config.head_dim),
+            "repeat_factor": repeat_factor,
+            "op": "ttnn.repeat(..., Shape([1, 1, 1, repeat_factor]))",
+        },
+        "rope": {
+            "q_rope_split_in_trace": False,
+            "kv_rope_split_in_trace": False,
+            "status": "not_yet_traceable_in_this_slice",
+        },
+        "sparse_compressed_tokens": {
+            "contributed": True,
+            "source": "device-resident compressed K/V cache window with row 0 updated from real wkv/kv_norm projection",
+            "real_sparse_indexer_selected_tokens": False,
+        },
+        "softmax": {
+            "qk_scores_in_trace": False,
+            "attention_sink_softmax_in_trace": False,
+            "value_reduction_in_trace": False,
+        },
+        "exact_sparse_attention_blockers": [
+            "dynamic per-token top-k cache gather is still represented by host fallback helpers",
+            "attention-sink softmax over [selected cache rows + sink] is not in this protected path",
+            "Q/K RoPE split and sparse value reduction remain outside this trace slice",
+        ],
+    }
 
 
 def _guard_status(trace_capture: Mapping[str, Any]) -> dict[str, Any]:
@@ -1509,23 +1597,30 @@ def _replay_activation(activation: torch.Tensor) -> torch.Tensor:
     return (activation.float().flip(-2) * token_scale - 0.03125).to(torch.bfloat16).contiguous()
 
 
-def deterministic_traceable_attention_output(*, q_output_dim: int, seq_len: int) -> torch.Tensor:
-    if q_output_dim <= 0:
-        raise ValueError(f"q_output_dim must be positive, got {q_output_dim}")
+def deterministic_traceable_kv_cache_seed(
+    *,
+    cache_len: int,
+    kv_output_dim: int,
+    cache_update_index: int,
+    seq_len: int,
+) -> torch.Tensor:
+    if cache_len <= 0:
+        raise ValueError(f"cache_len must be positive, got {cache_len}")
+    if kv_output_dim <= 0:
+        raise ValueError(f"kv_output_dim must be positive, got {kv_output_dim}")
     if seq_len <= 0:
         raise ValueError(f"seq_len must be positive, got {seq_len}")
+    if cache_update_index < 0 or cache_update_index + seq_len > cache_len:
+        raise ValueError(
+            f"cache window [{cache_update_index}, {cache_update_index + seq_len}) must fit cache_len {cache_len}"
+        )
 
-    values = torch.linspace(-0.45, 0.55, steps=seq_len * q_output_dim, dtype=torch.float32)
-    attention = values.reshape(seq_len, q_output_dim)
-    attention = attention - attention.mean(dim=-1, keepdim=True)
-    attention = attention * torch.rsqrt(attention.square().mean(dim=-1, keepdim=True) + 1e-6)
-    token_offsets = torch.linspace(0.03, -0.03, steps=seq_len, dtype=torch.float32).reshape(seq_len, 1)
-    return (attention + token_offsets).reshape(1, 1, seq_len, q_output_dim).to(torch.bfloat16).contiguous()
-
-
-def _replay_attention_output(attention_output: torch.Tensor) -> torch.Tensor:
-    token_scale = torch.linspace(0.9, 1.1, steps=attention_output.shape[-2], dtype=torch.float32).reshape(1, 1, -1, 1)
-    return (attention_output.float().roll(shifts=1, dims=-2) * token_scale + 0.015625).to(torch.bfloat16).contiguous()
+    values = torch.linspace(-0.125, 0.125, steps=cache_len * kv_output_dim, dtype=torch.float32)
+    cache = values.reshape(1, 1, cache_len, kv_output_dim)
+    row_scale = torch.linspace(0.85, 1.15, steps=cache_len, dtype=torch.float32).reshape(1, 1, cache_len, 1)
+    cache = cache * row_scale
+    cache[:, :, cache_update_index, :] = 0.0
+    return cache.to(torch.bfloat16).contiguous()
 
 
 def _validate_ttnn_hidden_states(hidden_states, *, hidden_size: int) -> None:
@@ -1538,16 +1633,6 @@ def _validate_ttnn_hidden_states(hidden_states, *, hidden_size: int) -> None:
         raise ValueError("hidden_states must contain at least one token")
 
 
-def _validate_ttnn_attention_output(attention_output, *, q_output_dim: int) -> None:
-    shape = tuple(attention_output.shape)
-    if len(shape) != 4 or shape[:2] != (1, 1):
-        raise ValueError(f"attention_output must have shape [1, 1, tokens, q_output_dim], got {shape}")
-    if int(shape[-1]) != int(q_output_dim):
-        raise ValueError(f"attention_output width must be {q_output_dim}, got {shape[-1]}")
-    if int(shape[-2]) <= 0:
-        raise ValueError("attention_output must contain at least one token")
-
-
 def _validate_activation(activation: torch.Tensor, *, hidden_size: int) -> None:
     if activation.ndim != 4 or tuple(activation.shape[:2]) != (1, 1):
         raise ValueError(f"activation must have shape [1, 1, tokens, hidden], got {tuple(activation.shape)}")
@@ -1557,15 +1642,10 @@ def _validate_activation(activation: torch.Tensor, *, hidden_size: int) -> None:
         raise ValueError("activation must contain at least one token")
 
 
-def _validate_attention_output(attention_output: torch.Tensor, *, q_output_dim: int) -> None:
-    if attention_output.ndim != 4 or tuple(attention_output.shape[:2]) != (1, 1):
-        raise ValueError(
-            f"attention_output must have shape [1, 1, tokens, q_output_dim], got {tuple(attention_output.shape)}"
-        )
-    if int(attention_output.shape[-1]) != int(q_output_dim):
-        raise ValueError(f"attention_output width must be {q_output_dim}, got {attention_output.shape[-1]}")
-    if int(attention_output.shape[-2]) <= 0:
-        raise ValueError("attention_output must contain at least one token")
+def _validate_kv_cache_initial(kv_cache_initial: torch.Tensor, *, cache_len: int, kv_output_dim: int) -> None:
+    expected_shape = (1, 1, int(cache_len), int(kv_output_dim))
+    if tuple(kv_cache_initial.shape) != expected_shape:
+        raise ValueError(f"kv_cache_initial must have shape {expected_shape}, got {tuple(kv_cache_initial.shape)}")
 
 
 def _validate_traceable_decode_router_tensors(
@@ -1633,9 +1713,17 @@ def _validate_smoke_args(
     if cache_len <= 0:
         raise ValueError(f"cache_len must be positive, got {cache_len}")
     if cache_update_index is not None:
-        _resolve_cache_update_index(seq_len=seq_len, cache_len=cache_len, cache_update_index=cache_update_index)
+        update_index = _resolve_cache_update_index(
+            seq_len=seq_len, cache_len=cache_len, cache_update_index=cache_update_index
+        )
     elif seq_len >= cache_len:
         raise ValueError(f"default cache_update_index seq_len={seq_len} must be less than cache_len {cache_len}")
+    else:
+        update_index = int(seq_len)
+    if update_index + int(seq_len) > int(cache_len):
+        raise ValueError(
+            f"fixed attention cache window [{update_index}, {update_index + int(seq_len)}) exceeds cache_len {cache_len}"
+        )
     if routed_topk_prefix is not None and routed_topk_prefix <= 0:
         raise ValueError(f"routed_topk_prefix must be positive when provided, got {routed_topk_prefix}")
     if not 0.0 <= pcc <= 1.0:
