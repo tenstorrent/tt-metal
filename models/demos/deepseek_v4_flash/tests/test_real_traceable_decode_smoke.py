@@ -58,16 +58,26 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
 
     assert result["mode"] == "cpu-reference"
     assert result["passed"] is True
+    assert result["decode_step_count"] == 1
+    assert result["positions_used"] == [4]
     assert result["trace_capture"]["attempted"] is False
     assert result["trace_capture_attempted"] is False
     assert result["trace_capture_passed"] is False
+    assert result["trace_capture"]["single_capture_replayed_across_positions"] is False
+    assert result["trace_capture"]["cache_update_index_dynamic"] is False
     assert result["trace_capture"]["ttnn_to_torch_guarded"] is True
     assert result["guard_status"]["ttnn_to_torch_guarded"] is True
     assert result["host_boundaries_inside_trace"] == []
     assert result["cache_update"]["name"] == "compressed_kv_projection_cache_append"
     assert result["cache_update"]["cache_len"] == 64
     assert result["cache_update"]["update_index"] == 4
+    assert result["cache_update"]["update_indices"] == [4]
+    assert result["cache_update"]["updated_rows"] == [4]
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is False
+    assert result["cache_update"]["single_capture_replay_across_positions"] is False
     assert result["cache_update"]["device_resident_inside_trace"] is True
+    assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
+    assert result["multi_position_replay"]["cache_update_index_dynamic"] is False
     assert result["traceable_decode_scope"]["not_full_forward"] is True
     assert result["traceable_decode_scope"]["inside_trace"] == [
         "ttnn.rms_norm(attn_norm)",
@@ -244,6 +254,49 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert "rope_table_host_to_device" in result["host_boundaries_outside_trace"]
     assert "attention_output_host_to_device" not in result["host_boundaries_outside_trace"]
     assert result["accuracy"]["cpu_reference"]["passed"] is True
+    assert result["accuracy_by_step"][0]["accuracy"]["cpu_reference"]["passed"] is True
+    assert result["decode_steps_detail"][0]["position"] == 4
+    assert result["decode_steps_detail"][0]["cache_rows_updated"] == [4]
+    assert result["decode_steps_detail"][0]["preflight_topk_expert_ids"] == [3, 2]
+    assert result["decode_steps_detail"][0]["selected_expert_ids"] == [3]
+    assert len(result["decode_steps_detail"][0]["replay_topk_route_weights"]) == 2
+
+
+def test_cpu_traceable_decode_subpath_reports_two_static_cache_positions(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=3,
+        seq_len=4,
+        max_bytes=24 * 1024,
+        routed_topk_prefix=1,
+        decode_steps=2,
+        cpu_only=True,
+    )
+
+    assert result["passed"] is True
+    assert result["decode_step_count"] == 2
+    assert result["positions_used"] == [4, 5]
+    assert result["cache_update"]["update_indices"] == [4, 5]
+    assert result["cache_update"]["updated_rows"] == [4, 5]
+    assert result["cache_update"]["update_index_kind"] == "static_host_argument_per_trace_capture"
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is False
+    assert result["multi_position_replay"]["carried_device_kv_cache_state"] is True
+    assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
+    assert result["multi_position_replay"]["recaptured_per_position"] is True
+    assert result["multi_position_replay"]["cache_update_index_dynamic"] is False
+    assert len(result["decode_steps_detail"]) == 2
+    assert [step["position"] for step in result["decode_steps_detail"]] == [4, 5]
+    assert [step["cache_rows_updated"] for step in result["decode_steps_detail"]] == [[4], [5]]
+    assert all(step["attention_path_stayed_in_trace"] for step in result["decode_steps_detail"])
+    assert all(step["router_weights_stayed_in_trace"] for step in result["decode_steps_detail"])
+    assert all(not step["router_expert_dispatch_dynamic_in_trace"] for step in result["decode_steps_detail"])
+    assert all(len(step["preflight_topk_expert_ids"]) == 2 for step in result["decode_steps_detail"])
+    assert all(len(step["replay_topk_route_weights"]) == 2 for step in result["decode_steps_detail"])
+    assert result["reference_by_step"][1]["position"] == 5
+    assert result["replay_reference_by_step"][1]["position"] == 5
+    assert result["accuracy_by_step"][1]["accuracy"]["cpu_reference"]["passed"] is True
 
 
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
@@ -350,10 +403,13 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     if not snapshot.is_dir():
         pytest.fail(f"Real DeepSeek V4 Flash snapshot is missing: {snapshot}")
 
+    decode_steps = int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_STEPS", "2"))
     result = run_traceable_decode_subpath_smoke(
         snapshot,
         layer=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_LAYER", "3")),
         seq_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_SEQ_LEN", "32")),
+        cache_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_CACHE_LEN", str(96))),
+        decode_steps=decode_steps,
         device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
         trace_region_size=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_TRACE_REGION_SIZE", str(64 * 1024 * 1024))),
     )
@@ -363,6 +419,16 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["trace_capture"]["attempted"] is True
     assert result["trace_capture"]["capture_passed"] is True
     assert result["trace_capture"]["execute_replay_passed"] is True
+    assert result["decode_step_count"] == decode_steps
+    assert len(result["positions_used"]) == result["decode_step_count"]
+    assert result["trace_capture"]["capture_count"] == result["decode_step_count"]
+    assert result["trace_capture"]["single_capture_replayed_across_positions"] is False
+    assert result["trace_capture"]["recaptured_per_position"] is (decode_steps > 1)
+    assert result["trace_capture"]["cache_update_index_dynamic"] is False
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is False
+    assert result["multi_position_replay"]["carried_device_kv_cache_state"] is True
+    assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
+    assert result["multi_position_replay"]["recaptured_per_position"] is (decode_steps > 1)
     assert result["trace_capture_attempted"] is True
     assert result["trace_capture_passed"] is True
     assert result["trace_execute_replay_passed"] is True
@@ -411,3 +477,10 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["accuracy"]["combined_ffn_output"]["passed"] is True
     assert result["accuracy"]["residual_output"]["passed"] is True
     assert result["accuracy"]["kv_cache"]["passed"] is True
+    assert len(result["accuracy_by_step"]) == result["decode_step_count"]
+    for step in result["accuracy_by_step"]:
+        assert step["accuracy"]["attention_output"]["passed"] is True
+        assert step["accuracy"]["attention_projected"]["passed"] is True
+        assert step["accuracy"]["combined_ffn_output"]["passed"] is True
+        assert step["accuracy"]["residual_output"]["passed"] is True
+        assert step["accuracy"]["kv_cache"]["passed"] is True

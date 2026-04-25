@@ -70,6 +70,7 @@ REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_TRACEABLE_DECODE_LAYER = 3
 DEFAULT_TRACEABLE_DECODE_SEQ_LEN = 32
 DEFAULT_TRACEABLE_DECODE_CACHE_LEN = 64
+DEFAULT_TRACEABLE_DECODE_STEPS = 1
 DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX: int | None = None
 DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK = 8
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS = 4
@@ -191,7 +192,8 @@ class TtTraceableDecodeSubpath:
         layer: int,
         cache_len: int,
         cache_update_index: int,
-        initial_kv_cache: torch.Tensor,
+        initial_kv_cache: torch.Tensor | None,
+        kv_cache=None,
         attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -292,13 +294,19 @@ class TtTraceableDecodeSubpath:
             dtype=dtype,
             memory_config=memory_config,
         )
-        self.kv_cache = _to_tt_kv_cache(
-            cache_len=self.cache_len,
-            kv_output_dim=self.kv_output_dim,
-            initial_cache=initial_kv_cache,
-            device=device,
-            dtype=dtype,
-            memory_config=memory_config,
+        if kv_cache is not None and initial_kv_cache is not None:
+            raise ValueError("Pass either initial_kv_cache or kv_cache, not both")
+        self.kv_cache = (
+            kv_cache
+            if kv_cache is not None
+            else _to_tt_kv_cache(
+                cache_len=self.cache_len,
+                kv_output_dim=self.kv_output_dim,
+                initial_cache=initial_kv_cache,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
         )
         self.attn_norm = _to_tt_norm_weight(
             weights.attn_norm,
@@ -471,6 +479,7 @@ def run_traceable_decode_subpath_smoke(
     trace_region_size: int = DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE,
     cache_len: int = DEFAULT_TRACEABLE_DECODE_CACHE_LEN,
     cache_update_index: int | None = None,
+    decode_steps: int = DEFAULT_TRACEABLE_DECODE_STEPS,
     attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
     pcc: float = 0.99,
     rtol: float = 8e-2,
@@ -486,6 +495,7 @@ def run_traceable_decode_subpath_smoke(
         trace_region_size=trace_region_size,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        decode_steps=decode_steps,
         routed_topk_prefix=routed_topk_prefix,
         pcc=pcc,
     )
@@ -510,32 +520,44 @@ def run_traceable_decode_subpath_smoke(
         kv_output_dim=_kv_output_dim(config),
         cache_update_index=cache_update_index,
         seq_len=seq_len,
+        decode_steps=decode_steps,
     )
-    replay_activation = _replay_activation(activation)
-    preliminary_reference = build_torch_traceable_decode_subpath_reference(
-        weights,
-        config=config,
-        layer=layer,
-        activation=activation,
-        kv_cache_initial=kv_cache_initial,
-        cache_len=cache_len,
-        cache_update_index=cache_update_index,
-        attention_mode=attention_mode,
-        route_plan=None,
+    activations = tuple(_decode_step_activation(activation, step) for step in range(int(decode_steps)))
+    replay_activations = tuple(_replay_activation(step_activation) for step_activation in activations)
+    cache_update_indices = tuple(int(cache_update_index) + step for step in range(int(decode_steps)))
+
+    route_plans: list[TraceableDecodeRoutePlan] = []
+    preliminary_cache = kv_cache_initial
+    for step, step_activation in enumerate(activations):
+        preliminary_reference = build_torch_traceable_decode_subpath_reference(
+            weights,
+            config=config,
+            layer=layer,
+            activation=step_activation,
+            kv_cache_initial=preliminary_cache,
+            cache_len=cache_len,
+            cache_update_index=cache_update_indices[step],
+            attention_mode=attention_mode,
+            route_plan=None,
+        )
+        route_plans.append(
+            build_traceable_decode_route_plan(
+                weights,
+                config=config,
+                seq_len=seq_len,
+                ffn_norm_output=preliminary_reference["ffn_norm_output"],
+                routed_topk_prefix=routed_topk_prefix,
+            )
+        )
+        preliminary_cache = preliminary_reference["kv_cache"]
+
+    selected_expert_ids = _unique_ints(
+        expert for route_plan in route_plans for expert in route_plan.selected_expert_ids
     )
-    route_plan = build_traceable_decode_route_plan(
-        weights,
-        config=config,
-        seq_len=seq_len,
-        ffn_norm_output=preliminary_reference["ffn_norm_output"],
-        routed_topk_prefix=routed_topk_prefix,
-    )
-    if route_plan.selected_expert_ids:
+    if selected_expert_ids:
         index = RealCheckpointTensorIndex.from_snapshot(snapshot_dir)
         routed_expert_keys = [
-            key
-            for expert in route_plan.selected_expert_ids
-            for key in layer_expert_mlp_keys(index, layer=layer, expert=expert)
+            key for expert in selected_expert_ids for key in layer_expert_mlp_keys(index, layer=layer, expert=expert)
         ]
         keys["routed_experts"] = routed_expert_keys
         tensors, metadata = _load_missing_tensors(
@@ -550,30 +572,39 @@ def run_traceable_decode_subpath_smoke(
             tensors,
             config=config,
             layer=layer,
-            selected_experts=route_plan.selected_expert_ids,
+            selected_experts=selected_expert_ids,
         )
-    reference = build_torch_traceable_decode_subpath_reference(
-        weights,
-        config=config,
-        layer=layer,
-        activation=activation,
-        kv_cache_initial=kv_cache_initial,
-        cache_len=cache_len,
-        cache_update_index=cache_update_index,
-        attention_mode=attention_mode,
-        route_plan=route_plan,
-    )
-    replay_reference = build_torch_traceable_decode_subpath_reference(
-        weights,
-        config=config,
-        layer=layer,
-        activation=replay_activation,
-        kv_cache_initial=kv_cache_initial,
-        cache_len=cache_len,
-        cache_update_index=cache_update_index,
-        attention_mode=attention_mode,
-        route_plan=route_plan,
-    )
+    references: list[dict[str, torch.Tensor]] = []
+    replay_references: list[dict[str, torch.Tensor]] = []
+    reference_cache = kv_cache_initial
+    replay_reference_cache = kv_cache_initial
+    for step, route_plan in enumerate(route_plans):
+        reference = build_torch_traceable_decode_subpath_reference(
+            weights,
+            config=config,
+            layer=layer,
+            activation=activations[step],
+            kv_cache_initial=reference_cache,
+            cache_len=cache_len,
+            cache_update_index=cache_update_indices[step],
+            attention_mode=attention_mode,
+            route_plan=route_plan,
+        )
+        references.append(reference)
+        reference_cache = reference["kv_cache"]
+        replay_reference = build_torch_traceable_decode_subpath_reference(
+            weights,
+            config=config,
+            layer=layer,
+            activation=replay_activations[step],
+            kv_cache_initial=replay_reference_cache,
+            cache_len=cache_len,
+            cache_update_index=cache_update_indices[step],
+            attention_mode=attention_mode,
+            route_plan=route_plan,
+        )
+        replay_references.append(replay_reference)
+        replay_reference_cache = replay_reference["kv_cache"]
     metadata_groups = _metadata_groups(metadata, keys)
     result = _base_result(
         snapshot_dir=snapshot_dir,
@@ -581,16 +612,22 @@ def run_traceable_decode_subpath_smoke(
         seq_len=seq_len,
         cache_len=cache_len,
         cache_update_index=cache_update_index,
+        cache_update_indices=cache_update_indices,
+        decode_steps=decode_steps,
         config=config,
         metadata=metadata,
         metadata_groups=metadata_groups,
         weights=weights,
-        activation=activation,
+        activation=activations[0],
         kv_cache_initial=kv_cache_initial,
-        replay_activation=replay_activation,
-        route_plan=route_plan,
-        reference=reference,
-        replay_reference=replay_reference,
+        replay_activation=replay_activations[0],
+        activations=activations,
+        replay_activations=replay_activations,
+        route_plans=route_plans,
+        reference=references[0],
+        replay_reference=replay_references[0],
+        references=references,
+        replay_references=replay_references,
         attention_mode=attention_mode,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
@@ -605,24 +642,39 @@ def run_traceable_decode_subpath_smoke(
                 "reason": "cpu-only requested; TTNN trace capture was not run",
             }
         }
+        result["accuracy_by_step"] = [
+            {
+                "step": step,
+                "position": cache_update_indices[step],
+                "accuracy": {
+                    "cpu_reference": {
+                        "passed": True,
+                        "reason": "cpu-only requested; TTNN trace capture was not run",
+                    }
+                },
+            }
+            for step in range(int(decode_steps))
+        ]
+        for step_detail in result["decode_steps_detail"]:
+            step_detail["accuracy"] = result["accuracy_by_step"][step_detail["step"]]["accuracy"]
         result["passed"] = True
         return result
 
     if seq_len % SHARED_EXPERT_TTNN_TILE_MULTIPLE != 0:
         raise ValueError(f"TTNN traceable decode seq_len must be a multiple of 32, got {seq_len}")
 
-    ttnn_outputs, trace_info = _run_ttnn_traceable_decode_subpath(
+    ttnn_outputs_by_step, trace_info = _run_ttnn_traceable_decode_subpath(
         weights,
-        route_plan=route_plan,
+        route_plans=route_plans,
         config=config,
-        activation=activation,
-        replay_activation=replay_activation,
+        activations=activations,
+        replay_activations=replay_activations,
         kv_cache_initial=kv_cache_initial,
         device_id=device_id,
         trace_region_size=trace_region_size,
         layer=layer,
         cache_len=cache_len,
-        cache_update_index=cache_update_index,
+        cache_update_indices=cache_update_indices,
         attention_mode=attention_mode,
     )
     result["mode"] = "ttnn-trace"
@@ -636,22 +688,41 @@ def run_traceable_decode_subpath_smoke(
         attention_mode,
         config=config,
         weights=weights,
-        route_plan=route_plan,
+        route_plan=route_plans[0],
     )
     result["trace_capture"]["traced_operations"] = list(result["ttnn_ops"])
-    result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs.items()}
-    result["accuracy"] = {}
-    for name, expected in _traceable_accuracy_items(replay_reference):
-        accuracy = _traceable_accuracy_summary(
-            name,
-            expected,
-            ttnn_outputs[name],
-            pcc_threshold=pcc,
-            rtol=rtol,
-            atol=atol,
+    result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs_by_step[0].items()}
+    result["ttnn_by_step"] = [
+        {
+            "step": step,
+            "position": cache_update_indices[step],
+            "tensors": {name: _tensor_summary(value) for name, value in step_outputs.items()},
+        }
+        for step, step_outputs in enumerate(ttnn_outputs_by_step)
+    ]
+    result["accuracy_by_step"] = []
+    for step, (step_outputs, step_reference) in enumerate(zip(ttnn_outputs_by_step, replay_references)):
+        step_accuracy = {}
+        for name, expected in _traceable_accuracy_items(step_reference):
+            accuracy = _traceable_accuracy_summary(
+                name,
+                expected,
+                step_outputs[name],
+                pcc_threshold=pcc,
+                rtol=rtol,
+                atol=atol,
+            )
+            accuracy["required_for_pass"] = _traceable_accuracy_required_for_pass(name)
+            step_accuracy[name] = accuracy
+        result["accuracy_by_step"].append(
+            {
+                "step": step,
+                "position": cache_update_indices[step],
+                "accuracy": step_accuracy,
+            }
         )
-        accuracy["required_for_pass"] = _traceable_accuracy_required_for_pass(name)
-        result["accuracy"][name] = accuracy
+        result["decode_steps_detail"][step]["accuracy"] = step_accuracy
+    result["accuracy"] = result["accuracy_by_step"][0]["accuracy"]
     if "router_decode_topk_indices" in result["accuracy"]:
         result["router_trace"]["device_topk_indices_match_torch_reference"] = bool(
             result["accuracy"]["router_decode_topk_indices"].get("allclose", False)
@@ -667,7 +738,12 @@ def run_traceable_decode_subpath_smoke(
         result["trace_capture"]["attempted"]
         and result["trace_capture"]["capture_passed"]
         and result["trace_capture"]["execute_replay_passed"]
-        and all(item["passed"] for item in result["accuracy"].values() if bool(item.get("required_for_pass", True)))
+        and all(
+            item["passed"]
+            for step in result["accuracy_by_step"]
+            for item in step["accuracy"].values()
+            if bool(item.get("required_for_pass", True))
+        )
     )
     return result
 
@@ -853,11 +929,12 @@ def build_torch_traceable_decode_subpath_reference(
     else:
         routed_output_float = torch.zeros_like(shared_output, dtype=torch.float32)
         routed_expert_outputs = {}
-        for expert in route_plan.selected_expert_ids:
+        router_selected_weights = router_intermediates["router_selected_route_weights_masked"][0, 0].float()
+        for slot, expert in enumerate(route_plan.selected_expert_ids):
             if expert not in weights.routed_experts:
                 raise KeyError(f"Missing routed expert weights for selected expert {expert}")
             expert_weights = weights.routed_experts[expert]
-            route_weight = route_plan.per_expert_route_weight[expert].reshape(-1, 1)
+            route_weight = router_selected_weights[:, int(slot) : int(slot) + 1]
             expert_output = (
                 swiglu_expert(
                     ffn_norm_output[:, 0].reshape(-1, int(config.hidden_size)),
@@ -1116,6 +1193,7 @@ def main() -> None:
     parser.add_argument("--trace-region-size", type=int, default=DEFAULT_TRACEABLE_DECODE_TRACE_REGION_SIZE)
     parser.add_argument("--cache-len", type=int, default=DEFAULT_TRACEABLE_DECODE_CACHE_LEN)
     parser.add_argument("--cache-update-index", type=int, default=None)
+    parser.add_argument("--decode-steps", type=int, default=DEFAULT_TRACEABLE_DECODE_STEPS)
     parser.add_argument(
         "--attention-mode",
         choices=TRACEABLE_DECODE_ATTENTION_MODES,
@@ -1145,6 +1223,7 @@ def main() -> None:
         trace_region_size=args.trace_region_size,
         cache_len=args.cache_len,
         cache_update_index=args.cache_update_index,
+        decode_steps=args.decode_steps,
         attention_mode=args.attention_mode,
         pcc=args.pcc,
         rtol=args.rtol,
@@ -1158,73 +1237,114 @@ def main() -> None:
 def _run_ttnn_traceable_decode_subpath(
     weights: TraceableDecodeWeights,
     *,
-    route_plan: TraceableDecodeRoutePlan,
+    route_plans: Sequence[TraceableDecodeRoutePlan],
     config: DeepSeekV4FlashConfig,
-    activation: torch.Tensor,
-    replay_activation: torch.Tensor,
+    activations: Sequence[torch.Tensor],
+    replay_activations: Sequence[torch.Tensor],
     kv_cache_initial: torch.Tensor,
     device_id: int,
     trace_region_size: int,
     layer: int,
     cache_len: int,
-    cache_update_index: int,
+    cache_update_indices: Sequence[int],
     attention_mode: str,
-) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
+) -> tuple[list[dict[str, torch.Tensor]], dict[str, Any]]:
+    if not route_plans:
+        raise ValueError("at least one route plan is required")
+    if not (len(route_plans) == len(activations) == len(replay_activations) == len(cache_update_indices)):
+        raise ValueError(
+            "route_plans, activations, replay_activations, and cache_update_indices must have matching lengths"
+        )
     device = ttnn.open_device(
         device_id=int(device_id),
         num_command_queues=1,
         trace_region_size=int(trace_region_size),
     )
-    trace_id = None
+    trace_ids: list[int] = []
     try:
-        module = TtTraceableDecodeSubpath(
-            device=device,
-            weights=weights,
-            route_plan=route_plan,
-            config=config,
-            layer=layer,
+        allocated_trace_count = 0
+        kv_cache = _to_tt_kv_cache(
             cache_len=cache_len,
-            cache_update_index=cache_update_index,
-            initial_kv_cache=kv_cache_initial,
-            attention_mode=attention_mode,
+            kv_output_dim=_kv_output_dim(config),
+            initial_cache=kv_cache_initial,
+            device=device,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_input = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(tuple(activation.shape)),
+            ttnn.Shape(tuple(activations[0].shape)),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             device,
         )
-        _copy_activation_to_device(activation, tt_input)
-        module(tt_input)
-        ttnn.synchronize_device(device)
+        outputs_by_step: list[dict[str, torch.Tensor]] = []
+        guarded_labels: list[str] = []
+        for step, (route_plan, activation, replay_activation, cache_update_index) in enumerate(
+            zip(route_plans, activations, replay_activations, cache_update_indices)
+        ):
+            module = TtTraceableDecodeSubpath(
+                device=device,
+                weights=weights,
+                route_plan=route_plan,
+                config=config,
+                layer=layer,
+                cache_len=cache_len,
+                cache_update_index=int(cache_update_index),
+                initial_kv_cache=None,
+                kv_cache=kv_cache,
+                attention_mode=attention_mode,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _copy_activation_to_device(activation, tt_input)
+            module(tt_input)
+            ttnn.synchronize_device(device)
+            kv_cache = module.kv_cache
 
-        with TraceableDecodeHostGuard() as guard:
-            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            output_tensors = module(tt_input)
-            ttnn.end_trace_capture(device, trace_id, cq_id=0)
-        ttnn.synchronize_device(device)
+            with TraceableDecodeHostGuard() as guard:
+                trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                output_tensors = module(tt_input)
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            trace_ids.append(trace_id)
+            allocated_trace_count += 1
+            guarded_labels = guard.guarded_labels
+            kv_cache = module.kv_cache
+            ttnn.synchronize_device(device)
 
-        _copy_activation_to_device(replay_activation, tt_input)
-        ttnn.synchronize_device(device)
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-        ttnn.synchronize_device(device)
-        outputs = {name: ttnn.to_torch(tensor).contiguous() for name, tensor in output_tensors.items()}
+            _copy_activation_to_device(replay_activation, tt_input)
+            ttnn.synchronize_device(device)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            ttnn.synchronize_device(device)
+            outputs_by_step.append(
+                {name: ttnn.to_torch(tensor).contiguous() for name, tensor in output_tensors.items()}
+            )
+            ttnn.release_trace(device, trace_id)
+            trace_ids.remove(trace_id)
+            kv_cache = module.kv_cache
+
         trace_info = {
             "attempted": True,
             "capture_passed": True,
             "execute_replay_attempted": True,
             "execute_replay_passed": True,
             "trace_id_allocated": True,
+            "trace_ids_allocated": allocated_trace_count,
             "guard_enabled": True,
-            "guarded_symbols": guard.guarded_labels,
-            "ttnn_to_torch_guarded": "ttnn.to_torch" in guard.guarded_labels,
+            "guarded_symbols": guarded_labels,
+            "ttnn_to_torch_guarded": "ttnn.to_torch" in guarded_labels,
             "host_boundaries_inside_trace": [],
+            "decode_step_count": len(route_plans),
+            "capture_count": allocated_trace_count,
+            "positions_used": [int(value) for value in cache_update_indices],
+            "single_capture_replayed_across_positions": False,
+            "recaptured_per_position": len(route_plans) > 1,
+            "carried_device_kv_cache_state": True,
+            "cache_update_index_dynamic": False,
+            "cache_update_index_kind": "static_host_argument_per_trace_capture",
         }
-        return outputs, trace_info
+        return outputs_by_step, trace_info
     finally:
-        if trace_id is not None:
+        for trace_id in reversed(trace_ids):
             ttnn.release_trace(device, trace_id)
         ttnn.close_device(device)
 
@@ -1245,6 +1365,8 @@ def _base_result(
     seq_len: int,
     cache_len: int,
     cache_update_index: int,
+    cache_update_indices: Sequence[int],
+    decode_steps: int,
     config: DeepSeekV4FlashConfig,
     metadata: Sequence[TensorMetadata],
     metadata_groups: Mapping[str, Sequence[TensorMetadata]],
@@ -1252,9 +1374,13 @@ def _base_result(
     activation: torch.Tensor,
     kv_cache_initial: torch.Tensor,
     replay_activation: torch.Tensor,
-    route_plan: TraceableDecodeRoutePlan,
+    activations: Sequence[torch.Tensor],
+    replay_activations: Sequence[torch.Tensor],
+    route_plans: Sequence[TraceableDecodeRoutePlan],
     reference: Mapping[str, torch.Tensor],
     replay_reference: Mapping[str, torch.Tensor],
+    references: Sequence[Mapping[str, torch.Tensor]],
+    replay_references: Sequence[Mapping[str, torch.Tensor]],
     attention_mode: str,
     max_tensors: int,
     max_bytes: int,
@@ -1269,8 +1395,11 @@ def _base_result(
         for name, items in metadata_groups.items()
     }
     guarded_labels = [symbol.label for symbol in default_guarded_symbols()]
+    route_plan = route_plans[0]
     routed_expert_ids_loaded = [int(expert) for expert in weights.routed_experts]
-    routed_expert_ids_executed = list(route_plan.selected_expert_ids)
+    routed_expert_ids_executed = _unique_ints(
+        expert for step_route_plan in route_plans for expert in step_route_plan.selected_expert_ids
+    )
     router_summary = _router_trace_summary(route_plan, config=config, weights=weights)
     excluded_from_trace = [
         "true DeepSeek K/V split; this slice creates explicit K and V tensors from one compressed cache window",
@@ -1299,15 +1428,50 @@ def _base_result(
         "snapshot_dir": str(snapshot_dir),
         "layer": int(layer),
         "logical_decode_tokens": 1,
+        "decode_step_count": int(decode_steps),
+        "positions_used": [int(value) for value in cache_update_indices],
+        "decode_positions": [int(value) for value in cache_update_indices],
         "tensor_sequence_length": int(seq_len),
         "cache_update": {
             "name": "compressed_kv_projection_cache_append",
             "cache_len": int(cache_len),
             "update_index": int(cache_update_index),
+            "update_indices": [int(value) for value in cache_update_indices],
+            "updated_rows": [int(value) for value in cache_update_indices],
             "updated_tokens": 1,
+            "updated_tokens_per_step": 1,
+            "decode_steps": int(decode_steps),
+            "update_index_kind": "static_host_argument_per_trace_capture",
+            "dynamic_update_index_in_trace": False,
+            "single_capture_replay_across_positions": False,
             "input_layout": "[seq=1, heads=1, batch_padded=32, kv_output_dim]",
             "cache_layout": "[batch=1, heads=1, cache_len, kv_output_dim]",
             "device_resident_inside_trace": True,
+            "limitation": (
+                "ttnn.update_cache takes update_idx as a Python scalar in this path; the cache slice bounds and "
+                "RoPE table positions are also static trace-capture inputs, so one captured trace is not claimed "
+                "to advance across decode positions"
+            ),
+        },
+        "multi_position_replay": {
+            "requested_decode_steps": int(decode_steps),
+            "positions_used": [int(value) for value in cache_update_indices],
+            "carried_device_kv_cache_state": True,
+            "single_capture_replayed_across_positions": False,
+            "recaptured_per_position": int(decode_steps) > 1,
+            "identical_guarded_body_per_position": True,
+            "cache_update_index": "static_host_argument_per_trace_capture",
+            "cache_update_index_dynamic": False,
+            "current_position_dynamic": False,
+            "strongest_landed_subpiece": (
+                "one guarded TTNN body can be captured per static position while reusing the same device-resident "
+                "KV cache tensor across steps"
+            ),
+            "single_capture_blockers": [
+                "ttnn.update_cache exposes update_idx as a host uint32 argument, not a mutable TTNN tensor input",
+                "ttnn.slice cache-window start/end are Python shape arguments baked into the traced op sequence",
+                "RoPE cos/sin tables are materialized for a fixed start_pos before trace capture",
+            ],
         },
         "attention_path": _attention_path_summary(
             config=config,
@@ -1316,6 +1480,16 @@ def _base_result(
             seq_len=seq_len,
             attention_mode=attention_mode,
         ),
+        "attention_path_by_step": [
+            _attention_path_summary(
+                config=config,
+                layer=layer,
+                cache_update_index=int(step_cache_update_index),
+                seq_len=seq_len,
+                attention_mode=attention_mode,
+            )
+            for step_cache_update_index in cache_update_indices
+        ],
         "traceability_flags": {
             "attention_mode": attention_mode,
             "kv_source": "device_resident_compressed_kv_projection_cache_window",
@@ -1379,14 +1553,27 @@ def _base_result(
         },
         "router_trace": router_summary,
         "selected_routing": _route_plan_summary(route_plan, config=config),
+        "selected_routing_by_step": [
+            _route_plan_summary(step_route_plan, config=config) for step_route_plan in route_plans
+        ],
         "routed_expert_execution": {
             "loaded_expert_ids": routed_expert_ids_loaded,
             "loaded_expert_count": len(routed_expert_ids_loaded),
             "executed_expert_ids": routed_expert_ids_executed,
             "executed_expert_count": len(routed_expert_ids_executed),
             "all_selected_experts_loaded": set(routed_expert_ids_executed).issubset(set(routed_expert_ids_loaded)),
-            "full_topk_executed": int(route_plan.topk_prefix) == int(route_plan.full_topk),
+            "full_topk_executed": all(
+                int(step_route_plan.topk_prefix) == int(step_route_plan.full_topk) for step_route_plan in route_plans
+            ),
         },
+        "decode_steps_detail": _decode_steps_detail(
+            route_plans=route_plans,
+            references=references,
+            replay_references=replay_references,
+            cache_update_indices=cache_update_indices,
+            seq_len=seq_len,
+            attention_mode=attention_mode,
+        ),
         "selected_source_keys": [item.source_key for item in metadata],
         "loaded_tensors": [_metadata_summary(item) for item in metadata],
         "loaded_tensor_groups": loaded_groups,
@@ -1440,6 +1627,13 @@ def _base_result(
             "ttnn_to_torch_guarded": "ttnn.to_torch" in guarded_labels,
             "host_boundaries_inside_trace": [],
             "traced_operations": [],
+            "decode_step_count": int(decode_steps),
+            "capture_count": 0,
+            "positions_used": [int(value) for value in cache_update_indices],
+            "single_capture_replayed_across_positions": False,
+            "recaptured_per_position": False,
+            "cache_update_index_dynamic": False,
+            "cache_update_index_kind": "static_host_argument_per_trace_capture",
         },
         "trace_capture_attempted": False,
         "trace_capture_passed": False,
@@ -1502,6 +1696,15 @@ def _base_result(
                 "description": "static-shape decode activation is copied into a preallocated device tensor outside the guard",
             },
             {
+                "name": "trace_recapture_per_position",
+                "location": "outside protected trace body",
+                "description": (
+                    "multi-position smoke captures the same guarded TTNN body once per static cache index because "
+                    "the current path does not expose cache index, cache slice bounds, or RoPE position as "
+                    "replay-mutable device inputs"
+                ),
+            },
+            {
                 "name": "trace_output_readback",
                 "location": "after trace replay",
                 "description": "TTNN outputs are copied to host after replay for accuracy checks only",
@@ -1516,6 +1719,7 @@ def _base_result(
             "kv_cache_seed_host_to_device",
             "rope_table_host_to_device",
             "activation_host_to_device",
+            "trace_recapture_per_position",
             "trace_output_readback",
         ],
         "reference_ops": _traceable_decode_reference_ops(
@@ -1529,11 +1733,31 @@ def _base_result(
             "capture_activation": _tensor_summary(activation),
             "kv_cache_initial": _tensor_summary(kv_cache_initial),
             "replay_activation": _tensor_summary(replay_activation),
+            "capture_activations_by_step": [_tensor_summary(value) for value in activations],
+            "replay_activations_by_step": [_tensor_summary(value) for value in replay_activations],
         },
         "reference": {name: _tensor_summary(value) for name, value in reference.items()},
         "replay_reference": {name: _tensor_summary(value) for name, value in replay_reference.items()},
+        "reference_by_step": [
+            {
+                "step": step,
+                "position": int(cache_update_indices[step]),
+                "tensors": {name: _tensor_summary(value) for name, value in step_reference.items()},
+            }
+            for step, step_reference in enumerate(references)
+        ],
+        "replay_reference_by_step": [
+            {
+                "step": step,
+                "position": int(cache_update_indices[step]),
+                "tensors": {name: _tensor_summary(value) for name, value in step_reference.items()},
+            }
+            for step, step_reference in enumerate(replay_references)
+        ],
         "ttnn": {},
+        "ttnn_by_step": [],
         "accuracy": {},
+        "accuracy_by_step": [],
         "passed": False,
     }
 
@@ -1550,6 +1774,86 @@ def _metadata_groups(
             raise ValueError(f"Unexpected tensor in traceable decode slice: {item.canonical_key}")
         groups[group].append(item)
     return groups
+
+
+def _decode_steps_detail(
+    *,
+    route_plans: Sequence[TraceableDecodeRoutePlan],
+    references: Sequence[Mapping[str, torch.Tensor]],
+    replay_references: Sequence[Mapping[str, torch.Tensor]],
+    cache_update_indices: Sequence[int],
+    seq_len: int,
+    attention_mode: str,
+) -> list[dict[str, Any]]:
+    details = []
+    for step, (route_plan, reference, replay_reference, cache_update_index) in enumerate(
+        zip(route_plans, references, replay_references, cache_update_indices)
+    ):
+        position = int(cache_update_index)
+        details.append(
+            {
+                "step": step,
+                "position": position,
+                "cache_update_index": position,
+                "cache_update_index_kind": "static_host_argument_per_trace_capture",
+                "cache_rows_updated": [position],
+                "cache_window_rows": [position, position + int(seq_len)],
+                "single_capture_replayed_across_this_position": False,
+                "carried_device_kv_cache_state": True,
+                "attention_path_stayed_in_trace": True,
+                "router_weights_stayed_in_trace": True,
+                "router_expert_dispatch_dynamic_in_trace": False,
+                "preflight_topk_expert_ids": [int(value) for value in route_plan.router_indices.reshape(-1).tolist()],
+                "preflight_topk_route_weights": [
+                    float(value) for value in route_plan.router_weights.reshape(-1).float().tolist()
+                ],
+                "selected_expert_ids": [int(value) for value in route_plan.selected_indices.reshape(-1).tolist()],
+                "selected_route_weights": [
+                    float(value) for value in route_plan.selected_weights.reshape(-1).float().tolist()
+                ],
+                "replay_topk_expert_ids": [
+                    int(value) for value in replay_reference["router_decode_topk_indices"].reshape(-1).tolist()
+                ],
+                "replay_topk_route_weights": [
+                    float(value)
+                    for value in replay_reference["router_decode_route_weights"].reshape(-1).float().tolist()
+                ],
+                "reference_cache_row_updated": _tensor_summary(reference["kv_cache"][:, :, position : position + 1, :]),
+                "replay_reference_cache_row_updated": _tensor_summary(
+                    replay_reference["kv_cache"][:, :, position : position + 1, :]
+                ),
+                "accuracy_focus_keys": [
+                    "kv_output",
+                    "kv_cache",
+                    "attention_cache_window",
+                    "attention_context_heads"
+                    if attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+                    else "expanded_attention_cache",
+                    "attention_output",
+                    "attention_projected",
+                    "post_attention_residual",
+                    "router_decode_topk_indices",
+                    "router_decode_route_weights",
+                    "shared_output",
+                    "routed_output",
+                    "combined_ffn_output",
+                    "residual_output",
+                ],
+                "accuracy": {},
+            }
+        )
+    return details
+
+
+def _unique_ints(values) -> list[int]:
+    seen: set[int] = set()
+    unique: list[int] = []
+    for value in values:
+        int_value = int(value)
+        if int_value not in seen:
+            seen.add(int_value)
+            unique.append(int_value)
+    return unique
 
 
 def _resolve_patch_target(symbol: GuardedSymbol) -> tuple[object, str]:
@@ -2675,12 +2979,21 @@ def _replay_activation(activation: torch.Tensor) -> torch.Tensor:
     return (activation.float().flip(-2) * token_scale - 0.03125).to(torch.bfloat16).contiguous()
 
 
+def _decode_step_activation(activation: torch.Tensor, step: int) -> torch.Tensor:
+    if int(step) == 0:
+        return activation.contiguous()
+    token_scale = torch.linspace(0.97, 1.03, steps=activation.shape[-2], dtype=torch.float32).reshape(1, 1, -1, 1)
+    shifted = activation.float().roll(shifts=int(step), dims=-2)
+    return (shifted * token_scale + (0.015625 * int(step))).to(torch.bfloat16).contiguous()
+
+
 def deterministic_traceable_kv_cache_seed(
     *,
     cache_len: int,
     kv_output_dim: int,
     cache_update_index: int,
     seq_len: int,
+    decode_steps: int = DEFAULT_TRACEABLE_DECODE_STEPS,
 ) -> torch.Tensor:
     if cache_len <= 0:
         raise ValueError(f"cache_len must be positive, got {cache_len}")
@@ -2688,16 +3001,19 @@ def deterministic_traceable_kv_cache_seed(
         raise ValueError(f"kv_output_dim must be positive, got {kv_output_dim}")
     if seq_len <= 0:
         raise ValueError(f"seq_len must be positive, got {seq_len}")
-    if cache_update_index < 0 or cache_update_index + seq_len > cache_len:
+    if decode_steps <= 0:
+        raise ValueError(f"decode_steps must be positive, got {decode_steps}")
+    if cache_update_index < 0 or cache_update_index + int(decode_steps) - 1 + seq_len > cache_len:
         raise ValueError(
-            f"cache window [{cache_update_index}, {cache_update_index + seq_len}) must fit cache_len {cache_len}"
+            f"last cache window [{cache_update_index + int(decode_steps) - 1}, "
+            f"{cache_update_index + int(decode_steps) - 1 + seq_len}) must fit cache_len {cache_len}"
         )
 
     values = torch.linspace(-0.125, 0.125, steps=cache_len * kv_output_dim, dtype=torch.float32)
     cache = values.reshape(1, 1, cache_len, kv_output_dim)
     row_scale = torch.linspace(0.85, 1.15, steps=cache_len, dtype=torch.float32).reshape(1, 1, cache_len, 1)
     cache = cache * row_scale
-    cache[:, :, cache_update_index, :] = 0.0
+    cache[:, :, int(cache_update_index) : int(cache_update_index) + int(decode_steps), :] = 0.0
     return cache.to(torch.bfloat16).contiguous()
 
 
@@ -2775,6 +3091,7 @@ def _validate_smoke_args(
     trace_region_size: int,
     cache_len: int,
     cache_update_index: int | None,
+    decode_steps: int,
     routed_topk_prefix: int | None,
     pcc: float,
 ) -> None:
@@ -2790,6 +3107,8 @@ def _validate_smoke_args(
         raise ValueError(f"trace_region_size must be positive, got {trace_region_size}")
     if cache_len <= 0:
         raise ValueError(f"cache_len must be positive, got {cache_len}")
+    if decode_steps <= 0:
+        raise ValueError(f"decode_steps must be positive, got {decode_steps}")
     if cache_update_index is not None:
         update_index = _resolve_cache_update_index(
             seq_len=seq_len, cache_len=cache_len, cache_update_index=cache_update_index
@@ -2798,9 +3117,11 @@ def _validate_smoke_args(
         raise ValueError(f"default cache_update_index seq_len={seq_len} must be less than cache_len {cache_len}")
     else:
         update_index = int(seq_len)
-    if update_index + int(seq_len) > int(cache_len):
+    last_update_index = update_index + int(decode_steps) - 1
+    if last_update_index + int(seq_len) > int(cache_len):
         raise ValueError(
-            f"fixed attention cache window [{update_index}, {update_index + int(seq_len)}) exceeds cache_len {cache_len}"
+            f"last fixed attention cache window [{last_update_index}, {last_update_index + int(seq_len)}) "
+            f"exceeds cache_len {cache_len}"
         )
     if routed_topk_prefix is not None and routed_topk_prefix <= 0:
         raise ValueError(f"routed_topk_prefix must be positive when provided, got {routed_topk_prefix}")
