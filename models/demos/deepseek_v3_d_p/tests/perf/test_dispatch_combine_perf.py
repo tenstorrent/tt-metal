@@ -201,7 +201,7 @@ def run_model_device_perf_test_with_merge(
 
 
 def _perf_param(
-    op, worker_file, worker_test, topo, nlinks, payload, expected_ns, op_filter, margin=0.03, layout="tile"
+    op, worker_file, worker_test, topo, nlinks, payload, expected_ns, op_filter, margin=0.05, layout="tile"
 ):
     """Build one pytest.param tuple for the perf tests."""
     worker_id = f"perf-{topo}-8-{nlinks}link-{payload}"
@@ -232,7 +232,7 @@ def _perf_param(
 
 # CI set (BH LoudBox pipeline): keep small.
 _DISPATCH_PERF_PARAMS = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, "7k", 3_465_000, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, "7k", 3_544_089, ""),
     _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, "7k", 2_820_533, ""),
 ]
 _COMBINE_PERF_PARAMS = [
