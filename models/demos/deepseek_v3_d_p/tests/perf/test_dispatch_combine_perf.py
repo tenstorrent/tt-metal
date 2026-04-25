@@ -230,15 +230,15 @@ def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filt
 
 # CI set (BH LoudBox pipeline): keep small.
 _DISPATCH_PERF_PARAMS = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, 3_926_242, ""),
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 2_633_140, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, 3_759_572, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 2_630_604, ""),
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_138_829, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_402_272, "CombineDeviceOperation"
     ),
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 3_027_467, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 3_177_159, "CombineDeviceOperation"
     ),
 ]
 
