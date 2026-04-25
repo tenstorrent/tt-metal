@@ -254,128 +254,64 @@ namespace kernel_profiler {
 #define PERF_CNT_START_VALUE 1
 #define PERF_CNT_STOP_VALUE 2
 
-uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
-    uint32_t reg_addr = 0;
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: reg_addr = RISCV_DEBUG_REG_PERF_CNT_FPU0; break;
-        case PerfCounterGroup::PACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0; break;
-        case PerfCounterGroup::UNPACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0; break;
-        case PerfCounterGroup::L1_0:
-        case PerfCounterGroup::L1_1:
-        case PerfCounterGroup::L1_2:
-        case PerfCounterGroup::L1_3:
-        case PerfCounterGroup::L1_4: reg_addr = RISCV_DEBUG_REG_PERF_CNT_L1_0; break;
-        case PerfCounterGroup::INSTRN: reg_addr = RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0; break;
-        default: {
-            ASSERT(false);
-            break;
-        }
-    }
-    return reg_addr;
+// Counter groups and their corresponding enable bitmask bits. Shared; used on both
+// TRISC1 (start/stop loop) and BRISC (read loop).
+constexpr std::pair<PerfCounterGroup, uint32_t> counter_group_flags[] = {
+    {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
+    {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
+    {PerfCounterGroup::UNPACK, PROFILE_PERF_COUNTERS_UNPACK},
+    {PerfCounterGroup::L1_0, PROFILE_PERF_COUNTERS_L1_0},
+    {PerfCounterGroup::L1_1, PROFILE_PERF_COUNTERS_L1_1},
+    {PerfCounterGroup::INSTRN, PROFILE_PERF_COUNTERS_INSTRN},
+    {PerfCounterGroup::L1_2, PROFILE_PERF_COUNTERS_L1_2},
+    {PerfCounterGroup::L1_3, PROFILE_PERF_COUNTERS_L1_3},
+    {PerfCounterGroup::L1_4, PROFILE_PERF_COUNTERS_L1_4},
+};
+constexpr uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
+
+// Lookup table indexed by PerfCounterGroup. Smaller than a 9-case switch.
+// Keep ordered to match the enum (FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4).
+constexpr uint32_t cntl_reg_for_group[9] = {
+    RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
+    RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
+    RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,    // UNPACK
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_0
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_1
+    RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0,  // INSTRN
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_2
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_3
+    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_4
+};
+
+FORCE_INLINE uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
+    return cntl_reg_for_group[static_cast<uint32_t>(counter_group)];
 }
 
-uint32_t get_read_register_for_counter_group(PerfCounterGroup counter_group) {
-    uint32_t reg_addr = 0;
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU; break;
-        case PerfCounterGroup::PACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK; break;
-        case PerfCounterGroup::UNPACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK; break;
-        case PerfCounterGroup::L1_0:
-        case PerfCounterGroup::L1_1:
-        case PerfCounterGroup::L1_2:
-        case PerfCounterGroup::L1_3:
-        case PerfCounterGroup::L1_4: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1; break;
-        case PerfCounterGroup::INSTRN: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD; break;
-        default: {
-            ASSERT(false);
-            break;
-        }
-    }
-    return reg_addr;
-}
+// Shared: sets the L1 mux select (bank 0..4) for the given group. 0 for non-L1 groups (unused).
+constexpr uint32_t mux_sel_for_group[9] = {
+    0,  // FPU (unused)
+    0,  // PACK (unused)
+    0,  // UNPACK (unused)
+    0,  // L1_0 → bank 0
+    1,  // L1_1 → bank 1
+    0,  // INSTRN (unused)
+    2,  // L1_2 → bank 2
+    3,  // L1_3 → bank 3
+    4,  // L1_4 → bank 4
+};
 
-uint32_t get_flag_for_counter_group(PerfCounterGroup counter_group) {
-    uint32_t flag = 0;
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: flag = PROFILE_PERF_COUNTERS_FPU; break;
-        case PerfCounterGroup::PACK: flag = PROFILE_PERF_COUNTERS_PACK; break;
-        case PerfCounterGroup::UNPACK: flag = PROFILE_PERF_COUNTERS_UNPACK; break;
-        case PerfCounterGroup::L1_0: flag = PROFILE_PERF_COUNTERS_L1_0; break;
-        case PerfCounterGroup::L1_1: flag = PROFILE_PERF_COUNTERS_L1_1; break;
-        case PerfCounterGroup::INSTRN: flag = PROFILE_PERF_COUNTERS_INSTRN; break;
-        case PerfCounterGroup::L1_2: flag = PROFILE_PERF_COUNTERS_L1_2; break;
-        case PerfCounterGroup::L1_3: flag = PROFILE_PERF_COUNTERS_L1_3; break;
-        case PerfCounterGroup::L1_4: flag = PROFILE_PERF_COUNTERS_L1_4; break;
-        default: {
-            ASSERT(false);
-            break;
-        }
-    }
-    return flag;
-}
-
-uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
-    uint32_t num_counters = 0;
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: num_counters = NUM_FPU_COUNTERS; break;
-        case PerfCounterGroup::UNPACK: num_counters = NUM_UNPACK_COUNTERS; break;
-        case PerfCounterGroup::PACK: num_counters = NUM_PACK_COUNTERS; break;
-        case PerfCounterGroup::L1_0: num_counters = NUM_L1_0_COUNTERS; break;
-        case PerfCounterGroup::L1_1: num_counters = NUM_L1_1_COUNTERS; break;
-        case PerfCounterGroup::INSTRN: num_counters = NUM_INSTRN_COUNTERS; break;
-        case PerfCounterGroup::L1_2: num_counters = NUM_L1_2_COUNTERS; break;
-        case PerfCounterGroup::L1_3: num_counters = NUM_L1_3_COUNTERS; break;
-        case PerfCounterGroup::L1_4: num_counters = NUM_L1_4_COUNTERS; break;
-        default: {
-            ASSERT(false);
-            break;
-        }
-    }
-    return num_counters;
-}
-
-FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counter_group(
-    PerfCounterGroup counter_group) {
-    switch (counter_group) {
-        case PerfCounterGroup::FPU: return fpu_counters.data();
-        case PerfCounterGroup::UNPACK: return unpack_counters.data();
-        case PerfCounterGroup::PACK: return pack_counters.data();
-        case PerfCounterGroup::L1_0: return l1_0_counters.data();
-        case PerfCounterGroup::L1_1: return l1_1_counters.data();
-        case PerfCounterGroup::INSTRN: return instrn_counters.data();
-        case PerfCounterGroup::L1_2: return l1_2_counters.data();
-        case PerfCounterGroup::L1_3: return l1_3_counters.data();
-        case PerfCounterGroup::L1_4: return l1_4_counters.data();
-        default: {
-            ASSERT(false);
-            return fpu_counters.data();
-        }
-    }
-}
-
-void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
+FORCE_INLINE void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     volatile tt_reg_ptr uint32_t* mux_reg =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-    uint32_t mux_val = *mux_reg;
-    // L1_MUX_MASK defined in hw_counters.h (arch-specific width)
-    uint32_t mux_sel = 0;
-    if (counter_group == PerfCounterGroup::L1_1) {
-        mux_sel = 1;
-    } else if (counter_group == PerfCounterGroup::L1_2) {
-        mux_sel = 2;
-    } else if (counter_group == PerfCounterGroup::L1_3) {
-        mux_sel = 3;
-    } else if (counter_group == PerfCounterGroup::L1_4) {
-        mux_sel = 4;
-    }
-    mux_val = (mux_val & ~L1_MUX_MASK) | (mux_sel << 4);
-    *mux_reg = mux_val;
+    uint32_t mux_sel = mux_sel_for_group[static_cast<uint32_t>(counter_group)];
+    *mux_reg = (*mux_reg & ~L1_MUX_MASK) | (mux_sel << 4);
 }
 
+#if COMPILE_FOR_TRISC == 1
+// --- TRISC1-only: start/stop counters around the compute kernel ------------
+
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
-    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1 ||
-        counter_group == PerfCounterGroup::L1_2 || counter_group == PerfCounterGroup::L1_3 ||
-        counter_group == PerfCounterGroup::L1_4) {
+    if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
         set_l1_mux_ctrl(counter_group);
     }
     volatile tt_reg_ptr uint32_t* cntl_reg =
@@ -393,10 +329,83 @@ __attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group)
     cntl_reg[2] = PERF_CNT_STOP_VALUE;
 }
 
+void start_perf_counter() {
+    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            start_single_group(counter_group_flags[i].first);
+        }
+    }
+}
+
+void stop_perf_counter() {
+    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
+        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
+            stop_single_group(counter_group_flags[i].first);
+        }
+    }
+}
+
+struct PerfCounterWrapper {
+    PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
+    ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
+};
+
+#endif  // COMPILE_FOR_TRISC == 1
+
+#if defined(COMPILE_FOR_BRISC)
+// --- BRISC-only: counter readout and DRAM push -----------------------------
+
+// Lookup tables indexed by PerfCounterGroup (same ordering as cntl_reg_for_group).
+constexpr uint32_t read_reg_for_group[9] = {
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU,            // FPU
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK,      // PACK
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK,    // UNPACK
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_0
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_1
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD,  // INSTRN
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_2
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_3
+    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_4
+};
+
+constexpr uint32_t num_counters_for_group[9] = {
+    NUM_FPU_COUNTERS,     // FPU
+    NUM_PACK_COUNTERS,    // PACK
+    NUM_UNPACK_COUNTERS,  // UNPACK
+    NUM_L1_0_COUNTERS,    // L1_0
+    NUM_L1_1_COUNTERS,    // L1_1
+    NUM_INSTRN_COUNTERS,  // INSTRN
+    NUM_L1_2_COUNTERS,    // L1_2
+    NUM_L1_3_COUNTERS,    // L1_3
+    NUM_L1_4_COUNTERS,    // L1_4
+};
+
+constexpr const std::pair<PerfCounterType, uint16_t>* counters_for_group[9] = {
+    fpu_counters.data(),     // FPU
+    pack_counters.data(),    // PACK
+    unpack_counters.data(),  // UNPACK
+    l1_0_counters.data(),    // L1_0
+    l1_1_counters.data(),    // L1_1
+    instrn_counters.data(),  // INSTRN
+    l1_2_counters.data(),    // L1_2
+    l1_3_counters.data(),    // L1_3
+    l1_4_counters.data(),    // L1_4
+};
+
+FORCE_INLINE uint32_t get_read_register_for_counter_group(PerfCounterGroup g) {
+    return read_reg_for_group[static_cast<uint32_t>(g)];
+}
+
+FORCE_INLINE uint32_t get_num_counters_for_counter_group(PerfCounterGroup g) {
+    return num_counters_for_group[static_cast<uint32_t>(g)];
+}
+
+FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counter_group(PerfCounterGroup g) {
+    return counters_for_group[static_cast<uint32_t>(g)];
+}
+
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
-    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1 ||
-        counter_group == PerfCounterGroup::L1_2 || counter_group == PerfCounterGroup::L1_3 ||
-        counter_group == PerfCounterGroup::L1_4) {
+    if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
         set_l1_mux_ctrl(counter_group);
     }
     volatile tt_reg_ptr uint32_t* cntl_reg =
@@ -418,115 +427,55 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
     }
 }
 
-// Counter groups and their corresponding enable bitmask bits.
-constexpr std::pair<PerfCounterGroup, uint32_t> counter_group_flags[] = {
-    {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
-    {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
-    {PerfCounterGroup::UNPACK, PROFILE_PERF_COUNTERS_UNPACK},
-    {PerfCounterGroup::L1_0, PROFILE_PERF_COUNTERS_L1_0},
-    {PerfCounterGroup::L1_1, PROFILE_PERF_COUNTERS_L1_1},
-    {PerfCounterGroup::INSTRN, PROFILE_PERF_COUNTERS_INSTRN},
-    {PerfCounterGroup::L1_2, PROFILE_PERF_COUNTERS_L1_2},
-    {PerfCounterGroup::L1_3, PROFILE_PERF_COUNTERS_L1_3},
-    {PerfCounterGroup::L1_4, PROFILE_PERF_COUNTERS_L1_4},
-};
-constexpr uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
-
-void start_perf_counter() {
-    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
-            start_single_group(counter_group_flags[i].first);
-        }
-    }
-}
-
-// Called from TRISC1 at compute kernel end. Readout happens later on BRISC (NOC access).
-void stop_perf_counter() {
-    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
-            stop_single_group(counter_group_flags[i].first);
-        }
-    }
-};
-
-// Body-only flush; finish_profiler writes the header sentinel later.
-__attribute__((noinline)) void perf_counter_flush() {
-#if defined(COMPILE_FOR_BRISC)
-    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
-        return;
-    }
-    if (wIndex <= CUSTOM_MARKERS) {
-        return;  // nothing to flush
-    }
-
-    uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
-    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
-
-    uint32_t send_count = wIndex - CUSTOM_MARKERS;
-
-    // Pad body to NOC alignment
-    for (uint32_t i = 0; i < (send_count % NOC_ALIGNMENT_FACTOR); i++) {
-        mark_padding();
-        send_count += PROFILER_L1_MARKER_UINT32_SIZE;
-    }
-
-    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX] + send_count;
-    if (currEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-        wIndex = CUSTOM_MARKERS;
-        return;  // DRAM full, drop remaining counters
-    }
-
-    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
-                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                           HOST_BUFFER_END_INDEX * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                           profiler_control_buffer[HOST_BUFFER_END_INDEX] * sizeof(uint32_t);
-
-    const auto s = TensorAccessor(
-        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
-        profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram);
-
-    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
-
-    NocRegisterStateSave noc_state;
-    profiler_noc_async_write_posted(
-        reinterpret_cast<uint32_t>(&profiler_data_buffer[myRiscID].data[CUSTOM_MARKERS]),
-        dram_bank_dst_noc_addr,
-        send_count * sizeof(uint32_t));
-    profiler_noc_async_flush_posted_write();
-
-    profiler_control_buffer[HOST_BUFFER_END_INDEX] = currEndIndex;
-    wIndex = CUSTOM_MARKERS;
+void read_perf_counters() {
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU
+    read_single_group(PerfCounterGroup::FPU);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_PACK
+    read_single_group(PerfCounterGroup::PACK);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_UNPACK
+    read_single_group(PerfCounterGroup::UNPACK);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_0
+    read_single_group(PerfCounterGroup::L1_0);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_1
+    read_single_group(PerfCounterGroup::L1_1);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_INSTRN
+    read_single_group(PerfCounterGroup::INSTRN);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_2
+    read_single_group(PerfCounterGroup::L1_2);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_3
+    read_single_group(PerfCounterGroup::L1_3);
+#endif
+#if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_4
+    read_single_group(PerfCounterGroup::L1_4);
 #endif
 }
 
-// Called from BRISC; flushes L1 to DRAM between groups.
-void read_perf_counters() {
-    bool first_group = true;
-    for (uint32_t i = 0; i < NUM_COUNTER_GROUPS; i++) {
-        if (PROFILE_PERF_COUNTERS & counter_group_flags[i].second) {
-            if (!first_group) {
-                perf_counter_flush();
-            }
-            read_single_group(counter_group_flags[i].first);
-            first_group = false;
-        }
-    }
-};
-
-// TRISC1: RAII wrapper that starts counters in constructor and stops in destructor.
-// Counter readout happens later on BRISC via read_perf_counters().
-struct PerfCounterWrapper {
-    PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
-    ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
-};
+#endif  // COMPILE_FOR_BRISC
 
 }  // namespace kernel_profiler
 
+#if COMPILE_FOR_TRISC == 1
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
-#define ReadPerfCounters() kernel_profiler::read_perf_counters();
 #define RecordPerfCounters() kernel_profiler::PerfCounterWrapper _perf_counter_wrapper_;
+#else
+#define StartPerfCounters()
+#define StopPerfCounters()
+#define RecordPerfCounters()
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+#define ReadPerfCounters() kernel_profiler::read_perf_counters();
+#else
+#define ReadPerfCounters()
+#endif
 
 #else
 
