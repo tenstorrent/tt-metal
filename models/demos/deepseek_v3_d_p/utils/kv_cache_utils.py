@@ -7,16 +7,16 @@ Utilities for KVPE cache initialization and management.
 
 import socket
 
-import torch
-
-import ttnn
-
-# This is a predefined constant for the number of contiguous tokens in a DRAM bank
+# These constants are safe to import on any rank (no torch/ttnn dependency).
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
 
 def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes):
+    import torch  # noqa: PLC0415 — deferred so decode-only ranks don't need torch
+
+    import ttnn  # noqa: PLC0415
+
     """
     Create and populate a KV chunk address table for disaggregation.
 
@@ -129,6 +129,10 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
 
 
 def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers):
+    import torch  # noqa: PLC0415
+
+    import ttnn  # noqa: PLC0415
+
     """
     Initialize KVPE cache for MLA.
 
