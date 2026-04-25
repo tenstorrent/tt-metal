@@ -405,6 +405,55 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
                 "rescue_stuck_dispatch_cores: Device {} dispatch cores may still be stuck after rescue injection "
                 "— proceeding to process_termination_signals anyway",
                 device->id());
+
+            // FIX AD: Hard-reset still-stuck Tensix dispatch cores via PCIe (MMIO devices only).
+            //
+            // Dispatch cores stuck in a NOC write barrier or fabric-acknowledgment wait are NOT
+            // unblocked by stream-counter injection (which only satisfies stream_wrap_gt waits).
+            // Leaving these cores running contaminates the next process: it inherits the stuck
+            // BRISC and sees 5-second CQ timeouts on every operation.
+            //
+            // For MMIO devices we can hard-reset the core directly via PCIe without going
+            // through the ETH relay, so it is safe to do here.  Non-MMIO relay-broken devices
+            // already returned early (FIX Y guard at the top of this function).
+            if (device->is_mmio_capable() && !dispatch_cores.empty()) {
+                log_warning(
+                    tt::LogMetal,
+                    "rescue_stuck_dispatch_cores: Device {} performing hard BRISC reset on {} still-stuck dispatch "
+                    "cores via PCIe",
+                    device->id(),
+                    dispatch_cores.size());
+                for (const auto& virtual_core : dispatch_cores) {
+                    try {
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(device->id(), virtual_core), tt::umd::RiscType::ALL);
+                        cluster_.deassert_risc_reset_at_core(
+                            tt_cxy_pair(device->id(), virtual_core), tt::umd::RiscType::ALL);
+                        log_info(
+                            tt::LogMetal,
+                            "rescue_stuck_dispatch_cores: Device {} hard-reset dispatch core ({},{})",
+                            device->id(),
+                            virtual_core.x,
+                            virtual_core.y);
+                    } catch (const std::exception& e) {
+                        log_error(
+                            tt::LogMetal,
+                            "rescue_stuck_dispatch_cores: Device {} hard-reset of core ({},{}) failed: {}",
+                            device->id(),
+                            virtual_core.x,
+                            virtual_core.y,
+                            e.what());
+                    } catch (...) {
+                        log_error(
+                            tt::LogMetal,
+                            "rescue_stuck_dispatch_cores: Device {} hard-reset of core ({},{}) failed with "
+                            "non-std exception",
+                            device->id(),
+                            virtual_core.x,
+                            virtual_core.y);
+                    }
+                }
+            }
         }
     }
 }
