@@ -239,7 +239,7 @@ class TtPrefillTransformer(LightweightModule):
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
-            h, _ = layer(h, rope_tensors, kvpe_cache, cache_layer_idx=i)
+            h, _ = layer(h, rope_tensors, kvpe_cache, cache_layer_idx=i, return_intermediates=return_intermediates)
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)

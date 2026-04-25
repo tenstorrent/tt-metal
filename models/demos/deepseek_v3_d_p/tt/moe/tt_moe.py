@@ -383,6 +383,12 @@ class TtMoe(LightweightModule):
         _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
         logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
+        # DEBUG
+        # Print full region offsets per expert for monitoring
+        _offsets_4d = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
+        _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
+        logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
+
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
         # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
@@ -533,22 +539,51 @@ class TtMoe(LightweightModule):
         if return_intermediates:
             # Check for buffer overflow (dispatch kernel silently drops overflow tokens).
             # The kernel bounds-check is against max_dispatch_buffer_token_size (total per-chip
-            # buffer capacity). Any single per-expert count exceeding that cap is a guaranteed
-            # overflow; if the per-expert counts fit individually but their sum-per-chip would
-            # exceed the cap, overflow is still possible (not detected here).
+            # buffer capacity). Group-sparse counts mean each chip's experts_per_chip-sized
+            # chunk of _counts_host holds that chip's nonzero counts; the sum of each chunk is
+            # the chip's total dispatched tokens and must fit in the dispatch buffer.
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
             _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
             _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-            max_token_count = int(_counts_host.to(torch.int64).max().item())
+            _per_chip_sums = _counts_host.to(torch.int64).flatten().view(-1, self.experts_per_chip).sum(dim=1)
+            max_per_chip_sum = int(_per_chip_sums.max().item())
             max_capacity = self.dispatch_module.max_dispatch_buffer_token_size
-            if max_token_count > max_capacity:
+            logger.info(
+                f"[TtMoe.forward] max per-chip dispatched token sum: {max_per_chip_sum} "
+                f"(max_dispatch_buffer_token_size={max_capacity})"
+            )
+            if max_per_chip_sum > max_capacity:
                 logger.error(
-                    f"[TtMoe.forward] expert token count ({max_token_count}) exceeds "
+                    f"[TtMoe.forward] per-chip dispatched token sum ({max_per_chip_sum}) exceeds "
                     f"max_dispatch_buffer_token_size ({max_capacity}). "
                     f"Overflow tokens were dropped - output data is corrupted. "
                     f"Reduce sequence length."
                 )
                 logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+                logger.debug(f"[TtMoe.forward] per_chip_sums: {_per_chip_sums.tolist()}")
+
+            # Every per-expert region offset must address a row inside the dispatch buffer
+            # (i.e. < max_dispatch_buffer_token_size). An offset >= capacity means the
+            # expert's region starts past the end of the buffer and its tokens are dropped.
+            _offsets_4d = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
+            _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
+            _offsets_flat = _offsets_host.to(torch.int64).flatten()
+            _argmax_offset = int(_offsets_flat.argmax().item())
+            max_region_offset = int(_offsets_flat[_argmax_offset].item())
+            max_offset_token_count = int(_counts_host.to(torch.int64).flatten()[_argmax_offset].item())
+            logger.info(
+                f"[TtMoe.forward] max expert region offset: {max_region_offset} "
+                f"(token_count for that expert: {max_offset_token_count}, "
+                f"max_dispatch_buffer_token_size={max_capacity})"
+            )
+            if max_region_offset >= max_capacity:
+                logger.error(
+                    f"[TtMoe.forward] expert region offset ({max_region_offset}) is not below "
+                    f"max_dispatch_buffer_token_size ({max_capacity}). "
+                    f"Overflow tokens were dropped - output data is corrupted. "
+                    f"Reduce sequence length."
+                )
+                logger.debug(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
             intermediates = TtMoEIntermediates(
                 gate_scores=scores,

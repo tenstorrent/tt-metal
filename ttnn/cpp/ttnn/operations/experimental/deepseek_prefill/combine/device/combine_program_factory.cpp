@@ -145,7 +145,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
 
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
-    auto max_dispatched_tokens_per_expert = dispatched_shape[-2] / operation_attributes.experts_per_chip;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     // Maximum worker cores: one per fabric link.
@@ -398,7 +397,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         operation_attributes.experts_per_chip,
         operation_attributes.num_experts_per_tok,
         operation_attributes.seq_len_per_chip,
-        (uint32_t)max_dispatched_tokens_per_expert,
 
         // Hidden dimension
         (uint32_t)hidden_size,
