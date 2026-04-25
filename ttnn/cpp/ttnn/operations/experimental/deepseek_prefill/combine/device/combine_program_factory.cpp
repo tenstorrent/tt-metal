@@ -1041,9 +1041,8 @@ void CombineProgramFactory::override_runtime_arguments(
             for (size_t i = 0; i < shared_variables.idle_cores.size(); i++) {
                 auto& idle_rt_args = tt::tt_metal::GetRuntimeArgs(
                     program, shared_variables.reader_untilize_kernel_ids[i], shared_variables.idle_cores[i]);
-                // RT layout: [0:counter_ready_sem, 1:data_ready_sem, 2:noc_x, 3:noc_y, 4:start_sem,
-                //             5:dispatched_buffer_addr, 6:expert_start, 7:expert_end]
-                idle_rt_args.at(5) = tensor_args.dispatched_buffer.buffer()->address();
+                // RT layout: [0:counter_ready_sem, 1:dispatched_buffer_addr, 2:expert_start, 3:expert_end]
+                idle_rt_args.at(1) = tensor_args.dispatched_buffer.buffer()->address();
             }
         }
     }
