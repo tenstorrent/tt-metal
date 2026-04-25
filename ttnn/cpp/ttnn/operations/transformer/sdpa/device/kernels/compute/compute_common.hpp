@@ -2495,7 +2495,7 @@ void sdpa_ring(
         out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
-        q_num_chunks,    // q_num_chunks (number of local q chunks)
+        q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)
         0,               // local_q_start (not used)
         0,               // chunked_q_chunk_offset (not used)
         0,

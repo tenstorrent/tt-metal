@@ -168,9 +168,6 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
-    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
-
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {

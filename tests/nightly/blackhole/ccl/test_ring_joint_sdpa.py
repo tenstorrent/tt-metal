@@ -23,7 +23,7 @@ import math
 import torch
 from dataclasses import dataclass, field
 from itertools import product
-from typing import ClassVar, List, Tuple, Dict
+from typing import List, Dict
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
