@@ -697,7 +697,7 @@ void FabricFirmwareInitializer::post_teardown() {
     if (!timed_out_chips.empty() && descriptor_->metal_context().is_device_manager_initialized()) {
         auto& dm = descriptor_->metal_context().device_manager();
         for (const ChipId chip_id : timed_out_chips) {
-            Device* dev = dm->get_device(chip_id);
+            IDevice* dev = dm->get_active_device(chip_id);
             if (dev) {
                 dev->set_fabric_teardown_timed_out();
                 log_warning(
