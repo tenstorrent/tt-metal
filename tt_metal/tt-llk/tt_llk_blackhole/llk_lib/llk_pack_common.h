@@ -139,7 +139,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
 }
 
 template <bool untilize = false, ReduceDim dim>
-inline void _llk_pack_reduce_mask_config_()
+inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
@@ -211,7 +211,7 @@ inline void _llk_pack_reduce_mask_config_()
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(face_r_dim);
 
     // Configure packer
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);

@@ -143,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif
 
-    _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<false, REDUCE_DIM>(tensor_shape.face_r_dim);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

@@ -424,6 +424,11 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
     if constexpr (revert) {
         _llk_pack_reduce_mask_clear_();
     } else {
-        _llk_pack_reduce_mask_config_<untilize, dim>();
+        if constexpr (at_kernel_start) {
+            const std::uint32_t output_id = get_output_id(icb_out);
+            _llk_pack_reduce_mask_config_<untilize, dim>(get_output_face_r_dim(output_id));
+        } else {
+            _llk_pack_reduce_mask_config_<untilize, dim>();
+        }
     }
 }

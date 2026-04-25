@@ -570,12 +570,12 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t tile_c_dim          = TILE_C_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config         = 0)
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim                 = TILE_C_DIM,
+    const std::uint32_t num_faces                  = 4,
+    const bool partial_face                        = false,
+    [[maybe_unused]] const bool narrow_tile        = false,
+    const std::uint32_t relu_config                = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
