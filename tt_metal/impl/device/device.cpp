@@ -1531,16 +1531,35 @@ void Device::wait_for_fabric_workers_ready() {
                         sync_status);
                 }
                 if (elapsed > kSyncTimeoutMs) {
-                    log_warning(
-                        tt::LogMetal,
-                        "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) waiting "
-                        "for LOCAL_HANDSHAKE_COMPLETE on master chan {} (status=0x{:08x}, "
-                        "expected=0x{:08x}). Continuing to health check.",
-                        this->id(),
-                        kSyncTimeoutMs,
-                        master_chan,
-                        sync_buf[0],
-                        sync_status);
+                    // FIX V (#42429): On a non-MMIO device, status=0x0 after 10s means the
+                    // device's ETH channels never booted fabric firmware — the relay path to
+                    // this device is broken.  Set fabric_relay_path_broken_ so that Phase 5b
+                    // (health check reads) and any subsequent quiesce relay ops are skipped,
+                    // exactly as done for Phase 5 relay read exceptions (FIX U) and ENTRY
+                    // snapshot deadline exceeded (FIX S/T).
+                    if (!this->is_mmio_capable() && sync_buf[0] == 0x0) {
+                        fabric_relay_path_broken_ = true;
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) "
+                            "waiting for LOCAL_HANDSHAKE_COMPLETE on master chan {} — status "
+                            "still 0x0 on non-MMIO device.  Setting fabric_relay_path_broken_=true "
+                            "to skip relay ops in subsequent quiesce.  (FIX V: #42429)",
+                            this->id(),
+                            kSyncTimeoutMs,
+                            master_chan);
+                    } else {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) waiting "
+                            "for LOCAL_HANDSHAKE_COMPLETE on master chan {} (status=0x{:08x}, "
+                            "expected=0x{:08x}). Continuing to health check.",
+                            this->id(),
+                            kSyncTimeoutMs,
+                            master_chan,
+                            sync_buf[0],
+                            sync_status);
+                    }
                     break;
                 }
                 if (++sync_spin >= kSpinLimit) {
@@ -1582,15 +1601,16 @@ void Device::wait_for_fabric_workers_ready() {
         // how long propagation from master to subordinate channels actually takes and whether
         // 500ms was cutting off channels that would have become healthy shortly after.
         //
-        // Skip Phase 5b entirely if Phase 5 reads threw (relay path broken after Phase 3).
-        // In that case, channel reads in Phase 5b either accumulate 5-second timeouts per
+        // Skip Phase 5b entirely if Phase 5 relay reads threw OR if fabric_relay_path_broken_
+        // was set by the Phase 5 timeout (FIX V — non-MMIO device, status=0x0 after 10s).
+        // In either case, channel reads in Phase 5b either accumulate 5-second timeouts per
         // channel or hang indefinitely (relay ERISC still alive but peer fabric firmware never
         // responds to UMD relay protocol) — both outcomes block the quiesce path.
-        if (phase5_relay_read_threw) {
-            // FIX U: Phase 5 relay read failed — UMD relay path to this non-MMIO device is
-            // broken because the MMIO device's relay ERISC now runs fabric firmware after
-            // Phase 3.  fabric_relay_path_broken_ is already set (catch block above), so
-            // subsequent quiesce calls will skip all relay ops.
+        if (phase5_relay_read_threw || fabric_relay_path_broken_) {
+            // FIX U / FIX V: Phase 5 relay read failed or timed out with 0x0 on non-MMIO
+            // device — UMD relay path is broken.  fabric_relay_path_broken_ is already set
+            // (catch block or timeout block above), so subsequent quiesce calls will skip
+            // all relay ops.
             //
             // Previously we TT_THROWed here, but that caused a cascading failure:
             //   1. TT_THROW triggers a teardown second quiesce
@@ -1609,11 +1629,13 @@ void Device::wait_for_fabric_workers_ready() {
             // scenario requires a non-blocking UMD probe or thread-based timeout.
             log_warning(
                 tt::LogMetal,
-                "wait_for_fabric_workers_ready: Device {} Phase 5: relay read failed on non-MMIO "
-                "device — fabric_relay_path_broken_ already set.  Returning without throwing "
-                "to prevent cascading second quiesce from re-flashing MMIO relay channels "
-                "mid-boot.  (FIX U: #42429)",
-                this->id());
+                "wait_for_fabric_workers_ready: Device {} Phase 5: relay path broken "
+                "(phase5_relay_read_threw={} fabric_relay_path_broken_={}) — "
+                "skipping Phase 5b to prevent cascading second quiesce from re-flashing "
+                "MMIO relay channels mid-boot.  (FIX U/V: #42429)",
+                this->id(),
+                phase5_relay_read_threw,
+                fabric_relay_path_broken_);
             return;
         } else {
         constexpr uint32_t kHealthCheckTimeoutMs = 2000;
@@ -1826,6 +1848,34 @@ void Device::wait_for_fabric_workers_ready() {
                     details += fmt::format(
                         "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
                 }
+                // FIX V (#42429): On a non-MMIO device, if ALL truly-unhealthy channels are at
+                // 0x0 or 0xdeadbeef (deadline-skipped), the device's ETH channels never booted
+                // fabric firmware — the relay path is broken.  Set fabric_relay_path_broken_ and
+                // return cleanly rather than TT_THROWing, which would trigger a cascading teardown
+                // second quiesce that re-flashes MMIO relay channels mid-boot and causes a second
+                // cascade failure.  This mirrors the Phase 5 relay read exception path (FIX U) and
+                // the ENTRY snapshot deadline exceeded path (FIX S/T).
+                if (!this->is_mmio_capable()) {
+                    const bool all_dead = std::all_of(
+                        truly_unhealthy.begin(),
+                        truly_unhealthy.end(),
+                        [](const UnhealthyChannel& u) {
+                            return u.actual_status == 0x0 || u.actual_status == 0xdeadbeef;
+                        });
+                    if (all_dead) {
+                        fabric_relay_path_broken_ = true;
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline exceeded "
+                            "with {} channel(s) still at 0x0/0xdeadbeef on non-MMIO device — "
+                            "setting fabric_relay_path_broken_=true to skip relay ops in "
+                            "subsequent quiesce.  (FIX V: #42429)\n{}",
+                            this->id(),
+                            truly_unhealthy.size(),
+                            details);
+                        return;
+                    }
+                }
                 // Interpret the observed status before throwing so the reader knows
                 // whether this is a timing issue or genuine hardware/firmware failure.
                 // STARTED (0xa0b0c0d0) = launched but handshake not complete → timing issue
@@ -1853,7 +1903,7 @@ void Device::wait_for_fabric_workers_ready() {
             this->id(),
             chans.size() - fabric_pre_dead_channels_.size(),
             fabric_pre_dead_channels_.size());
-        }  // end else (phase5_relay_read_threw == false)
+        }  // end else (!phase5_relay_read_threw && !fabric_relay_path_broken_)
     }
 
     log_info(tt::LogMetal, "Fabric workers ready on Device {}", this->id_);
