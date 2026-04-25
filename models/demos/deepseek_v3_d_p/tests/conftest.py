@@ -67,11 +67,11 @@ def pytest_collection_modifyitems(config, items):
         if devices_needed > num_devices:
             skip_reason = f"Requires {devices_needed} devices, only {num_devices} available"
 
-        # Architecture-specific constraints
-        elif is_blackhole():
-            # BH: only supports all available devices configs
-            if devices_needed != num_devices:
-                skip_reason = f"Blackhole only supports {num_devices}-device mesh configs (requested {devices_needed})"
+        # # Architecture-specific constraints
+        # elif is_blackhole():
+        #     # BH: only supports all available devices configs
+        #     if devices_needed != num_devices:
+        #         skip_reason = f"Blackhole only supports {num_devices}-device mesh configs (requested {devices_needed})"
 
         elif is_wormhole_b0():
             # WH: ring topology only works with 8 devices
