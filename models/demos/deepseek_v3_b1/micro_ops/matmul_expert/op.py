@@ -916,13 +916,20 @@ def create_dram_expert_tensors_multi_device(
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
                           l1_addrs, per_core_values, num_in1_buffers)}
     """
+    from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
     mesh_shape = mesh_device.shape
     num_devices = mesh_device.get_num_devices()
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    # Use the pinned (harvest-agnostic) DRAM→worker assignment so meta/fmt tensor
+    # placement matches callers that rig their compute-core mask + per-core descriptors
+    # on the pinned list (e.g. fused MoE). The device's dynamic optimal assignment
+    # can return different cores under harvesting, leaving compute cores with
+    # expert_offsets_l1_addr=0 and hanging the kernel.
+    primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):
@@ -959,15 +966,23 @@ def create_dram_expert_tensors_multi_device(
     backing_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, backing_shard_spec
     )
-    dram_backing_tensor = ttnn.from_torch(
-        torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
-        dtype=ttnn.uint8,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=backing_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    if allocate_in1_backing:
+        dram_backing_tensor = ttnn.from_torch(
+            torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=backing_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    else:
+        # Caller (e.g. fused MoE) will overlay cb_in1 and cb_fmt on its own L1 region
+        # (e.g. SDPA buffer) and fill in fmt_cb_l1_addr downstream. Skipping the
+        # replicated backing tensor eliminates a separate L1 allocation that the CB
+        # allocator didn't see (potential silent stomp source).
+        dram_backing_tensor = None
+        cb_in1_base_shifted = 0
     max_subblock_bytes_shifted = (subblock_k * subblock_n * max_tile_size) >> _CB_ADDR_SHIFT
 
     # fmt metadata sync: 2 global sems as atomic counters (0..2).
@@ -986,12 +1001,15 @@ def create_dram_expert_tensors_multi_device(
     pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
     ttnn.synchronize_device(mesh_device)
-    fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
-
-    logger.info(
-        f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
-        f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
-    )
+    if dram_backing_tensor is not None:
+        fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
+        logger.info(
+            f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
+            f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
+        )
+    else:
+        fmt_cb_l1_addr = 0  # placeholder; caller overrides in its CB overlay pass.
+        logger.info(f"  dram_backing SKIPPED (caller will overlay); in1={in1_region_bytes}B, fmt={fmt_region_bytes}B")
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
     # K-split: each core's fmt describes only its K-slice's blocks.

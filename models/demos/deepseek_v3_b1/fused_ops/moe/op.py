@@ -545,6 +545,9 @@ class MoeRoutedExpertOp:
             n_parallel_per_bank=cores_per_dram_bank,
             num_total_experts=num_total_experts,
             is_dram_flags=is_dram_flags,
+            # MoE overlays cb_in1 + cb_fmt on the SDPA buffer in _overlap_cbs_with_sdpa_buffer;
+            # skip the helper's separate L1 backing tensor (invisible to CB allocator, can stomp).
+            allocate_in1_backing=False,
         )
 
         # dram_results layout (one entry per mesh coordinate) is pr42896's 15-element tuple:
@@ -583,6 +586,11 @@ class MoeRoutedExpertOp:
         # Per-device compute cores list (same list across devices; from first device's per_core_values).
         first_coord_for_cores = next(iter(per_core_values_per_device))
         compute_cores_list = [c for (c, _) in per_core_values_per_device[first_coord_for_cores]["bank_id"]]
+
+        # Diagnostic: compare pinned list (used by MoE for gate_proj_core_ranges + bank_id/vc)
+        # against canonical helper list (used for meta/fmt tensor placement). If these
+        # diverge, per-core CT descriptors land on different cores than the L1 meta tables.
+        pinned_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
 
         # Fmt DRAM sizing: recompute here (matches helper's internals).
         # Phase 1C: k_parallel_per_bank=1, subblock_n=1 (matches setup), so
@@ -1520,39 +1528,12 @@ class MoeRoutedExpertOp:
                 if "expert_offsets_l1_addr_per_device" in p:
                     p["index_l1_addr"] = index_l1_addr
 
-        # Build cb_fmt CB descriptors for MatmulExpertCompressedDRAM.
-        # Canonical (micro_ops/matmul_expert/op.py:414-427) aliases cb_fmt OVER the
-        # dram_backing_tensor at address_offset=in1_region_bytes so the CB's L1 base
-        # matches fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes.
-        # NCRISC writes fmt via raw L1 pointer at fmt_cb_l1_addr; compute reads via the
-        # CB interface — both must resolve to the same physical L1 region.
-        _dram_alignment = ttnn._ttnn.bfp_utils.get_dram_alignment()
-
-        def _build_cb_fmt_descriptor(cb_id, params):
-            if "fmt_per_expert_bytes" not in params:
-                return None
-            fmt_bytes = params["fmt_per_expert_bytes"]
-            page_size = ((max(fmt_bytes, _dram_alignment) + _dram_alignment - 1) // _dram_alignment) * _dram_alignment
-            in1_region_bytes = params["cb_in1_size_bytes"]
-            in1_backing_tensor = params["in1_backing_tensor"]
-            cb_fmt_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                cb_id,
-                in1_backing_tensor,
-                address_offset=in1_region_bytes,
-                total_size=page_size,
-            )
-            cb_fmt_desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=cb_id,
-                    data_format=ttnn.uint8,
-                    page_size=page_size,
-                ),
-            ]
-            return cb_fmt_desc
-
-        gate_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(gate_proj_cb_fmt, gate_proj_params)
-        up_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(up_proj_cb_fmt, up_proj_params)
-        down_proj_cb_fmt_descriptor = _build_cb_fmt_descriptor(down_proj_cb_fmt, down_proj_params)
+        # cb_fmt descriptors are now created inside `_overlap_cbs_with_sdpa_buffer`
+        # (aliased on the SDPA KV buffer before cb_in1). Stub values here; overwritten
+        # after overlay so the CB allocator sees the fmt L1 region and won't stomp it.
+        gate_proj_cb_fmt_descriptor = None
+        up_proj_cb_fmt_descriptor = None
+        down_proj_cb_fmt_descriptor = None
 
         # ==================================================================
         # Eltwise Add: down_proj + shared_expert_output
@@ -4145,9 +4126,42 @@ class MoeOp:
         routed_ctx.add_params["cb_in1_descriptor"] = cb23_desc
         kv_offset += cb23_total_size
 
-        # ── CB 9/18: DRAM matmul in1 (gate/up_proj and down_proj share same offset) ──
+        # ── cb_fmt for gate/up/down matmul_expert: allocate in SDPA before cb_in1 so the
+        # CB allocator sees them (no separate in1_backing_tensor needed; fmt_cb_l1_addr
+        # is set here to the SDPA offset and threaded into CT args via proj_params).
+        up_proj_params = routed_ctx.up_proj_params
         gate_proj_params = routed_ctx.gate_proj_params
         down_proj_params = routed_ctx.down_proj_params
+
+        def _overlay_cb_fmt(params, cb_id, proj_label):
+            fmt_page_size = params["fmt_cb_page_size"]
+            # Double-buffered: 2 slots × page_size bytes (kernel toggles fmt_slot ^= 1).
+            fmt_region = 2 * fmt_page_size
+            nonlocal kv_offset
+            fmt_offset = kv_offset
+            desc = ttnn.cb_descriptor_from_sharded_tensor(
+                cb_id,
+                kv_buf,
+                address_offset=fmt_offset,
+                total_size=fmt_page_size,
+            )
+            desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_id,
+                    data_format=ttnn.uint8,
+                    page_size=fmt_page_size,
+                ),
+            ]
+            params["fmt_cb_l1_addr"] = kv_addr + fmt_offset
+            params["cb_fmt_descriptor_override"] = desc
+            kv_offset += fmt_region
+            return desc
+
+        routed_ctx.gate_proj_cb_fmt_descriptor = _overlay_cb_fmt(gate_proj_params, routed_ctx.gate_proj_cb_fmt, "gate")
+        routed_ctx.up_proj_cb_fmt_descriptor = _overlay_cb_fmt(up_proj_params, routed_ctx.up_proj_cb_fmt, "up")
+        routed_ctx.down_proj_cb_fmt_descriptor = _overlay_cb_fmt(down_proj_params, routed_ctx.down_proj_cb_fmt, "down")
+
+        # ── CB 9/18: DRAM matmul in1 (gate/up_proj and down_proj share same offset) ──
         cb9_total_size = gate_proj_params["in1_total_size"]
         cb18_total_size = down_proj_params["in1_total_size"]
         shared_in1_size = max(cb9_total_size, cb18_total_size)
