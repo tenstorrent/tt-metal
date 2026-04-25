@@ -866,6 +866,7 @@ void Device::quiesce_and_restart_fabric_workers() {
             default: break;
         }
         if (v == 0xDEAD5B5B) return "(deadline-skipped)";
+        if (v == 0xDEADECE7) return "(read-exception)";
         return "(unknown)";
     };
 
@@ -900,9 +901,10 @@ void Device::quiesce_and_restart_fabric_workers() {
         log_warning(
             tt::LogMetal,
             "quiesce_and_restart_fabric_workers: Device {} Phase 2.5: relay path known broken "
-            "(fabric_relay_path_broken_) and device is non-MMIO — skipping all Phase 2.5 relay "
+            "(fabric_relay_path_broken_) and device is non-MMIO — skipping all {} Phase 2.5 relay "
             "reads/writes to prevent indefinite UMD relay hang.  Phase 3 will also be skipped.",
-            this->id());
+            this->id(),
+            active_channels.size());
     } else {
     {
         const auto [erisc_term_addr, erisc_term_signal] =
@@ -1465,7 +1467,7 @@ void Device::wait_for_fabric_workers_ready() {
                     last_p4_log_ms = elapsed;
                     log_info(
                         tt::LogMetal,
-                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 4: still waiting for "
+                        "wait_for_fabric_workers_ready: Device {} eth_chan {} Phase 4: still waiting for "
                         "MUX READY_FOR_TRAFFIC ({}ms elapsed, status=0x{:08x} {})",
                         this->id(),
                         eth_chan_id,
@@ -1639,11 +1641,12 @@ void Device::wait_for_fabric_workers_ready() {
                         fabric_relay_path_broken_ = true;
                         log_warning(
                             tt::LogMetal,
-                            "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) "
+                            "wait_for_fabric_workers_ready: Device {} (mmio={}) Phase 5: timeout ({}ms) "
                             "waiting for LOCAL_HANDSHAKE_COMPLETE on master chan {} — status "
                             "still 0x0 on non-MMIO device.  Setting fabric_relay_path_broken_=true "
                             "to skip relay ops in subsequent quiesce.  (FIX V: #42429)",
                             this->id(),
+                            this->is_mmio_capable(),
                             kSyncTimeoutMs,
                             master_chan);
                     } else {
@@ -1673,8 +1676,30 @@ void Device::wait_for_fabric_workers_ready() {
                 auto ready_sig = builder_ctx.get_fabric_router_ready_address_and_signal();
                 if (ready_sig) {
                     std::vector<uint32_t> ready_buf(1, static_cast<uint32_t>(ready_sig->second));
-                    detail::WriteToDeviceL1(
-                        this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
+                    // Phase 5 already confirmed LOCAL_HANDSHAKE_COMPLETE — this write is
+                    // best-effort.  For non-MMIO devices it goes through the UMD ETH relay; if
+                    // the relay is in a degraded state this could throw.  Catch and log rather
+                    // than rethrowing: the successful Phase 5 handshake result must not be masked
+                    // by a best-effort write failure.
+                    try {
+                        detail::WriteToDeviceL1(
+                            this, master_logical_core, ready_sig->first, ready_buf, CoreType::ETH);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5: READY_FOR_TRAFFIC "
+                            "write to master chan {} failed (best-effort, ignoring): {}",
+                            this->id(),
+                            master_chan,
+                            e.what());
+                    } catch (...) {
+                        log_warning(
+                            tt::LogMetal,
+                            "wait_for_fabric_workers_ready: Device {} Phase 5: READY_FOR_TRAFFIC "
+                            "write to master chan {} failed with unknown exception (best-effort, ignoring)",
+                            this->id(),
+                            master_chan);
+                    }
                 }
                 log_info(
                     tt::LogMetal,
