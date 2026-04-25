@@ -404,7 +404,7 @@ void Device::configure_fabric(
     //
     // pre_dead_channels: channels already confirmed dead by terminate_stale_erisc_routers().
     // Passed through so configure_fabric_cores() can skip assert_risc_reset_at_core() for them
-    // and avoid the indefinite hang observed on T3K Device 4 ch7 (#42429).
+    // and avoid the indefinite hang that occurs on non-MMIO device channels in T3K (#42429).
     // skip_soft_reset_channels: channels with base-UMD relay firmware (0x49706550).
     // FIX M (#42429): soft reset would halt the relay BRISC and cascade → hang.
     const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_channels);
@@ -654,12 +654,11 @@ void Device::quiesce_and_restart_fabric_workers() {
                                               .count();
             if (snapshot_elapsed > kSnapshotDeadlineMs) {
                 // FIX S (#42429): Snapshot deadline exceeded means the UMD relay path to this
-                // device is broken (reads are accumulating 5s timeouts).  Set
-                // fabric_relay_path_broken_ so that Phase 2.5 and Phase 3 skip all relay
-                // reads/writes for this device — preventing the 650s hang observed in run
-                // #24921278543 where Device 6 channels 0+1 each timed out (10s total > 6s
-                // deadline) but channels 6/7 then hung indefinitely in Phase 2.5 without
-                // throwing an exception (relay ERISC alive but peering firmware unresponsive).
+                // non-MMIO device is broken (relay reads accumulate 5s timeouts per channel).
+                // Set fabric_relay_path_broken_ so Phase 2.5 and Phase 3 skip all relay
+                // reads/writes — preventing the ~650s hang where some channels throw 5s
+                // timeouts but others hang indefinitely without exception (relay ERISC alive
+                // but peering firmware unresponsive to UMD protocol).
                 fabric_relay_path_broken_ = true;
                 log_warning(
                     tt::LogMetal,
@@ -887,7 +886,7 @@ void Device::quiesce_and_restart_fabric_workers() {
                 detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& e) {
                 // Non-MMIO relay read failed (e.g. UMD relay ERISC not running relay firmware
-                // after Phase 3 loaded fabric firmware on Device 0's channels).  We cannot
+                // after Phase 3 loaded fabric firmware on the MMIO device's channels).  We cannot
                 // safely send TERMINATE because WriteToDeviceL1 via the relay can hang
                 // indefinitely with no write timeout.  Skip this channel — configure_fabric_cores()
                 // in Phase 3 overwrites L1 regardless of ERISC state.
@@ -1241,12 +1240,12 @@ void Device::quiesce_and_restart_fabric_workers() {
     }
 
     // FIX P REMOVED (#42429): The per-device MAGIC injection (FIX P) was removed because it
-    // caused a regression on T3K when BOTH MMIO and non-MMIO devices have
+    // caused a regression when BOTH MMIO and non-MMIO devices have
     // get_num_fabric_initialized_routers > 0 (i.e. both run through quiesce).  FIX P
-    // completed Device 4's receiver handshake BEFORE Device 0's sender ERISCs were
-    // relaunched.  When Device 0's Phase 3 then launched its senders, they wrote MAGIC to
-    // Device 4 — but Device 4 was already at READY_FOR_TRAFFIC and no longer in the
-    // receiver loop.  Device 0's senders waited forever for REMOTE_HANDSHAKE_COMPLETE.
+    // completed the non-MMIO receiver handshake BEFORE the MMIO device's sender ERISCs were
+    // relaunched.  When the MMIO device's Phase 3 then launched its senders, they wrote MAGIC
+    // to the non-MMIO device — but it was already at READY_FOR_TRAFFIC and no longer in the
+    // receiver loop.  The MMIO senders waited forever for REMOTE_HANDSHAKE_COMPLETE.
     //
     // The fix is structural: the mesh-level caller now runs Phase 3 (relaunch) on ALL
     // devices first, then runs wait_for_fabric_workers_ready() on all devices.  This
