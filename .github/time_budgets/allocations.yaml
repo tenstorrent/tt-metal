@@ -3,32 +3,37 @@
 # Teams not listed get 0 allocation on that SKU.
 
 N150:
-  team_infra:    0.20
+  team_infra:    0.25
   team_llk:      0.25
-  team_models:   0.30
+  team_models:   0.25
   team_runtime:  0.25
 
 N300:
-  team_infra:    0.10
-  team_llk:      0.20
-  team_models:   0.40
-  team_runtime:  0.30
+  team_infra:    0.25
+  team_llk:      0.25
+  team_models:   0.25
+  team_runtime:  0.25
 
 p150b:
-  team_infra:    0.10
-  team_llk:      0.40
+  team_infra:    0.25
+  team_llk:      0.25
   team_models:   0.25
   team_runtime:  0.25
 
 p300b:
-  team_llk:      0.50
-  team_models:   0.30
-  team_runtime:  0.20
+  team_infra:    0.25
+  team_llk:      0.25
+  team_models:   0.25
+  team_runtime:  0.25
 
 LLMBOX:
-  team_models:   0.80
-  team_runtime:  0.20
+  team_infra:    0.25
+  team_llk:      0.25
+  team_models:   0.25
+  team_runtime:  0.25
 
 galaxy:
-  team_models:   0.70
-  team_runtime:  0.30
+  team_infra:    0.25
+  team_llk:      0.25
+  team_models:   0.25
+  team_runtime:  0.25
