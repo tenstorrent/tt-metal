@@ -1,0 +1,257 @@
+# Fractional allocation of each SKU pool per team.
+# Values per SKU must sum to <= 1.0.
+#
+# Usage-based allocations derived from actual timeout budgets in
+# tests/pipeline_reorg/*.yaml (sum of timeout minutes per team per SKU).
+# SKUs with no pipeline_reorg usage → equal 0.20 fallback.
+# Generated: 2026-04-25
+
+# ── Wormhole CIv1 ──────────────────────────────────────────
+wh_n150:
+  models:  1.0000  # 370/370 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_n300:
+  models:  1.0000  # 46/46 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_n300_perf:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+wh_llmbox:
+  models:  0.5983  # 700/1170 min (59.8%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.2350  # 275/1170 min (23.5%)
+  shield:  0.0385  # 45/1170 min (3.8%)
+  ttnn:  0.1282  # 150/1170 min (12.8%)
+
+wh_llmbox_perf:
+  models:  1.0000  # 1495/1495 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_llmbox_perf_release:
+  models:  1.0000  # 168/168 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_galaxy:
+  models:  0.0492  # 30/610 min (4.9%)
+  runtime:  0.0574  # 35/610 min (5.7%)
+  scaleout:  0.2213  # 135/610 min (22.1%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.6721  # 410/610 min (67.2%)
+
+wh_galaxy_perf:
+  models:  1.0000  # 475/475 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_galaxy_release:
+  models:  1.0000  # 255/255 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_galaxy_perf_release:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+# ── Wormhole CIv2 ──────────────────────────────────────────
+wh_n150_civ2:
+  models:  0.1872  # 126/673 min (18.7%)
+  runtime:  0.8128  # 547/673 min (81.3%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+wh_n300_civ2:
+  models:  0.1884  # 156/828 min (18.8%)
+  runtime:  0.1534  # 127/828 min (15.3%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.6582  # 545/828 min (65.8%)
+
+wh_llmbox_civ2:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+# ── Blackhole CIv1 ─────────────────────────────────────────
+bh_p100:
+  models:  0.0000  # no usage (0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  1.0000  # 545/545 min (100.0%)
+
+bh_p100_perf:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+bh_p150:
+  models:  1.0000  # 134/134 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_p150_perf:
+  models:  0.8513  # 229/269 min (85.1%)
+  runtime:  0.1487  # 40/269 min (14.9%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_p300:
+  models:  1.0000  # 194/194 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_p300_viommu:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+bh_llmbox:
+  models:  1.0000  # 946/946 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_loudbox:
+  models:  0.9902  # 507/512 min (99.0%)
+  runtime:  0.0098  # 5/512 min (1.0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_quietbox:
+  models:  0.0000  # no usage (0%)
+  runtime:  1.0000  # 50/50 min (100.0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_quietbox_perf:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+bh_quietbox_2:
+  models:  1.0000  # 210/210 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_deskbox:
+  models:  1.0000  # 80/80 min (100.0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_galaxy:
+  models:  0.3529  # 60/170 min (35.3%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  0.4118  # 70/170 min (41.2%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.2353  # 40/170 min (23.5%)
+
+bh_galaxy_perf:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+bh_galaxy_release:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+bh_galaxy_perf_release:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+# ── Blackhole CIv2 ─────────────────────────────────────────
+bh_p100a_civ2_viommu:
+  models:  0.0000  # no usage (0%)
+  runtime:  1.0000  # 72/72 min (100.0%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_p150b_civ2:
+  models:  0.0994  # 120/1207 min (9.9%)
+  runtime:  0.4490  # 542/1207 min (44.9%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.4515  # 545/1207 min (45.2%)
+
+bh_p150b_civ2_viommu:
+  models:  0.8889  # 40/45 min (88.9%)
+  runtime:  0.1111  # 5/45 min (11.1%)
+  scaleout:  0.0000  # no usage (0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_loudbox_civ2_viommu:
+  models:  0.20  # no usage data — equal fallback
+  runtime:  0.20  # no usage data — equal fallback
+  scaleout:  0.20  # no usage data — equal fallback
+  shield:  0.20  # no usage data — equal fallback
+  ttnn:  0.20  # no usage data — equal fallback
+
+# ── Blackhole Superpods ────────────────────────────────────
+bh_sp1:
+  models:  0.0000  # no usage (0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  1.0000  # 50/50 min (100.0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
+
+bh_sp4:
+  models:  0.0000  # no usage (0%)
+  runtime:  0.0000  # no usage (0%)
+  scaleout:  1.0000  # 30/30 min (100.0%)
+  shield:  0.0000  # no usage (0%)
+  ttnn:  0.0000  # no usage (0%)
