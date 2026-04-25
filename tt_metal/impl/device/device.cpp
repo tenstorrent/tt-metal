@@ -653,11 +653,19 @@ void Device::quiesce_and_restart_fabric_workers() {
                                               std::chrono::steady_clock::now() - snapshot_start)
                                               .count();
             if (snapshot_elapsed > kSnapshotDeadlineMs) {
+                // FIX S (#42429): Snapshot deadline exceeded means the UMD relay path to this
+                // device is broken (reads are accumulating 5s timeouts).  Set
+                // fabric_relay_path_broken_ so that Phase 2.5 and Phase 3 skip all relay
+                // reads/writes for this device — preventing the 650s hang observed in run
+                // #24921278543 where Device 6 channels 0+1 each timed out (10s total > 6s
+                // deadline) but channels 6/7 then hung indefinitely in Phase 2.5 without
+                // throwing an exception (relay ERISC alive but peering firmware unresponsive).
+                fabric_relay_path_broken_ = true;
                 log_warning(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} ENTRY snapshot: "
-                    "deadline ({}ms) exceeded after {}ms — skipping remaining channels "
-                    "to prevent indefinite relay hang.",
+                    "deadline ({}ms) exceeded after {}ms — relay path broken, setting "
+                    "fabric_relay_path_broken_=true to skip Phase 2.5/3 relay reads.",
                     this->id(),
                     kSnapshotDeadlineMs,
                     snapshot_elapsed);
