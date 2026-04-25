@@ -40,6 +40,9 @@ static std::string ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& i
     return info.param ? "ImplicitSyncTrue" : "ImplicitSyncFalse";
 }
 
+// expected_output, when non-null, is compared against the device output instead of input.
+// This is used for Tensix→DM ring-pressure tests where the device cycles through fewer
+// unique ring slots than entries_per_core, so output != input by design.
 void execute_program_and_verify(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     Program& program,
@@ -47,7 +50,8 @@ void execute_program_and_verify(
     const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
     distributed::MeshCoordinate& zero_coord,
     std::vector<uint32_t>& input,
-    bool verify_output = true) {
+    bool verify_output = true,
+    const std::vector<uint32_t>* expected_output = nullptr) {
     distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
 
     if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
@@ -70,9 +74,10 @@ void execute_program_and_verify(
     distributed::ReadShard(mesh_device->mesh_command_queue(), output, out_buffer, zero_coord, true);
 
     if (verify_output) {
-        if (input != output) {
-            log_info(tt::LogTest, "Printing input");
-            for (auto i : input) {
+        const std::vector<uint32_t>& expected = expected_output ? *expected_output : input;
+        if (expected != output) {
+            log_info(tt::LogTest, "Printing expected");
+            for (auto i : expected) {
                 std::cout << i << " ";
             }
             std::cout << std::endl;
@@ -81,7 +86,7 @@ void execute_program_and_verify(
                 std::cout << i << " ";
             }
         }
-        EXPECT_EQ(input, output);
+        EXPECT_EQ(expected, output);
     }
 }
 
@@ -260,23 +265,31 @@ void run_single_dfb_program(
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_buffer_size / sizeof(uint32_t));
 
     IDevice* device = mesh_device->get_devices()[0];
-    const uint32_t words_per_core = entries_per_core * entry_size / sizeof(uint32_t);
+    // const uint32_t words_per_core = entries_per_core * entry_size / sizeof(uint32_t);
 
     // For Tensix → DM: pre-fill each core's DFB L1 with its input chunk so the
     // Tensix producer kernel can read from L1 while DM consumer drains to DRAM.
     //
     // l1_by_core addresses are not populated until allocate_dataflow_buffers() runs
     // during program compilation. Since this is a single-DFB test it is always placed at the L1 base allocator address.
+    //
+    // IMPORTANT: the slice written to L1 must be exactly the physical ring size
+    // (dfb->total_size() bytes = num_entries * entry_size). Writing more than the ring
+    // size would corrupt L1 beyond the ring (kernel stack, config structures, etc.).
+    // For ring-pressure tests (entries_per_core > num_entries) only the first
+    // num_entries slots are filled; the producer kernel cycles through those same
+    // slots repeatedly, which is the expected behaviour.
     if (producer_type == DFBPorCType::TENSIX) {
         const uint32_t dfb_l1_addr =
             static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        const uint32_t ring_words = dfb->total_size() / sizeof(uint32_t);
         for (const CoreRange& cr : core_range_set.ranges()) {
             for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
                 for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
                     const CoreCoord core(x, y);
                     const uint32_t co = core_to_chunk_offset.at(core);
                     const uint32_t wpe = entry_size / sizeof(uint32_t);
-                    std::vector<uint32_t> slice(words_per_core, 0);
+                    std::vector<uint32_t> slice(ring_words, 0);
                     for (uint32_t p = 0; p < dfb_config.num_producers; p++) {
                         for (uint32_t e = 0; e < num_entries_per_producer; e++) {
                             const uint32_t page_id = co + e * dfb_config.num_producers + p;
@@ -292,6 +305,13 @@ void run_single_dfb_program(
                                     ? (p * num_entries_per_producer + e)
                                     : (e * dfb_config.num_producers + p);
 
+                            // Stop once all physical ring slots are filled; for ring-pressure
+                            // tests the remaining iterations would alias back to already-filled
+                            // slots, so there is nothing new to write.
+                            if (dst_slot >= dfb_config.num_entries) {
+                                break;
+                            }
+
                             std::copy(
                                 input.begin() + page_id * wpe,
                                 input.begin() + page_id * wpe + wpe,
@@ -304,12 +324,45 @@ void run_single_dfb_program(
         }
     }
 
+    // For Tensix → DM ring-pressure tests (entries_per_core > num_entries), the
+    // Tensix producer cycles through the same num_entries ring slots indefinitely.
+    // Each STRIDED consumer c always reads ring slot (c % num_entries), which was
+    // pre-filled with input page c.  The expected out_buffer page p therefore
+    // contains the data from ring slot (p % num_consumers) % num_entries, not
+    // input[p].  Build the corrected expected vector so the verification is sound.
+    std::optional<std::vector<uint32_t>> tensix_dm_expected;
+    if (producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::DM &&
+        entries_per_core > dfb_config.num_entries &&
+        dfb_config.cap == dfb::AccessPattern::STRIDED) {
+        const uint32_t wpe = entry_size / sizeof(uint32_t);
+        tensix_dm_expected.emplace(num_cores * entries_per_core * wpe, 0u);
+        for (const CoreRange& cr : core_range_set.ranges()) {
+            for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
+                    const CoreCoord core(x, y);
+                    const uint32_t co = core_to_chunk_offset.at(core);
+                    for (uint32_t p = 0; p < entries_per_core; p++) {
+                        // Consumer c = p % num_consumers always reads the ring slot it
+                        // was assigned (slot = c % num_entries), which holds input[co + c].
+                        const uint32_t ring_slot =
+                            (p % dfb_config.num_consumers) % dfb_config.num_entries;
+                        std::copy(
+                            input.begin() + (co + ring_slot) * wpe,
+                            input.begin() + (co + ring_slot + 1) * wpe,
+                            tensix_dm_expected->begin() + (co + p) * wpe);
+                    }
+                }
+            }
+        }
+    }
+
     // Launch program; verify out_buffer only for DM → DM paths (Tensix consumer
     // does not write to DRAM, so out_buffer verification is skipped there).
     execute_program_and_verify(
         mesh_device, program, in_buffer, out_buffer, zero_coord,
         input,
-        /*verify_output=*/(consumer_type == DFBPorCType::DM));
+        /*verify_output=*/(consumer_type == DFBPorCType::DM),
+        tensix_dm_expected ? &*tensix_dm_expected : nullptr);
 
     // For DM → Tensix: verify each core's DFB L1 against the expected input chunk.
     if (consumer_type == DFBPorCType::TENSIX) {
@@ -319,14 +372,23 @@ void run_single_dfb_program(
                 std::vector<uint32_t> l1_data;
                 detail::ReadFromDeviceL1(device, core, alloc_addr, dfb->total_size(), l1_data);
                 const uint32_t wpe_v = entry_size / sizeof(uint32_t);
-                std::vector<uint32_t> expected(words_per_core, 0);
+                // Physical ring holds dfb_config.num_entries entries; for ring-pressure
+                // tests (entries_per_core > dfb_config.num_entries) the ring wraps and
+                // only the last ring_capacity writes per producer survive in L1.
+                // Size expected to l1_data so the comparison is against what is actually there.
+                const uint32_t total_ring_words = dfb->total_size() / sizeof(uint32_t);
+                std::vector<uint32_t> expected(total_ring_words, 0);
                 if (dfb_config.cap == dfb::AccessPattern::BLOCKED) {
                     // BLOCKED consumer: ring is TC-first (stride_in_entries=1).
-                    // Ring slot p*E+e holds the tile that producer p wrote at entry e,
-                    // which is input page co + e*num_producers + p.
+                    // Each producer p has ring_capacity consecutive ring slots.
+                    // After wrapping, only the last ring_capacity entries from each
+                    // producer survive: e in [num_entries_per_producer - ring_capacity, ...).
+                    const uint32_t ring_capacity = dfb_config.num_entries / dfb_config.num_producers;
+                    const uint32_t last_e_base = num_entries_per_producer - ring_capacity;
                     for (uint32_t p = 0; p < dfb_config.num_producers; p++) {
-                        for (uint32_t e = 0; e < num_entries_per_producer; e++) {
-                            const uint32_t ring_slot = p * num_entries_per_producer + e;
+                        for (uint32_t c = 0; c < ring_capacity; c++) {
+                            const uint32_t ring_slot = p * ring_capacity + c;
+                            const uint32_t e = last_e_base + c;
                             const uint32_t page_id = co + e * dfb_config.num_producers + p;
                             if (page_id >= co + entries_per_core) {
                                 break;
@@ -339,9 +401,12 @@ void run_single_dfb_program(
                     }
                 } else {
                     // STRIDED consumer: ring is interleaved, matching sequential input order.
+                    // For ring-pressure tests (entries_per_core > dfb_config.num_entries) only
+                    // the last dfb_config.num_entries entries survive in L1; copy that suffix.
+                    const uint32_t ring_start_page = co + entries_per_core - dfb_config.num_entries;
                     std::copy(
-                        input.begin() + co * wpe_v,
-                        input.begin() + co * wpe_v + words_per_core,
+                        input.begin() + ring_start_page * wpe_v,
+                        input.begin() + ring_start_page * wpe_v + total_ring_words,
                         expected.begin());
                 }
                 if (expected != l1_data) {
@@ -713,6 +778,88 @@ DFB_TEST    (DMTensix, 6Sx4B, DM,     TENSIX, 6, STRIDED, 4, BLOCKED, DFB_NO_EXT
 // DFB_TEST    (TensixDM, 1Sx6B, TENSIX, DM,     1, STRIDED, 6, BLOCKED, DFB_NO_EXTRA_SKIP) // revisit more than 4 blocked consumers
 // DFB_TEST    (TensixDM, 2Sx6B, TENSIX, DM,     2, STRIDED, 6, BLOCKED, DFB_NO_EXTRA_SKIP)
 // DFB_TEST    (TensixDM, 4Sx6B, TENSIX, DM,     4, STRIDED, 6, BLOCKED, DFB_NO_EXTRA_SKIP)
+
+// 1 strided DM producer, 1 strided DM consumer, num_entries=4.
+// Ring wraps 16x; baseline to confirm wraparound logic with minimum participants.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB ring-pressure test for WH/BH until DFB is backported";
+    }
+    DFB_SKIP_IF_UNSUPPORTED(1, 1);
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 4,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    run_single_dfb_program(
+        this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM,
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
+}
+
+// 4 strided DM producers, 4 strided DM consumers, num_entries=4 -> capacity=1.
+// Each producer stalls after every push; ring wraps 64x per producer.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_4Sx4S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB ring-pressure test for WH/BH until DFB is backported";
+    }
+    DFB_SKIP_IF_UNSUPPORTED(4, 4);
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 4,
+        .num_producers = 4,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    run_single_dfb_program(
+        this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM,
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
+}
+
+// 4 DM producers (STRIDED), 4 Tensix consumers (BLOCKED), num_entries=4 -> capacity=1.
+// Every push stalls until all 4 blocked Tensix consumers ack; ring wraps 64x per producer.
+// Exercises remapper fan-out on the DM->Tensix path under maximum ring pressure.
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB_RingPressure_4Sx4B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB ring-pressure test for WH/BH until DFB is backported";
+    }
+    DFB_SKIP_IF_UNSUPPORTED(4, 4);
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 4,  // tight ring: capacity = num_entries / num_producers = 1
+        .num_producers = 4,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = dfb::AccessPattern::BLOCKED,
+        .enable_implicit_sync = GetParam()};
+    run_single_dfb_program(
+        this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX,
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
+}
+
+// 2 Tensix producers (STRIDED), 4 DM consumers (STRIDED), num_entries=4 -> capacity=1.
+// Ring wraps 64x per producer; exercises the Tensix->DM path with asymmetric P:C ratio
+// under tight ring pressure (num_consumers > num_producers).
+TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB_RingPressure_2Sx4S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB ring-pressure test for WH/BH until DFB is backported";
+    }
+    DFB_SKIP_IF_UNSUPPORTED(2, 4);
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 4,  // tight ring: capacity = num_entries / max(num_p, num_c) = 1
+        .num_producers = 2,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = GetParam()};
+    run_single_dfb_program(
+        this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM,
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
+}
 
 TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx1S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
