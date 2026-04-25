@@ -37,16 +37,24 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 CODEOWNERS_PATH = REPO_ROOT / ".github" / "CODEOWNERS"
 STATUS_FILE = BUDGET_DIR / "BUDGET_STATUS.md"
 
-# Map substrings in runner labels → canonical SKU name (lowercase key)
-RUNNER_SKU_MAP = {
-    "n150": "N150",
-    "n300": "N300",
-    "p150b": "p150b",
-    "p300b": "p300b",
-    "llmbox": "LLMBOX",
-    "galaxy": "galaxy",
-    "blackhole": "p150b",  # common alias
-}
+SKU_CONFIG_PATH = REPO_ROOT / ".github" / "sku_config.yaml"
+
+_SKU_CONFIG_CACHE: dict | None = None
+
+
+def _sku_config() -> dict[str, list[str]]:
+    """Return {sku_name: [required_labels_lowercase]} from sku_config.yaml."""
+    global _SKU_CONFIG_CACHE
+    if _SKU_CONFIG_CACHE is None:
+        if SKU_CONFIG_PATH.exists():
+            raw = load_yaml(SKU_CONFIG_PATH)
+            _SKU_CONFIG_CACHE = {
+                sku: [str(l).lower() for l in (cfg.get("runs_on") or [])]
+                for sku, cfg in (raw.get("skus") or {}).items()
+            }
+        else:
+            _SKU_CONFIG_CACHE = {}
+    return _SKU_CONFIG_CACHE
 
 WARN_THRESHOLD = 0.85  # warn at 85% of budget
 
@@ -80,14 +88,21 @@ def changed_files(base_ref: str) -> list[Path]:
 
 
 def extract_sku(runs_on) -> str | None:
-    """Extract canonical SKU from a GHA runs-on value (str or list)."""
+    """Match a GHA runs-on value against sku_config.yaml entries.
+
+    Returns the sku_config key whose runs_on labels are all present in the
+    job's runner labels.  Prefers the most-specific match (most labels).
+    """
     labels = [runs_on] if isinstance(runs_on, str) else (runs_on if isinstance(runs_on, list) else [])
-    for label in labels:
-        low = str(label).lower()
-        for key, sku in RUNNER_SKU_MAP.items():
-            if key in low:
-                return sku
-    return None
+    label_set = {str(l).lower() for l in labels}
+    best_sku, best_score = None, 0
+    for sku, required in _sku_config().items():
+        if not required:
+            continue
+        if all(r in label_set for r in required) and len(required) > best_score:
+            best_score = len(required)
+            best_sku = sku
+    return best_sku
 
 
 def matrix_shards(job: dict) -> int:
@@ -158,17 +173,22 @@ def codeowner_for(rules: list, path: Path) -> str | None:
 
 def parse_pipeline_reorg_yaml(path: Path, content: str | None = None) -> list[dict]:
     """
-    Parse a tests/pipeline_reorg/*.yaml file into a list of test entries.
+    Parse a tests/pipeline_reorg/*.yaml file into a list of cost entries.
 
-    Expected schema (file-level defaults can be overridden per entry):
-      team: runtime              # file-level default (optional)
-      sku: N150                  # file-level default (optional)
-      tests:
-        - name: test_foo
-          timeout: 30            # minutes — REQUIRED for cost calculation
-          sku: N150              # overrides file-level
-          team: runtime          # overrides file-level
-          shards: 2              # optional, default 1
+    Actual schema — a YAML list where each item is a test job:
+
+      - name: Galaxy CCL tests
+        cmd:  pytest tests/nightly/tg/ccl ...
+        skus:
+          wh_galaxy:
+            timeout: 60          # minutes on this SKU
+          bh_galaxy:
+            timeout: 30
+        team: ttnn
+        owner_id: U05ACKAJTHS
+
+    Each (test, sku) pair becomes one entry with shards=1 (one parallel job).
+    Files that are not a YAML list (e.g. ttsim-skip-list.yaml) are silently skipped.
     """
     if content is None:
         if not path.exists():
@@ -176,30 +196,38 @@ def parse_pipeline_reorg_yaml(path: Path, content: str | None = None) -> list[di
         content = path.read_text()
 
     try:
-        data = yaml.safe_load(content) or {}
+        data = yaml.safe_load(content)
     except yaml.YAMLError:
         return []
 
-    file_team = data.get("team")
-    file_sku = data.get("sku")
-    entries = []
+    if not isinstance(data, list):
+        return []  # skip dict-shaped files (skip lists, etc.)
 
-    for t in data.get("tests", []):
-        if not isinstance(t, dict):
+    entries = []
+    for item in data:
+        if not isinstance(item, dict):
             continue
-        team = t.get("team") or file_team
-        sku = t.get("sku") or file_sku
-        timeout = t.get("timeout")  # minutes
-        if not (team and sku and timeout):
+        team = item.get("team")
+        skus_field = item.get("skus")
+        if not isinstance(skus_field, dict):
             continue
-        entries.append({
-            "name": t.get("name", "unknown"),
-            "team": str(team),
-            "sku": str(sku),
-            "timeout_minutes": int(timeout),
-            "shards": int(t.get("shards", 1)),
-            "source": path.name,
-        })
+        for sku_name, sku_cfg in skus_field.items():
+            if isinstance(sku_cfg, dict):
+                timeout = sku_cfg.get("timeout")
+            elif isinstance(sku_cfg, (int, float)):
+                timeout = sku_cfg
+            else:
+                continue
+            if not (team and sku_name and timeout):
+                continue
+            entries.append({
+                "name": item.get("name", "unknown"),
+                "team": str(team),
+                "sku": str(sku_name),
+                "timeout_minutes": float(timeout),
+                "shards": 1,  # each SKU entry is one parallel job
+                "source": path.name,
+            })
     return entries
 
 
