@@ -124,13 +124,19 @@ def run(
     weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
     weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
 
-    # Generate weight tensor
+    # Generate weight tensor — ttnn.embedding requires a 2D weight [num_embeddings, embedding_dim].
+    # The master trace may record a 4D shape (e.g. [1, 1, 131072, 64]) due to mesh expansion,
+    # so we create the tensor with the traced shape but reshape to 2D for the embedding op.
     torch_weight_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), weight_dtype_actual
     )(weight_shape_actual)
 
+    # Reshape to 2D for embedding op: last 2 dims are [num_embeddings, embedding_dim]
+    embedding_dim = weight_shape_actual[-1]
+    torch_weight_2d = torch_weight_tensor.reshape(num_embeddings, embedding_dim)
+
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_2d).squeeze()
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -198,6 +204,9 @@ def run(
 
         embedding_kwargs["layout"] = parse_dict_value("layout", layout) if isinstance(layout, dict) else layout
     embedding_kwargs.update(op_kwargs)
+    # ttnn.embedding requires 2D weight; reshape if 4D from master trace
+    if len(weight_shape_actual) > 2:
+        weight_tensor = ttnn.reshape(weight_tensor, (num_embeddings, embedding_dim))
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
