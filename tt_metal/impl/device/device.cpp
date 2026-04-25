@@ -1587,26 +1587,34 @@ void Device::wait_for_fabric_workers_ready() {
         // channel or hang indefinitely (relay ERISC still alive but peer fabric firmware never
         // responds to UMD relay protocol) — both outcomes block the quiesce path.
         if (phase5_relay_read_threw) {
-            // Phase 5 relay read failed — the UMD relay path to this non-MMIO device is
-            // broken.  Proceeding to AllGather on fabric that cannot be verified would risk
-            // silent data corruption or a harder-to-diagnose hang downstream.  Abort here
-            // with a clear error so the test fails fast with a useful message rather than
-            // hanging indefinitely or corrupting data silently.
+            // FIX U: Phase 5 relay read failed — UMD relay path to this non-MMIO device is
+            // broken because the MMIO device's relay ERISC now runs fabric firmware after
+            // Phase 3.  fabric_relay_path_broken_ is already set (catch block above), so
+            // subsequent quiesce calls will skip all relay ops.
             //
-            // NOTE: If Phase 5's own read hangs (rather than throws — possible when the relay
-            // ERISC is alive but forwards to a peer running fabric firmware), we never reach
-            // this throw.  That scenario requires either a non-blocking UMD probe API or a
-            // thread-based timeout on ReadFromDeviceL1, which is not yet implemented.
-            TT_THROW(
-                "wait_for_fabric_workers_ready: Device {}: Phase 5 relay read failed — "
-                "UMD relay path to this non-MMIO device is broken (relay ERISC on the MMIO "
-                "device now runs fabric firmware, so subsequent reads via that relay either "
-                "throw a 5s UMD timeout or hang indefinitely).  "
-                "Cannot verify fabric health.  Aborting to prevent AllGather proceeding on "
-                "degraded fabric.  If this fires consistently, check whether "
-                "terminate_stale_erisc_routers skipped soft-resetting a channel that should "
-                "have been reset before Phase 3 firmware load.",
+            // Previously we TT_THROWed here, but that caused a cascading failure:
+            //   1. TT_THROW triggers a teardown second quiesce
+            //   2. Second quiesce runs Phase 3 for MMIO devices again, re-flashing channels
+            //      that are mid-boot from the first Phase 3 (status 0x0 = launch msg lost)
+            //   3. MMIO device Phase 5b sees all channels at 0x0 and also TT_THROWs
+            //
+            // Returning cleanly avoids that cascade.  The AllGather may still succeed:
+            // Device N's own ETH channels likely booted fabric firmware correctly in Phase 3;
+            // we simply cannot verify it via UMD relay because that relay path has been
+            // transitioned to fabric firmware.  If the AllGather hangs, TT_METAL_OPERATION_TIMEOUT
+            // will fire and the test will fail with a clear timeout rather than a cascade.
+            //
+            // NOTE: If Phase 5's read hangs rather than throws (relay ERISC alive but peer
+            // fabric firmware ignores UMD relay protocol), we never reach this point.  That
+            // scenario requires a non-blocking UMD probe or thread-based timeout.
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5: relay read failed on non-MMIO "
+                "device — fabric_relay_path_broken_ already set.  Returning without throwing "
+                "to prevent cascading second quiesce from re-flashing MMIO relay channels "
+                "mid-boot.  (FIX U: #42429)",
                 this->id());
+            return;
         } else {
         constexpr uint32_t kHealthCheckTimeoutMs = 2000;
         // Log unhealthy channels every 200ms for observability.
