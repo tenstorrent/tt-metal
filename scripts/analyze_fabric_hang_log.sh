@@ -273,7 +273,7 @@ echo ""
 
 # ─── ERRORS/WARNINGS ───
 echo "=== ERRORS/WARNINGS (filtered, deduplicated) ==="
-grep -iE '(warning|error)' "$CLEAN" | \
+grep -iE '(warning|error|TT_THROW|TT_FATAL|Fatal|Abort)' "$CLEAN" | \
 grep -iE '(Metal|Test|Fabric)' | \
 grep -viE '(hugepage|bind_area|motherboard|Node\.js|DeprecationWarning|digest-mismatch|Buffer\(\)|topology_mapper|num_routing_planes|hwloc|cpuset|errno|issue_record_event|reserve begin|reserve ok|sub_device)' | \
 python3 -c "
@@ -354,7 +354,7 @@ P5B_FAILS=$(grep -c 'Phase 5b.*read failed' "$CLEAN" 2>/dev/null || true)
 P5B_FAILS=${P5B_FAILS:-0}
 P5B_SKIP=$(grep -c 'Phase 5b.*skipping' "$CLEAN" 2>/dev/null || true)
 P5B_SKIP=${P5B_SKIP:-0}
-PROBLEM_DEVS=$(grep -E '(read failed|Timeout|deadbeef)' "$CLEAN" | grep -oE 'Device [0-9]+' | sort -u | tr '\n' ', ' | sed 's/,\s*$//')
+PROBLEM_DEVS=$(grep -iE '(read failed|Timeout|0xDEAD5B5B|0xDEADECE7|deadbeef)' "$CLEAN" | grep -oE 'Device [0-9]+' | sort -u | tr '\n' ', ' | sed 's/,\s*$//')
 
 HANG_DUR="unknown"
 if [[ "$CANCEL_TS" != "unknown" && "$LAST_METAL_TS" != "unknown" ]]; then
@@ -363,6 +363,33 @@ if [[ "$CANCEL_TS" != "unknown" && "$LAST_METAL_TS" != "unknown" ]]; then
     if [[ $C_SEC -gt 0 && $L_SEC -gt 0 ]]; then
         HANG_DUR="$((C_SEC - L_SEC))s"
     fi
+fi
+
+# Detect which failure patterns are present, then emit a targeted diagnosis.
+HAS_RELAY_BROKEN=$(grep -c 'relay.*path.*broken\|fabric_relay_path_broken_' "$CLEAN" 2>/dev/null || echo 0)
+HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeout.*MUX' "$CLEAN" 2>/dev/null || echo 0)
+HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null || echo 0)
+HAS_FORCE_RESET=$(grep -c 'assert_risc_reset_at_core\|force.reset' "$CLEAN" 2>/dev/null || echo 0)
+
+if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
+    DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
+fabric firmware on the MMIO device's relay ERISCs, subsequent non-MMIO reads via those
+relay channels either timed out (5s each) or hung indefinitely. Check RELAY PATH BROKEN
+and ENTRY SNAPSHOT sections above for affected devices/channels."
+elif [[ "${HAS_P4_TIMEOUT:-0}" -gt 0 ]]; then
+    DIAGNOSIS="Phase 4 Tensix MUX timeout: a MUX core did not reach READY_FOR_TRAFFIC within
+the allotted window after firmware relaunch. The MUX was force-reset and the job aborted.
+Check Phase 4 log lines and FORCE RESETS section for the affected channel."
+elif [[ "${HAS_EXCEPTION:-0}" -gt 0 && "${HAS_RELAY_BROKEN:-0}" -eq 0 ]]; then
+    DIAGNOSIS="Exception (TT_THROW/TT_FATAL) during quiesce without relay-path-broken flag set.
+Check ERRORS/WARNINGS section for the thrown message and the surrounding log context."
+elif [[ "${HAS_FORCE_RESET:-0}" -gt 0 ]]; then
+    DIAGNOSIS="Force resets (assert_risc_reset_at_core) were applied during Phase 2. Check
+whether the reset succeeded and whether Phase 3 proceeded on a still-running MUX core.
+Check FORCE RESETS and Phase 2 timing in the PHASES section."
+else
+    DIAGNOSIS="No known failure pattern detected. Check ERRORS/WARNINGS and NEWLY DEAD CHANNELS
+sections above for clues. Consider examining the raw PHASES timeline for unexpected gaps."
 fi
 
 cat <<SUMMARY_EOF
@@ -377,15 +404,7 @@ Problem devices: ${PROBLEM_DEVS:-none detected}
 
 Last logged action: $LAST_METAL_MSG
 
-Diagnosis: During fabric quiesce (teardown), L1 reads on non-MMIO
-devices timed out with ~5s UMD relay timeouts per channel. Each failed
-read accumulated ~5s of wall time. After the last logged warning, the job
-hung for ~${HANG_DUR} until the GHA runner canceled it. The root cause is
-UMD relay path breakdown after Phase 3 loaded fabric firmware on the MMIO
-device's relay ERISCs — subsequent reads via those relay channels either
-timeout (5s each) or hang indefinitely (relay ERISC alive but peer fabric
-firmware never responds to UMD relay protocol). Check RELAY PATH BROKEN
-and ENTRY SNAPSHOT sections above for which devices/channels were affected.
+Diagnosis: $DIAGNOSIS
 SUMMARY_EOF
 echo ""
 echo "========================================================================"

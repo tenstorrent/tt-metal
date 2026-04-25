@@ -397,6 +397,10 @@ void Device::configure_fabric(
     // cycle does not falsely short-circuit Phase 2.5, Phase 3, and Phase 5 for non-MMIO
     // devices.  (#42429 — flag is set in quiesce ENTRY snapshot / Phase 5 catch block).
     fabric_relay_path_broken_ = false;
+    // Clear accumulated soft-reset failures from the prior quiesce cycle.  A channel that was
+    // force-reset and recovered should not be permanently excluded from Phase 5 health checks
+    // in subsequent cycles — the set is repopulated by this configure_fabric() call below.
+    fabric_pre_dead_channels_.clear();
 
     // FIX P2 (#42429): Persist pre_dead_channels so quiesce Phase 5 can skip them.
     // These channels have no fabric firmware loaded; Phase 5's READY_FOR_TRAFFIC check must
@@ -819,10 +823,13 @@ void Device::quiesce_and_restart_fabric_workers() {
                 env_impl.get_cluster().assert_risc_reset_at_core(
                     tt_cxy_pair(this->id(), virtual_mux_coord), tt::umd::RiscType::ALL);
             } catch (const std::exception& e) {
-                log_warning(
+                // Escalate to ERROR: a failed force-reset means the MUX BRISC may still be
+                // running when Phase 3 overwrites its L1, which can corrupt the MUX kernel
+                // and cause an opaque hang on the next dispatch or AllGather operation.
+                log_error(
                     tt::LogMetal,
-                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core failed on Device {} "
-                    "eth_chan {}: {}",
+                    "quiesce_and_restart_fabric_workers: assert_risc_reset_at_core FAILED on Device {} "
+                    "eth_chan {} — Phase 3 L1 overwrite is unsafe, MUX may still be running: {}",
                     this->id(),
                     eth_chan_id,
                     e.what());
@@ -1342,6 +1349,32 @@ void Device::wait_for_fabric_workers_ready() {
     auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
     const bool has_tensix_mux = (tensix_config_mode != tt::tt_fabric::FabricTensixConfig::DISABLED);
 
+    // Maps a raw EDMStatus uint32 to its enum name for log readability.
+    // Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
+    auto edm_status_str = [](uint32_t v) -> const char* {
+        switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
+            case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:      return "INITIALIZATION_STARTED";
+            case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
+            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:    return "LOCAL_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:   return "REMOTE_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:           return "READY_FOR_TRAFFIC";
+            case tt::tt_fabric::EDMStatus::TERMINATED:                  return "TERMINATED";
+            case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:             return "TXQ_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:      return "STREAM_REG_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED: return "DOWNSTREAM_EDM_SETUP_STARTED";
+            case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:      return "EDM_VCS_SETUP_COMPLETE";
+            case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE: return "ETHERNET_HANDSHAKE_COMPLETE";
+            case tt::tt_fabric::EDMStatus::VCS_OPENED:                  return "VCS_OPENED";
+            case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:   return "ROUTING_TABLE_INITIALIZED";
+            case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
+            default: break;
+        }
+        if (v == 0xDEAD5B5B) return "(deadline-skipped)";
+        if (v == 0xDEADECE7) return "(read-exception)";
+        return "(unknown)";
+    };
+
     // Phase 4: Wait for each MUX core to reach READY_FOR_TRAFFIC before returning.
     //
     // Without this wait, the next dispatch op can arrive while the MUX is still in its
@@ -1523,11 +1556,12 @@ void Device::wait_for_fabric_workers_ready() {
                         tt::LogMetal,
                         "wait_for_fabric_workers_ready: Device {} Phase 5: still waiting for "
                         "LOCAL_HANDSHAKE_COMPLETE on master chan {} after {}ms — "
-                        "current status=0x{:08x} (expected=0x{:08x})",
+                        "current status=0x{:08x} ({}) (expected=0x{:08x})",
                         this->id(),
                         master_chan,
                         elapsed,
                         sync_buf[0],
+                        edm_status_str(sync_buf[0]),
                         sync_status);
                 }
                 if (elapsed > kSyncTimeoutMs) {
@@ -1552,12 +1586,13 @@ void Device::wait_for_fabric_workers_ready() {
                         log_warning(
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} Phase 5: timeout ({}ms) waiting "
-                            "for LOCAL_HANDSHAKE_COMPLETE on master chan {} (status=0x{:08x}, "
+                            "for LOCAL_HANDSHAKE_COMPLETE on master chan {} (status=0x{:08x} {}, "
                             "expected=0x{:08x}). Continuing to health check.",
                             this->id(),
                             kSyncTimeoutMs,
                             master_chan,
                             sync_buf[0],
+                            edm_status_str(sync_buf[0]),
                             sync_status);
                     }
                     break;
@@ -1709,7 +1744,8 @@ void Device::wait_for_fabric_workers_ready() {
                         chans_checked,
                         total_chans);
                     still_pending.push_back(idx);
-                    still_pending_statuses.push_back({ch.eth_chan_id, 0xdeadbeef});
+                    // 0xDEAD5B5B: Phase 5b per-iteration deadline exceeded — read was skipped.
+                    still_pending_statuses.push_back({ch.eth_chan_id, 0xDEAD5B5B});
                     continue;
                 }
                 chans_checked++;
@@ -1729,7 +1765,8 @@ void Device::wait_for_fabric_workers_ready() {
                         this->id(),
                         ch.eth_chan_id,
                         e.what());
-                    status_buf[0] = 0xdeadbeef;
+                    // 0xDEADECE7: Phase 5b relay read threw an exception.
+                    status_buf[0] = 0xDEADECE7;
                 }
                 if (status_buf[0] != expected_ready) {
                     still_pending.push_back(idx);
@@ -1749,7 +1786,7 @@ void Device::wait_for_fabric_workers_ready() {
                 last_hc_log_ms = hc_elapsed;
                 std::string pending_str;
                 for (const auto& [cid, st] : still_pending_statuses) {
-                    pending_str += fmt::format(" chan{}=0x{:08x}", cid, st);
+                    pending_str += fmt::format(" chan{}=0x{:08x}({})", cid, st, edm_status_str(st));
                 }
                 log_info(
                     tt::LogMetal,
@@ -1762,8 +1799,8 @@ void Device::wait_for_fabric_workers_ready() {
             }
             if (hc_elapsed > kHealthCheckTimeoutMs) {
                 // Final diagnostic read — best-effort snapshot of each remaining channel.
-                // Apply the same per-read deadline guard: skip the read and record
-                // 0xdeadbeef if another channel's read already consumed the budget.
+                // Apply the same per-read deadline guard: skip the read and record a
+                // distinct sentinel if the diagnostic budget is exhausted.
                 for (size_t idx : pending) {
                     const auto& ch = chans[idx];
                     std::vector<uint32_t> status_buf(1, 0);
@@ -1777,11 +1814,12 @@ void Device::wait_for_fabric_workers_ready() {
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
                             "diagnostic deadline ({}ms) exceeded before reading chan {} — "
-                            "recording as 0xdeadbeef without read",
+                            "recording as 0xDEAD5B5B without read",
                             this->id(),
                             kDiagBudgetMs,
                             ch.eth_chan_id);
-                        status_buf[0] = 0xdeadbeef;
+                        // 0xDEAD5B5B: Phase 5b deadline exceeded — read skipped.
+                        status_buf[0] = 0xDEAD5B5B;
                     } else {
                         try {
                             detail::ReadFromDeviceL1(
@@ -1795,11 +1833,12 @@ void Device::wait_for_fabric_workers_ready() {
                             log_warning(
                                 tt::LogMetal,
                                 "wait_for_fabric_workers_ready: Device {} Phase 5b: final "
-                                "diagnostic read failed on chan {} — recording as 0xdeadbeef: {}",
+                                "diagnostic read failed on chan {} — recording as 0xDEADECE7: {}",
                                 this->id(),
                                 ch.eth_chan_id,
                                 e.what());
-                            status_buf[0] = 0xdeadbeef;
+                            // 0xDEADECE7: Phase 5b relay read threw an exception.
+                            status_buf[0] = 0xDEADECE7;
                         }
                     }
                     unhealthy.push_back({ch.eth_chan_id, status_buf[0]});
@@ -1830,7 +1869,8 @@ void Device::wait_for_fabric_workers_ready() {
                 std::string dead_details;
                 for (const auto& u : pre_dead_unhealthy) {
                     dead_details += fmt::format(
-                        "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                        "  dev={} chan={} status=0x{:08x}({})\n",
+                        this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
                 }
                 log_warning(
                     tt::LogMetal,
@@ -1846,28 +1886,32 @@ void Device::wait_for_fabric_workers_ready() {
                 std::string details;
                 for (const auto& u : truly_unhealthy) {
                     details += fmt::format(
-                        "  dev={} chan={} status=0x{:08x}\n", this->id(), u.eth_chan_id, u.actual_status);
+                        "  dev={} chan={} status=0x{:08x}({})\n",
+                        this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
                 }
                 // FIX V (#42429): On a non-MMIO device, if ALL truly-unhealthy channels are at
-                // 0x0 or 0xdeadbeef (deadline-skipped), the device's ETH channels never booted
-                // fabric firmware — the relay path is broken.  Set fabric_relay_path_broken_ and
-                // return cleanly rather than TT_THROWing, which would trigger a cascading teardown
-                // second quiesce that re-flashes MMIO relay channels mid-boot and causes a second
-                // cascade failure.  This mirrors the Phase 5 relay read exception path (FIX U) and
-                // the ENTRY snapshot deadline exceeded path (FIX S/T).
+                // 0x0, 0xDEAD5B5B (deadline-skipped), or 0xDEADECE7 (read exception), the
+                // device's ETH channels never booted fabric firmware — the relay path is broken.
+                // Set fabric_relay_path_broken_ and return cleanly rather than TT_THROWing,
+                // which would trigger a cascading teardown second quiesce that re-flashes MMIO
+                // relay channels mid-boot and causes a second cascade failure.  This mirrors the
+                // Phase 5 relay read exception path (FIX U) and the ENTRY snapshot deadline
+                // exceeded path (FIX S/T).
                 if (!this->is_mmio_capable()) {
                     const bool all_dead = std::all_of(
                         truly_unhealthy.begin(),
                         truly_unhealthy.end(),
                         [](const UnhealthyChannel& u) {
-                            return u.actual_status == 0x0 || u.actual_status == 0xdeadbeef;
+                            return u.actual_status == 0x0 ||
+                                   u.actual_status == 0xDEAD5B5B ||
+                                   u.actual_status == 0xDEADECE7;
                         });
                     if (all_dead) {
                         fabric_relay_path_broken_ = true;
                         log_warning(
                             tt::LogMetal,
                             "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline exceeded "
-                            "with {} channel(s) still at 0x0/0xdeadbeef on non-MMIO device — "
+                            "with {} channel(s) at 0x0/0xDEAD5B5B/0xDEADECE7 on non-MMIO device — "
                             "setting fabric_relay_path_broken_=true to skip relay ops in "
                             "subsequent quiesce.  (FIX V: #42429)\n{}",
                             this->id(),
