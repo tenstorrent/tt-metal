@@ -35,6 +35,7 @@ from models.demos.deepseek_v4_flash.real_ffn_fanout_smoke import (
 from models.demos.deepseek_v4_flash.real_ffn_fanout_smoke import _payload_byte_split as _ffn_fanout_payload_byte_split
 from models.demos.deepseek_v4_flash.real_ffn_fanout_smoke import (
     _run_ttnn_ffn_fanout_slice,
+    build_torch_ffn_fanout_candidate_experts,
     build_torch_ffn_fanout_reference,
     build_torch_ffn_fanout_selector_reference,
     layer_ffn_fanout_keys,
@@ -570,6 +571,7 @@ def _prepare_decode_ffn_fanout(
     activation: torch.Tensor,
     max_tensors: int,
     max_bytes: int,
+    input_ids: torch.Tensor | None = None,
 ) -> tuple[
     dict[str, torch.Tensor],
     list[TensorMetadata],
@@ -586,6 +588,7 @@ def _prepare_decode_ffn_fanout(
         layer=layer,
         requested_expert=requested_expert,
         seq_len=int(activation.shape[-2]),
+        input_ids=input_ids,
     )
     selector_reference = build_torch_ffn_fanout_selector_reference(
         tensors,
@@ -595,7 +598,14 @@ def _prepare_decode_ffn_fanout(
         input_ids=input_ids,
     )
     activated_experts = _ordered_activated_expert_ids(selector_reference["router_indices"])
-    ffn_keys = layer_ffn_fanout_keys(index, layer=layer, experts=activated_experts)
+    candidate_experts = build_torch_ffn_fanout_candidate_experts(
+        tensors,
+        config=config,
+        layer=layer,
+        activation=activation,
+        input_ids=input_ids,
+    )
+    ffn_keys = layer_ffn_fanout_keys(index, layer=layer, experts=candidate_experts)
     tensors, metadata = _load_missing_tensors(
         index,
         tensors,
@@ -604,10 +614,10 @@ def _prepare_decode_ffn_fanout(
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
-    validate_real_ffn_fanout_slice(tensors, config=config, layer=layer, experts=activated_experts)
+    validate_real_ffn_fanout_slice(tensors, config=config, layer=layer, experts=candidate_experts)
     routed_weights_by_expert = {
         expert_id: decode_real_expert_weights(tensors, config=config, layer=layer, expert=expert_id)
-        for expert_id in activated_experts
+        for expert_id in candidate_experts
     }
     shared_weights = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
     ffn_reference = build_torch_ffn_fanout_reference(
@@ -644,13 +654,31 @@ def _fanout_input_ids_for_activation(
     layer: int,
     requested_expert: int | None,
     seq_len: int,
+    input_ids: torch.Tensor | None = None,
 ) -> torch.Tensor | None:
     tid2eid = tensors.get(f"layers.{layer}.ffn.gate.tid2eid")
     if tid2eid is None:
         return None
+    if input_ids is not None:
+        return _validate_hash_route_input_ids(input_ids, tid2eid=tid2eid, seq_len=seq_len)
     if requested_expert is None:
         raise ValueError("Hash-routed decode FFN fanout requires --expert to choose deterministic input ids")
     return deterministic_input_ids_for_expert(tid2eid=tid2eid, expert=int(requested_expert), seq_len=seq_len)
+
+
+def _validate_hash_route_input_ids(
+    input_ids: torch.Tensor,
+    *,
+    tid2eid: torch.Tensor,
+    seq_len: int,
+) -> torch.Tensor:
+    if input_ids.ndim != 2 or tuple(input_ids.shape) != (1, int(seq_len)):
+        raise ValueError(f"hash-route input_ids must have shape [1, {seq_len}], got {tuple(input_ids.shape)}")
+    if input_ids.dtype not in (torch.int32, torch.int64):
+        raise ValueError(f"hash-route input_ids dtype must be int32 or int64, got {input_ids.dtype}")
+    if torch.any(input_ids < 0) or torch.any(input_ids >= tid2eid.shape[0]):
+        raise ValueError(f"hash-route input_ids values must be in [0, {tid2eid.shape[0]})")
+    return input_ids.contiguous()
 
 
 def _decode_fanout_preview(
@@ -1326,6 +1354,8 @@ def _base_result(
     ffn_metadata = metadata_groups["ffn"]
     attention_payload = _attention_payload_byte_split(attention_metadata)
     ffn_payload = _ffn_fanout_payload_byte_split(ffn_metadata)
+    loaded_expert_ids = sorted(int(expert_id) for expert_id in ffn_payload["routed_experts_by_id"])
+    activated_expert_set = {int(expert_id) for expert_id in activated_experts}
     total_payload = sum(item.nbytes for item in metadata)
     attention_reference = reference["attention"]
     decode_cache_reference = reference["decode_cache"]
@@ -1386,6 +1416,9 @@ def _base_result(
             "prefill_ffn_full_expert_fanout": "not materialized in this decode-layer smoke",
             "activated_expert_count": len(activated_experts),
             "activated_expert_ids": [int(expert_id) for expert_id in activated_experts],
+            "loaded_expert_count": len(loaded_expert_ids),
+            "loaded_expert_ids": loaded_expert_ids,
+            "loaded_extra_candidate_count": len(set(loaded_expert_ids) - activated_expert_set),
             "topk": int(config.num_experts_per_tok),
             "topk_prefix_limit": None,
         },

@@ -126,6 +126,9 @@ def run_real_decode_stack_logits_smoke(
     logits_rtol: float = 1e-1,
     logits_atol: float = 1.0,
     top_logit_atol: float = 1.0,
+    initial_prefill_hidden: torch.Tensor | None = None,
+    initial_decode_hidden: torch.Tensor | None = None,
+    input_ids: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     """Run a tiny real consecutive-layer decode stack through final norm and LM head."""
 
@@ -152,11 +155,13 @@ def run_real_decode_stack_logits_smoke(
 
     tensors: dict[str, torch.Tensor] = {}
     metadata: list[TensorMetadata] = []
-    prefill_hidden = deterministic_attention_activation(hidden_size=config.hidden_size, seq_len=prefill_seq_len)
-    decode_hidden = deterministic_attention_activation(
-        hidden_size=config.hidden_size,
-        seq_len=prefill_seq_len + 1,
-    )[:, :, -1:, :].contiguous()
+    prefill_hidden, decode_hidden, prefill_input_ids, decode_input_ids = _resolve_stack_inputs(
+        config,
+        prefill_seq_len=prefill_seq_len,
+        initial_prefill_hidden=initial_prefill_hidden,
+        initial_decode_hidden=initial_decode_hidden,
+        input_ids=input_ids,
+    )
 
     layer_runtimes: list[_LayerRuntime] = []
     layer_summaries: list[dict[str, Any]] = []
@@ -170,6 +175,8 @@ def run_real_decode_stack_logits_smoke(
             layer=layer,
             prefill_hidden=prefill_hidden,
             decode_hidden=decode_hidden,
+            prefill_input_ids=prefill_input_ids,
+            decode_input_ids=decode_input_ids,
             current_position=current_position,
             materialize_prefill_output=not is_last_layer,
             max_tensors=max_tensors,
@@ -386,6 +393,8 @@ def _build_reference_layer_step(
     layer: int,
     prefill_hidden: torch.Tensor,
     decode_hidden: torch.Tensor,
+    prefill_input_ids: torch.Tensor | None,
+    decode_input_ids: torch.Tensor | None,
     current_position: int,
     materialize_prefill_output: bool,
     max_tensors: int,
@@ -412,7 +421,7 @@ def _build_reference_layer_step(
 
     prefill_reference = None
     prefill_activated_experts: Sequence[int] = ()
-    prefill_input_ids = None
+    prefill_ffn_input_ids = None
     prefill_router_preview = _not_materialized_prefill_summary(layer=layer)
     prefill_routed_weights_by_expert = None
     prefill_shared_weights = None
@@ -441,17 +450,18 @@ def _build_reference_layer_step(
             prefill_routed_weights_by_expert,
             prefill_shared_weights,
             prefill_ffn_reference,
-            prefill_input_ids,
+            prefill_ffn_input_ids,
         ) = _prepare_prefill_ffn_fanout(
             index,
             tensors,
             metadata,
             config=config,
             layer=layer,
-            requested_expert=_default_requested_expert(tensors, layer=layer),
+            requested_expert=None if prefill_input_ids is not None else _default_requested_expert(tensors, layer=layer),
             activation=prefill_post_attention_residual,
             max_tensors=max_tensors,
             max_bytes=max_bytes,
+            input_ids=prefill_input_ids,
         )
         prefill_reference = build_torch_prefill_decoder_layer_reference(
             activation=prefill_hidden,
@@ -502,17 +512,18 @@ def _build_reference_layer_step(
         decode_routed_weights_by_expert,
         decode_shared_weights,
         decode_ffn_reference,
-        decode_input_ids,
+        decode_ffn_input_ids,
     ) = _prepare_decode_ffn_fanout(
         index,
         tensors,
         metadata,
         config=config,
         layer=layer,
-        requested_expert=_default_requested_expert(tensors, layer=layer),
+        requested_expert=None if decode_input_ids is not None else _default_requested_expert(tensors, layer=layer),
         activation=decode_post_attention_residual,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
+        input_ids=decode_input_ids,
     )
     decode_reference = {
         "decode_input_hidden_states": decode_hidden,
@@ -530,11 +541,11 @@ def _build_reference_layer_step(
         compressor_weights=compressor_weights,
         indexer_weights=indexer_weights,
         prefill_activated_experts=prefill_activated_experts,
-        prefill_input_ids=prefill_input_ids,
+        prefill_input_ids=prefill_ffn_input_ids,
         prefill_routed_weights_by_expert=prefill_routed_weights_by_expert,
         prefill_shared_weights=prefill_shared_weights,
         decode_activated_experts=decode_activated_experts,
-        decode_input_ids=decode_input_ids,
+        decode_input_ids=decode_ffn_input_ids,
         decode_routed_weights_by_expert=decode_routed_weights_by_expert,
         decode_shared_weights=decode_shared_weights,
         prefill_cache_reference=prefill_cache_reference,
@@ -832,6 +843,15 @@ def _layer_summary(
         "fanout_scope": {
             "prefill_activated_expert_ids": [int(expert_id) for expert_id in runtime.prefill_activated_experts],
             "prefill_activated_expert_count": len(runtime.prefill_activated_experts),
+            "prefill_loaded_expert_count": 0
+            if runtime.prefill_routed_weights_by_expert is None
+            else len(runtime.prefill_routed_weights_by_expert),
+            "prefill_loaded_extra_candidate_count": 0
+            if runtime.prefill_routed_weights_by_expert is None
+            else len(
+                set(runtime.prefill_routed_weights_by_expert)
+                - {int(expert_id) for expert_id in runtime.prefill_activated_experts}
+            ),
             "prefill_topk": int(config.num_experts_per_tok),
             "prefill_routes_executed": 0
             if runtime.prefill_reference is None
@@ -839,6 +859,11 @@ def _layer_summary(
             "prefill_full_fanout_materialized": runtime.prefill_reference is not None,
             "decode_activated_expert_ids": [int(expert_id) for expert_id in runtime.decode_activated_experts],
             "decode_activated_expert_count": len(runtime.decode_activated_experts),
+            "decode_loaded_expert_count": len(runtime.decode_routed_weights_by_expert),
+            "decode_loaded_extra_candidate_count": len(
+                set(runtime.decode_routed_weights_by_expert)
+                - {int(expert_id) for expert_id in runtime.decode_activated_experts}
+            ),
             "decode_topk": int(config.num_experts_per_tok),
             "decode_routes_executed": int(runtime.decode_reference["ffn"]["router_indices"].numel()),
             "unique_expert_cap": None,
@@ -1077,6 +1102,60 @@ def _not_materialized_prefill_summary(*, layer: int) -> dict[str, Any]:
         "layer": int(layer),
         "reason": "final stack layer only needs a prefill cache for the one-token decode path",
     }
+
+
+def _resolve_stack_inputs(
+    config: DeepSeekV4FlashConfig,
+    *,
+    prefill_seq_len: int,
+    initial_prefill_hidden: torch.Tensor | None,
+    initial_decode_hidden: torch.Tensor | None,
+    input_ids: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    if (initial_prefill_hidden is None) != (initial_decode_hidden is None):
+        raise ValueError("initial_prefill_hidden and initial_decode_hidden must be provided together")
+    if initial_prefill_hidden is None:
+        prefill_hidden = deterministic_attention_activation(hidden_size=config.hidden_size, seq_len=prefill_seq_len)
+        decode_hidden = deterministic_attention_activation(
+            hidden_size=config.hidden_size,
+            seq_len=prefill_seq_len + 1,
+        )[:, :, -1:, :].contiguous()
+    else:
+        prefill_hidden = _validate_stack_hidden(
+            initial_prefill_hidden,
+            expected_tokens=prefill_seq_len,
+            hidden_size=config.hidden_size,
+            label="initial_prefill_hidden",
+        )
+        decode_hidden = _validate_stack_hidden(
+            initial_decode_hidden,
+            expected_tokens=1,
+            hidden_size=config.hidden_size,
+            label="initial_decode_hidden",
+        )
+    if input_ids is None:
+        return prefill_hidden, decode_hidden, None, None
+    if input_ids.ndim != 2 or tuple(input_ids.shape) != (1, int(prefill_seq_len) + 1):
+        raise ValueError(f"input_ids must have shape [1, {int(prefill_seq_len) + 1}], got {tuple(input_ids.shape)}")
+    if input_ids.dtype not in (torch.int32, torch.int64):
+        raise ValueError(f"input_ids dtype must be int32 or int64, got {input_ids.dtype}")
+    if torch.any(input_ids < 0) or torch.any(input_ids >= int(config.vocab_size)):
+        raise ValueError(f"input_ids values must be in [0, {config.vocab_size})")
+    input_ids = input_ids.contiguous()
+    return prefill_hidden, decode_hidden, input_ids[:, :prefill_seq_len], input_ids[:, prefill_seq_len:]
+
+
+def _validate_stack_hidden(
+    hidden_states: torch.Tensor,
+    *,
+    expected_tokens: int,
+    hidden_size: int,
+    label: str,
+) -> torch.Tensor:
+    expected = (1, 1, int(expected_tokens), int(hidden_size))
+    if tuple(hidden_states.shape) != expected:
+        raise ValueError(f"{label} must have shape {expected}, got {tuple(hidden_states.shape)}")
+    return hidden_states.contiguous()
 
 
 def _default_requested_expert(tensors: Mapping[str, torch.Tensor], *, layer: int) -> int | None:

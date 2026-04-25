@@ -110,8 +110,10 @@ def test_cpu_real_decode_logits_smoke_projects_decoder_hidden_to_logits(tmp_path
         "total": 4224,
     }
     assert result["fanout_scope"]["activated_expert_count"] == 2
+    assert result["fanout_scope"]["loaded_expert_count"] == 4
+    assert result["fanout_scope"]["loaded_extra_candidate_count"] == 2
     assert len(result["activated_experts"]) == 2
-    assert result["payload_bytes"]["total"] == 34860
+    assert result["payload_bytes"]["total"] == 38700
     assert result["reference"]["final_norm"]["shape"] == [1, 1, 1, 32]
     assert result["reference"]["logits"]["shape"] == [1, 1, 1, 64]
     assert len(result["reference"]["top_k"]) == 3
@@ -187,7 +189,9 @@ def test_cpu_real_decode_logits_smoke_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["final_norm_lm_head"]["lm_head_shape_loaded"] == [16, 32]
     assert payload["payload_bytes"]["final_norm_lm_head"]["total"] == 1152
     assert payload["fanout_scope"]["activated_expert_count"] == 2
-    assert payload["payload_bytes"]["total"] == 31788
+    assert payload["fanout_scope"]["loaded_expert_count"] == 4
+    assert payload["fanout_scope"]["loaded_extra_candidate_count"] == 2
+    assert payload["payload_bytes"]["total"] == 35628
     assert payload["reference"]["top_k"][0]["id"] >= 8
     assert payload["reference"]["top_k"][0]["id"] < 24
     assert payload["ttnn_ops"] == []

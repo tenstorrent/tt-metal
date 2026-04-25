@@ -53,6 +53,7 @@ DEFAULT_SEQUENCE_LENGTH = 1
 DEFAULT_ANCHOR_EXPERT = 1
 DEFAULT_FFN_FANOUT_MAX_TENSORS = 64
 DEFAULT_FFN_FANOUT_MAX_BYTES = max(DEFAULT_MAX_BYTES, 128 * 1024 * 1024)
+DEFAULT_ROUTER_EXPERT_CANDIDATE_MARGIN = 2
 
 
 def run_real_ffn_fanout_smoke(
@@ -317,8 +318,12 @@ def build_torch_ffn_fanout_selector_reference(
     layer: int,
     activation: torch.Tensor,
     input_ids: torch.Tensor | None,
+    topk: int | None = None,
 ) -> dict[str, torch.Tensor | None]:
     _validate_activation(activation, hidden_size=config.hidden_size)
+    route_topk = config.num_experts_per_tok if topk is None else int(topk)
+    if route_topk <= 0 or route_topk > int(config.n_routed_experts):
+        raise ValueError(f"topk must be in [1, {config.n_routed_experts}], got {route_topk}")
     prefix = f"layers.{layer}"
     norm_output = rms_norm(
         activation[:, 0],
@@ -328,7 +333,7 @@ def build_torch_ffn_fanout_selector_reference(
     router_weights, router_indices = v4_router(
         norm_output[:, 0],
         tensors[f"{prefix}.ffn.gate.weight"].to(torch.bfloat16),
-        topk=config.num_experts_per_tok,
+        topk=route_topk,
         route_scale=config.routed_scaling_factor,
         scoring_func=config.scoring_func,
         bias=tensors.get(f"{prefix}.ffn.gate.bias"),
@@ -341,6 +346,34 @@ def build_torch_ffn_fanout_selector_reference(
         "router_indices": router_indices.contiguous(),
         "input_ids": input_ids,
     }
+
+
+def build_torch_ffn_fanout_candidate_experts(
+    tensors: Mapping[str, torch.Tensor],
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    activation: torch.Tensor,
+    input_ids: torch.Tensor | None,
+    candidate_margin: int = DEFAULT_ROUTER_EXPERT_CANDIDATE_MARGIN,
+) -> list[int]:
+    """Return experts to load, including near-boundary learned-router candidates."""
+
+    if candidate_margin < 0:
+        raise ValueError(f"candidate_margin must be non-negative, got {candidate_margin}")
+    prefix = f"layers.{layer}"
+    route_topk = int(config.num_experts_per_tok)
+    if tensors.get(f"{prefix}.ffn.gate.tid2eid") is None:
+        route_topk = min(int(config.n_routed_experts), route_topk + int(candidate_margin))
+    selector = build_torch_ffn_fanout_selector_reference(
+        tensors,
+        config=config,
+        layer=layer,
+        activation=activation,
+        input_ids=input_ids,
+        topk=route_topk,
+    )
+    return _ordered_activated_expert_ids(selector["router_indices"])
 
 
 def build_torch_ffn_fanout_reference(

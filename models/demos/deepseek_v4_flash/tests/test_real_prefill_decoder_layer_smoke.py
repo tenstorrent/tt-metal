@@ -106,15 +106,18 @@ def test_cpu_real_prefill_decoder_layer_smoke_composes_attention_ffn_and_residua
         "layers.3.ffn.gate.weight",
         "layers.3.ffn.gate.bias",
     ]
-    assert result["loaded_tensor_groups"]["ffn"]["count"] == 21
-    assert result["payload_bytes"]["total"] == 30636
+    assert result["loaded_tensor_groups"]["ffn"]["count"] == 33
+    assert result["payload_bytes"]["total"] == 34476
     assert result["payload_bytes"]["attention_runtime"]["total"] == 20240
-    assert result["payload_bytes"]["ffn"]["total"] == 10396
+    assert result["payload_bytes"]["ffn"]["total"] == 14236
     assert result["prefill_fanout_info"]["source"] == "torch_router_full_topk_on_post_attention_prefill_residual"
     assert result["fanout_scope"] == {
         "full_expert_fanout": True,
         "activated_expert_ids": [3, 2],
         "activated_expert_count": 2,
+        "loaded_expert_ids": [0, 1, 2, 3],
+        "loaded_expert_count": 4,
+        "loaded_extra_candidate_count": 2,
         "topk": 2,
         "routes_executed": 8,
         "tokens": 4,
@@ -190,11 +193,13 @@ def test_cpu_real_prefill_decoder_layer_smoke_cli_outputs_json(tmp_path: Path) -
     assert payload["schema_version"] == 1
     assert payload["mode"] == "cpu-reference"
     assert payload["layer"] == 3
-    assert payload["payload_bytes"]["total"] == 30636
+    assert payload["payload_bytes"]["total"] == 34476
     assert payload["output_shapes"]["post_attention_residual"] == [1, 1, 4, 32]
     assert payload["output_shapes"]["post_ffn_residual"] == [1, 1, 4, 32]
     assert payload["fanout_scope"]["full_expert_fanout"] is True
     assert payload["fanout_scope"]["routes_executed"] == 8
+    assert payload["fanout_scope"]["loaded_expert_count"] == 4
+    assert payload["fanout_scope"]["loaded_extra_candidate_count"] == 2
     assert payload["ttnn_ops"] == []
     assert payload["host_boundaries"][-1]["name"] == "ffn_residual_host_add"
     assert payload["accuracy"]["cpu_reference"]["passed"] is True
