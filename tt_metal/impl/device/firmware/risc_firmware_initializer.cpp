@@ -15,6 +15,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"
+#include "device/device_manager.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "hal.hpp"
@@ -242,6 +243,79 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     tt::LogAlways,
                     "teardown: set_internal_routing_info_for_ethernet_cores failed with unknown exception type "
                     "(likely UmdException<RuntimeError> from dead ERISC relay on remote chip)");
+            }
+        }
+
+        // FIX AB (#42429): After a quiesce failure where Phase 3 loaded fabric firmware
+        // on ETH channels but Phase 5 relay handshake timed out, the MMIO devices'
+        // active ETH channels are left running fabric firmware rather than UMD base
+        // relay firmware.  The NEXT binary's Metal init calls l1_barrier and
+        // write_core for non-MMIO devices; these route through the MMIO devices' ETH
+        // channels as UMD relay.  Since those channels are now running fabric firmware
+        // (not relay firmware), the relay writes hang indefinitely — causing the second
+        // binary's entire Metal init to stall until the CI job-level timeout fires.
+        //
+        // Detection: any non-MMIO device with fabric_relay_path_broken == true means
+        // Phase 3 relaunched fabric firmware on non-MMIO ETH channels but Phase 5
+        // could not confirm READY_FOR_TRAFFIC via UMD relay.  The relay ETH channels
+        // on the corresponding MMIO host(s) were also re-flashed by Phase 3 and are in
+        // the same partially-initialized fabric firmware state.
+        //
+        // Fix: hard-reset (assert + deassert RISC reset) all active ETH channels on
+        // MMIO devices via direct PCIe — no relay needed.  This reboots ERISC from ROM
+        // and restores UMD base relay firmware, leaving the cluster in a clean state
+        // for the next process.
+        if (descriptor_->metal_context().is_device_manager_initialized() && get_control_plane_) {
+            auto& dm = descriptor_->metal_context().device_manager();
+            bool any_non_mmio_relay_broken = false;
+            const auto all_ids = cluster_.all_chip_ids();
+            const auto mmio_ids = cluster_.mmio_chip_ids();
+            for (tt::ChipId device_id : all_ids) {
+                if (mmio_ids.count(device_id)) {
+                    continue;  // skip MMIO devices — we only care about non-MMIO relay state
+                }
+                // Use get_device() (private, friend access) instead of get_active_device():
+                // by the time teardown() runs, dev->close() has already been called by
+                // DeviceManager::close_devices(), setting initialized_=false.
+                // get_active_device() asserts is_initialized(), but fabric_relay_path_broken_
+                // is still valid in memory after close — we just need raw Device* access.
+                const Device* dev = dm->get_device(device_id);
+                if (dev && dev->is_fabric_relay_path_broken()) {
+                    any_non_mmio_relay_broken = true;
+                    break;
+                }
+            }
+            if (any_non_mmio_relay_broken) {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: FIX AB — at least one non-MMIO device has fabric_relay_path_broken. "
+                    "Hard-resetting active ETH channels on all MMIO devices via PCIe to restore "
+                    "UMD base relay firmware for the next process.");
+                for (const tt::ChipId mmio_id : cluster_.mmio_chip_ids()) {
+                    for (const auto& logical_core :
+                         this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {
+                        CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            mmio_id, logical_core, CoreType::ETH);
+                        try {
+                            // Assert + deassert RISC reset reboots ERISC from ROM,
+                            // restoring UMD base/relay firmware.  For MMIO devices this
+                            // goes through PCIe (direct), not the relay — safe even when
+                            // the relay itself is broken.
+                            cluster_.assert_risc_reset_at_core(
+                                tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
+                            cluster_.deassert_risc_reset_at_core(
+                                tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogAlways,
+                                "teardown: FIX AB hard-reset of ETH core {} on MMIO device {} failed: {}",
+                                virtual_core.str(),
+                                mmio_id,
+                                e.what());
+                        } catch (...) {
+                        }
+                    }
+                }
             }
         }
     }

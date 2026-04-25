@@ -100,6 +100,7 @@ private:
 
     friend class experimental::DispatchContext;
     friend class DispatchKernelInitializer;
+    friend class RiscFirmwareInitializer;
 };
 
 }  // namespace tt::tt_metal
