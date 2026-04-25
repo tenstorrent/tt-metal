@@ -7,13 +7,14 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <tt_stl/assert.hpp>
 
@@ -29,74 +30,104 @@ namespace tt::tt_metal::distributed::multihost {
 
 namespace {
 
-// Sub-context layout comes from tt-run env vars (set per-process, no collectives):
-//   TT_RUN_SUBCONTEXT_ID     -> this rank's sub-context id (absent => single-context job)
-//   TT_RUN_SUBCONTEXT_SIZES  -> comma-separated sizes of all sub-contexts, in id order
 struct MpiLauncherEnvLayout {
+    bool split_active = false;
     std::optional<int> this_subcontext_id;
+    int subcontext_count = 1;
     std::vector<int> subcontext_sizes;
-    // Prefix sum of subcontext_sizes: world_rank_prefix[s] is the first MPI_COMM_WORLD rank in sub-context s.
-    // E.g. sizes {64,1} -> prefix {0,64}; decode local 3 -> world 0+3, prefill local 0 -> world 64+0.
     std::vector<int> world_rank_prefix;
 };
 
 MpiLauncherEnvLayout g_mpi_launcher_env_layout{};
 
-// `job_world_size` is MPI_COMM_WORLD (pre-split) rank count; used to validate TT_RUN_SUBCONTEXT_SIZES and
-// to build the single-context layout when TT_RUN_SUBCONTEXT_ID is unset.
-MpiLauncherEnvLayout parse_launcher_env_layout_from_env(int job_world_size) {
+std::vector<int> parse_csv_ints(std::string_view csv) {
+    std::vector<int> out;
+    while (!csv.empty()) {
+        auto comma = csv.find(',');
+        std::string_view token = csv.substr(0, comma);
+        while (!token.empty() && token.front() == ' ') {
+            token.remove_prefix(1);
+        }
+        while (!token.empty() && token.back() == ' ') {
+            token.remove_suffix(1);
+        }
+        TT_FATAL(!token.empty(), "TT_RUN_SUBCONTEXT_SIZES: empty token");
+        int v = 0;
+        const char* begin = token.data();
+        const char* end = begin + token.size();
+        auto [ptr, ec] = std::from_chars(begin, end, v);
+        TT_FATAL(ec == std::errc{} && ptr == end, "TT_RUN_SUBCONTEXT_SIZES: invalid integer in '{}'", token);
+        TT_FATAL(v > 0, "TT_RUN_SUBCONTEXT_SIZES: size must be positive, got {}", v);
+        out.push_back(v);
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        csv.remove_prefix(comma + 1);
+    }
+    return out;
+}
+
+MpiLauncherEnvLayout parse_launcher_env_layout(int current_context_world_size) {
     MpiLauncherEnvLayout m;
-    TT_FATAL(job_world_size > 0, "job_world_size must be positive");
+    TT_FATAL(current_context_world_size > 0, "current_context_world_size must be positive");
 
     const char* id_env = std::getenv("TT_RUN_SUBCONTEXT_ID");
     if (id_env == nullptr || id_env[0] == '\0') {
-        m.subcontext_sizes = {job_world_size};
+        m.split_active = false;
+        m.this_subcontext_id = std::nullopt;
+        m.subcontext_count = 1;
+        m.subcontext_sizes = {current_context_world_size};
         m.world_rank_prefix = {0};
         return m;
     }
 
+    m.split_active = true;
+    int this_id = 0;
+    try {
+        this_id = std::stoi(std::string(id_env));
+    } catch (const std::exception&) {
+        TT_THROW("Invalid TT_RUN_SUBCONTEXT_ID (expected integer): {}", id_env);
+    }
+    TT_FATAL(this_id >= 0, "TT_RUN_SUBCONTEXT_ID must be non-negative");
+    m.this_subcontext_id = this_id;
+
+    const char* count_env = std::getenv("TT_RUN_SUBCONTEXT_COUNT");
     const char* sizes_env = std::getenv("TT_RUN_SUBCONTEXT_SIZES");
+    TT_FATAL(
+        count_env != nullptr && count_env[0] != '\0',
+        "TT_RUN_SUBCONTEXT_ID is set but TT_RUN_SUBCONTEXT_COUNT is missing");
     TT_FATAL(
         sizes_env != nullptr && sizes_env[0] != '\0',
         "TT_RUN_SUBCONTEXT_ID is set but TT_RUN_SUBCONTEXT_SIZES is missing");
 
     try {
-        m.this_subcontext_id = std::stoi(std::string(id_env));
+        m.subcontext_count = std::stoi(std::string(count_env));
     } catch (const std::exception&) {
-        TT_THROW("Invalid TT_RUN_SUBCONTEXT_ID (expected integer): {}", id_env);
+        TT_THROW("Invalid TT_RUN_SUBCONTEXT_COUNT: {}", count_env);
     }
-    TT_FATAL(*m.this_subcontext_id >= 0, "TT_RUN_SUBCONTEXT_ID must be non-negative, got {}", *m.this_subcontext_id);
-
-    std::stringstream ss(sizes_env);
-    for (std::string tok; std::getline(ss, tok, ',');) {
-        const int sz = std::stoi(tok);
-        TT_FATAL(sz > 0, "TT_RUN_SUBCONTEXT_SIZES: sizes must be positive, got {}", sz);
-        m.subcontext_sizes.push_back(sz);
-    }
-
-    const int this_id = *m.this_subcontext_id;
+    TT_FATAL(m.subcontext_count > 0, "TT_RUN_SUBCONTEXT_COUNT must be positive");
+    m.subcontext_sizes = parse_csv_ints(sizes_env);
     TT_FATAL(
-        this_id < static_cast<int>(m.subcontext_sizes.size()),
-        "TT_RUN_SUBCONTEXT_ID {} out of range for {} sub-contexts",
-        this_id,
-        m.subcontext_sizes.size());
-
-    int sum_sizes = 0;
-    for (int s : m.subcontext_sizes) {
-        sum_sizes += s;
-    }
+        static_cast<int>(m.subcontext_sizes.size()) == m.subcontext_count,
+        "TT_RUN_SUBCONTEXT_SIZES length {} does not match TT_RUN_SUBCONTEXT_COUNT {}",
+        m.subcontext_sizes.size(),
+        m.subcontext_count);
     TT_FATAL(
-        sum_sizes == job_world_size,
-        "TT_RUN_SUBCONTEXT_SIZES sum {} does not match MPI_COMM_WORLD size {}",
-        sum_sizes,
-        job_world_size);
+        this_id < m.subcontext_count, "TT_RUN_SUBCONTEXT_ID {} out of range for count {}", this_id, m.subcontext_count);
 
-    // world_rank_prefix[i] = sum(subcontext_sizes[0..i-1]) so local rank L in sub-context i maps to
-    // MPI world rank world_rank_prefix[i] + L (tt-run merges sub-contexts as contiguous world blocks).
-    m.world_rank_prefix.assign(m.subcontext_sizes.size(), 0);
-    for (std::size_t i = 1; i < m.subcontext_sizes.size(); ++i) {
-        m.world_rank_prefix[i] = m.world_rank_prefix[i - 1] + m.subcontext_sizes[i - 1];
+    m.world_rank_prefix.resize(m.subcontext_count);
+    int acc = 0;
+    for (int i = 0; i < m.subcontext_count; i++) {
+        m.world_rank_prefix[i] = acc;
+        acc += m.subcontext_sizes[i];
     }
+
+    TT_FATAL(
+        m.subcontext_sizes[this_id] == current_context_world_size,
+        "TT_RUN_SUBCONTEXT_SIZE / communicator size {} does not match TT_RUN_SUBCONTEXT_SIZES for this id ({})",
+        current_context_world_size,
+        m.subcontext_sizes[this_id]);
+
     return m;
 }
 
@@ -261,31 +292,46 @@ void MPIContext::create(int argc, char** argv) {
     init_env(argc, argv);
 
     ContextPtr parent = std::make_shared<MPIContext>(MPI_COMM_WORLD)->duplicate();
-    const int job_world_size = static_cast<int>(*parent->size());
 
-    g_mpi_launcher_env_layout = parse_launcher_env_layout_from_env(job_world_size);
+    const char* sub_id_str = std::getenv("TT_RUN_SUBCONTEXT_ID");
+    if (sub_id_str != nullptr && sub_id_str[0] != '\0') {
+        int color = 0;
+        try {
+            color = std::stoi(std::string(sub_id_str));
+        } catch (const std::exception&) {
+            TT_THROW("Invalid TT_RUN_SUBCONTEXT_ID (expected integer): {}", sub_id_str);
+        }
+        TT_FATAL(color >= 0, "TT_RUN_SUBCONTEXT_ID must be non-negative, got {}", color);
 
-    if (g_mpi_launcher_env_layout.this_subcontext_id.has_value()) {
-        const int color = *g_mpi_launcher_env_layout.this_subcontext_id;
         const auto mpi_parent = std::dynamic_pointer_cast<MPIContext>(parent);
         TT_FATAL(mpi_parent != nullptr, "MPIContext::create: parent must be MPIContext");
         int parent_rank = 0;
         MPI_CHECK(MPI_Comm_rank(mpi_parent->comm(), &parent_rank));
         // Key = rank on parent comm so sub-context ranks follow global (parent) order within each color.
         current_world_ = mpi_parent->split(Color(color), Key(parent_rank));
-        TT_FATAL(
-            static_cast<int>(*current_world_->size()) ==
-                g_mpi_launcher_env_layout.subcontext_sizes[static_cast<std::size_t>(color)],
-            "MPI_Comm_split size {} does not match TT_RUN_SUBCONTEXT_SIZES[{}]={}",
-            *current_world_->size(),
-            color,
-            g_mpi_launcher_env_layout.subcontext_sizes[static_cast<std::size_t>(color)]);
     } else {
         current_world_ = std::move(parent);
     }
+    refresh_launcher_layout_from_env();
+}
 
+void MPIContext::refresh_launcher_layout_from_env() {
+    TT_FATAL(current_world_ != nullptr, "MPIContext: current world not set");
     if (!mpi_job_world_) {
         mpi_job_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD);
+    }
+    const int sub_sz = static_cast<int>(*current_world_->size());
+    g_mpi_launcher_env_layout = parse_launcher_env_layout(sub_sz);
+    if (g_mpi_launcher_env_layout.split_active) {
+        int total_ranks = 0;
+        for (int s : g_mpi_launcher_env_layout.subcontext_sizes) {
+            total_ranks += s;
+        }
+        TT_FATAL(
+            total_ranks == *mpi_job_world_->size(),
+            "Sum of TT_RUN_SUBCONTEXT_SIZES ({}) does not match MPI job world size ({})",
+            total_ranks,
+            *mpi_job_world_->size());
     }
 }
 
@@ -315,15 +361,15 @@ std::optional<SubcontextId> MPIContext::subcontext_id() const {
     return SubcontextId{*id};
 }
 
-int MPIContext::subcontext_count() const { return static_cast<int>(g_mpi_launcher_env_layout.subcontext_sizes.size()); }
+int MPIContext::subcontext_count() const { return g_mpi_launcher_env_layout.subcontext_count; }
 
 Size MPIContext::subcontext_size(SubcontextId subcontext_id) const {
     const auto& L = g_mpi_launcher_env_layout;
     TT_FATAL(
-        *subcontext_id >= 0 && *subcontext_id < static_cast<int>(L.subcontext_sizes.size()),
+        *subcontext_id >= 0 && *subcontext_id < L.subcontext_count,
         "subcontext_id {} out of range [0, {})",
         *subcontext_id,
-        L.subcontext_sizes.size());
+        L.subcontext_count);
     return Size(L.subcontext_sizes[*subcontext_id]);
 }
 
@@ -335,17 +381,16 @@ tt::stl::Span<const int> MPIContext::subcontext_sizes() const {
 Rank MPIContext::local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const {
     const auto& L = g_mpi_launcher_env_layout;
     TT_FATAL(
-        *subcontext_id >= 0 && *subcontext_id < static_cast<int>(L.subcontext_sizes.size()),
+        *subcontext_id >= 0 && *subcontext_id < L.subcontext_count,
         "subcontext_id {} out of range [0, {})",
         *subcontext_id,
-        L.subcontext_sizes.size());
+        L.subcontext_count);
     TT_FATAL(
         *local_rank >= 0 && *local_rank < L.subcontext_sizes[*subcontext_id],
         "local_rank {} out of range for sub-context {} (size {})",
         *local_rank,
         *subcontext_id,
         L.subcontext_sizes[*subcontext_id]);
-    // World rank = start of this sub-context's block + offset within that block.
     return Rank{L.world_rank_prefix[*subcontext_id] + *local_rank};
 }
 

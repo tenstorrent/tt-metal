@@ -5,18 +5,15 @@
 // MPI sub-context bring-up: dual fabric modes + intra-context DistributedContext + inter-context MPI_COMM_WORLD.
 // Dispatch mirrors models/demos/deepseek_v3_b1/docs/example_dual_rankbindings_one_psd.md (PrefillDecodeDisaggregated).
 //
-// Launch example (from repo root). Use a block comment so shell `\` continuations do not trip -Wcomment on `//`
-// lines (GCC treats backslash-newline inside `//` as a multi-line // comment).
-/*
- *   tt-run --mock-cluster-rank-binding \
- *     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
- * \
- *     --rank-bindings-mapping \
- *     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \
- *     --mpi-args "--allow-run-as-root --oversubscribe" \
- *     ./build/test/tt_metal/distributed/distributed_unit_tests \
- *     --gtest_filter="MpiSubContext.*"
- */
+// Launch (from repo root):
+//   tt-run --mock-cluster-rank-binding \
+//     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml
+//     \
+//     --rank-bindings-mapping \
+//     tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml \
+//     --mpi-args "--allow-run-as-root --oversubscribe" \
+//     ./build/test/tt_metal/distributed/distributed_unit_tests \
+//     --gtest_filter="MpiSubContext.*"
 
 #include <gtest/gtest.h>
 #include <mpi.h>
@@ -59,8 +56,8 @@ void run_prefill_quad2x4_mock_galaxy() {
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     MetalContext::instance().initialize_fabric_config();
 
-    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
-    // returns the sub-context, not the full world. Rename or remove.
+    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
+    // not the full world. Rename or remove.
     const auto& ctx = MetalContext::instance().full_world_distributed_context();
     auto world = multihost::DistributedContext::get_world_context();
     const int local_rank = static_cast<int>(*ctx.rank());
@@ -99,8 +96,8 @@ void run_decode_quad2x4_mock_galaxy() {
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     MetalContext::instance().initialize_fabric_config();
 
-    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
-    // returns the sub-context, not the full world. Rename or remove.
+    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
+    // not the full world. Rename or remove.
     const auto& ctx = MetalContext::instance().full_world_distributed_context();
     auto world = multihost::DistributedContext::get_world_context();
     const int local_rank = static_cast<int>(*ctx.rank());
@@ -183,8 +180,8 @@ TEST(MpiSubContext, CurrentWorldIsSplitSubcommunicator) {
     auto& metal = MetalContext::instance();
 
     // --- get_current_world() is the split subcommunicator ---
-    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is a misleading
-    // name — it actually returns the *sub-context* communicator (post MPI_Comm_split), NOT the full MPI_COMM_WORLD.
+    // TODO: full_world_distributed_context() is a misleading name — it actually returns
+    // the *sub-context* communicator (post MPI_Comm_split), NOT the full MPI_COMM_WORLD.
     // Rename or remove in favor of get_current_world() / get_distributed_context_ptr().
     const auto& current = metal.full_world_distributed_context();
 
@@ -296,8 +293,8 @@ TEST(MpiSubContext, LauncherMetadataAndTranslationInSplitLaunch) {
     }
 
     auto& metal = MetalContext::instance();
-    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
-    // returns the sub-context, not the full world. Rename or remove.
+    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
+    // not the full world. Rename or remove.
     const auto& sub_ctx = metal.full_world_distributed_context();
     auto job_world = multihost::DistributedContext::get_world_context();
     ASSERT_NE(job_world, nullptr);
@@ -357,8 +354,8 @@ TEST(MpiSubContext, SingleGalaxySplitContext) {
         GTEST_SKIP();
     }
 
-    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): full_world_distributed_context() is misleading —
-    // returns the sub-context, not the full world. Rename or remove.
+    // TODO: full_world_distributed_context() is misleading — returns the sub-context,
+    // not the full world. Rename or remove.
     const auto& distributed_context = MetalContext::instance().full_world_distributed_context();
     const int local_size = static_cast<int>(*distributed_context.size());
 
@@ -374,9 +371,16 @@ TEST(MpiSubContext, SingleGalaxySplitContext) {
     }
 
     const int sub_id = std::stoi(std::string(sub_env));
+    // <<<<<<< HEAD
     auto job_world = multihost::DistributedContext::get_world_context();
     ASSERT_EQ(static_cast<int>(*job_world->subcontext_size(multihost::SubcontextId{sub_id})), 2)
         << "Quad 2×4 mapping uses two ranks per sub-context";
+    // =======
+    //     const char* sub_size_env = std::getenv("TT_RUN_SUBCONTEXT_SIZE");
+    //     ASSERT_NE(sub_size_env, nullptr);
+    //     const int sub_size = std::stoi(std::string(sub_size_env));
+    //     ASSERT_EQ(sub_size, 2) << "Quad 2×4 mapping uses two ranks per sub-context";
+    // >>>>>>> 99c91cd142c (Add sub-context API for split MPI jobs)
     ASSERT_EQ(local_size, 2) << "MPI_Comm_split should yield communicator size 2 per sub-context";
 
     if (sub_id == 0) {

@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
@@ -159,7 +160,6 @@ public:
     static ContextPtr get_world_context();
     static void set_current_world(const ContextPtr& ctx);
 
-    // Returns true if the distributed context has already been initialized.
     static bool is_initialized();
 
     DistributedContextId id() const;
@@ -169,7 +169,7 @@ public:
     [[nodiscard]] virtual Size size() const = 0;
     [[nodiscard]] virtual bool supports_fault_tolerance() const = 0;
 
-    //--- Sub-context layout (split jobs: TT_RUN_SUBCONTEXT_ID + TT_RUN_SUBCONTEXT_SIZES from launcher) ---
+    //--- Sub-context layout (populated from TT_RUN_SUBCONTEXT_* env at create) ---
     /// This process's sub-context id, or nullopt for a normal single-context job.
     [[nodiscard]] virtual std::optional<SubcontextId> subcontext_id() const { return std::nullopt; }
     /// Number of sub-contexts in the merged job (1 when not split).
