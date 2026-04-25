@@ -904,8 +904,6 @@ class DecoderStage(StageKind):
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         self._persistent_loop = PersistentLoop(mesh_device, available_cores, self._persistent_mode)
-        persistent_next_iter_semaphore = self._persistent_loop.next_iter_semaphore
-        termination_semaphore = self._persistent_loop.termination_semaphore
 
         if self._is_moe:
             d = create_decoder_block_tensors(
@@ -953,10 +951,9 @@ class DecoderStage(StageKind):
             "downstream_sockets": downstream_sockets,
         }
 
-        if persistent_next_iter_semaphore is not None:
-            self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
-        if termination_semaphore is not None:
-            self._state["termination_semaphore"] = termination_semaphore
+        if self._persistent_mode:
+            self._state["persistent_next_iter_semaphore"] = self._persistent_loop.next_iter_semaphore
+            self._state["termination_semaphore"] = self._persistent_loop.termination_semaphore
 
         self._state["decoder_program_context"] = self._build_decoder_program_context()
 

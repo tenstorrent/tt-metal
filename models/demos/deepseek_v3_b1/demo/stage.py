@@ -58,17 +58,13 @@ ACTIVATION_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES)
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 SECOND_PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 7)
 
-# Embedding core coords for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
-EMBEDDING_H2D_CORE_COORD = ttnn.CoreCoord(12, 0)
+# Embedding D2H core coord for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
 EMBEDDING_D2H_CORE_COORD = ttnn.CoreCoord(12, 1)
-ARGMAX_RELAY_CORE = ttnn.CoreCoord(12, 2)
 
 # MTP constants
-embedding_dim = 7168
-mtp_output_dim = 7168
 num_dram_banks = 8
 METADATA_NUM_ELEMS = 32
-mtp_n_per_core = mtp_output_dim // num_dram_banks
+mtp_n_per_core = ACTIVATION_DIM // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
 # Token metadata payload: just token info (id, type, pos) — same physical size as TOKEN.
@@ -315,7 +311,6 @@ class SpecLMHeadStage(StageKind):
     N_PER_CORE = 160
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
     A_TILE = ttnn.Tile([1, 32])
-    B_TILE = ttnn.Tile([32, 32])
     OUT_TILE = ttnn.Tile([1, 32])
     ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 0)
     LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
@@ -391,11 +386,6 @@ class SpecLMHeadStage(StageKind):
         )
         argmax_final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(cls.ARGMAX_FINAL_CORE, cls.ARGMAX_FINAL_CORE)])
 
-        input_a_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (cls.M, cls.K + METADATA_NUM_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
-        )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -576,9 +566,8 @@ class BaseLMHeadStage(StageKind):
     N_PER_CORE = 160
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
     A_TILE = ttnn.Tile([1, 32])
-    B_TILE = ttnn.Tile([32, 32])
     OUT_TILE = ttnn.Tile([1, 32])
-    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)  # Changed from (0, 1) to (0, 0)
+    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)
     LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
 
     def __init__(
@@ -661,11 +650,6 @@ class BaseLMHeadStage(StageKind):
         )
         argmax_final_core_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(BaseLMHeadStage.ARGMAX_FINAL_CORE, BaseLMHeadStage.ARGMAX_FINAL_CORE)]
-        )
-        input_a_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (BaseLMHeadStage.M, BaseLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR),
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -834,28 +818,6 @@ class BaseLMHeadStage(StageKind):
                 [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dg.x - 1, dg.y - 1))]
             )
             reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_sem_crs, 0) for _ in range(4)]
-
-        sender = BaseLMHeadStage.LMHEAD_INPUT_CORE
-        matmul_bbox = matmul_core_grid.bounding_box()
-        mcast_end_x = max(matmul_bbox.end.x, sender.x)
-        mcast_end_y = max(matmul_bbox.end.y, sender.y)
-        mcast_receiver_ranges = []
-        if sender.y > 0:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mcast_end_x, sender.y - 1))
-            )
-        if sender.x > 0:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(0, sender.y), ttnn.CoreCoord(sender.x - 1, sender.y))
-            )
-        if sender.x < mcast_end_x:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(sender.x + 1, sender.y), ttnn.CoreCoord(mcast_end_x, sender.y))
-            )
-        if sender.y < mcast_end_y:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(0, sender.y + 1), ttnn.CoreCoord(mcast_end_x, mcast_end_y))
-            )
 
         eh_gather_output_buf = None
 
@@ -1170,7 +1132,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
     """Combined SpecLMHead + Embedding on the same mesh.
 
     SpecLMHead occupies (0,0)-(10,9).  Embedding I/O uses column 12:
-      H2D at EMBEDDING_H2D_CORE_COORD, D2H at EMBEDDING_D2H_CORE_COORD,
+      H2D at PIPELINE_CORE_COORD, D2H at EMBEDDING_D2H_CORE_COORD,
       argmax final at ARGMAX_FINAL_CORE.  Exit D2D relay uses PIPELINE_CORE_COORD.
 
     Pipeline topology:
