@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -200,6 +201,7 @@ def run(
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer).squeeze()
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
