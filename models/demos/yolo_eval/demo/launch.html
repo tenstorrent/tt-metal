@@ -37,7 +37,7 @@
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 16px;
-    padding: 12px 16px;
+    padding: 10px 20px;
     position: sticky;
     top: 0;
     z-index: 10;
@@ -49,20 +49,20 @@
     justify-self: start;
     display: inline-flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 14px;
+    gap: 14px;
+    padding: 10px 18px;
     background: var(--card);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
+    border-radius: 14px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
-  .logo-card img { height: 32px; display: block; }
-  .center-stack { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .logo-card img { height: 56px; display: block; }
+  .center-stack { display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .title {
-    font-size: 18px; line-height: 1.2; font-weight: 600;
+    font-size: 24px; line-height: 1.2; font-weight: 600;
     letter-spacing: 0.2px;
     border-bottom: 2px solid rgba(124, 92, 255, 0.5);
-    padding-bottom: 4px;
+    padding-bottom: 6px;
   }
   .toggle-pill {
     position: relative;
@@ -70,7 +70,7 @@
     background: var(--pill-inactive);
     border: 1px solid var(--card-border);
     border-radius: 999px;
-    padding: 4px;
+    padding: 5px;
     box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.06);
     user-select: none;
   }
@@ -79,32 +79,34 @@
     z-index: 1;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
+    gap: 10px;
+    padding: 10px 22px;
     border-radius: 999px;
     cursor: pointer;
     color: var(--text-dim);
     font-weight: 500;
+    font-size: 16px;
     transition: color 160ms ease;
-    min-width: 124px;
+    min-width: 150px;
     justify-content: center;
   }
   .toggle-pill .seg.active { color: #fff; }
   .toggle-pill .indicator {
     position: absolute;
-    top: 4px; bottom: 4px;
+    top: 5px; bottom: 5px;
     border-radius: 999px;
     background: linear-gradient(135deg, var(--accent), #5b3dd6);
     box-shadow: 0 6px 18px rgba(124, 92, 255, 0.45);
     transition: transform 200ms ease, width 200ms ease;
     z-index: 0;
   }
+  /* Side panel kept narrow on purpose — video must dominate. */
   main {
     flex: 1 1 auto;
     display: grid;
-    grid-template-columns: 1fr 360px;
-    gap: 16px;
-    padding: 16px;
+    grid-template-columns: 1fr 300px;
+    gap: 12px;
+    padding: 10px 12px;
   }
   @media (max-width: 1100px) {
     main { grid-template-columns: 1fr; }
@@ -117,13 +119,19 @@
     border-radius: 12px;
     overflow: hidden;
     min-height: 300px;
+    /* Match the video's own height cap so the card doesn't reserve empty
+       pillarbox below the stream. The overlay canvas is position:absolute
+       and tracks the video's content rect, so it still lines up. */
+    max-height: calc(100vh - 110px);
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
   #main, #localCam {
     display: block;
     width: 100%;
     height: auto;
-    max-height: calc(100vh - 160px);
+    /* Generous cap — header is 80-90 px now, so 110 px leaves a small
+       breathing margin without wasting vertical space on letterbox. */
+    max-height: calc(100vh - 110px);
     background: #000;
     object-fit: contain;
   }
@@ -135,18 +143,18 @@
     height: 100%;
     pointer-events: none;
   }
-  .right-col { display: flex; flex-direction: column; gap: 16px; }
+  .right-col { display: flex; flex-direction: column; gap: 14px; }
   .preview-card {
     background: var(--card);
     border: 1px solid var(--card-border);
     border-radius: 12px;
-    padding: 12px;
+    padding: 14px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
   .preview-card h3 {
-    margin: 0 0 8px 0;
-    font-size: 12px;
-    letter-spacing: 1px;
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    letter-spacing: 1.2px;
     text-transform: uppercase;
     color: var(--text-dim);
     font-weight: 600;
@@ -160,22 +168,30 @@
     border: 1px solid rgba(124, 92, 255, 0.18);
   }
   .caption {
-    margin-top: 8px;
-    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin-top: 10px;
+    font: 15px ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--text-dim);
     text-align: center;
+  }
+  /* Dedicated FPS line — bigger than the caption so it reads across the room. */
+  #fpsCap {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    color: var(--good);
+    margin-top: 6px;
   }
   .meta-card {
     background: var(--card);
     border: 1px solid var(--card-border);
     border-radius: 12px;
-    padding: 12px;
-    font: 11px ui-monospace, monospace;
+    padding: 14px 16px;
+    font: 14px ui-monospace, monospace;
     color: var(--text-dim);
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
-  .meta-card .row { display: flex; justify-content: space-between; padding: 2px 0; }
-  .meta-card .row b { color: var(--text); font-weight: 500; }
+  .meta-card .row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .meta-card .row b { color: var(--text); font-weight: 600; font-size: 15px; }
   .switch-overlay {
     position: fixed;
     inset: 0;
@@ -209,6 +225,119 @@
     display: none;
   }
   .err-toast.show { display: block; }
+  /* 8-stream grid: 4 columns x 2 rows of square tiles, sized so the whole
+     grid fits within the viewport (no scroll). --s is the per-cell side,
+     computed as min(width-budget/4, height-budget/2) so cells stay square
+     and the grid is centered with any remaining space as margin. */
+  #streamsGrid {
+    display: none;
+    gap: 10px;
+    justify-content: center;
+    align-content: center;
+    width: 100%;
+  }
+  main.streams-mode {
+    grid-template-columns: 1fr;
+    padding: 8px 10px;
+  }
+  main.streams-mode #streamsGrid {
+    display: grid;
+    --header-h: 120px;
+    --gap: 10px;
+    /* source content is 1280x724 (16:9-ish) after cropping the baked-in
+       gray bars. Cell width takes the lesser of width-budget/4 and
+       (height-budget/2) * aspect so rows of the grid still fit. */
+    --aspect: calc(1280 / 724);
+    --s-w: min(
+      calc((100vw - 40px - 3 * var(--gap)) / 4),
+      calc(((100vh - var(--header-h) - var(--gap)) / 2) * var(--aspect))
+    );
+    grid-template-columns: repeat(4, var(--s-w));
+    grid-template-rows: repeat(2, calc(var(--s-w) / var(--aspect)));
+  }
+  main.streams-mode .video-card,
+  main.streams-mode .right-col { display: none; }
+  .stream-cell {
+    position: relative;
+    background: #050308;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .stream-cell canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  .stream-hud {
+    position: absolute;
+    top: 6px; left: 8px; right: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+    z-index: 2;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.75);
+  }
+  .stream-hud .hud-left {
+    background: rgba(124, 92, 255, 0.6);
+    padding: 3px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.3px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .stream-hud .hud-right {
+    background: rgba(10, 6, 18, 0.7);
+    padding: 3px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.2px;
+    color: var(--good);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  /* Master video sits in the first cell at full size so Chrome keeps the
+     decoder active (offscreen / 2-px tricks can trip the "invisible media"
+     throttle in recent builds). The canvas on top covers it completely; the
+     video itself is invisible to the user. */
+  .streams-master-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+    background: #000;
+  }
+  .stream-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 1;
+    background: rgba(10, 6, 18, 0.75);
+    color: var(--text);
+    font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.5px;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+  .stream-loading.hidden { opacity: 0; pointer-events: none; display: none; }
+  .stream-loading .tile-spinner {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    border: 3px solid rgba(124, 92, 255, 0.18);
+    border-top-color: var(--accent);
+    animation: spin 900ms linear infinite;
+  }
 </style>
 </head>
 <body>
@@ -223,6 +352,9 @@
         <button class="seg" data-id="camera" role="tab" aria-selected="false">
           <span aria-hidden="true">🎥</span><span>Camera</span>
         </button>
+        <button class="seg" data-id="multi" role="tab" aria-selected="false">
+          <span aria-hidden="true">🗂️</span><span>Streams</span>
+        </button>
         <button class="seg active" data-id="video" role="tab" aria-selected="true">
           <span aria-hidden="true">🎬</span><span>Video</span>
         </button>
@@ -233,15 +365,17 @@
 
   <main>
     <section class="video-card" id="videoCard">
-      <video id="main" autoplay muted playsinline></video>
+      <video id="main" autoplay muted playsinline loop></video>
       <video id="localCam" autoplay muted playsinline></video>
       <canvas id="overlay"></canvas>
     </section>
+    <section id="streamsGrid"></section>
     <aside class="right-col">
       <div class="preview-card">
         <h3>Tile preview</h3>
         <canvas id="tiles" width="320" height="180"></canvas>
-        <div class="caption" id="tilesCap">— tiles → — devices</div>
+        <div class="caption" id="tilesCap">YOLOv8L · — tiles</div>
+        <div class="caption" id="fpsCap">inference —.— FPS</div>
       </div>
       <div class="meta-card" id="meta">
         <div class="row"><span>transport</span><b id="m_transport">—</b></div>
@@ -285,8 +419,8 @@ function gridFor(w, h) {
 }
 
 function captionFor(g) {
-  if (g.n <= 1) return "single device, ≤ 640×640";
-  return `${g.n} tiles → ${g.n} devices`;
+  if (g.n <= 1) return "YOLOv8L · 1 × 640×640 tile";
+  return `YOLOv8L · ${g.n} × 640×640 tiles`;
 }
 
 /* ===================================================================
@@ -357,8 +491,20 @@ function drawTilePreview() {
   document.getElementById("tilesCap").textContent = captionFor(lastGrid);
 }
 
+function _updateFpsCap() {
+  const el = document.getElementById("fpsCap");
+  if (!el) return;
+  // If no dets arrived in the last 2 s the stream has stalled — blank the
+  // readout so it doesn't keep advertising a stale number.
+  const stalled = _detsLastT === 0 || (performance.now() - _detsLastT) > 2000;
+  el.textContent = (!stalled && detsFps > 0.5)
+    ? `inference ${detsFps.toFixed(1)} FPS`
+    : "inference —.— FPS";
+}
+
 function rafLoop() {
   drawTilePreview();
+  _updateFpsCap();
   requestAnimationFrame(rafLoop);
 }
 
@@ -393,38 +539,101 @@ const ovctx     = overlay.getContext("2d");
 let latestDets  = null;
 const COCO = ["person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed","dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"];
 
-function syncOverlaySize() {
+function syncOverlayRect() {
+  // The <video> element is `width:100%; height:auto; max-height:...;
+  // object-fit:contain`, which means the element box is frequently a
+  // different aspect ratio than the intrinsic video — creating letterbox
+  // bars inside the element. The previous overlay was `inset:0` on the
+  // whole card, so box coords drawn in source space landed outside the
+  // actual video area. Compute the video's *content* rect here (applying
+  // contain-math manually) and position the canvas exactly over it. Then
+  // set the internal canvas buffer to source-frame dims so detection box
+  // coords map 1:1 — no scaling in drawOverlay.
   const v = currentMode === "camera" ? localCam : mainEl;
-  const w = v.videoWidth || v.clientWidth, h = v.videoHeight || v.clientHeight;
-  if (!w || !h) return;
-  if (overlay.width !== w || overlay.height !== h) {
-    overlay.width = w; overlay.height = h;
+  let sw, sh;
+  if (currentMode === "camera") {
+    sw = v.videoWidth || negotiatedW || 0;
+    sh = v.videoHeight || negotiatedH || 0;
+  } else {
+    sw = negotiatedW || v.videoWidth || 0;
+    sh = negotiatedH || v.videoHeight || 0;
   }
+  if (!sw || !sh) return false;
+
+  const vRect = v.getBoundingClientRect();
+  if (!vRect.width || !vRect.height) return false;
+
+  const srcAR  = sw / sh;
+  const elemAR = vRect.width / vRect.height;
+  let contentW, contentH, contentX, contentY;
+  if (elemAR > srcAR) {
+    // Element wider than content — pillarbox bars left/right.
+    contentH = vRect.height;
+    contentW = contentH * srcAR;
+    contentX = (vRect.width - contentW) / 2;
+    contentY = 0;
+  } else {
+    contentW = vRect.width;
+    contentH = contentW / srcAR;
+    contentX = 0;
+    contentY = (vRect.height - contentH) / 2;
+  }
+
+  // Position the canvas absolutely (still inside #videoCard, which is
+  // position:relative) so its CSS rect exactly matches the video's content.
+  const card = document.getElementById("videoCard");
+  const cardRect = card.getBoundingClientRect();
+  const left = (vRect.left - cardRect.left) + contentX;
+  const top  = (vRect.top  - cardRect.top)  + contentY;
+  overlay.style.inset  = "auto";
+  overlay.style.left   = left + "px";
+  overlay.style.top    = top + "px";
+  overlay.style.width  = contentW + "px";
+  overlay.style.height = contentH + "px";
+
+  // Internal buffer = source frame dims. Box coords are source-space →
+  // drawing with raw (x1,y1,x2,y2) maps pixel-perfect once CSS scales
+  // the canvas to contentW × contentH.
+  if (overlay.width !== sw) overlay.width = sw;
+  if (overlay.height !== sh) overlay.height = sh;
+  return true;
 }
 
 function drawOverlay() {
-  syncOverlaySize();
+  if (currentMode === "multi") return; // multi mode draws per-stream canvases
+  const ok = syncOverlayRect();
+  if (!ok) return;
   ovctx.clearRect(0, 0, overlay.width, overlay.height);
-  if (currentMode !== "camera" || !latestDets) return;
-  const { boxes, scores, cls, frame_w, frame_h } = latestDets;
+  // Gate: only paint boxes when a video frame is actually being shown. Without
+  // this, SSE-delivered dets land faster than the <video> can load and the
+  // rAF loop paints stale boxes onto a black/unloaded element. Also clears
+  // latestDets so when playback stalls, boxes blank instead of sticking.
+  const el = (currentMode === "camera") ? localCam : mainEl;
+  const playing = el && el.readyState >= 2 && !el.paused && !el.ended;
+  if (!playing) { latestDets = null; return; }
+  if (!latestDets) return;
+  const { boxes, scores, cls } = latestDets;
   if (!boxes || !boxes.length) return;
-  const sx = overlay.width  / (frame_w || overlay.width);
-  const sy = overlay.height / (frame_h || overlay.height);
-  ovctx.lineWidth = 2;
-  ovctx.font = "12px ui-monospace, monospace";
+  const sw = overlay.width;
+  // Stroke / label sized in source space so screen thickness is consistent
+  // across resolutions — a 2 px stroke at 1080p becomes invisible at 4K.
+  const lw = Math.max(2, Math.round(sw / 600));
+  const fontPx = Math.max(12, Math.round(sw / 80));
+  ovctx.lineWidth = lw;
+  ovctx.font = `${fontPx}px ui-monospace, monospace`;
   for (let i = 0; i < boxes.length; i++) {
     const [x1, y1, x2, y2] = boxes[i];
     const c = cls ? cls[i] : 0;
     const s = scores ? scores[i] : 0;
-    const X = x1 * sx, Y = y1 * sy, W = (x2 - x1) * sx, H = (y2 - y1) * sy;
     ovctx.strokeStyle = "rgba(124, 92, 255, 0.95)";
-    ovctx.strokeRect(X, Y, W, H);
+    ovctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     const label = `${COCO[c] || c} ${(s * 100).toFixed(0)}%`;
     const tw = ovctx.measureText(label).width + 8;
+    const lh = fontPx + 4;
     ovctx.fillStyle = "rgba(124, 92, 255, 0.85)";
-    ovctx.fillRect(X, Math.max(0, Y - 16), tw, 16);
+    ovctx.fillRect(x1, Math.max(0, y1 - lh), tw, lh);
     ovctx.fillStyle = "#fff";
-    ovctx.fillText(label, X + 4, Math.max(12, Y - 4));
+    ovctx.fillText(label, x1 + 4, Math.max(fontPx, y1 - 4));
   }
 }
 function overlayLoop() { drawOverlay(); requestAnimationFrame(overlayLoop); }
@@ -434,9 +643,132 @@ function overlayLoop() { drawOverlay(); requestAnimationFrame(overlayLoop); }
  * =================================================================== */
 let pc = null;
 let dch = null;
-let currentMode = "video";          // "video" | "camera"
+let currentMode = "video";          // "video" | "camera" | "multi"
 let camStream = null;
 let negotiatedW = 0, negotiatedH = 0;
+let negotiatedFps = 0, totalFrames = 0;
+
+// Video-split mode: pipeline runs at full speed (~70 FPS) and pushes
+// {frame_id, boxes, ...} over SSE as each frame is inferred. Browser plays
+// the raw source MP4 at its native rate (~30 FPS) with `loop` on, and the
+// pipeline's FrameSource also loops internally (but keeps frame_id monotonic).
+//
+// To keep boxes aligned across loop cycles we key the buffer by
+// `frame_id % totalFrames` — pipeline pass N overwrites slot for source
+// frame F every cycle, so the browser always finds the freshest dets for
+// whatever frame it's currently presenting. Buffer size stays bounded at
+// totalFrames regardless of how long the pipeline has been running.
+const detsBuffer = new Map();       // (frame_id % n_frames) -> {boxes, scores, cls}
+let detsSSE = null;
+let videoRvfcHandle = null;
+
+// Inference throughput — the pipeline publishes its own `ema_fps` (the same
+// number printed in the `[sahi-640] avg ... FPS` log lines) on every dets
+// message, so the browser just reads and displays it verbatim. We deliberately
+// do NOT derive FPS from SSE arrival rate: TCP batches multiple dets into one
+// packet, EventSource dispatches them in the same microtask, and any 1/dt
+// estimate spikes to ~10,000 FPS. Trusting the server's smoothed number keeps
+// the readout steady and matches what the logs report.
+let detsFps = 0;
+let _detsLastT = 0;                  // last arrival timestamp; used only to blank the readout when the stream stalls
+
+function _markDetsArrival(fps) {
+  _detsLastT = performance.now();
+  if (typeof fps === "number" && isFinite(fps) && fps >= 0) {
+    detsFps = fps;
+  }
+}
+
+function _resetDetsFps() {
+  detsFps = 0; _detsLastT = 0;
+}
+
+function closeDetsStream() {
+  if (detsSSE) { try { detsSSE.close(); } catch (_e) {} }
+  detsSSE = null;
+  detsBuffer.clear();
+}
+
+function _frameKey(raw) {
+  // Pipeline emits monotonic frame_ids, but the source file has only
+  // totalFrames frames — every cycle the pipeline walks them again. Folding
+  // to `raw mod totalFrames` keeps the buffer bounded AND lets the browser's
+  // <video loop> (which restarts its clock every cycle) hit the same slot.
+  if (totalFrames > 0) {
+    const m = ((raw % totalFrames) + totalFrames) % totalFrames;
+    return m;
+  }
+  return raw | 0;
+}
+
+function openDetsStream() {
+  closeDetsStream();
+  detsSSE = new EventSource(`${location.origin}/dets`);
+  detsSSE.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (_e) { return; }
+    if (!msg || msg.k !== "dets") return;
+    _markDetsArrival(msg.fps);
+    const key = _frameKey(msg.frame_id | 0);
+    detsBuffer.set(key, {
+      boxes: msg.boxes || [],
+      scores: msg.scores || [],
+      cls: msg.cls || [],
+    });
+  };
+  detsSSE.onerror = () => {
+    // EventSource auto-reconnects — just log.
+    console.warn("[dets] SSE error (auto-reconnect)");
+  };
+}
+
+function detsForFrame(frameId) {
+  // Exact match preferred; fall back to the nearest earlier frame_id (or
+  // wrap-around predecessor when totalFrames is known) so a brief inference
+  // stall doesn't blank the overlay.
+  if (detsBuffer.has(frameId)) return detsBuffer.get(frameId);
+  let best = -1;
+  for (const k of detsBuffer.keys()) {
+    if (k <= frameId && k > best) best = k;
+  }
+  if (best < 0 && totalFrames > 0 && detsBuffer.size > 0) {
+    // Cold start: no slot at or before frameId, but the pipeline may have
+    // filled later slots from a prior cycle. Take the highest one we have.
+    for (const k of detsBuffer.keys()) if (k > best) best = k;
+  }
+  return best >= 0 ? detsBuffer.get(best) : null;
+}
+
+function onVideoFrameTick(_now, metadata) {
+  // Prefer mediaTime * fps when we know totalFrames — it maps to a file-local
+  // frame index that matches `fc % totalFrames` on the server side. The
+  // alternative (presentedFrames) starts fresh on every <video loop> cycle
+  // AND on every `mainEl.load()`, so it doesn't align with pipeline fc.
+  let fid;
+  if (totalFrames > 0 && negotiatedFps > 0 && metadata && typeof metadata.mediaTime === "number") {
+    const localIdx = Math.round(metadata.mediaTime * negotiatedFps);
+    fid = ((localIdx % totalFrames) + totalFrames) % totalFrames;
+  } else {
+    fid = ((metadata && metadata.presentedFrames) | 0) - 1;
+  }
+  const d = detsForFrame(fid);
+  if (d) {
+    latestDets = {
+      boxes: d.boxes, scores: d.scores, cls: d.cls,
+      frame_w: negotiatedW, frame_h: negotiatedH,
+    };
+  }
+  if (currentMode === "video" && mainEl && typeof mainEl.requestVideoFrameCallback === "function") {
+    videoRvfcHandle = mainEl.requestVideoFrameCallback(onVideoFrameTick);
+  }
+}
+
+function cancelVideoRvfc() {
+  if (videoRvfcHandle && mainEl && typeof mainEl.cancelVideoFrameCallback === "function") {
+    try { mainEl.cancelVideoFrameCallback(videoRvfcHandle); } catch (_e) {}
+  }
+  videoRvfcHandle = null;
+}
 
 function showSwitch(msg) {
   document.getElementById("switchMsg").textContent = msg;
@@ -459,8 +791,14 @@ function teardown() {
     camStream.getTracks().forEach(t => { try { t.stop(); } catch (_e) {} });
     camStream = null;
   }
+  cancelVideoRvfc();
+  closeDetsStream();
+  teardownStreams();
+  _resetDetsFps();
+  latestDets = null;
   mainEl.srcObject = null;
   mainEl.removeAttribute("src");
+  mainEl.load();
   localCam.srcObject = null;
 }
 
@@ -488,7 +826,12 @@ async function offerToPipeline(pcLocal) {
   return r.json();
 }
 
-/* ---------- Video mode: H.264 fMP4 over HTTP from /stream ---------- */
+/* ---------- Video mode: split delivery ----------
+ * Browser plays /source.mp4 natively (no server re-encode) and overlays
+ * detections streamed over /dets SSE, looked up per frame via rVFC.
+ * This decouples network bandwidth from inference throughput: the pipeline
+ * runs at ~70 FPS on hardware independently of the 30 FPS playback rate.
+ */
 async function startVideo() {
   showSwitch("Starting Video transport…");
   teardown();
@@ -496,23 +839,35 @@ async function startVideo() {
   if (!status.ok) { hideSwitch(); toast("supervisor failed to start pipeline"); return; }
   negotiatedW = status.frame_w; negotiatedH = status.frame_h;
   lastGrid = gridFor(negotiatedW, negotiatedH);
-  updateMeta(status, "H.264 fMP4 over HTTP");
-  showSwitch("Connecting to video stream…");
+  updateMeta(status, "native MP4 + dets over SSE");
+  showSwitch("Loading source video…");
   localCam.style.display = "none";
   mainEl.style.display = "block";
   mainEl.srcObject = null;
-  // Cache-buster stops the browser from replaying a closed prior stream
-  // buffer when toggling video→camera→video in the same page session.
-  mainEl.src = `${location.origin}/stream?t=${Date.now()}`;
+  // Cache-buster: on toggle video→camera→video, some browsers keep the old
+  // range-cache keyed on the bare URL.
+  mainEl.src = `${location.origin}/source.mp4?t=${Date.now()}`;
   mainSrc = mainEl;
   const ready = new Promise((resolve) => {
     const done = () => { mainEl.removeEventListener("loadeddata", done); mainEl.removeEventListener("playing", done); resolve(); };
     mainEl.addEventListener("loadeddata", done, { once: true });
     mainEl.addEventListener("playing", done, { once: true });
-    setTimeout(resolve, 8000); // don't hang UI if the first GOP is slow
+    setTimeout(resolve, 8000);
   });
   try { await mainEl.play(); } catch (_e) { /* autoplay quirks */ }
   await ready;
+
+  // Start SSE + per-frame overlay lookup AFTER the <video> is wired up so
+  // the very first presented frame can already pick up a det (pipeline
+  // begins inferring as soon as the supervisor restart returned 200).
+  openDetsStream();
+  if (typeof mainEl.requestVideoFrameCallback === "function") {
+    videoRvfcHandle = mainEl.requestVideoFrameCallback(onVideoFrameTick);
+  } else {
+    // Extremely old browsers: fall back to the RAF overlay loop only (it
+    // will show the newest buffered det, which drifts slightly from playback).
+    console.warn("[video] requestVideoFrameCallback unavailable; overlay may lag");
+  }
   hideSwitch();
 }
 
@@ -563,6 +918,7 @@ async function startCamera() {
       if (typeof ev.data === "string") payload = JSON.parse(ev.data);
       else payload = JSON.parse(new TextDecoder().decode(ev.data));
       if (payload && payload.k === "dets") {
+        _markDetsArrival(payload.fps);
         latestDets = {
           boxes: payload.boxes || [],
           scores: payload.scores || [],
@@ -590,6 +946,9 @@ function updateMeta(status, deliveryDesc) {
     srcW = status.frame_w; srcH = status.frame_h;
     lastGrid = gridFor(srcW, srcH);
   }
+  // fps / n_frames are present in video mode only. Stash for rVFC lookup math.
+  negotiatedFps = +(status.fps || 0) || 0;
+  totalFrames = (status.n_frames | 0) || 0;
 }
 
 async function selectMode(mode) {
@@ -598,8 +957,9 @@ async function selectMode(mode) {
   setActiveSeg(mode);
   localStorage.setItem("ttdemo.mode", mode);
   try {
-    if (mode === "video") await startVideo();
-    else                  await startCamera();
+    if (mode === "video")      await startVideo();
+    else if (mode === "multi") await startStreams();
+    else                       await startCamera();
   } catch (e) {
     hideSwitch();
     toast(e.message || String(e));
@@ -609,6 +969,409 @@ async function selectMode(mode) {
 
 segs.forEach(s => s.addEventListener("click", () => selectMode(s.dataset.id)));
 window.addEventListener("resize", () => setActiveSeg(currentMode, false));
+
+/* ===================================================================
+ * Multi (Streams) mode: ONE hidden master <video> feeds 8 canvas tiles.
+ *
+ * Why a single video: HTTP/1.1 per-origin connection caps (~6 in Chrome)
+ * throttle 8 parallel <video src="/source.mp4"> tags so ~2 tiles hang
+ * indefinitely. Routing one master video into 8 canvases via rVFC uses
+ * one connection, renders all 8 tiles from the same decoded frames, and
+ * stays in perfect lockstep.
+ *
+ * Pipeline still emits one dets message *per stream* per frame (the
+ * stream_id being the route key); each tile renders the master frame
+ * + its own stream_id's boxes. V1 broadcasts the same frame to all 8,
+ * so box coords are identical across tiles; when the pipeline grows
+ * true per-stream sources the same demux handles it unchanged.
+ * =================================================================== */
+const N_STREAMS = 8;
+// Source video is 1280x1280 with baked-in gray bars; actual content is
+// rows [STREAMS_CROP_Y, STREAMS_CROP_Y + STREAMS_CROP_H). Canvas is sized to
+// the cropped content, drawImage uses the 9-arg crop form, and box y-coords
+// (reported in 1280x1280 frame space) get shifted by -STREAMS_CROP_Y.
+const STREAMS_SRC_W = 1280;
+const STREAMS_SRC_H = 1280;
+const STREAMS_CROP_Y = 280;
+const STREAMS_CROP_H = 724;
+let streamsMaster = null;
+let streamsCanvases = [];
+let streamsCtxs = [];
+let streamsDetsBuffers = [];
+let streamsLatestDets = [];
+let streamsRvfcHandle = null;
+let streamsDetsSSE = null;
+let streamsHudLeftEls = [];    // per-stream "Stream N · model · D devices"
+let streamsHudRightEls = [];   // per-stream FPS element
+let streamsLoadingEls = [];    // per-stream loading overlay (hidden after first paint)
+let streamsFirstFrameSeen = []; // per-stream bool — drop the overlay once true
+let streamsFps = [];           // last-known per-stream FPS (from SSE msg.fps)
+let streamsTilesPerStream = 4; // model cluster size per stream, seeded from /api/status
+
+function buildStreamsGrid(forceRebuild = false) {
+  const grid = document.getElementById("streamsGrid");
+  if (!forceRebuild && streamsMaster && streamsCanvases.length === N_STREAMS) return;
+  // Nuke the DOM tree -- this also removes any existing <video> with a
+  // sticky MediaError (code=4 SRC_NOT_SUPPORTED etc), which cannot be
+  // fully cleared via src reassignment alone in Chromium.
+  streamsMaster = null;
+  grid.innerHTML = "";
+  streamsCanvases = []; streamsCtxs = [];
+  streamsDetsBuffers = []; streamsLatestDets = [];
+  streamsHudLeftEls = []; streamsHudRightEls = []; streamsFps = [];
+  streamsLoadingEls = []; streamsFirstFrameSeen = [];
+
+  streamsMaster = document.createElement("video");
+  streamsMaster.autoplay = true;
+  streamsMaster.muted = true;
+  streamsMaster.playsInline = true;
+  streamsMaster.loop = true;
+  streamsMaster.preload = "auto";
+  streamsMaster.className = "streams-master-video";
+  streamsMaster.addEventListener("error", () => {
+    const e = streamsMaster.error;
+    const codeNames = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+    const codeName = e ? (codeNames[e.code] || String(e.code)) : "none";
+    console.error(`[multi] master <video> error code=${e && e.code} (${codeName}) message=${e && e.message}`);
+    toast(`stream video failed (${codeName})`);
+  });
+  streamsMaster.addEventListener("loadeddata", () => {
+    console.log(`[multi] master loadeddata ${streamsMaster.videoWidth}x${streamsMaster.videoHeight}`);
+  });
+  streamsMaster.addEventListener("playing", () => {
+    console.log("[multi] master playing");
+  });
+  streamsMaster.addEventListener("stalled", () => console.warn("[multi] master stalled"));
+  // Deferred: we attach the master <video> to cell 0 AFTER the cells are
+  // created (so it sits beneath that cell's canvas in the render tree at
+  // full cell size — keeps the decoder active under Chrome's visibility
+  // heuristics).
+
+  for (let i = 0; i < N_STREAMS; i++) {
+    const cell = document.createElement("div");
+    cell.className = "stream-cell";
+    const hud = document.createElement("div");
+    hud.className = "stream-hud";
+    const hudLeft = document.createElement("span");
+    hudLeft.className = "hud-left";
+    hudLeft.textContent = `Stream ${i + 1} · YOLOv8L · ${streamsTilesPerStream} devices`;
+    const hudRight = document.createElement("span");
+    hudRight.className = "hud-right";
+    hudRight.textContent = "—.— FPS";
+    hud.appendChild(hudLeft);
+    hud.appendChild(hudRight);
+    const c = document.createElement("canvas");
+    c.width = STREAMS_SRC_W; c.height = STREAMS_CROP_H;
+    const loading = document.createElement("div");
+    loading.className = "stream-loading";
+    const spinner = document.createElement("div");
+    spinner.className = "tile-spinner";
+    const msg = document.createElement("div");
+    msg.textContent = "Loading stream…";
+    loading.appendChild(spinner);
+    loading.appendChild(msg);
+    // Attach the master <video> to cell 0, beneath that cell's canvas.
+    // Canvas sits at z-index:1 via its .stream-cell canvas rule; the video
+    // lives at z-index:0 as a full-size, opaque-black backdrop that the
+    // drawImage loop reads from. Keeps the decoder active because the
+    // element is in a visible render subtree at real size.
+    if (i === 0 && streamsMaster) {
+      cell.appendChild(streamsMaster);
+    }
+    cell.appendChild(c);
+    cell.appendChild(hud);
+    cell.appendChild(loading);
+    grid.appendChild(cell);
+    streamsCanvases.push(c);
+    streamsCtxs.push(c.getContext("2d"));
+    streamsDetsBuffers.push(new Map());
+    streamsLatestDets.push(null);
+    streamsHudLeftEls.push(hudLeft);
+    streamsHudRightEls.push(hudRight);
+    streamsLoadingEls.push(loading);
+    streamsFirstFrameSeen.push(false);
+    streamsFps.push(0);
+  }
+}
+
+function openStreamsDetsStream() {
+  if (streamsDetsSSE) { try { streamsDetsSSE.close(); } catch (_e) {} }
+  streamsDetsSSE = new EventSource(`${location.origin}/dets`);
+  streamsDetsSSE.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (_e) { return; }
+    if (!msg || msg.k !== "dets") return;
+    _markDetsArrival(msg.fps);
+    const sid = (msg.stream_id | 0);
+    if (sid < 0 || sid >= N_STREAMS) return;
+    const key = _frameKey(msg.frame_id | 0);
+    streamsDetsBuffers[sid].set(key, {
+      boxes: msg.boxes || [],
+      scores: msg.scores || [],
+      cls: msg.cls || [],
+    });
+    if (typeof msg.fps === "number" && isFinite(msg.fps) && msg.fps >= 0) {
+      streamsFps[sid] = msg.fps;
+      const el = streamsHudRightEls[sid];
+      if (el) el.textContent = `${msg.fps.toFixed(1)} FPS`;
+    }
+  };
+  streamsDetsSSE.onerror = () => { console.warn("[dets-multi] SSE error (auto-reconnect)"); };
+}
+
+function closeStreamsDetsStream() {
+  if (streamsDetsSSE) { try { streamsDetsSSE.close(); } catch (_e) {} }
+  streamsDetsSSE = null;
+  for (const b of streamsDetsBuffers) b.clear();
+}
+
+function _streamDetsForFrame(sid, frameId) {
+  const buf = streamsDetsBuffers[sid];
+  if (!buf) return null;
+  if (buf.has(frameId)) return buf.get(frameId);
+  let best = -1;
+  for (const k of buf.keys()) if (k <= frameId && k > best) best = k;
+  if (best < 0 && totalFrames > 0 && buf.size > 0) {
+    for (const k of buf.keys()) if (k > best) best = k;
+  }
+  return best >= 0 ? buf.get(best) : null;
+}
+
+function _drawStreamBoxes(sid) {
+  // Canvas already holds the current master frame -- DO NOT clear here, or
+  // we'd erase the video. Just stroke boxes on top.
+  const ctx = streamsCtxs[sid];
+  const canvas = streamsCanvases[sid];
+  const d = streamsLatestDets[sid];
+  if (!ctx || !canvas || !d || !d.boxes || !d.boxes.length) return;
+  const sw = canvas.width;
+  const lw = Math.max(2, Math.round(sw / 400));
+  const fontPx = Math.max(14, Math.round(sw / 60));
+  ctx.lineWidth = lw;
+  ctx.font = `${fontPx}px ui-monospace, monospace`;
+  const { boxes, scores, cls } = d;
+  for (let i = 0; i < boxes.length; i++) {
+    const [bx1, by1, bx2, by2] = boxes[i];
+    // Boxes are in 1280x1280 source-frame coordinates. We cropped the top
+    // STREAMS_CROP_Y rows off, so shift y by that offset. Drop any box that
+    // lies entirely inside the cropped-out bar.
+    const y1 = by1 - STREAMS_CROP_Y;
+    const y2 = by2 - STREAMS_CROP_Y;
+    if (y2 <= 0 || y1 >= STREAMS_CROP_H) continue;
+    const x1 = bx1;
+    const x2 = bx2;
+    const c = cls ? cls[i] : 0;
+    const sc = scores ? scores[i] : 0;
+    ctx.strokeStyle = "rgba(124, 92, 255, 0.95)";
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    const label = `${COCO[c] || c} ${(sc * 100).toFixed(0)}%`;
+    const tw = ctx.measureText(label).width + 8;
+    const lh = fontPx + 4;
+    ctx.fillStyle = "rgba(124, 92, 255, 0.85)";
+    ctx.fillRect(x1, Math.max(0, y1 - lh), tw, lh);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, x1 + 4, Math.max(fontPx, y1 - 4));
+  }
+}
+
+// Last frame_id observed by rVFC (if available). rAF loop reads this to
+// align dets with the current video frame. When rVFC is unavailable we fall
+// back to currentTime * fps.
+let _streamsLastFid = 0;
+let _streamsRafHandle = null;
+
+function _streamsDrawLoop() {
+  if (currentMode !== "multi" || !streamsMaster) { _streamsRafHandle = null; return; }
+  const master = streamsMaster;
+  const ready = master.readyState >= 2 && master.videoWidth > 0;
+  let fid = _streamsLastFid;
+  if (ready && totalFrames > 0 && negotiatedFps > 0) {
+    const localIdx = Math.round((master.currentTime || 0) * negotiatedFps);
+    fid = ((localIdx % totalFrames) + totalFrames) % totalFrames;
+  }
+  for (let s = 0; s < N_STREAMS; s++) {
+    const ctx = streamsCtxs[s];
+    const canvas = streamsCanvases[s];
+    if (!ctx || !canvas) continue;
+    if (ready) {
+      // 9-arg drawImage: crop source rect (skip gray bars) -> full canvas.
+      try {
+        ctx.drawImage(
+          master,
+          0, STREAMS_CROP_Y, STREAMS_SRC_W, STREAMS_CROP_H,
+          0, 0, canvas.width, canvas.height,
+        );
+      } catch (_e) {}
+      if (!streamsFirstFrameSeen[s]) {
+        streamsFirstFrameSeen[s] = true;
+        const lo = streamsLoadingEls[s];
+        if (lo) lo.classList.add("hidden");
+      }
+      const d = _streamDetsForFrame(s, fid);
+      if (d) streamsLatestDets[s] = d;
+      _drawStreamBoxes(s);
+    } else {
+      // Master stalled/loading: blank the tile (video frame + boxes) so we
+      // don't show stale boxes floating over a black canvas.
+      try { ctx.clearRect(0, 0, canvas.width, canvas.height); } catch (_e) {}
+      streamsLatestDets[s] = null;
+    }
+  }
+  _streamsRafHandle = requestAnimationFrame(_streamsDrawLoop);
+}
+
+// rVFC tick — purely tracks the current frame_id so dets line up precisely
+// with the decoded frame. Never does drawing itself (rAF loop handles that)
+// so a throttled rVFC can't stall the visual.
+function _onMasterFrame(_now, metadata) {
+  if (currentMode !== "multi" || !streamsMaster) return;
+  if (totalFrames > 0 && negotiatedFps > 0 && metadata && typeof metadata.mediaTime === "number") {
+    const localIdx = Math.round(metadata.mediaTime * negotiatedFps);
+    _streamsLastFid = ((localIdx % totalFrames) + totalFrames) % totalFrames;
+  } else if (metadata && typeof metadata.presentedFrames === "number") {
+    _streamsLastFid = (metadata.presentedFrames | 0) - 1;
+  }
+  if (typeof streamsMaster.requestVideoFrameCallback === "function") {
+    streamsRvfcHandle = streamsMaster.requestVideoFrameCallback(_onMasterFrame);
+  }
+}
+
+function cancelStreamsRvfc() {
+  if (streamsRvfcHandle && streamsMaster && typeof streamsMaster.cancelVideoFrameCallback === "function") {
+    try { streamsMaster.cancelVideoFrameCallback(streamsRvfcHandle); } catch (_e) {}
+  }
+  streamsRvfcHandle = null;
+  if (_streamsRafHandle) { try { cancelAnimationFrame(_streamsRafHandle); } catch (_e) {} }
+  _streamsRafHandle = null;
+}
+
+async function startStreams() {
+  showSwitch("Starting Streams transport…");
+  teardown();
+  const status = await postSource("multi", 0, 0);
+  if (!status.ok) { hideSwitch(); toast("supervisor failed to start multi-stream pipeline"); return; }
+  negotiatedW = status.frame_w; negotiatedH = status.frame_h;
+  lastGrid = gridFor(negotiatedW, negotiatedH);
+  const nStreams = status.n_streams || N_STREAMS;
+  const tps = status.tiles_per_stream || 4;
+  streamsTilesPerStream = tps;
+  updateMeta(status, `${nStreams} streams × ${tps} tiles → ${status.n_tiles} devices`);
+  showSwitch("Loading stream video…");
+
+  buildStreamsGrid(true);
+  document.querySelector("main").classList.add("streams-mode");
+  for (let i = 0; i < N_STREAMS; i++) {
+    // Canvas internal size matches the cropped content area, NOT the raw
+    // 1280x1280 frame — the drawImage call above crops the gray bars.
+    streamsCanvases[i].width = STREAMS_SRC_W;
+    streamsCanvases[i].height = STREAMS_CROP_H;
+    if (streamsHudLeftEls[i]) {
+      streamsHudLeftEls[i].textContent = `Stream ${i + 1} · YOLOv8L · ${tps} devices`;
+    }
+    if (streamsHudRightEls[i]) {
+      streamsHudRightEls[i].textContent = "—.— FPS";
+    }
+    streamsFirstFrameSeen[i] = false;
+    if (streamsLoadingEls[i]) streamsLoadingEls[i].classList.remove("hidden");
+  }
+  // Pre-flight: confirm /source.mp4 is reachable BEFORE binding to the video
+  // element. If the pipeline is still warming up (trace capture, mesh lock
+  // release), we retry a few times with backoff so we don't poison the
+  // <video> element with a cached 404.
+  const srcUrl = `${location.origin}/source.mp4?t=${Date.now()}`;
+  let probeOk = false;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const pr = await fetch(srcUrl, { method: "HEAD", cache: "no-store" });
+      if (pr.ok) { probeOk = true; break; }
+      console.warn(`[multi] /source.mp4 probe attempt ${attempt+1}: status=${pr.status}`);
+    } catch (e) {
+      console.warn(`[multi] /source.mp4 probe attempt ${attempt+1} threw:`, e && e.message);
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  if (!probeOk) {
+    hideSwitch();
+    toast("pipeline did not serve /source.mp4 after 5s — check supervisor logs");
+    return;
+  }
+  // Clear any poisoned state on the element before re-assigning (browsers
+  // cache a NETWORK/SRC_NOT_SUPPORTED error on media elements across src
+  // changes unless we explicitly blank+load first).
+  streamsMaster.removeAttribute("src");
+  streamsMaster.load();
+  streamsMaster.src = srcUrl;
+  streamsMaster.load();
+  try {
+    await streamsMaster.play();
+  } catch (e) {
+    console.warn("[multi] master play() rejected:", e && e.message);
+    // Autoplay policy can block the first play() even though muted=true.
+    // Retry once after a short delay; if that still fails, surface it.
+    await new Promise(r => setTimeout(r, 250));
+    try { await streamsMaster.play(); }
+    catch (e2) { toast("browser blocked autoplay: click anywhere to start"); console.warn("[multi] retry failed:", e2 && e2.message); }
+  }
+  // Click-anywhere-to-play: if autoplay got blocked, a single click on the
+  // grid unblocks playback. Registered once; the handler removes itself
+  // after the first successful play().
+  const _onGridClick = () => {
+    if (!streamsMaster) return;
+    streamsMaster.play().then(() => {
+      document.getElementById("streamsGrid").removeEventListener("click", _onGridClick);
+    }).catch(() => {});
+  };
+  document.getElementById("streamsGrid").addEventListener("click", _onGridClick);
+  // Watchdog: if the master isn't reporting HAVE_CURRENT_DATA after 3s,
+  // surface its state to the console so the user can see what's wrong.
+  setTimeout(() => {
+    if (!streamsMaster) return;
+    const m = streamsMaster;
+    console.log(
+      `[multi] master state: readyState=${m.readyState} ` +
+      `videoWidth=${m.videoWidth} videoHeight=${m.videoHeight} ` +
+      `currentTime=${m.currentTime.toFixed(2)} paused=${m.paused} ` +
+      `error=${m.error && m.error.code} networkState=${m.networkState}`
+    );
+  }, 3000);
+  await new Promise((res) => {
+    const done = () => {
+      streamsMaster.removeEventListener("loadeddata", done);
+      streamsMaster.removeEventListener("playing", done);
+      res();
+    };
+    streamsMaster.addEventListener("loadeddata", done, { once: true });
+    streamsMaster.addEventListener("playing", done, { once: true });
+    setTimeout(res, 8000);
+  });
+
+  openStreamsDetsStream();
+  // rAF draws continuously (fires even if autoplay is throttled / rVFC
+  // never runs). rVFC, when available, only updates the frame_id so dets
+  // overlay aligns to the decoded frame.
+  _streamsRafHandle = requestAnimationFrame(_streamsDrawLoop);
+  if (typeof streamsMaster.requestVideoFrameCallback === "function") {
+    streamsRvfcHandle = streamsMaster.requestVideoFrameCallback(_onMasterFrame);
+  }
+  hideSwitch();
+}
+
+function teardownStreams() {
+  cancelStreamsRvfc();
+  closeStreamsDetsStream();
+  if (streamsMaster) {
+    try { streamsMaster.pause(); } catch (_e) {}
+    try { streamsMaster.removeAttribute("src"); streamsMaster.load(); } catch (_e) {}
+  }
+  for (let i = 0; i < streamsCanvases.length; i++) {
+    streamsLatestDets[i] = null;
+    if (streamsCtxs[i] && streamsCanvases[i]) {
+      streamsCtxs[i].clearRect(0, 0, streamsCanvases[i].width, streamsCanvases[i].height);
+    }
+  }
+  const mainEl2 = document.querySelector("main");
+  if (mainEl2) mainEl2.classList.remove("streams-mode");
+}
 
 async function fetchStatus() {
   try {
@@ -629,13 +1392,18 @@ async function fetchStatus() {
   const status0 = await fetchStatus();
   if (status0 && status0.transport && status0.transport !== "idle") {
     const deliv = status0.transport === "video"
-      ? "H.264 fMP4 over HTTP"
+      ? "native MP4 + dets over SSE"
+      : status0.transport === "multi"
+      ? `${status0.n_streams || 8} streams × ${status0.tiles_per_stream || 4} tiles`
       : "data_only (boxes over data channel)";
     updateMeta(status0, deliv);
   }
 
   const saved = localStorage.getItem("ttdemo.mode");
-  const initial = (saved === "camera") ? "camera" : (status0 && status0.transport === "camera" ? "camera" : "video");
+  const validModes = ["camera", "video", "multi"];
+  let initial = "video";
+  if (validModes.includes(saved)) initial = saved;
+  else if (status0 && validModes.includes(status0.transport)) initial = status0.transport;
   currentMode = (initial === "video") ? "camera" : "video"; // force selectMode to switch
   await selectMode(initial);
 })();

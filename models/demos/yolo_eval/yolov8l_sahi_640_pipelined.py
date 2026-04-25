@@ -1082,8 +1082,14 @@ def _postprocess_worker_shm(
     seams_x: tuple = (),
     seams_y: tuple = (),
     seam_tol: int = 80,
+    skip_pixel_output: bool = False,
 ):
-    """BG process: per-tile NMS + cross-tile merge + draw + encode."""
+    """BG process: per-tile NMS + cross-tile merge + draw + encode.
+
+    When `skip_pixel_output` is True, the draw/HUD/encode tail is bypassed
+    — use this for split-delivery mode, where the browser plays the raw
+    source file and only consumes detections over SSE.
+    """
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # Pin BG to physical cores 24-31 + SMT siblings 56-63 (8 physical cores,
@@ -1268,6 +1274,16 @@ def _postprocess_worker_shm(
                         "k": "dets",
                         "frame_id": int(fc),
                         "n": _n,
+                        # Ship the server-computed end-to-end FPS so the
+                        # browser displays the EXACT number the pipeline logs
+                        # show (see `[sahi-640] avg ... FPS` in stdout). The
+                        # alternative — reconstructing FPS from SSE arrival
+                        # timestamps in the browser — was wrong because TCP
+                        # batches multiple dets into one packet and 1/dt
+                        # balloons when messages dispatch in the same tick.
+                        # ema_fps is one frame stale here (updated at fc+=1
+                        # further down) which is imperceptible for a readout.
+                        "fps": float(ema_fps),
                         "boxes": boxes_np.astype(np.float32).tolist() if _n else [],
                         "scores": scores_np.astype(np.float32).tolist() if _n else [],
                         "cls": cls_np.astype(np.int32).tolist() if _n else [],
@@ -1287,49 +1303,55 @@ def _postprocess_worker_shm(
                     pass
 
             t0 = time.perf_counter()
-            _draw_boxes_np(canvas, boxes_np, scores_np, cls_np, names_dict)
+            if not skip_pixel_output:
+                _draw_boxes_np(canvas, boxes_np, scores_np, cls_np, names_dict)
             t_draw = time.perf_counter() - t0
 
             # Multi-worker encode: 3 threads overlap cv2.imencode (~28ms each)
             # with NMS+merge+draw (~13ms).  Only block if all 3 workers busy.
             # cv2.imencode releases the GIL so threads give real parallelism.
             t0 = time.perf_counter()
-            canvas = draw_hud(canvas, hud_label, ema_fps)
-            if h264_queue is not None:
-                # Convert BGR → YUV I420 here, in the BG worker. libx264's
-                # internal swscale BGR→YUV at 4K costs ~15 ms/frame and
-                # serialises with encode; cv2.cvtColor releases the GIL and
-                # has spare host-CPU headroom here. Sending yuv420p directly
-                # into the encoder roughly halves encoder-thread wall time
-                # at 3840×2160, lifting delivered fps from ~17 → ~30+.
-                yuv_i420 = cv2.cvtColor(canvas, cv2.COLOR_BGR2YUV_I420)
-                try:
-                    h264_queue.put_nowait(yuv_i420)
-                except Exception:
-                    try:
-                        h264_queue.get_nowait()
-                    except Exception:
-                        pass
+            if skip_pixel_output:
+                # Split mode: browser renders the raw source file + overlays
+                # dets from /dets SSE. No server-side draw / HUD / encode.
+                t_encode = 0.0
+            else:
+                canvas = draw_hud(canvas, hud_label, ema_fps)
+                if h264_queue is not None:
+                    # Convert BGR → YUV I420 here, in the BG worker. libx264's
+                    # internal swscale BGR→YUV at 4K costs ~15 ms/frame and
+                    # serialises with encode; cv2.cvtColor releases the GIL and
+                    # has spare host-CPU headroom here. Sending yuv420p directly
+                    # into the encoder roughly halves encoder-thread wall time
+                    # at 3840×2160, lifting delivered fps from ~17 → ~30+.
+                    yuv_i420 = cv2.cvtColor(canvas, cv2.COLOR_BGR2YUV_I420)
                     try:
                         h264_queue.put_nowait(yuv_i420)
                     except Exception:
-                        pass
-            else:
-                # Multi-worker encode: 3 threads overlap cv2.imencode (~28ms each)
-                # with NMS+merge+draw (~13ms).  Only block if all 3 workers busy.
-                # cv2.imencode releases the GIL so threads give real parallelism.
-                # Drain completed futures
-                encode_futures = [ef for ef in encode_futures if not ef.done()]
-                # Block only if all workers are saturated
-                if len(encode_futures) >= 3:
-                    encode_futures[0].result()
-                    encode_futures.pop(0)
-                # CRITICAL: copy canvas before encoding.  `canvas` is a numpy view
-                # into shared memory (shm_ring).  With RING_SIZE=4 and ~26ms pipeline
-                # latency, the prep process overwrites this slot ~27ms after BG reads
-                # it — while the 28ms JPEG encode is still reading.
-                encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality, fc))
-            t_encode = time.perf_counter() - t0
+                        try:
+                            h264_queue.get_nowait()
+                        except Exception:
+                            pass
+                        try:
+                            h264_queue.put_nowait(yuv_i420)
+                        except Exception:
+                            pass
+                else:
+                    # Multi-worker JPEG encode path (legacy MJPEG / per-frame file).
+                    # Drain completed futures
+                    encode_futures = [ef for ef in encode_futures if not ef.done()]
+                    # Block only if all workers are saturated
+                    if len(encode_futures) >= 3:
+                        encode_futures[0].result()
+                        encode_futures.pop(0)
+                    # CRITICAL: copy canvas before encoding.  `canvas` is a numpy view
+                    # into shared memory (shm_ring).  With RING_SIZE=4 and ~26ms pipeline
+                    # latency, the prep process overwrites this slot ~27ms after BG reads
+                    # it — while the 28ms JPEG encode is still reading.
+                    encode_futures.append(
+                        encode_pool.submit(_write_frame_ts, frame_file, canvas.copy(), jpeg_quality, fc)
+                    )
+                t_encode = time.perf_counter() - t0
 
             dt_post = time.perf_counter() - t_post_start
             fc += 1
@@ -1598,6 +1620,7 @@ def run_sahi_640_pipelined(args):
     webrtc_proc: "mp.Process | None" = None
     _serve_codec = getattr(args, "serve_codec", "h264")
 
+    skip_pixel_output = False
     if source == "webrtc":
         # Camera mode: aiohttp+aiortc bridge on args.port. Frames come in via
         # ingress_q (consumed by prep worker); detections go out via dets_q
@@ -1615,6 +1638,26 @@ def run_sahi_640_pipelined(args):
         webrtc_proc.start()
         print(
             f"{TAG} WebRTC ingress: http://{args.host}:{args.port}/offer  " f"ingress={frame_w}x{frame_h}",
+            flush=True,
+        )
+    elif args.serve and getattr(args, "serve_split", False) and not is_image:
+        # Split delivery: browser plays the raw source file natively (no
+        # server-side re-encode), detections stream over /dets SSE.
+        # Reuses the dets_q plumbing the webrtc path uses; post worker
+        # skips draw/HUD/encode.
+        from models.demos.yolo_eval import _split_server as _split
+
+        webrtc_dets_q = _ctx.Queue(maxsize=128)
+        webrtc_proc = _ctx.Process(
+            target=_split.run_server,
+            args=(args.host, int(args.port), webrtc_dets_q, args.input or "", frame_w, frame_h),
+            daemon=True,
+            name="sahi640-split",
+        )
+        webrtc_proc.start()
+        skip_pixel_output = True
+        print(
+            f"{TAG} Split server: http://{args.host}:{args.port}/  " f"source={args.input} ({frame_w}x{frame_h})",
             flush=True,
         )
     elif args.serve and _serve_codec == "h264" and not is_image:
@@ -1671,6 +1714,7 @@ def run_sahi_640_pipelined(args):
             seams_x,
             seams_y,
             seam_tol,
+            skip_pixel_output,
         ),
         daemon=True,
         name="sahi640-bg",
@@ -2188,6 +2232,12 @@ def parse_args() -> argparse.Namespace:
         choices=["h264", "mjpeg"],
         default="h264",
         help="Streaming codec for --serve. h264=fMP4 over HTTP (WAN-friendly, ~4 Mbps); mjpeg=legacy file-polled MJPEG.",
+    )
+    p.add_argument(
+        "--serve-split",
+        action="store_true",
+        help="Split delivery: serve the original MP4 file to the browser (byte-range) "
+        "and push detections over /dets SSE. No server-side re-encode. Overrides --serve-codec.",
     )
     p.add_argument(
         "--stream-bitrate",

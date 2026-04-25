@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import math
 import os
 import signal
@@ -50,12 +51,34 @@ from typing import Optional
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+
+def _child_preexec() -> None:
+    # Linux only. Ask the kernel to SIGTERM this child the instant the
+    # supervisor process dies -- including on SIGKILL/crash where our
+    # `on_cleanup` hook never runs. `start_new_session=True` below already
+    # isolates the pipeline's process group for programmatic restart; this
+    # closes the orphan-on-crash gap so `pgrep yolov8l_sahi` never outlives
+    # the supervisor.
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)  # PR_SET_PDEATHSIG = 1
+    except Exception:
+        pass
+
+
 TILE = 640
 DEMO_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = DEMO_DIR / "assets"
 LAUNCH_HTML = DEMO_DIR / "launch.html"
 PIPELINE_SCRIPT = DEMO_DIR.parent / "yolov8l_sahi_640_pipelined.py"
+MULTI_PIPELINE_SCRIPT = DEMO_DIR.parent / "yolov8l_sahi_5frame_pipelined.py"
 TT_METAL_DIR = Path(__file__).resolve().parents[4]
+
+# Multi-stream topology (mirrors yolov8l_sahi_5frame_pipelined.py constants).
+MULTI_N_STREAMS = 8
+MULTI_TILES_PER_STREAM = 4
+MULTI_STREAM_W = 1280
+MULTI_STREAM_H = 1280
 
 
 def _grid_for(w: int, h: int) -> dict:
@@ -64,20 +87,32 @@ def _grid_for(w: int, h: int) -> dict:
     return {"tiles_x": cols, "tiles_y": rows, "n_tiles": cols * rows}
 
 
-def _peek_video_dims(path: str) -> tuple[int, int]:
+def _peek_video_meta(path: str) -> tuple[int, int, float, int]:
+    """Return (width, height, fps, n_frames) for the source file.
+
+    fps and n_frames let the browser key its detections buffer by
+    `frame_id % n_frames` so a long-running pipeline (which loops its
+    `FrameSource` internally and keeps `fc` monotonic) still lines up
+    with the browser's `<video loop>` element — which resets its clock
+    every cycle.
+    """
     try:
         import cv2  # type: ignore[import-not-found]
     except ImportError:
-        return (3840, 2160)
+        return (3840, 2160, 30.0, 0)
     cap = cv2.VideoCapture(path)
     try:
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     finally:
         cap.release()
     if w <= 0 or h <= 0:
-        return (3840, 2160)
-    return (w, h)
+        w, h = 3840, 2160
+    if fps <= 0.0:
+        fps = 30.0
+    return (w, h, fps, max(0, n))
 
 
 def _connect_host(host: str) -> str:
@@ -128,6 +163,7 @@ class Supervisor:
         self,
         *,
         video_path: str,
+        video_multi_path: str,
         pipeline_host: str,
         pipeline_port: int,
         default_bitrate: str,
@@ -135,6 +171,7 @@ class Supervisor:
         extra_pipeline_args: list[str],
     ) -> None:
         self.video_path = video_path
+        self.video_multi_path = video_multi_path
         self.pipeline_host = pipeline_host
         self.pipeline_port = pipeline_port
         self.default_bitrate = default_bitrate
@@ -144,8 +181,13 @@ class Supervisor:
         self.transport: str = "idle"
         self.frame_w: int = 0
         self.frame_h: int = 0
+        self.fps: float = 0.0
+        self.n_frames: int = 0
         self.start_t: float = 0.0
         self.tiles: dict = {"tiles_x": 0, "tiles_y": 0, "n_tiles": 0}
+        # Multi-stream fields -- zero in single-stream transports.
+        self.n_streams: int = 0
+        self.tiles_per_stream: int = 0
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -184,9 +226,13 @@ class Supervisor:
         return env
 
     def _build_argv(self, transport: str, width: int, height: int) -> list[str]:
+        # Multi-stream mode uses a different script; keep the same argv
+        # shape (host/port/frame-width/frame-height) so the supervisor
+        # readiness poll is unchanged.
+        script = MULTI_PIPELINE_SCRIPT if transport == "multi" else PIPELINE_SCRIPT
         argv = [
             self._python(),
-            str(PIPELINE_SCRIPT),
+            str(script),
             "--host",
             self.pipeline_host,
             "--port",
@@ -197,25 +243,17 @@ class Supervisor:
             str(int(height)),
         ]
         if transport == "video":
-            # Video (4K) runs cleanly with fast torchvision NMS — source is
-            # high-quality, cross-class misclassifications are rare. NMM's
-            # Python-loop merge adds ~5ms to BG and caps throughput, so use
-            # the vectorized NMS path and keep raw FPS above the baseline.
+            # Split delivery: browser plays the source MP4 natively via
+            # byte-range GETs, and overlays boxes from /dets SSE. Pipeline
+            # runs inference at full hardware speed (~70 fps) decoupled from
+            # browser playback (30 fps native).
             argv += [
                 "--source",
                 "file",
                 "--input",
                 self.video_path,
                 "--serve",
-                "--serve-codec",
-                "h264",
-                "--stream-bitrate",
-                self._bitrate_bps(self.default_bitrate),
-                "--stream-keyint",
-                str(self.default_keyint),
-                "--stream-fps",
-                "75",
-                # "--display-width", "1920",
+                "--serve-split",
                 "--conf",
                 "0.75",
                 "--merge-mode",
@@ -250,6 +288,26 @@ class Supervisor:
                 "--seam-merge",
                 "--seam-tol",
                 "100",
+            ]
+        elif transport == "multi":
+            # Multi-stream demo: 8 parallel 1280x1280 streams x 4 tiles each
+            # = 32 tiles on the full 8x4 mesh. Split delivery only; same
+            # detection tuning as single-stream video mode so confidence
+            # behaviour is familiar.
+            argv += [
+                "--input",
+                self.video_multi_path,
+                "--serve",
+                "--serve-split",
+                "--conf",
+                "0.75",
+                "--merge-mode",
+                "nms",
+                "--merge-match",
+                "iou",
+                "--class-agnostic",
+                "--merge-threshold",
+                "0.75",
             ]
         else:
             raise ValueError(f"unknown transport: {transport!r}")
@@ -286,12 +344,21 @@ class Supervisor:
 
     async def restart(self, transport: str, width: int, height: int) -> dict:
         async with self._lock:
+            fps = 0.0
+            n_frames = 0
             if transport == "video":
+                w, h, fps, n_frames = _peek_video_meta(self.video_path)
                 if width <= 0 or height <= 0:
-                    width, height = _peek_video_dims(self.video_path)
+                    width, height = w, h
             elif transport == "camera":
                 if width <= 0 or height <= 0:
                     width, height = (1280, 720)
+            elif transport == "multi":
+                # Multi-stream dims are fixed at MULTI_STREAM_W x MULTI_STREAM_H.
+                # fps / n_frames come from the multi-stream source file so the
+                # browser's per-stream <video loop> can key dets by frame_id.
+                w, h, fps, n_frames = _peek_video_meta(self.video_multi_path)
+                width, height = MULTI_STREAM_W, MULTI_STREAM_H
             else:
                 return {"ok": False, "error": f"unknown transport {transport}"}
 
@@ -314,7 +381,20 @@ class Supervisor:
                     f"{width}x{height} (pid={self.proc.pid})",
                     flush=True,
                 )
-                self.tiles = _grid_for(width, height)
+                if transport == "multi":
+                    self.tiles = {
+                        "tiles_x": 2,
+                        "tiles_y": 2,
+                        "n_tiles": MULTI_N_STREAMS * MULTI_TILES_PER_STREAM,
+                    }
+                else:
+                    self.tiles = _grid_for(width, height)
+                # Refresh fps/n_frames from the file — these may not have been
+                # populated on a previous restart (older builds) even though the
+                # transport+dims match.
+                if transport in ("video", "multi"):
+                    self.fps = fps
+                    self.n_frames = n_frames
                 return {
                     "ok": True,
                     "url": f"http://{_connect_host(self.pipeline_host)}:{self.pipeline_port}/",
@@ -325,9 +405,23 @@ class Supervisor:
                     "tiles_x": self.tiles["tiles_x"],
                     "tiles_y": self.tiles["tiles_y"],
                     "n_tiles": self.tiles["n_tiles"],
+                    "fps": self.fps,
+                    "n_frames": self.n_frames,
+                    "n_streams": self.n_streams,
+                    "tiles_per_stream": self.tiles_per_stream,
                 }
 
-            self.tiles = _grid_for(width, height)
+            if transport == "multi":
+                # Fixed topology for the multi-stream demo -- the launch page
+                # uses (n_streams, tiles_per_stream) to build the 8-element
+                # grid; n_tiles = 32 is informational.
+                self.tiles = {
+                    "tiles_x": 2,
+                    "tiles_y": 2,
+                    "n_tiles": MULTI_N_STREAMS * MULTI_TILES_PER_STREAM,
+                }
+            else:
+                self.tiles = _grid_for(width, height)
             await self.stop()
             # Wait for port *and* chip lock — TT UMD holds a PCIe lock
             # under /dev/shm that can linger up to ~3 s after the owning
@@ -348,10 +442,21 @@ class Supervisor:
                 # whole tree on supervisor exit; otherwise a SIGKILL on the
                 # supervisor leaves the pipeline orphaned and holding port 9090.
                 start_new_session=True,
+                # Kernel-level "die with the parent" backstop for the crash/
+                # SIGKILL case where on_cleanup never fires.
+                preexec_fn=_child_preexec,
             )
             self.transport = transport
             self.frame_w = int(width)
             self.frame_h = int(height)
+            self.fps = fps if transport in ("video", "multi") else 0.0
+            self.n_frames = n_frames if transport in ("video", "multi") else 0
+            if transport == "multi":
+                self.n_streams = MULTI_N_STREAMS
+                self.tiles_per_stream = MULTI_TILES_PER_STREAM
+            else:
+                self.n_streams = 0
+                self.tiles_per_stream = 0
             self.start_t = time.time()
 
         ready = await _await_pipeline_ready(self.pipeline_host, self.pipeline_port, 90.0)
@@ -365,6 +470,10 @@ class Supervisor:
             "tiles_x": self.tiles["tiles_x"],
             "tiles_y": self.tiles["tiles_y"],
             "n_tiles": self.tiles["n_tiles"],
+            "fps": self.fps,
+            "n_frames": self.n_frames,
+            "n_streams": self.n_streams,
+            "tiles_per_stream": self.tiles_per_stream,
         }
 
 
@@ -382,6 +491,10 @@ async def _api_status(req: web.Request) -> web.Response:
             "tiles_x": sup.tiles.get("tiles_x", 0),
             "tiles_y": sup.tiles.get("tiles_y", 0),
             "n_tiles": sup.tiles.get("n_tiles", 0),
+            "n_streams": sup.n_streams,
+            "tiles_per_stream": sup.tiles_per_stream,
+            "fps": sup.fps,
+            "n_frames": sup.n_frames,
             "uptime_s": (time.time() - sup.start_t) if sup.start_t else 0.0,
             "pipeline_url": f"http://{_connect_host(sup.pipeline_host)}:{sup.pipeline_port}/",
         }
@@ -427,37 +540,40 @@ async def _proxy_offer(req: web.Request) -> web.Response:
     return web.json_response({"error": f"pipeline unreachable: {last_err}"}, status=502)
 
 
-async def _proxy_stream(req: web.Request) -> web.StreamResponse:
-    """Reverse-proxy GET /stream to the pipeline's H.264 fMP4 stream.
+async def _proxy_passthrough(req: web.Request, upstream_path: str) -> web.StreamResponse:
+    """Stream a GET through to the pipeline on `upstream_path`. Forwards
+    Range/Accept headers and preserves upstream status, content-type,
+    Content-Length / Accept-Ranges / Content-Range. Used for the raw
+    source file (byte-range) and the /dets SSE stream.
 
-    Only valid in video mode; camera mode has no /stream endpoint, so we
-    return 503 to avoid a stale <video> element hanging on connection.
-    Forwards Range headers so the browser can seek.
+    Only valid in video mode; camera mode doesn't expose these endpoints.
     """
     sup: Supervisor = req.app["sup"]
-    if sup.transport != "video":
+    if sup.transport not in ("video", "multi"):
         return web.json_response(
-            {"error": f"/stream not available in transport={sup.transport!r}"},
+            {"error": f"{upstream_path} not available in transport={sup.transport!r}"},
             status=503,
         )
-    target = f"http://{_connect_host(sup.pipeline_host)}:{sup.pipeline_port}/stream"
+    target = f"http://{_connect_host(sup.pipeline_host)}:{sup.pipeline_port}{upstream_path}"
     fwd_headers = {}
-    for h in ("Range", "Accept", "Accept-Encoding"):
+    for h in ("Range", "Accept", "Accept-Encoding", "If-None-Match", "If-Modified-Since"):
         v = req.headers.get(h)
         if v:
             fwd_headers[h] = v
+    # SSE needs an unbounded read deadline; byte-range reads finish fast but
+    # may also be long for a 4K file over a slow sink — leave sock_read=None.
     timeout = ClientTimeout(total=None, sock_connect=5.0, sock_read=None)
     sess = ClientSession(timeout=timeout)
     try:
         upstream = await sess.get(target, headers=fwd_headers)
     except Exception as e:
         await sess.close()
-        return web.json_response({"error": f"stream unreachable: {e}"}, status=502)
+        return web.json_response({"error": f"upstream unreachable: {e}"}, status=502)
 
     resp = web.StreamResponse(status=upstream.status, reason=upstream.reason)
-    ct = _strip_charset(upstream.headers.get("Content-Type", "video/mp4"))
+    ct = _strip_charset(upstream.headers.get("Content-Type", "application/octet-stream"))
     resp.content_type = ct
-    for h in ("Content-Length", "Accept-Ranges", "Content-Range", "Cache-Control"):
+    for h in ("Content-Length", "Accept-Ranges", "Content-Range", "Cache-Control", "X-Accel-Buffering"):
         v = upstream.headers.get(h)
         if v:
             resp.headers[h] = v
@@ -471,7 +587,7 @@ async def _proxy_stream(req: web.Request) -> web.StreamResponse:
     except (ConnectionResetError, asyncio.CancelledError):
         pass
     except Exception as e:
-        print(f"[supervisor] /stream proxy error: {e}", flush=True)
+        print(f"[supervisor] {upstream_path} proxy error: {e}", flush=True)
     finally:
         try:
             upstream.release()
@@ -481,14 +597,54 @@ async def _proxy_stream(req: web.Request) -> web.StreamResponse:
     return resp
 
 
+async def _proxy_source_mp4(req: web.Request) -> web.StreamResponse:
+    # Direct file serve (no inter-process HTTP hop). Avoids Chrome
+    # ERR_INVALID_HTTP_RESPONSE caused by Content-Length mismatches when the
+    # upstream proxy connection dropped mid-range, and lets aiohttp handle
+    # HEAD + Range natively instead of forwarding every HEAD as a full GET.
+    sup: Supervisor = req.app["sup"]
+    if sup.transport == "video":
+        path = Path(sup.video_path)
+    elif sup.transport == "multi":
+        path = Path(sup.video_multi_path)
+    else:
+        return web.json_response(
+            {"error": f"/source.mp4 not available in transport={sup.transport!r}"},
+            status=503,
+        )
+    if not path.exists():
+        return web.Response(status=404, text=f"source missing: {path}\n")
+    resp = web.FileResponse(path=str(path), chunk_size=1 << 16)
+    resp.content_type = "video/mp4"
+    return resp
+
+
+async def _proxy_dets(req: web.Request) -> web.StreamResponse:
+    return await _proxy_passthrough(req, "/dets")
+
+
+async def _proxy_stream(req: web.Request) -> web.StreamResponse:
+    """Back-compat stub — split delivery replaced /stream with /source.mp4+/dets.
+    Return 503 so any cached launch.html referencing /stream fails fast.
+    """
+    sup: Supervisor = req.app["sup"]
+    return web.json_response(
+        {"error": f"/stream not available in transport={sup.transport!r} (use /source.mp4 + /dets)"},
+        status=503,
+    )
+
+
 async def _api_source(req: web.Request) -> web.Response:
     try:
         body = await req.json()
     except Exception:
         return web.json_response({"ok": False, "error": "invalid json"}, status=400)
     transport = str(body.get("transport") or "").strip().lower()
-    if transport not in ("video", "camera"):
-        return web.json_response({"ok": False, "error": "transport must be 'video' or 'camera'"}, status=400)
+    if transport not in ("video", "camera", "multi"):
+        return web.json_response(
+            {"ok": False, "error": "transport must be 'video', 'camera', or 'multi'"},
+            status=400,
+        )
     width = int(body.get("width") or 0)
     height = int(body.get("height") or 0)
     sup: Supervisor = req.app["sup"]
@@ -524,6 +680,8 @@ def build_app(sup: Supervisor) -> web.Application:
     app.router.add_post("/api/source", _api_source)
     app.router.add_post("/offer", _proxy_offer)
     app.router.add_get("/stream", _proxy_stream)
+    app.router.add_get("/source.mp4", _proxy_source_mp4)
+    app.router.add_get("/dets", _proxy_dets)
     app.router.add_get("/assets/{name:[A-Za-z0-9_.\\-]+}", _asset)
     app.on_cleanup.append(_on_cleanup)
     return app
@@ -532,12 +690,18 @@ def build_app(sup: Supervisor) -> web.Application:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Demo supervisor for YOLOv8L SAHI-640 pipeline.")
     p.add_argument("--video", required=True, help="Path to the demo video (used in Video mode).")
+    p.add_argument(
+        "--video-multi",
+        default=None,
+        help="Path to the 1280x1280 video used in Multi-stream mode "
+        "(default: sample_images/14052767_1280x1280_30fps.mp4 under the demo dir).",
+    )
     p.add_argument("--bind", default="0.0.0.0:9100", help="host:port for the supervisor (default 0.0.0.0:9100).")
     p.add_argument("--pipeline-host", default="0.0.0.0", help="Host the pipeline binds (default 0.0.0.0).")
     p.add_argument("--pipeline-port", type=int, default=9090, help="Port the pipeline binds (default 9090).")
     p.add_argument(
         "--auto-start",
-        choices=["video", "camera", "none"],
+        choices=["video", "camera", "multi", "none"],
         default="video",
         help="Spawn this transport on boot (default 'video').",
     )
@@ -565,11 +729,28 @@ def main() -> None:
         print(f"[supervisor] pipeline script missing: {PIPELINE_SCRIPT}", file=sys.stderr, flush=True)
         sys.exit(2)
 
+    # Multi-stream default: sibling sample file under the yolo_eval demo dir.
+    video_multi = args.video_multi or str(DEMO_DIR.parent / "sample_images" / "14052767_1280x1280_30fps.mp4")
+    if not Path(video_multi).exists():
+        print(
+            f"[supervisor] WARN: multi-stream video not found: {video_multi} "
+            f"(Multi mode will fail until --video-multi points at a valid file)",
+            file=sys.stderr,
+            flush=True,
+        )
+    if not MULTI_PIPELINE_SCRIPT.exists():
+        print(
+            f"[supervisor] WARN: multi-stream pipeline missing: {MULTI_PIPELINE_SCRIPT}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     bind_host, _, bind_port_s = args.bind.partition(":")
     bind_port = int(bind_port_s or 9100)
 
     sup = Supervisor(
         video_path=str(Path(args.video).resolve()),
+        video_multi_path=str(Path(video_multi).resolve()),
         pipeline_host=args.pipeline_host,
         pipeline_port=int(args.pipeline_port),
         default_bitrate=args.bitrate,
@@ -578,7 +759,7 @@ def main() -> None:
     )
 
     async def _bootstrap(app: web.Application) -> None:
-        if args.auto_start in ("video", "camera"):
+        if args.auto_start in ("video", "camera", "multi"):
             print(f"[supervisor] auto-starting transport={args.auto_start}", flush=True)
             asyncio.create_task(sup.restart(args.auto_start, 0, 0))
 

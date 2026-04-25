@@ -2,35 +2,31 @@
 # SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Multi-frame parallel SAHI worker for YOLOv8L 4K inference on full Galaxy mesh.
+YOLOv8L SAHI-640 multi-stream pipelined inference on the full 8x4 Galaxy mesh.
 
-Processes 5 frames simultaneously by tiling each 3840×2160 frame into
-6 tiles of 1280×1280 (3 cols × 2 rows with overlap on the bottom row)
-and runs all tiles across the full 8×4 = 32-device Galaxy mesh.
+Takes a 1280x1280 video source, tiles it into a 2x2 grid of 640x640 tiles
+(TILES_PER_STREAM=4) and replicates that batch N_STREAMS=8 times across
+the full 8x4 = 32-device mesh -- one logical stream per group of 4 devices.
 
-  5 frames × 6 tiles + 2 padding = 32 tiles → 32 devices
+Architecture mirrors yolov8l_sahi_640_pipelined.py's 3-stage pipeline:
+    - Prep process:  read 1 frame, slice into 4 tiles, broadcast 8x -> shm
+    - Main process:  host_prep + h2d + compute + d2h of the 32-tile batch
+    - BG process:    split 32-tile preds into 8 groups of 4, NMS+merge per
+                     stream, push 8 tagged dets messages (stream_id=0..7)
 
-Architecture (3-stage pipeline, all optimizations from yolov8l_sahi_640_pipelined):
-  - Prep process:  read-ahead + C++ fused tile conversion → shared memory
-  - Main process:  pipelined submit(N) + pcie_d2h(N-1) + compose(N-1)
-  - BG process:    fused NMS+merge + draw + multi-worker encode
+V1 note: all 8 streams read the same frame, so produced boxes are identical
+across streams. The browser still plays 8 independent <video> elements and
+overlays dets tagged with the matching stream_id, so the display shows 8
+concurrent stream viewports -- a clean visualisation of the 8-way parallel
+compute on the full 32-device mesh.
 
-Optimizations:
-  - C++ LUT uint8→bf16/255 with AVX2 NT stores (GIL-free)
-  - Pre-read-ahead threading for video decode overlap
-  - Deferred cv2.resize after ready_event (overlaps with main's h2d)
-  - Pipelined submit/d2h/compose (device compute overlaps with host I/O)
-  - Go signal after submit (avoids PCIe bandwidth contention)
-  - Double-buffered shm_tensor (prep writes one while main reads other)
-  - Shared-memory prediction ring (eliminates pickle overhead)
-  - Physical-shape compose (contiguous memcpys)
-  - Fused NMS+merge returning numpy arrays
-  - Multi-worker JPEG encode with canvas.copy()
-  - CPU affinity (separate CCDs for main vs BG)
+Delivery: split-delivery only -- serves the raw 1280x1280 MP4 via
+byte-range, and pushes per-stream dets over /dets SSE. No H.264 re-encode,
+no WebRTC.
 
 Usage:
     python models/demos/yolo_eval/yolov8l_sahi_5frame_pipelined.py \\
-        --input path/to/4k_video.mp4 --serve --port 9090 --display-width 1920
+        --input sample_images/14052767_1280x1280_30fps.mp4 --serve --port 9090
 """
 from __future__ import annotations
 
@@ -38,200 +34,207 @@ import argparse
 import multiprocessing as mp
 import os
 import signal
-import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
 
-from models.demos.yolo_eval.yolov8l_native_vs_sahi_demo import (
-    _EMA_ALPHA,
-    FrameSource,
-    _coco_names_dict,
-    _load_coco_names,
-    draw_hud,
-)
+from models.demos.yolo_eval.yolov8l_native_vs_sahi_demo import FrameSource, _coco_names_dict, _load_coco_names
 from models.demos.yolo_eval.yolov8l_sahi_640_pipelined import (
+    _CONF_FLOOR_640,
+    _TILE_SIZE_640,
     _build_tile_specs,
-    _draw_boxes_np,
     _fused_nms_merge,
     _load_fused_tile_ext,
     build_overlap_grid,
 )
 
-_TILE_SIZE = 1280
-_CONF_FLOOR = 0.50
-_PAD_VALUE = 114
+# ---------------------------------------------------------------------------
+# Multi-stream topology constants
+# ---------------------------------------------------------------------------
+# Hardcoded to the full 8x4 Galaxy mesh. 8 logical streams, 4 tiles each.
+# 1280x1280 source tiles into 2x2 = 4 tiles of 640x640 (exact fit, no pad).
+N_STREAMS = 8
+STREAM_W = 1280
+STREAM_H = 1280
+TILES_PER_STREAM = 4  # 2x2 grid of 640x640 over 1280x1280
+TOTAL_TILES = N_STREAMS * TILES_PER_STREAM  # 32
+MESH_ROWS = 8
+MESH_COLS = 4
+TAG = "[sahi-640-multi]"
 
 
 # ---------------------------------------------------------------------------
-# Prep process: read N frames, C++ fused tile conversion, deferred scale
+# Prep worker: read 1 frame, slice into 4 tiles, broadcast 8x across batch.
 # ---------------------------------------------------------------------------
 
 
-def _prep_process_worker(
+def _prep_process_worker_multi(
     video_path: str,
-    grid,  # TileGrid (pickle-safe dataclass)
-    tiles_per_frame: int,
-    frames_per_batch: int,
-    total_devices: int,
-    shm_tensor_bufs: list[torch.Tensor],  # double-buffered [devices, 3, H, W] bf16
-    shm_ring: torch.Tensor,
-    ring_size: int,
-    shm_shifts: torch.Tensor,  # [tiles_per_frame, 2] int32 (constant grid)
-    shm_ring_slots: torch.Tensor,  # [frames_per_batch] int32
-    shm_timings: torch.Tensor,  # [10] float32
+    stream_grid,
+    shm_tensor_bufs: list,
+    shm_timings: torch.Tensor,
     go_event,
     ready_event,
     stop_event,
-    frame_h: int,
-    frame_w: int,
-    display_width: int,
+    pace: bool = False,
 ):
-    """Prep process: read N frames, C++ fused bf16 conversion, deferred scale.
+    """Read a 1280x1280 frame, convert its 4 tiles to bf16 NCHW, then copy
+    those 4 tiles into each of the 8 stream slots of the 32-tile shm batch.
 
-    Timings layout in shm_timings:
-        [0] = n_frames_valid (float)
-        [1] = read_ms
-        [2] = convert_ms (C++ kernel wall time)
-        [3] = total_prep_ms
-        [4] = unused
-        [5] = unused
-        [6] = sentinel: -1.0 = error/no-frames, >= 0 = valid
-        [7] = prep_frame_idx % 2 (which double-buffer was written)
+    Uses the same C++ fused tile conversion as the 640 pipeline but on a
+    single-stream grid of 4 tiles; the result is then broadcast 8x into the
+    full 32-slot buffer.
+
+    Timings layout (same keys as the 640 pipeline's shm_timings):
+        [0] n_frames_valid  [1] read_ms  [2] slice_ms  [3] preprocess_ms
+        [4] sp_wall_ms  [5] total_ms  [6] sentinel
     """
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    torch.set_num_threads(1)
+    # More threads help the 8-way broadcast memcpy (80MB/frame).  set_num_threads(1)
+    # was leaving ~12ms/frame of memory bandwidth on the table.
+    torch.set_num_threads(4)
 
     src = FrameSource(video_path)
 
-    # Load C++ fused tile extension + build tile specs (constant for all frames)
-    _fused_ext = _load_fused_tile_ext()
-    tile_specs = _build_tile_specs(grid)
+    _pace_interval = 0.0
+    if pace:
+        _cap = cv2.VideoCapture(video_path)
+        _src_fps = _cap.get(cv2.CAP_PROP_FPS)
+        _cap.release()
+        if _src_fps > 0:
+            _pace_interval = 1.0 / _src_fps
+    _pace_t0 = 0.0
 
-    # Thread pools (persistent across batches)
-    # 10 convert workers: 2 per frame, each handles 3 tiles.
-    # More parallelism than 5 workers since each C++ call is GIL-free.
-    convert_pool = ThreadPoolExecutor(max_workers=frames_per_batch * 2)
+    _fused_ext = _load_fused_tile_ext()
+    tile_specs = _build_tile_specs(stream_grid)  # 4 specs for 2x2 stream grid
+    slice_pool = ThreadPoolExecutor(max_workers=4)
+    bcast_pool = ThreadPoolExecutor(max_workers=8)
     read_pool = ThreadPoolExecutor(max_workers=1)
 
-    ring_idx = 0
-    prep_frame_idx = 0
+    # Scratch NCHW bf16 buffer for a single stream's 4 tiles -- C++ kernel
+    # writes here, then we broadcast into each of the 8 stream slots.
+    stream_bf16 = torch.zeros(TILES_PER_STREAM, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16)
 
-    # Write constant shifts once (all frames have the same tile grid)
-    for i, ts in enumerate(grid.tiles[:tiles_per_frame]):
-        shm_shifts[i, 0] = ts.col_start
-        shm_shifts[i, 1] = ts.row_start
-
-    # Pre-read helper
     def _read_next():
-        ok, frame = src.read()
+        ok, f = src.read()
         if not ok:
             src.reset()
-            ok, frame = src.read()
-        return ok, frame
+            ok, f = src.read()
+        return ok, f
 
-    # Read-ahead: read N frames in background thread.
-    # cv2.VideoCapture.read() releases GIL during H.264 decode,
-    # so this gets true parallelism with deferred scale / idle wait.
-    def _read_batch():
-        batch = []
-        for _ in range(frames_per_batch):
-            ok, frame = _read_next()
-            if not ok:
-                break
-            batch.append(frame)
-        return batch
-
-    # Kick off the very first read-ahead before entering the loop
-    _read_future = read_pool.submit(_read_batch)
+    pending_read = read_pool.submit(_read_next)
+    prep_frame_idx = 0
+    _PREP_LOG_INTERVAL = 30
+    _prep_log_sum_read = 0.0
+    _prep_log_sum_slice = 0.0
+    _prep_log_sum_bcast = 0.0
+    _prep_log_sum_total = 0.0
 
     try:
         while not stop_event.is_set():
-            go_event.wait()
+            while not go_event.wait(timeout=0.5):
+                if stop_event.is_set():
+                    return
             go_event.clear()
             if stop_event.is_set():
                 return
 
             t_prep_start = time.perf_counter()
-            buf_idx = prep_frame_idx % 2
-            shm_tensor = shm_tensor_bufs[buf_idx]
 
-            # --- Phase 1: Collect pre-read frames (should already be done) ----
             t0 = time.perf_counter()
-            frames = _read_future.result()
+            ok, frame = pending_read.result()
             t_read = (time.perf_counter() - t0) * 1000
-            n_valid = len(frames)
 
-            if n_valid == 0:
+            if not ok:
                 shm_timings[6] = -1.0
                 ready_event.set()
-                # Still kick off read-ahead (video may have looped)
-                _read_future = read_pool.submit(_read_batch)
+                pending_read = read_pool.submit(_read_next)
                 continue
 
-            # --- Phase 2: C++ fused tile conversion (parallel per-tile-group) -
-            # Split each frame's 6 tiles into 2 groups of 3 for more parallelism.
-            # Each C++ call is GIL-free, so 10 threads run truly in parallel.
+            pending_read = read_pool.submit(_read_next)
+
+            # Defensive resize: source is expected to be exactly STREAM_W x
+            # STREAM_H but tolerate mismatches.
+            if frame.shape[0] != STREAM_H or frame.shape[1] != STREAM_W:
+                frame = cv2.resize(frame, (STREAM_W, STREAM_H), interpolation=cv2.INTER_LINEAR)
+
+            frame_tensor = torch.from_numpy(frame)
+
+            # 4-way C++ fused slice for the 4 tiles of a single stream.
+            chunk = (TILES_PER_STREAM + 3) // 4
+
+            def _cpp_range(thread_id):
+                start = thread_id * chunk
+                end = min(start + chunk, TILES_PER_STREAM)
+                if start < end:
+                    _fused_ext.fused_convert_tile_range(
+                        frame_tensor,
+                        stream_bf16,
+                        tile_specs,
+                        start,
+                        end,
+                        True,
+                    )
+
             t0 = time.perf_counter()
-            _half = tiles_per_frame // 2
+            list(slice_pool.map(_cpp_range, range(4)))
+            t_sp = (time.perf_counter() - t0) * 1000
 
-            def _convert_tile_group(args):
-                fi, start, end = args
-                tile_offset = fi * tiles_per_frame
-                bf16_view = shm_tensor[tile_offset : tile_offset + tiles_per_frame]
-                frame_tensor = torch.from_numpy(frames[fi])
-                _fused_ext.fused_convert_tile_range(frame_tensor, bf16_view, tile_specs, start, end, True)
+            # Broadcast the 4-tile stream batch into all 8 stream slots.
+            # 8-way parallel memcpy — each thread writes one stream slot, so
+            # writes are disjoint (no contention).  Memory-bandwidth-bound,
+            # but parallel dispatch recovers the per-thread bandwidth we lost
+            # with a single-threaded copy.
+            t_bcast_start = time.perf_counter()
+            shm_tensor = shm_tensor_bufs[prep_frame_idx % 2]
 
-            _tasks = []
-            for fi in range(n_valid):
-                _tasks.append((fi, 0, _half))
-                _tasks.append((fi, _half, tiles_per_frame))
-            list(convert_pool.map(_convert_tile_group, _tasks))
-            t_convert = (time.perf_counter() - t0) * 1000
+            def _bcast_one(s):
+                shm_tensor[s * TILES_PER_STREAM : (s + 1) * TILES_PER_STREAM].copy_(stream_bf16)
 
-            # Zero-pad remaining device slots (batch=32, valid=30)
-            tile_offset = n_valid * tiles_per_frame
-            if tile_offset < total_devices:
-                shm_tensor[tile_offset:total_devices].zero_()
-
+            list(bcast_pool.map(_bcast_one, range(N_STREAMS)))
+            t_bcast = (time.perf_counter() - t_bcast_start) * 1000
             prep_frame_idx += 1
 
-            # Compute ring slots BEFORE signaling ready
-            for fi in range(n_valid):
-                shm_ring_slots[fi] = ring_idx % ring_size
-                ring_idx += 1
+            if _pace_interval > 0:
+                if _pace_t0 == 0.0:
+                    _pace_t0 = time.perf_counter()
+                else:
+                    target_t = _pace_t0 + prep_frame_idx * _pace_interval
+                    now = time.perf_counter()
+                    if target_t > now:
+                        time.sleep(target_t - now)
 
-            # --- Signal ready (bf16 tensor is in shm) -------------------------
-            t_prep_total = (time.perf_counter() - t_prep_start) * 1000
-            shm_timings[0] = float(n_valid)
+            t_total = (time.perf_counter() - t_prep_start) * 1000
+            shm_timings[0] = 1.0
             shm_timings[1] = t_read
-            shm_timings[2] = t_convert
-            shm_timings[3] = t_prep_total
-            shm_timings[6] = 0.0  # valid
-            shm_timings[7] = float(buf_idx)
+            shm_timings[2] = t_sp
+            shm_timings[3] = 0.0
+            shm_timings[4] = t_sp
+            shm_timings[5] = t_total
+            shm_timings[6] = 0.0
             ready_event.set()
 
-            # --- Post-ready work (overlaps with main's submit+d2h+compose) ----
-
-            # Start read-ahead for NEXT batch (CPU-bound, no bandwidth contention)
-            _read_future = read_pool.submit(_read_batch)
-
-            # Deferred scale + ring write: overlaps with main's submit + d2h.
-            for fi in range(n_valid):
-                slot = int(shm_ring_slots[fi].item())
-                frame = frames[fi]
-                if display_width > 0 and frame.shape[1] != display_width:
-                    target_h = int(round(frame.shape[0] * display_width / frame.shape[1]))
-                    scaled = cv2.resize(frame, (display_width, target_h), interpolation=cv2.INTER_LINEAR)
-                else:
-                    scaled = frame
-                shm_ring[slot].copy_(torch.from_numpy(scaled))
+            _prep_log_sum_read += t_read
+            _prep_log_sum_slice += t_sp
+            _prep_log_sum_bcast += t_bcast
+            _prep_log_sum_total += t_total
+            if prep_frame_idx % _PREP_LOG_INTERVAL == 0:
+                n = _PREP_LOG_INTERVAL
+                print(
+                    f"[prep] avg {n}f: total={_prep_log_sum_total / n:.2f}ms "
+                    f"read={_prep_log_sum_read / n:.2f} "
+                    f"slice={_prep_log_sum_slice / n:.2f} "
+                    f"bcast={_prep_log_sum_bcast / n:.2f}",
+                    flush=True,
+                )
+                _prep_log_sum_read = 0.0
+                _prep_log_sum_slice = 0.0
+                _prep_log_sum_bcast = 0.0
+                _prep_log_sum_total = 0.0
 
     except Exception:
         import traceback
@@ -242,237 +245,145 @@ def _prep_process_worker(
 
 
 # ---------------------------------------------------------------------------
-# BG postprocess: fused NMS + merge + draw + multi-worker encode
+# BG postprocess: split 32-tile preds into 8 streams, NMS+merge each.
 # ---------------------------------------------------------------------------
 
 
-def _postprocess_worker(
+def _postprocess_worker_shm_multi(
     q_in: mp.Queue,
-    tiles_per_frame: int,
-    shifts: list[tuple[int, int]],  # constant tile shifts (6 tuples)
+    stream_shifts: list,
     names_dict: dict,
     conf: float,
     iou: float,
     merge_iou: float,
     merge_class_agnostic: bool,
-    jpeg_quality: int,
-    frame_file: str,
-    hud_label: str,
-    output_path: str | None,
-    is_image: bool,
-    shm_ring: torch.Tensor,
-    ring_size: int,
+    merge_mode: str,
+    merge_match: str,
     shm_preds: torch.Tensor,
-    log_pred_h: int,
-    log_pred_w: int,
-    video_output_path: str | None = None,
-    video_fps: float = 30.0,
+    dets_q: mp.Queue,
 ):
-    """BG process: fused NMS + merge + draw + multi-worker JPEG encode.
+    """Split the 32-tile prediction batch into 8 groups of 4 tiles each and
+    run _fused_nms_merge per stream. Each stream pushes its own dets message
+    tagged with stream_id so the browser can route it to the matching
+    overlay canvas.
 
-    Receives (pred_slot, ring_slots, n_frames, scale_x, scale_y) per batch.
-    Reads predictions from shm_preds and display frames from shm_ring.
+    scale_x/scale_y are 1.0 -- boxes are shipped in source (1280x1280)
+    coords and the browser performs letterbox scaling per overlay canvas.
     """
-    TAG = "[bg-5f]"
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    # CPU affinity: pin to separate CCD from main process
+    _bg_cores = set(range(24, 32)) | set(range(56, 64))
     try:
-        os.sched_setaffinity(0, set(range(24, 32)) | set(range(56, 64)))
-        os.nice(5)  # mild deprioritization (was 19, starved encode threads)
-    except (OSError, AttributeError):
+        os.sched_setaffinity(0, _bg_cores)
+        os.nice(19)
+    except OSError:
         pass
-
     torch.set_num_threads(4)
-    cv2.setNumThreads(4)
+    cv2.setNumThreads(2)
 
     ema_fps = 0.0
     fc = 0
-    t_post_sum = t_nms_sum = t_draw_sum = t_encode_sum = 0.0
+    t_post_sum = 0.0
     t_wall_start = 0.0
-    LOG_INTERVAL = 10
-
+    t_last_post = 0.0
+    LOG_INTERVAL = 300
+    # Alpha for the short-term FPS EMA sent to the browser HUD. Higher than the
+    # lifetime `_EMA_ALPHA` because the HUD should react within a second or two
+    # to pipeline load changes rather than creep toward a cumulative average.
+    _HUD_FPS_ALPHA = 0.25
     nms_pool = ThreadPoolExecutor(max_workers=4)
-    # 3 JPEG encode workers — each imencode ~5-8ms, overlapped with NMS
-    encode_pool = ThreadPoolExecutor(max_workers=3)
-    encode_futures: list = []
 
-    # Optional MP4 video writer (runs in background thread to avoid blocking)
-    video_writer = None
-    _video_pool = None
-    _video_future = None
-    if video_output_path and not is_image:
-        disp_h, disp_w = shm_ring.shape[1], shm_ring.shape[2]
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_writer = cv2.VideoWriter(video_output_path, fourcc, video_fps, (disp_w, disp_h))
-        _video_pool = ThreadPoolExecutor(max_workers=1)
-        print(f"{TAG} Video output: {video_output_path} ({disp_w}x{disp_h} @ {video_fps:.1f} FPS)", flush=True)
-
-    def _write_frame_ts(path: str, img: np.ndarray, quality: int):
-        """Thread-safe: encode JPEG and atomically write to disk."""
-        import threading
-
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        if not ok:
-            return
-        tmp = path + f".tmp.{threading.get_ident()}"
+    while True:
         try:
-            with open(tmp, "wb") as f:
-                f.write(buf.tobytes())
-            os.replace(tmp, path)
-        except OSError:
-            pass
-
-    try:
-        while True:
             item = q_in.get()
             if item is None:
-                for ef in encode_futures:
-                    ef.result()
-                if video_writer is not None:
-                    if _video_future is not None:
-                        _video_future.result()
-                    _video_pool.shutdown(wait=True)
-                    video_writer.release()
-                    video_writer = None
-                    print(f"{TAG} Video saved: {video_output_path} ({fc} frames)", flush=True)
                 return
 
-            (pred_slot, ring_slots, n_frames, scale_x, scale_y) = item
+            pred_slot = item[0]
+            preds_torch = shm_preds[pred_slot, :, :84, :8400]  # [32, 84, 8400]
 
-            for fi in range(n_frames):
-                t_post_start = time.perf_counter()
-                if fc == 0:
-                    t_wall_start = t_post_start
+            t_post_start = time.perf_counter()
+            if fc == 0:
+                t_wall_start = t_post_start
 
-                # Slice this frame's predictions from shm_preds
-                start = fi * tiles_per_frame
-                end = start + tiles_per_frame
-                preds_torch = shm_preds[pred_slot, start:end, :log_pred_h, :log_pred_w]
-                ring_slot = ring_slots[fi]
-
-                # Canvas from ring (already at display resolution)
-                canvas = shm_ring[ring_slot].numpy()
-
-                # Debug raw output on first frame
-                if fc == 0:
-                    raw = preds_torch
-                    bbox_raw = raw[:, :4, :]
-                    cls_raw = raw[:, 4:, :]
-                    print(
-                        f"{TAG} raw output frame {fc}: "
-                        f"bbox min={bbox_raw.min():.2f} max={bbox_raw.max():.2f} "
-                        f"cls min={cls_raw.min():.2f} max={cls_raw.max():.2f} "
-                        f"nan={raw.isnan().sum()} inf={raw.isinf().sum()}",
-                        flush=True,
-                    )
-
-                # Fused NMS + cross-tile merge + scale
-                t0 = time.perf_counter()
+            # Per-stream NMS + merge. Slice 4 tiles out of the 32-tile batch
+            # per stream and run _fused_nms_merge on that 4-tile sub-batch.
+            for s in range(N_STREAMS):
+                start = s * TILES_PER_STREAM
+                end = start + TILES_PER_STREAM
+                sub_preds = preds_torch[start:end]
                 boxes_np, scores_np, cls_np = _fused_nms_merge(
-                    preds_torch,
+                    sub_preds,
                     conf,
                     iou,
-                    shifts=shifts,
-                    n_valid=tiles_per_frame,
+                    shifts=stream_shifts,
+                    n_valid=TILES_PER_STREAM,
                     merge_iou=merge_iou,
                     class_agnostic=merge_class_agnostic,
-                    scale_x=scale_x,
-                    scale_y=scale_y,
+                    scale_x=1.0,
+                    scale_y=1.0,
                     pool=nms_pool,
+                    merge_mode=merge_mode,
+                    merge_match=merge_match,
                 )
-                t_nms = time.perf_counter() - t0
 
-                # Debug detection stats
-                n_dets = len(boxes_np)
-                if fc == 0 or (fc % 25 == 0 and n_dets > 0):
-                    widths = boxes_np[:, 2] - boxes_np[:, 0] if n_dets else []
-                    heights = boxes_np[:, 3] - boxes_np[:, 1] if n_dets else []
-                    print(
-                        f"{TAG} frame {fc}: {n_dets} dets"
-                        + (
-                            f", scores=[{scores_np.min():.2f},{scores_np.max():.2f}], "
-                            f"widths=[{widths.min():.0f},{widths.max():.0f}], "
-                            f"heights=[{heights.min():.0f},{heights.max():.0f}]"
-                            if n_dets
-                            else ""
-                        ),
-                        flush=True,
-                    )
-
-                t0 = time.perf_counter()
-                _draw_boxes_np(canvas, boxes_np, scores_np, cls_np, names_dict)
-                t_draw = time.perf_counter() - t0
-
-                # Multi-worker JPEG encode + optional video writer (both threaded)
-                t0 = time.perf_counter()
-                canvas = draw_hud(canvas, hud_label, ema_fps)
-                frame_copy = canvas.copy()  # single copy shared by encode + video
-                if video_writer is not None:
-                    if _video_future is None or _video_future.done():
-                        _video_future = _video_pool.submit(video_writer.write, frame_copy)
-                    # else: video writer busy, skip this frame for mp4
-                encode_futures = [ef for ef in encode_futures if not ef.done()]
-                if len(encode_futures) >= 3:
-                    encode_futures[0].result()
-                    encode_futures.pop(0)
-                encode_futures.append(encode_pool.submit(_write_frame_ts, frame_file, frame_copy, jpeg_quality))
-                t_encode = time.perf_counter() - t0
-
-                dt_post = time.perf_counter() - t_post_start
-                fc += 1
-                t_post_sum += dt_post
-                t_nms_sum += t_nms
-                t_draw_sum += t_draw
-                t_encode_sum += t_encode
-
-                wall_elapsed = time.perf_counter() - t_wall_start
-                if fc > 1:
-                    wall_fps = (fc - 1) / wall_elapsed
-                    ema_fps = _EMA_ALPHA * wall_fps + (1 - _EMA_ALPHA) * ema_fps
-                else:
-                    ema_fps = 1.0 / max(dt_post, 1e-9)
-                    print(
-                        f"{TAG} First frame: {dt_post * 1000:.1f}ms "
-                        f"(nms={t_nms * 1000:.1f} draw={t_draw * 1000:.1f} "
-                        f"encode={t_encode * 1000:.1f})",
-                        flush=True,
-                    )
-
-                if fc % LOG_INTERVAL == 0:
-                    n = LOG_INTERVAL
-                    throughput = fc / wall_elapsed
-                    print(
-                        f"{TAG} BG avg {n}f: post={t_post_sum / n * 1000:.1f}ms "
-                        f"(nms={t_nms_sum / n * 1000:.1f} "
-                        f"draw={t_draw_sum / n * 1000:.1f} "
-                        f"encode={t_encode_sum / n * 1000:.1f})  "
-                        f"Throughput: {throughput:.1f} FPS",
-                        flush=True,
-                    )
-                    t_post_sum = t_nms_sum = t_draw_sum = t_encode_sum = 0.0
-
-            if is_image:
-                if output_path:
-                    cv2.imwrite(output_path, canvas)
-                    print(f"{TAG} Saved to {output_path}", flush=True)
-                print(f"{TAG} Image done.", flush=True)
-
-    except Exception:
-        import traceback
-
-        traceback.print_exc()
-    finally:
-        if video_writer is not None:
-            if _video_future is not None:
+                _n = int(len(boxes_np))
+                msg = {
+                    "k": "dets",
+                    "stream_id": s,
+                    "frame_id": int(fc),
+                    "n": _n,
+                    "fps": float(ema_fps),
+                    "boxes": boxes_np.astype(np.float32).tolist() if _n else [],
+                    "scores": scores_np.astype(np.float32).tolist() if _n else [],
+                    "cls": cls_np.astype(np.int32).tolist() if _n else [],
+                }
                 try:
-                    _video_future.result()
+                    dets_q.put_nowait(msg)
                 except Exception:
-                    pass
-            if _video_pool is not None:
-                _video_pool.shutdown(wait=False)
-            video_writer.release()
-            print(f"{TAG} Video saved (on exit): {video_output_path} ({fc} frames)", flush=True)
+                    try:
+                        dets_q.get_nowait()
+                    except Exception:
+                        pass
+                    try:
+                        dets_q.put_nowait(msg)
+                    except Exception:
+                        pass
+
+            dt_post = time.perf_counter() - t_post_start
+            fc += 1
+            t_post_sum += dt_post
+
+            # Instantaneous inter-frame FPS -> responsive EMA for the browser
+            # HUD. Using dt between successive post-worker arrivals captures
+            # end-to-end pipeline throughput (not just NMS time), and the EMA
+            # keeps jitter visible without letting one slow frame dominate.
+            wall_elapsed = time.perf_counter() - t_wall_start
+            if fc > 1:
+                dt_inter = time.perf_counter() - t_last_post
+                inst_fps = 1.0 / max(dt_inter, 1e-9)
+                ema_fps = _HUD_FPS_ALPHA * inst_fps + (1 - _HUD_FPS_ALPHA) * ema_fps
+            else:
+                ema_fps = 1.0 / max(dt_post, 1e-9)
+                print(
+                    f"{TAG} First frame post: {dt_post * 1000:.1f}ms " f"(8 streams x NMS+merge)",
+                    flush=True,
+                )
+            t_last_post = time.perf_counter()
+
+            if fc % LOG_INTERVAL == 0:
+                n = LOG_INTERVAL
+                throughput = fc / wall_elapsed
+                print(
+                    f"{TAG} BG avg {n}f: post={t_post_sum / n * 1000:.1f}ms  " f"Throughput: {throughput:.1f} FPS",
+                    flush=True,
+                )
+                t_post_sum = 0.0
+
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -481,79 +392,74 @@ def _postprocess_worker(
 
 
 def run_sahi_5frame_pipelined(args):
-    """5-frame pipelined YOLOv8L SAHI on the full Galaxy mesh.
-
-    Uses the same pipelined submit/d2h/compose pattern as the 640 pipeline
-    but processes 5 frames × 6 tiles = 30 tiles (+2 padding) per batch.
-    """
+    """Multi-stream pipelined YOLOv8L SAHI-640 on the full 8x4 = 32-device mesh."""
     import ttnn
     from models.demos.utils.common_demo_utils import get_mesh_mappers
-    from models.demos.yolov8l.common import yolov8l_l1_small_size_for_res, yolov8l_trace_region_size_e2e_for_res
+    from models.demos.yolov8l.common import yolov8l_l1_small_size_for_res
     from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
 
-    TAG = "[5f-1280]"
-    l1_small = yolov8l_l1_small_size_for_res(1280, 1280)
-    trace_region = yolov8l_trace_region_size_e2e_for_res(1280, 1280)
+    try:
+        os.sched_setaffinity(0, set(range(0, 24)) | set(range(32, 56)))
+    except OSError:
+        pass
 
-    # --- Frame source (peek for dimensions) --------------------------------
+    l1_small = yolov8l_l1_small_size_for_res(_TILE_SIZE_640, _TILE_SIZE_640)
+    trace_region = 6_434_816
+
+    if not args.input:
+        print(f"{TAG} ERROR: --input is required", file=sys.stderr, flush=True)
+        sys.exit(1)
+
     try:
         src = FrameSource(args.input)
     except RuntimeError as e:
         print(f"{TAG} ERROR: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
-
     sample = src.peek()
-    frame_h, frame_w = sample.shape[:2]
-    is_image = src.is_image
-    # Get source FPS for video output
-    if not is_image and hasattr(src, "_cap"):
-        source_fps = src._cap.get(cv2.CAP_PROP_FPS) or 30.0
-    else:
-        source_fps = 30.0
+    src_h, src_w = sample.shape[:2]
     src.release()
 
-    # --- Tile grid (overlap on bottom row) ---------------------------------
-    grid = build_overlap_grid(frame_h, frame_w, _TILE_SIZE, _TILE_SIZE)
-    tiles_per_frame = grid.n_tiles
-
-    print(
-        f"{TAG} Frame: {frame_w}x{frame_h} -> "
-        f"{grid.n_cols}x{grid.n_rows} = {tiles_per_frame} tiles/frame of {_TILE_SIZE}x{_TILE_SIZE}",
-        flush=True,
-    )
-    for i, ts in enumerate(grid.tiles):
+    if src_w != STREAM_W or src_h != STREAM_H:
         print(
-            f"{TAG}   tile {i}: start=({ts.col_start:>4},{ts.row_start:>4}) "
-            f"src={ts.src_w}x{ts.src_h} pad={ts.needs_pad}",
+            f"{TAG} WARN: source is {src_w}x{src_h}, expected {STREAM_W}x{STREAM_H}; " f"frames will be resized.",
             flush=True,
         )
 
-    # --- System mesh -------------------------------------------------------
+    # Per-stream tile grid: 1280x1280 -> 2x2 = 4 tiles of 640x640.
+    stream_grid = build_overlap_grid(STREAM_H, STREAM_W, _TILE_SIZE_640, _TILE_SIZE_640, add_whole_frame=False)
+    assert (
+        stream_grid.n_tiles == TILES_PER_STREAM
+    ), f"expected {TILES_PER_STREAM} tiles per stream, got {stream_grid.n_tiles}"
+    print(
+        f"{TAG} Per-stream grid: {stream_grid.n_cols}x{stream_grid.n_rows} "
+        f"= {stream_grid.n_tiles} tiles of {_TILE_SIZE_640}x{_TILE_SIZE_640}",
+        flush=True,
+    )
+    print(
+        f"{TAG} Total batch: {N_STREAMS} streams x {TILES_PER_STREAM} tiles "
+        f"= {TOTAL_TILES} tiles on {MESH_ROWS}x{MESH_COLS} mesh",
+        flush=True,
+    )
+
+    # Per-tile affine shifts for ONE stream -- reused identically for all 8
+    # streams because each stream lives in its own 1280x1280 coordinate
+    # frame. box_frame = box_tile * (1, 1) + (col_start, row_start).
+    stream_shifts = [(1.0, 1.0, float(ts.col_start), float(ts.row_start)) for ts in stream_grid.tiles]
+
+    # --- Open full 8x4 mesh --------------------------------------------------
     sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
     sys_rows, sys_cols = sys_shape
-    total_devices = sys_rows * sys_cols
-
-    frames_per_batch = total_devices // tiles_per_frame
-    n_padding = total_devices - (frames_per_batch * tiles_per_frame)
-
-    if frames_per_batch < 1:
+    if sys_rows < MESH_ROWS or sys_cols < MESH_COLS:
         print(
-            f"{TAG} ERROR: tiles_per_frame={tiles_per_frame} > " f"total_devices={total_devices}.",
+            f"{TAG} ERROR: system mesh {sys_rows}x{sys_cols} cannot host required " f"{MESH_ROWS}x{MESH_COLS} sub-mesh",
             file=sys.stderr,
             flush=True,
         )
         sys.exit(1)
 
+    mesh_shape = ttnn.MeshShape(MESH_ROWS, MESH_COLS)
     print(
-        f"{TAG} System: {sys_rows}x{sys_cols}={total_devices} devices  ->  "
-        f"{frames_per_batch} frames x {tiles_per_frame} tiles + {n_padding} padding = {total_devices}",
-        flush=True,
-    )
-
-    # --- Open full mesh ----------------------------------------------------
-    mesh_shape = ttnn.MeshShape(sys_rows, sys_cols)
-    print(
-        f"{TAG} Opening full mesh {sys_rows}x{sys_cols}={total_devices} "
+        f"{TAG} Opening mesh {MESH_ROWS}x{MESH_COLS}={TOTAL_TILES} "
         f"(l1_small={l1_small}, trace_region={trace_region})",
         flush=True,
     )
@@ -564,151 +470,119 @@ def run_sahi_5frame_pipelined(args):
         num_command_queues=2,
     )
     mesh_device.enable_program_cache()
+
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
 
-    # --- Build runner (batch = total_devices) ------------------------------
-    print(f"{TAG} Building YOLOv8lPerformantRunner ({_TILE_SIZE}x{_TILE_SIZE}, batch={total_devices})...", flush=True)
+    # --- Build runner (batch = TOTAL_TILES = 32) -----------------------------
+    print(
+        f"{TAG} Building YOLOv8lPerformantRunner " f"({_TILE_SIZE_640}x{_TILE_SIZE_640}, batch={TOTAL_TILES})...",
+        flush=True,
+    )
     runner = YOLOv8lPerformantRunner(
         mesh_device,
-        device_batch_size=total_devices,
-        inp_h=_TILE_SIZE,
-        inp_w=_TILE_SIZE,
+        device_batch_size=TOTAL_TILES,
+        inp_h=_TILE_SIZE_640,
+        inp_w=_TILE_SIZE_640,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
         weights_mesh_mapper=weights_mesh_mapper,
     )
     print(f"{TAG} Runner ready.", flush=True)
 
-    # --- Physical/logical shape for prediction ring ------------------------
-    _phys_pred_h, _phys_pred_w = runner._phys_per_shard
-    _log_pred_h, _log_pred_w = runner._log_per_shard
+    # --- NMS / merge config --------------------------------------------------
+    coco_names = _load_coco_names()
+    names_dict = _coco_names_dict(coco_names)
+    conf = max(args.conf, _CONF_FLOOR_640)
     print(
-        f"{TAG} Pred shard: logical=[{_log_pred_h},{_log_pred_w}] "
-        f"physical=[{_phys_pred_h},{_phys_pred_w}] "
-        f"compose_physical={runner._compose_physical}",
+        f"{TAG} NMS conf={conf} iou={args.iou} "
+        f"merge_iou={args.merge_threshold} class_agnostic={args.class_agnostic} "
+        f"merge_mode={args.merge_mode} merge_match={args.merge_match}",
         flush=True,
     )
 
-    # --- NMS config --------------------------------------------------------
-    coco_names = _load_coco_names()
-    names_dict = _coco_names_dict(coco_names)
-    conf = max(args.conf, _CONF_FLOOR)
-    merge_iou = args.sahi_merge_threshold
-    merge_class_agnostic = args.sahi_class_agnostic
-    # Constant tile shifts (same grid for every frame)
-    tile_shifts = [(ts.col_start, ts.row_start) for ts in grid.tiles[:tiles_per_frame]]
-
-    # --- Display dimensions ------------------------------------------------
-    display_width = args.display_width
-    if display_width > 0:
-        disp_h = int(round(frame_h * display_width / frame_w))
-        disp_w = display_width
-    else:
-        disp_h, disp_w = frame_h, frame_w
-    scale_x = disp_w / frame_w
-    scale_y = disp_h / frame_h
-
-    # --- Shared memory -----------------------------------------------------
+    # --- Shared memory -------------------------------------------------------
     _ctx = mp.get_context("spawn")
-
-    # Display frame ring buffer for BG process (display resolution)
-    RING_SIZE = frames_per_batch * 3  # 3 batches of headroom
-    shm_ring = torch.zeros(RING_SIZE, disp_h, disp_w, 3, dtype=torch.uint8).share_memory_()
-
-    # Double-buffered bf16 tile tensors for prep→main handoff
-    shm_buf0 = torch.zeros(total_devices, 3, _TILE_SIZE, _TILE_SIZE, dtype=torch.bfloat16).share_memory_()
-    shm_buf1 = torch.zeros(total_devices, 3, _TILE_SIZE, _TILE_SIZE, dtype=torch.bfloat16).share_memory_()
-    shm_tensor_bufs = [shm_buf0, shm_buf1]
-
-    # Prediction ring for main→BG handoff (physical shape for fast compose)
     PRED_RING = 2
-    shm_preds = torch.zeros(PRED_RING, total_devices, _phys_pred_h, _phys_pred_w, dtype=torch.bfloat16).share_memory_()
+    _phys_pred_h, _phys_pred_w = runner._phys_per_shard
+    _log_pred_h, _log_pred_w = runner._log_per_shard
+    shm_preds = torch.zeros(PRED_RING, TOTAL_TILES, _phys_pred_h, _phys_pred_w, dtype=torch.bfloat16).share_memory_()
+    print(
+        f"{TAG} shm_preds: [{PRED_RING}, {TOTAL_TILES}, {_phys_pred_h}, {_phys_pred_w}] "
+        f"logical=[:, :, :{_log_pred_h}, :{_log_pred_w}] "
+        f"({shm_preds.nelement() * 2 / 1e6:.1f} MB)",
+        flush=True,
+    )
+    pred_write_idx = 0
 
-    # Metadata shared memory
-    shm_shifts = torch.zeros(tiles_per_frame, 2, dtype=torch.int32).share_memory_()
-    shm_ring_slots = torch.zeros(frames_per_batch, dtype=torch.int32).share_memory_()
+    q_post: mp.Queue = _ctx.Queue(maxsize=4)
+
+    # --- Split server (raw MP4 + per-stream SSE dets) ------------------------
+    from models.demos.yolo_eval import _split_server as _split
+
+    dets_q = _ctx.Queue(maxsize=256)
+    server_proc = _ctx.Process(
+        target=_split.run_server,
+        args=(args.host, int(args.port), dets_q, args.input, STREAM_W, STREAM_H),
+        daemon=True,
+        name="sahi640-multi-split",
+    )
+    server_proc.start()
+    print(
+        f"{TAG} Split server: http://{args.host}:{args.port}/  " f"source={args.input} ({STREAM_W}x{STREAM_H})",
+        flush=True,
+    )
+
+    # --- BG process ----------------------------------------------------------
+    bg_proc = _ctx.Process(
+        target=_postprocess_worker_shm_multi,
+        args=(
+            q_post,
+            stream_shifts,
+            names_dict,
+            conf,
+            args.iou,
+            args.merge_threshold,
+            args.class_agnostic,
+            args.merge_mode,
+            args.merge_match,
+            shm_preds,
+            dets_q,
+        ),
+        daemon=True,
+        name="sahi640-multi-bg",
+    )
+    bg_proc.start()
+
+    # --- Prep process --------------------------------------------------------
+    _shm_buf0 = torch.zeros(TOTAL_TILES, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
+    _shm_buf1 = torch.zeros(TOTAL_TILES, 3, _TILE_SIZE_640, _TILE_SIZE_640, dtype=torch.bfloat16).share_memory_()
+    shm_tensor_bufs = [_shm_buf0, _shm_buf1]
     shm_timings = torch.zeros(10, dtype=torch.float32).share_memory_()
     go_event = _ctx.Event()
     ready_event = _ctx.Event()
     stop_event = _ctx.Event()
 
-    shm_mb = (
-        shm_buf0.nelement() * 2 * 2  # two buffers
-        + shm_ring.nelement()
-        + shm_preds.nelement() * 2
-        + shm_shifts.nelement() * 4
-        + shm_ring_slots.nelement() * 4
-        + shm_timings.nelement() * 4
-    ) / 1e6
-    print(
-        f"{TAG} Shared memory: {shm_mb:.0f} MB "
-        f"(ring={RING_SIZE}x{disp_w}x{disp_h}, "
-        f"pred_ring={PRED_RING}x{total_devices}x{_phys_pred_h}x{_phys_pred_w})",
-        flush=True,
-    )
+    shm_mb = (_shm_buf0.nelement() + _shm_buf1.nelement()) * 2 / 1e6
+    print(f"{TAG} Shared memory (tiles): {shm_mb:.0f} MB (double-buffered bf16)", flush=True)
 
-    # --- BG process --------------------------------------------------------
-    frame_file = args._frame_file
-    hud_label = f"YOLOv8L SAHI 1280 x{frames_per_batch} ({sys_rows}x{sys_cols}={total_devices} chips)"
-    q_post: mp.Queue = _ctx.Queue(maxsize=8)
-
-    bg_proc = _ctx.Process(
-        target=_postprocess_worker,
-        args=(
-            q_post,
-            tiles_per_frame,
-            tile_shifts,
-            names_dict,
-            conf,
-            args.iou,
-            merge_iou,
-            merge_class_agnostic,
-            args.jpeg_quality,
-            frame_file,
-            hud_label,
-            getattr(args, "output", None),
-            is_image,
-            shm_ring,
-            RING_SIZE,
-            shm_preds,
-            _log_pred_h,
-            _log_pred_w,
-            getattr(args, "video_output", None),
-            source_fps,
-        ),
-        daemon=True,
-        name="5f-bg",
-    )
-    bg_proc.start()
-
-    # --- Prep process ------------------------------------------------------
     prep_proc = _ctx.Process(
-        target=_prep_process_worker,
+        target=_prep_process_worker_multi,
         args=(
             args.input,
-            grid,
-            tiles_per_frame,
-            frames_per_batch,
-            total_devices,
+            stream_grid,
             shm_tensor_bufs,
-            shm_ring,
-            RING_SIZE,
-            shm_shifts,
-            shm_ring_slots,
             shm_timings,
             go_event,
             ready_event,
             stop_event,
-            frame_h,
-            frame_w,
-            display_width,
+            getattr(args, "pace", False),
         ),
         daemon=True,
-        name="5f-prep",
+        name="sahi640-multi-prep",
     )
     prep_proc.start()
 
-    # --- Signal handling ---------------------------------------------------
+    # --- Signal handling -----------------------------------------------------
     stop = False
 
     def _shutdown(*_):
@@ -718,100 +592,70 @@ def run_sahi_5frame_pipelined(args):
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    print(f"{TAG} 3-stage pipeline ({frames_per_batch}-frame batch) running...", flush=True)
+    print(
+        f"{TAG} 3-stage pipelined multi-stream loop "
+        f"({N_STREAMS} streams x {TILES_PER_STREAM} tiles = {TOTAL_TILES})...",
+        flush=True,
+    )
 
     # ===================================================================
-    # Main loop — pipelined submit/d2h/compose
+    # Main loop -- same submit / d2h / compose pipelining as the 640
+    # pipeline, but without display canvas plumbing since the browser
+    # plays the source file directly.
     # ===================================================================
-    batch_count = 0
-    frame_count_total = 0
-    LOG_INTERVAL = 5
     main_frame_idx = 0
-    pred_write_idx = 0
-
-    # Timing accumulators
-    t_prep_wait_sum = t_submit_sum = t_d2h_sum = t_compose_sum = 0.0
-    t_enqueue_sum = t_batch_total_sum = 0.0
-    t_prep_read_sum = t_prep_convert_sum = t_prep_total_sum = 0.0
-    t_host_prep_sum = t_h2d_sum = t_wait_op_sum = 0.0
-    t_pcie_d2h_sum = t_staging_wait_sum = 0.0
-    drop_count = 0
-
-    # Compose runs in a background thread (overlaps with next submit's h2d)
     _submit_executor = ThreadPoolExecutor(max_workers=1)
-    _compose_future = None
-    _compose_enqueue_item = None
+    _prep_executor = ThreadPoolExecutor(max_workers=1)
+    batch_count = 0
+    drop_count = 0
+    LOG_INTERVAL = 10
+    t_batch_total_sum = 0.0
+    t_wait_sum = 0.0
+    t_submit_sum = 0.0
+    t_compose_wait_sum = 0.0
+    t_qput_sum = 0.0
+    t_d2h_sum = 0.0
+    t_compose_start_sum = 0.0
 
     try:
-        # --- Prime first batch from prep -----------------------------------
         go_event.set()
         while not ready_event.wait(timeout=0.5):
             if stop:
                 return
         ready_event.clear()
-
         if shm_timings[6].item() < 0:
             print(f"{TAG} No frames available.", flush=True)
             return
 
-        n_frames_valid = int(shm_timings[0].item())
-        buf_idx = int(shm_timings[7].item())
-        cur_ring_slots = [int(shm_ring_slots[fi].item()) for fi in range(n_frames_valid)]
+        runner.submit(shm_tensor_bufs[main_frame_idx % 2])
+        main_frame_idx += 1
+        go_event.set()
+        _prep_pending = True
+
+        _compose_future = None
+        _compose_enqueue_item = None
+        _prepare_future = None
 
         print(
-            f"{TAG} First prep: {n_frames_valid} frames, "
-            f"read={shm_timings[1].item():.1f}ms, "
-            f"convert={shm_timings[2].item():.1f}ms, "
-            f"total={shm_timings[3].item():.1f}ms",
+            f"{TAG} First frame: prep={shm_timings[5].item():.1f}ms "
+            f"(read={shm_timings[1].item():.1f} sp={shm_timings[4].item():.1f})",
             flush=True,
         )
 
-        # Submit first batch
-        runner.submit(shm_tensor_bufs[buf_idx])
-        main_frame_idx += 1
-        prev_meta = (n_frames_valid, cur_ring_slots)
-
-        # Signal prep for next batch (after submit copied the data)
-        if not is_image:
-            go_event.set()
-            _prep_pending = True
-        else:
-            _prep_pending = False
-
-        # --- Steady-state pipeline loop ------------------------------------
         while not stop:
             t_batch_start = time.perf_counter()
 
-            # --- Wait for next prep result ---------------------------------
-            t0 = time.perf_counter()
-            _next_valid = False
             if _prep_pending:
                 while not ready_event.wait(timeout=0.5):
                     if stop:
                         break
                 ready_event.clear()
-                if not stop:
-                    _next_valid = shm_timings[6].item() >= 0
-            t_prep_wait = (time.perf_counter() - t0) * 1000
-
-            if stop:
-                break
-
-            # Read prep metadata
-            if _next_valid:
-                n_frames_valid_next = int(shm_timings[0].item())
-                buf_idx_next = int(shm_timings[7].item())
-                next_ring_slots = [int(shm_ring_slots[fi].item()) for fi in range(n_frames_valid_next)]
-                _prep_timings = {
-                    "read_ms": shm_timings[1].item(),
-                    "convert_ms": shm_timings[2].item(),
-                    "total_ms": shm_timings[3].item(),
-                }
+                _next_valid = (not stop) and shm_timings[6].item() >= 0
             else:
-                _prep_timings = None
+                _next_valid = False
+            t_after_wait = time.perf_counter()
 
-            if not _next_valid and not is_image:
-                # Drain compose before exiting
+            if not _next_valid:
                 if _compose_future is not None:
                     _compose_future.result()
                     try:
@@ -821,125 +665,91 @@ def run_sahi_5frame_pipelined(args):
                     _compose_future = None
                 break
 
-            # --- Submit next batch -----------------------------------------
-            result_meta = prev_meta
-            t0_submit = time.perf_counter()
+            # Kick off prepare_input (host from_torch loop, ~2-3ms) on a
+            # thread so it overlaps with d2h (~9ms) below.  enqueue_frame,
+            # which queues device commands on CQ0/CQ1, must still run on
+            # this thread to serialize with pcie_d2h() on CQ1.
             if _next_valid:
-                runner.submit(shm_tensor_bufs[buf_idx_next])
+                _prepare_future = _prep_executor.submit(runner.prepare_input, shm_tensor_bufs[main_frame_idx % 2])
                 main_frame_idx += 1
-                _lt = runner.last_timing
-                t_host_prep = _lt.get("host_prep_ms", 0)
-                t_wait_op = _lt.get("wait_op_ms", 0)
-                t_h2d = _lt.get("h2d_ms", 0)
-                prev_meta = (n_frames_valid_next, next_ring_slots)
-            else:
-                t_host_prep = t_wait_op = t_h2d = 0
-            t_submit = (time.perf_counter() - t0_submit) * 1000
+            t_after_submit = time.perf_counter()
 
-            # Signal prep AFTER submit (avoids h2d PCIe contention with convert)
-            if not is_image and _next_valid:
-                go_event.set()
-                _prep_pending = True
-            else:
-                _prep_pending = False
+            go_event.set()
+            _prep_pending = True
 
-            # --- Join compose from previous iteration ----------------------
             _dropped = False
+            t_compose_wait_start = time.perf_counter()
             if _compose_future is not None:
                 _compose_future.result()
-                t_compose = runner._compose_timing
+                t_after_compose_wait = time.perf_counter()
                 try:
                     q_post.put_nowait(_compose_enqueue_item)
                 except Exception:
                     _dropped = True
+                t_after_qput = time.perf_counter()
                 _compose_future = None
             else:
-                t_compose = 0.0
+                t_after_compose_wait = t_compose_wait_start
+                t_after_qput = t_compose_wait_start
 
-            # --- PCIe D2H -------------------------------------------------
-            t0_d2h = time.perf_counter()
             has_result = runner.pcie_d2h()
-            t_staging_wait = runner.last_timing.get("staging_wait_ms", 0)
-            t_pcie_d2h = runner.last_timing.get("pcie_d2h_ms", 0)
+            t_after_d2h = time.perf_counter()
 
-            # --- Launch compose (reads host_staging) -----------------------
             if has_result:
                 pred_slot = pred_write_idx % PRED_RING
                 _compose_future = _submit_executor.submit(runner.compose, dest=shm_preds[pred_slot])
-                r_n_frames, r_ring_slots = result_meta
                 pred_write_idx += 1
-                _compose_enqueue_item = (
-                    pred_slot,
-                    r_ring_slots,
-                    r_n_frames,
-                    scale_x,
-                    scale_y,
-                )
-            t_d2h = (time.perf_counter() - t0_d2h) * 1000
+                _compose_enqueue_item = (pred_slot,)
 
-            dt_batch = time.perf_counter() - t_batch_start
+            # Finish the submit pipeline: collect the prepared host tensor
+            # (which ran in parallel with d2h) and queue the device commands.
+            if _prepare_future is not None:
+                tt_inputs_host = _prepare_future.result()
+                runner.enqueue_frame(tt_inputs_host)
+                _prepare_future = None
+            t_after_compose_start = time.perf_counter()
 
-            # --- Logging ---------------------------------------------------
+            dt_batch = t_after_compose_start - t_batch_start
             batch_count += 1
-            n_f = result_meta[0] if result_meta else frames_per_batch
-            frame_count_total += n_f
             if _dropped:
                 drop_count += 1
-            t_prep_wait_sum += t_prep_wait
-            t_submit_sum += t_submit
-            t_d2h_sum += t_d2h
-            t_compose_sum += t_compose
-            t_batch_total_sum += dt_batch * 1000
-            t_host_prep_sum += t_host_prep
-            t_h2d_sum += t_h2d
-            t_wait_op_sum += t_wait_op
-            t_pcie_d2h_sum += t_pcie_d2h
-            t_staging_wait_sum += t_staging_wait
-            if _prep_timings:
-                t_prep_read_sum += _prep_timings["read_ms"]
-                t_prep_convert_sum += _prep_timings["convert_ms"]
-                t_prep_total_sum += _prep_timings["total_ms"]
+            t_batch_total_sum += dt_batch
+            t_wait_sum += t_after_wait - t_batch_start
+            t_submit_sum += t_after_submit - t_after_wait
+            t_compose_wait_sum += t_after_compose_wait - t_compose_wait_start
+            t_qput_sum += t_after_qput - t_after_compose_wait
+            t_d2h_sum += t_after_d2h - t_after_qput
+            t_compose_start_sum += t_after_compose_start - t_after_d2h
 
             if batch_count == 1:
-                _pt = _prep_timings or {}
-                eff_fps = n_f / max(dt_batch, 1e-9)
+                fps = 1.0 / max(dt_batch, 1e-9)
                 print(
-                    f"{TAG} Batch 1: {dt_batch*1000:.1f}ms "
-                    f"({n_f}f, {eff_fps:.1f} eff FPS)  |  "
-                    f"prep_wait={t_prep_wait:.1f}  "
-                    f"submit={t_submit:.1f}(host={t_host_prep:.1f} h2d={t_h2d:.1f})  "
-                    f"d2h={t_d2h:.1f}(wait={t_staging_wait:.1f} pcie={t_pcie_d2h:.1f})  "
-                    f"compose={t_compose:.1f}  "
-                    f"prep(proc)={_pt.get('total_ms',0):.1f}"
-                    f"[read={_pt.get('read_ms',0):.1f} "
-                    f"convert={_pt.get('convert_ms',0):.1f}]",
+                    f"{TAG} Batch 1: {dt_batch * 1000:.1f}ms ({fps:.1f} FPS)",
                     flush=True,
                 )
 
             if batch_count % LOG_INTERVAL == 0:
                 n = LOG_INTERVAL
-                avg_ms = t_batch_total_sum / n
-                total_frames = sum(frames_per_batch for _ in range(n))  # approximate
-                eff_fps = total_frames / (t_batch_total_sum / 1000)
+                avg_ms = t_batch_total_sum / n * 1000
+                fps = n / t_batch_total_sum
                 print(
-                    f"{TAG} avg {n}b: {avg_ms:.1f}ms/b ({eff_fps:.1f} eff FPS)  |  "
-                    f"prep(proc)={t_prep_total_sum/n:.1f}"
-                    f"[read={t_prep_read_sum/n:.1f} "
-                    f"convert={t_prep_convert_sum/n:.1f}]  "
-                    f"prep_wait={t_prep_wait_sum/n:.1f}  "
-                    f"submit={t_submit_sum/n:.1f}(host={t_host_prep_sum/n:.1f} h2d={t_h2d_sum/n:.1f})  "
-                    f"d2h={t_d2h_sum/n:.1f}(wait={t_staging_wait_sum/n:.1f} pcie={t_pcie_d2h_sum/n:.1f})  "
-                    f"compose={t_compose_sum/n:.1f}  "
-                    f"drops={drop_count}  (ms)",
+                    f"{TAG} avg {n}f: {avg_ms:.1f}ms/f ({fps:.1f} FPS)  drops={drop_count} | "
+                    f"wait={t_wait_sum / n * 1000:.2f} "
+                    f"submit={t_submit_sum / n * 1000:.2f} "
+                    f"cwait={t_compose_wait_sum / n * 1000:.2f} "
+                    f"qput={t_qput_sum / n * 1000:.2f} "
+                    f"d2h={t_d2h_sum / n * 1000:.2f} "
+                    f"cstart={t_compose_start_sum / n * 1000:.2f}",
                     flush=True,
                 )
-                t_prep_wait_sum = t_submit_sum = t_d2h_sum = t_compose_sum = 0.0
                 t_batch_total_sum = 0.0
-                t_prep_read_sum = t_prep_convert_sum = t_prep_total_sum = 0.0
-                t_host_prep_sum = t_h2d_sum = t_wait_op_sum = 0.0
-                t_pcie_d2h_sum = t_staging_wait_sum = 0.0
+                t_wait_sum = 0.0
+                t_submit_sum = 0.0
+                t_compose_wait_sum = 0.0
+                t_qput_sum = 0.0
+                t_d2h_sum = 0.0
+                t_compose_start_sum = 0.0
 
-        # --- Drain pending compose -----------------------------------------
         if _compose_future is not None:
             try:
                 _compose_future.result()
@@ -947,52 +757,47 @@ def run_sahi_5frame_pipelined(args):
             except Exception:
                 pass
 
-        # --- Flush last batch ----------------------------------------------
         if batch_count > 0 and not stop:
             try:
                 last_preds = runner.flush_pipeline(mesh_composer=output_mesh_composer)
-                if last_preds is not None and prev_meta is not None:
-                    r_n_frames, r_ring_slots = prev_meta
+                if last_preds is not None:
                     pred_slot = pred_write_idx % PRED_RING
-                    # Copy logical predictions to shm_preds
-                    n_tiles = r_n_frames * tiles_per_frame
-                    shm_preds[pred_slot, :n_tiles, :_log_pred_h, :_log_pred_w].copy_(last_preds[:n_tiles])
+                    shm_preds[pred_slot, :TOTAL_TILES, :_log_pred_h, :_log_pred_w].copy_(last_preds[:TOTAL_TILES])
                     pred_write_idx += 1
-                    q_post.put(
-                        (pred_slot, r_ring_slots, r_n_frames, scale_x, scale_y),
-                        timeout=2,
-                    )
+                    q_post.put((pred_slot,), timeout=2)
             except Exception:
                 pass
 
-        # Image mode: wait for BG to finish
-        if is_image:
-            while not stop and bg_proc.is_alive():
-                time.sleep(0.5)
-            while not stop:
-                time.sleep(1)
-
-    finally:
         _submit_executor.shutdown(wait=False)
 
-        # --- Shutdown BG ---
-        print(f"{TAG} Shutting down... ({frame_count_total} frames in {batch_count} batches)", flush=True)
-        try:
-            q_post.put_nowait(None)
-        except Exception:
-            pass
-        bg_proc.join(timeout=10)
-        if bg_proc.is_alive():
-            bg_proc.kill()
+    finally:
+        print(
+            f"\n{TAG} Shutting down... ({batch_count} frames processed)",
+            flush=True,
+        )
 
-        # --- Shutdown prep ---
         stop_event.set()
         go_event.set()
         prep_proc.join(timeout=5)
         if prep_proc.is_alive():
             prep_proc.kill()
+            prep_proc.join(timeout=2)
 
-        # --- Release devices ---
+        try:
+            while not q_post.empty():
+                q_post.get_nowait()
+        except Exception:
+            pass
+
+        try:
+            q_post.put_nowait(None)
+        except Exception:
+            pass
+        bg_proc.join(timeout=5)
+        if bg_proc.is_alive():
+            bg_proc.kill()
+            bg_proc.join(timeout=2)
+
         try:
             runner.release()
         except Exception:
@@ -1015,88 +820,41 @@ def run_sahi_5frame_pipelined(args):
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="YOLOv8L 5-frame SAHI 4K inference on full Galaxy mesh.",
+        description=f"YOLOv8L SAHI-640 multi-stream inference "
+        f"({N_STREAMS} streams x {TILES_PER_STREAM} tiles = {TOTAL_TILES} on "
+        f"{MESH_ROWS}x{MESH_COLS} mesh).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--input", required=True, help="Path to 4K video or image.")
+    p.add_argument("--input", required=True, help=f"Path to a {STREAM_W}x{STREAM_H} MP4 source.")
     p.add_argument("--conf", type=float, default=0.25, help="NMS confidence.")
     p.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold.")
-    p.add_argument("--serve", action="store_true", help="Stream MJPEG over HTTP.")
-    p.add_argument("--host", type=str, default="0.0.0.0", help="HTTP bind address.")
+    p.add_argument("--serve", action="store_true", help="Serve split-delivery HTTP.")
+    p.add_argument("--host", default="0.0.0.0", help="HTTP bind address.")
     p.add_argument("--port", type=int, default=9090, help="HTTP port.")
-    p.add_argument("--jpeg-quality", type=int, default=75, help="JPEG quality.")
+    p.add_argument("--merge-threshold", type=float, default=0.4, help="Cross-tile merge IoU.")
+    p.add_argument("--class-agnostic", action="store_true", help="Merge across classes.")
     p.add_argument(
-        "--display-width",
-        type=int,
-        default=0,
-        help="Width to scale output. 0 = native resolution.",
+        "--merge-mode",
+        choices=["nms", "greedy-nmm", "nmm", "wbf"],
+        default="greedy-nmm",
     )
-    p.add_argument(
-        "--sahi-merge-threshold",
-        type=float,
-        default=0.4,
-        help="Cross-tile merge NMS IoU threshold.",
-    )
-    p.add_argument(
-        "--sahi-class-agnostic",
-        action="store_true",
-        help="Merge boxes across classes during cross-tile NMS.",
-    )
-    p.add_argument("--output", type=str, default=None, help="Save result (image mode).")
-    p.add_argument(
-        "--video-output",
-        type=str,
-        default=None,
-        help="Path to write MP4 output video (e.g. output.mp4). "
-        "Writes every BG-processed frame at the source framerate.",
-    )
+    p.add_argument("--merge-match", choices=["iou", "ios"], default="ios")
+    p.add_argument("--pace", action="store_true", help="Pace prep to source FPS.")
+    # Supervisor-compat flags (accepted, ignored in split-only mode).
+    p.add_argument("--frame-width", type=int, default=STREAM_W)
+    p.add_argument("--frame-height", type=int, default=STREAM_H)
+    p.add_argument("--serve-split", action="store_true", help="Split delivery (default on).")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-
-    # Setup frame file for MJPEG streaming
-    tmpdir = tempfile.gettempdir()
-    frame_file = os.path.join(tmpdir, "yolov8l_5frame_sahi.jpg")
-    args._frame_file = frame_file
-
-    # Launch MJPEG server if requested
-    http_proc = None
-    if args.serve:
-        server_script = str(Path(__file__).resolve().parent / "_mjpeg_server.py")
-        print(f"[main] Starting MJPEG server on http://{args.host}:{args.port}/", flush=True)
-        http_proc = subprocess.Popen(
-            [
-                sys.executable,
-                server_script,
-                "--host",
-                args.host,
-                "--port",
-                str(args.port),
-                "--frame-file",
-                frame_file,
-            ]
-        )
-        time.sleep(1)
-
     try:
         run_sahi_5frame_pipelined(args)
     except KeyboardInterrupt:
         pass
     finally:
-        if http_proc and http_proc.poll() is None:
-            http_proc.terminate()
-            try:
-                http_proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                http_proc.kill()
-        for p in (frame_file, frame_file + ".tmp"):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
-        print("[main] Done.", flush=True)
+        print(f"{TAG} main done.", flush=True)
 
 
 if __name__ == "__main__":
