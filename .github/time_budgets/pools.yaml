@@ -1,21 +1,54 @@
 # Total machine-hours available per SKU per week.
 # This is the denominator for all budget calculations.
-# Update when hardware capacity changes or fleet size grows.
+# SKU names match .github/sku_config.yaml exactly.
 #
-# Source: Snowflake TTDATASF.SW_TEST.CICD_JOB, 28-day average (tt-metal only).
-# tt-metal is currently the sole user of all these SKUs (cross-repo query
-# returned zero usage for tt-xla, tt-mlir, tt-shield, tt-forge-*, tt-exalens).
+# Source: Snowflake TTDATASF.SW_TEST.CICD_JOB, 28-day avg (tt-metal only, Apr 2026).
+# tt-metal is sole user of all hardware SKUs (no other repo in Snowflake data).
 # Values = observed weekly usage + 20% headroom, rounded up to nearest 100.
-#
-# CIv1 (in-service bare-metal) and CIv2 (cloud-provisioned) are combined
-# under each canonical SKU name used by budget_check.py's RUNNER_SKU_MAP.
+# SKUs with no observed usage get a 100 h/wk placeholder.
+# Update when fleet capacity changes.
 
-# --- Wormhole ---
-N150:   3700   # CIv1 1047 + CIv2 1965 = 3012 h/wk observed
-N300:  23500   # CIv1 13498 + CIv2 6053 = 19551 h/wk observed (includes galaxy multi-host)
-LLMBOX: 1400   # CIv1 WH-LLMBox 653 + CIv2 N300-llmbox 506 = 1159 h/wk observed
-galaxy: 3900   # CIv1 wh_galaxy 3164 + bh_galaxy 38 = 3202 h/wk observed
+# ── Wormhole CIv1 ──────────────────────────────────────────────────────────
+wh_n150:               1300   # CIv1 N150:           1047 h/wk observed
+wh_n300:              15500   # CIv1 N300:          12914 h/wk observed
+wh_n300_perf:           200   # CIv1 N300 perf:       172 h/wk observed
+wh_llmbox:             1400   # CIv1 WH-LLMBox:      1109 h/wk observed
+wh_llmbox_perf:         400   # CIv1 WH-LLMBox perf:  344 h/wk observed
+wh_llmbox_perf_release: 200   # CIv1 WH-LLMBox perf-release: 174 h/wk observed
+wh_galaxy:              200   # CIv1 WH-Galaxy functional: 156 h/wk observed
+wh_galaxy_perf:        2700   # CIv1 WH-Galaxy perf: 2247 h/wk observed
+wh_galaxy_release:      900   # CIv1 WH-Galaxy release: 726 h/wk observed
+wh_galaxy_perf_release: 100   # CIv1 WH-Galaxy perf-release: 0 h/wk (placeholder)
 
-# --- Blackhole ---
-p150b:  5400   # CIv1 P150b 316 + CIv2 3564 + LoudBox (blackhole alias) 550 = 4430 h/wk
-p300b:  1600   # CIv1 P300 305 + P100 471 + QuietBox 273 + DeskBox 135 + CIv2 P100a 93 = 1277 h/wk
+# ── Wormhole CIv2 ──────────────────────────────────────────────────────────
+wh_n150_civ2:          1300   # CIv2 N150:           1061 h/wk observed
+wh_n300_civ2:          6000   # CIv2 N300:           4941 h/wk observed
+wh_llmbox_civ2:         400   # CIv2 N300-llmbox:     323 h/wk observed
+
+# ── Blackhole CIv1 ─────────────────────────────────────────────────────────
+bh_p100:                600   # CIv1 BH P100:         468 h/wk observed
+bh_p100_perf:           100   # CIv1 BH P100 perf:      3 h/wk observed
+bh_p150:                600   # CIv1 BH P150 functional: 429 h/wk observed
+bh_p150_perf:           100   # CIv1 BH P150 perf:     36 h/wk observed
+bh_p300:                400   # CIv1 BH P300:          297 h/wk observed
+bh_p300_viommu:         400   # CIv1 BH P300 viommu (same hardware as bh_p300)
+bh_llmbox:              100   # CIv1 BH LLMBox (perf): 79 h/wk observed
+bh_loudbox:             100   # CIv1 BH LoudBox functional: 74 h/wk observed
+bh_quietbox:            100   # CIv1 BH QuietBox functional: ~0 h/wk (placeholder)
+bh_quietbox_perf:       100   # CIv1 BH QuietBox perf:  6 h/wk observed
+bh_quietbox_2:          400   # CIv1 BH QuietBox-2:   266 h/wk observed
+bh_deskbox:             200   # CIv1 BH DeskBox:      135 h/wk observed
+bh_galaxy:              100   # CIv1 BH Galaxy functional: 38 h/wk observed
+bh_galaxy_perf:         100   # CIv1 BH Galaxy perf:    0 h/wk (placeholder)
+bh_galaxy_release:      100   # CIv1 BH Galaxy release: 0 h/wk (placeholder)
+bh_galaxy_perf_release: 100   # CIv1 BH Galaxy perf-release: 0 h/wk (placeholder)
+
+# ── Blackhole CIv2 ─────────────────────────────────────────────────────────
+bh_p100a_civ2_viommu:   200   # CIv2 BH P100a viommu:  89 h/wk observed
+bh_p150b_civ2:         2600   # CIv2 BH P150b:        2132 h/wk observed
+bh_p150b_civ2_viommu:  1200   # CIv2 BH P150b viommu:  982 h/wk observed
+bh_loudbox_civ2_viommu: 100   # CIv2 BH LoudBox viommu: 0 h/wk (placeholder)
+
+# ── Blackhole Superpods ────────────────────────────────────────────────────
+bh_sp1:                 100   # BH SP1 (exabox MGD): usage not tracked in Snowflake
+bh_sp4:                 100   # BH SP4 (exabox Count): usage not tracked in Snowflake
