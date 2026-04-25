@@ -28,6 +28,7 @@ from tracy import signpost
 from transformers import AutoConfig
 from transformers.cache_utils import DynamicCache
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
@@ -2808,7 +2809,7 @@ def test_single_device_d2h(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    d2h_page_size_bytes = 64
+    d2h_page_size_bytes = 256
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -3557,7 +3558,7 @@ def test_d2h(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    d2h_page_size_bytes = 64
+    d2h_page_size_bytes = 256
 
     a_tile = ttnn.Tile([1, 32])
     b_tile = ttnn.Tile([32, 32])
@@ -3791,7 +3792,7 @@ def test_d2d_to_d2h_pipeline(
     num_matmul_cores = 101
     n_per_core = 160
     n_total = num_matmul_cores * n_per_core
-    socket_page_size_bytes = 64
+    socket_page_size_bytes = 256
     socket_fifo_size = 256
 
     a_tile = ttnn.Tile([1, 32])
@@ -4099,7 +4100,7 @@ def test_4stage_galaxy_1_iteration(
     n_total = num_matmul_cores * n_per_core
     activation_page_size_bytes = K * 2  # bf16 [1, 7168]
     activation_fifo_size = activation_page_size_bytes * 2
-    socket_page_size_bytes = 64
+    socket_page_size_bytes = 256
     socket_fifo_size = 512
     assert activation_page_size_bytes == 14336
     assert socket_fifo_size == 8 * socket_page_size_bytes
@@ -4854,7 +4855,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1461000,
+            "worker_l1_size": 1441000,
         }
     ],
     indirect=True,
@@ -4939,6 +4940,9 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 torch_token[0, 7] = iteration
                 torch_token[0, 8] = iteration
                 torch_token[0, 9] = -1
+                torch_token[0, 10] = float_to_uint32(0.6)
+                torch_token[0, 11] = 1
+                torch_token[0, 12] = float_to_uint32(1.0)
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),

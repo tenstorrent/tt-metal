@@ -62,7 +62,7 @@ class DeepseekMetadata:
 def create_metadata_tensor(
     mesh_device: ttnn.MeshDevice, grid: ttnn.CoreRangeSet, metadata: DeepseekMetadata
 ) -> ttnn.Tensor:
-    torch_metadata = torch.tensor(metadata.to_list(), dtype=torch.uint32).repeat(grid.num_cores(), 1)
+    torch_metadata = torch.tensor(METADATA_TENSOR_NUM_UINT32, dtype=torch.uint32).repeat(grid.num_cores(), 1)
     metadata_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,

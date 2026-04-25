@@ -788,6 +788,10 @@ void kernel_main() {
     };
 #endif
 
+#if defined(COMPILE_FOR_BRISC)
+    DPRINT << "LM HEAD SAMPLING KERNEL START, is_bcast_root= " << (get_named_compile_time_arg_val("bcast_is_root") == 1) << ENDL();
+#endif
+
     // ====================================================================
     // LM HEAD SAMPLING Lambda
     // ====================================================================

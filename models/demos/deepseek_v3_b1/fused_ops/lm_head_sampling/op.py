@@ -48,6 +48,8 @@ from models.demos.deepseek_v3_b1.utils import (
     merge_kernel_defines,
 )
 
+from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
+
 
 def _round_up(value: int, alignment: int) -> int:
     return ((value + alignment - 1) // alignment) * alignment
@@ -357,7 +359,7 @@ class LMHeadSampling:
         socket_mode_none = 0
         socket_mode_d2h = 1
         socket_mode_d2d = 2
-        socket_page_size_bytes = 64
+        socket_page_size_bytes = METADATA_TENSOR_BYTES
         input_socket_mode_none = 0
         input_socket_mode_d2d = 2
 
@@ -653,7 +655,14 @@ class LMHeadSampling:
         reduce_gate_semaphore_id = 11
         # [MTP] Semaphore IDs for singalling metadata unicast in spec stage
         metadata_ready_semaphore_id = 12
-
+        logger.info(f"Broadcast input tensor shape: {input_tensor_mesh.shape}");
+        logger.info(f"Broadcast output tensor shape: {intermediate_tensor_mesh.shape}");
+        logger.info(f"Broadcast sender coord: {sender_coord}");
+        logger.info(f"Broadcast semaphores: {bcast_semaphores}");
+        logger.info(f"Broadcast socket: {socket_input}");
+        logger.info(f"Broadcast skip_ccl: {skip_ccl}");
+        logger.info(f"Broadcast chunk size bytes: {None}");
+        logger.info(f"Broadcast bcast cb id: {bcast_pkt_cb}");
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
@@ -1164,6 +1173,11 @@ class LMHeadSampling:
                 )
                 persistent_target_node = mesh_device.get_fabric_node_id(persistent_target_mesh_coord)
                 persistent_enable = int(persistent_mode and emit_socket_on_this_device)
+                logger.info(f"Persistent enable: {persistent_enable} on row, col: {row}, {col}");
+                logger.info(f"Emit socket on this device: {emit_socket_on_this_device}");
+                logger.info(f"Persistent mode: {persistent_mode}");
+                # address of persistent_next_iter_global_sem_addr
+                logger.info(f"Persistent next iter global sem address: {persistent_next_iter_global_sem_addr}");
 
                 # broadcast_rms-style BRISC source selection:
                 # - CCL path: packet CB
@@ -1187,11 +1201,14 @@ class LMHeadSampling:
                 eh_matmul_num_cores = eh_matmul_core_grid.num_cores() if enable_mtp_on_device else 0
 
                 # [MTP] EH output parameters (used by socket send for gather_dst_cb sizing)
-                eh_output_tile_size = out_tile.get_tile_size(data_format) if enable_mtp_on_device else 0
+                eh_output_tile_size = out_tile.get_tile_size(data_format) if enable_mtp_on_device else 1
                 eh_gather_dst_num_pages = eh_matmul_num_cores * eh_out_w_per_core if enable_mtp_on_device else 0
+                logger.info(f"EH gather dst num pages: {eh_gather_dst_num_pages}");
+                logger.info(f"EH output tile size: {eh_output_tile_size}");
                 eh_gather_send_total_bytes = (
-                    (eh_gather_dst_num_pages + 1) * eh_output_tile_size if enable_mtp_on_device else 0
+                    (eh_gather_dst_num_pages + socket_page_size_bytes//(eh_output_tile_size)) * eh_output_tile_size if enable_mtp_on_device else 0
                 )
+                logger.info(f"EH gather send total bytes: {eh_gather_send_total_bytes}");
                 # MTP metadata landing buffer on argmax final core (NCRISC unicast from exit input core).
                 metadata_output_l1_addr = 0
                 if metadata_tensor is not None:
