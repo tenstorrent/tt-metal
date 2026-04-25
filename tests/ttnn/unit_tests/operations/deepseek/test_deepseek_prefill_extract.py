@@ -342,7 +342,7 @@ def test_extract_matches_torch_slice(device, starts, counts, expert_id, max_toke
     # PCC against the original (pre-quantization) bfloat16 source: bfp8_b quantization
     # should preserve correlation well above 0.999.
     original = global_torch[starts[expert_id] : starts[expert_id] + rows, :]
-    assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.9999)
 
 
 def test_extract_2d_indices_matches_torch_slice(device):
@@ -377,7 +377,7 @@ def test_extract_2d_indices_matches_torch_slice(device):
     torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     # PCC against the original (pre-quantization) bfloat16 source.
     original = global_torch[starts[expert_id] : starts[expert_id] + rows, :]
-    assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.9999)
 
 
 # ---------------------------------------------------------------------------
@@ -447,11 +447,14 @@ def test_extract_stress_dram_utilization(device, starts, counts, expert_id):
 
     assert out_torch.shape == (STRESS_MAX_TOKENS, STRESS_HIDDEN_DIM)
     rows = _ceil_to_tile(counts[expert_id])
+    expected = ttnn.to_torch(g)[starts[expert_id] : starts[expert_id] + rows, :]
+    torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     original_slice = global_torch[starts[expert_id] : starts[expert_id] + rows, :].float()
-    assert_with_pcc(original_slice, out_torch[:rows, :].float(), pcc=0.999)
+    assert_with_pcc(original_slice, out_torch[:rows, :].float(), pcc=0.9999)
 
 
 @pytest.mark.parametrize("count", [25 * K, 16 * K, 8 * K, 4 * K, 2 * K, 1 * K])
+# @pytest.mark.parametrize("count", [1 * K])
 def test_extract_stress_dram_utilization_single_expert(device, count):
     starts = [0]
     counts = [count]
@@ -468,5 +471,7 @@ def test_extract_stress_dram_utilization_single_expert(device, count):
 
     assert out_torch.shape == (STRESS_MAX_TOKENS, STRESS_HIDDEN_DIM)
     rows = _ceil_to_tile(counts[expert_id])
+    expected = ttnn.to_torch(g)[starts[expert_id] : starts[expert_id] + rows, :]
+    torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     original_slice = global_torch[starts[expert_id] : starts[expert_id] + rows, :].float()
-    assert_with_pcc(original_slice, out_torch[:rows, :].float(), pcc=0.999)
+    assert_with_pcc(original_slice, out_torch[:rows, :].float(), pcc=0.9999)

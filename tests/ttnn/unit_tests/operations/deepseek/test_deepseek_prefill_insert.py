@@ -398,7 +398,7 @@ def test_insert_copies_slice(device, starts, counts, expert_id, global_rows, loc
     # PCC against the original (pre-quantization) bfloat16 reference.
     original = global_torch.clone()
     original[start : start + rows, :] = local_torch[:rows, :]
-    assert_with_pcc(original.float(), out_torch.float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
 
 
 def test_insert_is_in_place(device):
@@ -435,7 +435,7 @@ def test_insert_is_in_place(device):
     original = global_torch.clone()
     original[0:32, :] = local_a[:32, :]
     original[64:96, :] = local_b[:32, :]
-    assert_with_pcc(original.float(), out_torch.float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
 
 
 def test_insert_2d_indices_matches_torch_slice(device):
@@ -481,7 +481,7 @@ def test_insert_2d_indices_matches_torch_slice(device):
     # PCC against the original (pre-quantization) bfloat16 reference.
     original = global_torch.clone()
     original[starts[expert_id] : starts[expert_id] + rows, :] = local_torch[:rows, :]
-    assert_with_pcc(original.float(), out_torch.float(), pcc=0.999)
+    assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +555,10 @@ def test_insert_stress_dram_utilization(device, starts, counts, expert_id):
     assert out_torch.shape == (STRESS_GLOBAL_ROWS, STRESS_HIDDEN_DIM)
     rows = _ceil_to_tile(counts[expert_id])
     start = starts[expert_id]
+    expected = ttnn.to_torch(l)[:rows, :]
+    torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     local_slice = local_torch[:rows, :].float()
-    assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.999)
+    assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)
 
 
 @pytest.mark.parametrize("count", [25 * K, 16 * K, 8 * K, 4 * K, 2 * K, 1 * K])
@@ -580,5 +582,7 @@ def test_insert_stress_dram_utilization_single_expert(device, count):
     assert out_torch.shape == (STRESS_GLOBAL_ROWS, STRESS_HIDDEN_DIM)
     rows = _ceil_to_tile(counts[expert_id])
     start = starts[expert_id]
+    expected = ttnn.to_torch(l)[:rows, :]
+    torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     local_slice = local_torch[:rows, :].float()
-    assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.999)
+    assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)
