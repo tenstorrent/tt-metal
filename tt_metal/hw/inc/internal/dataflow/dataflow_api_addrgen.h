@@ -214,6 +214,25 @@ uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
 }
 
+// clang-format off
+/**
+ * Get an encoding for a noc address which contains core and L1 address.
+ *
+ * Return value: uint64_t
+ *
+ * | Argument | Description                          | Data type | Valid range               | required |
+ * |----------|--------------------------------------|-----------|---------------------------|----------|
+ * | noc_x    | Physical x coordinate of core        | uint32_t  | WH: 0-9, BH: 0-16         | True     |
+ * | noc_y    | Physical y coordinate of core        | uint32_t  | WH: 0-11, BH: 0-11        | True     |
+ * | addr     | Address in local L1 memory           | uint64_t  | 0..1MB + L1 address start | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t   | 0 or 1                    | False    |
+ */
+// clang-format on
+FORCE_INLINE
+uint64_t get_noc_addr64(uint32_t noc_x, uint32_t noc_y, uint64_t addr, uint8_t noc = noc_index) {
+    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
+}
+
 /*
     Need an alias to get_noc_addr so that the structs below don't confuse the above get_noc_addr with
     the struct variant

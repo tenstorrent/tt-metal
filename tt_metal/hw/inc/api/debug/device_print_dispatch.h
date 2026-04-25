@@ -13,13 +13,15 @@
 namespace device_print_dispatch {
 
 struct NocLocationInputInfo {
-    uint16_t x;
-    uint16_t y;
-    uint32_t high_address_bits;
-    uint32_t rw_ptr_addr;
-    uint32_t buf_addr;
-    uint32_t buf_size;
-};
+    uint16_t x : 6;
+    uint16_t y : 6;
+    uint64_t rw_ptr_addr : 52;
+    uint16_t buf_offset;
+    uint16_t buf_size;
+} __attribute__((packed, aligned(4)));
+
+static_assert(sizeof(NocLocationInputInfo) == 12, "NocLocationInputInfo must be 12 bytes");
+static_assert(sizeof(NocLocationInputInfo) % 4 == 0, "NocLocationInputInfo must be 4-byte aligned");
 
 struct DramStreamMessageHeader {
     uint16_t x : 6;
@@ -64,13 +66,13 @@ class DevicePrintDispatch {
 
 public:
     void init(
-        uint32_t noc_locations,
+        uint32_t noc_locations_ptr,
         uint32_t noc_locations_count,
         uint32_t l1_cache_buffer_address,
         uint32_t l1_cache_buffer_size,
         uint64_t cycles_for_stall_detection,
         uint64_t cycles_for_full_dispatch) {
-        this->noc_locations = (volatile tt_l1_ptr device_print_dispatch::NocLocationInputInfo*)noc_locations;
+        noc_locations = (volatile tt_l1_ptr device_print_dispatch::NocLocationInputInfo*)noc_locations_ptr;
         this->noc_locations_count = noc_locations_count;
         this->l1_cache_buffer_address = l1_cache_buffer_address;
         this->l1_cache_buffer_end = l1_cache_buffer_address + l1_cache_buffer_size;
@@ -101,9 +103,10 @@ public:
         // Initialize cache for noc addresses if enabled
         if constexpr (EnableNocLocationCache) {
             for (uint32_t i = 0; i < noc_locations_count; i++) {
-                uint32_t remote_l1_address = noc_locations[i].rw_ptr_addr;
-                uint64_t rw_noc_addr = get_noc_addr(noc_locations[i].x, noc_locations[i].y, remote_l1_address);
-                rw_noc_addresses[i] = rw_noc_addr | ((uint64_t)noc_locations[i].high_address_bits << 32);
+                rw_noc_addresses[i] =
+                    get_noc_addr64(noc_locations[i].x, noc_locations[i].y, noc_locations[i].rw_ptr_addr);
+                cache_buffer_offsets[i] = noc_locations[i].buf_offset;
+                cache_buffer_sizes[i] = noc_locations[i].buf_size;
             }
         }
     }
@@ -147,8 +150,7 @@ private:
             if constexpr (EnableNocLocationCache) {
                 rw_noc_address = rw_noc_addresses[i];
             } else {
-                uint32_t remote_l1_address = noc_locations[i].rw_ptr_addr;
-                rw_noc_address = get_noc_addr(noc_locations[i].x, noc_locations[i].y, remote_l1_address);
+                rw_noc_address = get_noc_addr64(noc_locations[i].x, noc_locations[i].y, noc_locations[i].rw_ptr_addr);
             }
 
             // Calculate alignment for the NOC read.
@@ -167,7 +169,12 @@ private:
         uint32_t num_noc_locations_to_process = 0;
 
         for (uint32_t i = 0; i < noc_locations_count; i++, rw_pointer_address_in_l1 += rw_pointers_entry_size) {
-            uint32_t remote_l1_address = noc_locations[i].rw_ptr_addr;
+            uint64_t remote_l1_address;
+            if constexpr (EnableNocLocationCache) {
+                remote_l1_address = rw_noc_addresses[i];
+            } else {
+                remote_l1_address = noc_locations[i].rw_ptr_addr;
+            }
             uint32_t alignment = remote_l1_address & (NocL1ToL1Alignment - 1);
             volatile tt_l1_ptr uint32_t* rw_pointers =
                 (volatile tt_l1_ptr uint32_t*)(rw_pointer_address_in_l1 + alignment);
@@ -187,8 +194,7 @@ private:
                     continue;
                 }
             } else {
-                // Ignore if write pointer is equal to read pointer, as that means there is no new messages in the
-                // buffer.
+                // Ignore if write pointer is equal to read pointer, as there are no new messages in the buffer.
                 if (write_position == read_position) {
                     continue;
                 }
@@ -206,7 +212,12 @@ private:
             uint32_t location_index = noc_locations_to_process[i];
             uint32_t rw_pointer_address_in_l1 = l1_rw_pointers_buffer_start + location_index * rw_pointers_entry_size;
             auto* noc_location = &noc_locations[location_index];
-            uint32_t remote_rw_ptr_address = noc_location->rw_ptr_addr;
+            uint64_t remote_rw_ptr_address;
+            if constexpr (EnableNocLocationCache) {
+                remote_rw_ptr_address = rw_noc_addresses[location_index];
+            } else {
+                remote_rw_ptr_address = noc_location->rw_ptr_addr;
+            }
             uint32_t rw_ptr_alignment = remote_rw_ptr_address & (NocL1ToL1Alignment - 1);
             volatile tt_l1_ptr uint32_t* rw_pointers =
                 (volatile tt_l1_ptr uint32_t*)(rw_pointer_address_in_l1 + rw_ptr_alignment);
@@ -215,8 +226,16 @@ private:
             bool stall = (write_position & DEVICE_PRINT_WRITE_STALL_FLAG) == 0;
             write_position = write_position & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
-            uint32_t remote_buffer_address = noc_location->buf_addr;
-            uint32_t remote_buffer_size = noc_location->buf_size;
+            uint64_t remote_buffer_address;
+            uint32_t remote_buffer_size;
+
+            if constexpr (EnableNocLocationCache) {
+                remote_buffer_address = cache_buffer_offsets[i] + remote_rw_ptr_address;
+                remote_buffer_size = cache_buffer_sizes[i];
+            } else {
+                remote_buffer_address = noc_location->buf_offset + remote_rw_ptr_address;
+                remote_buffer_size = noc_location->buf_size;
+            }
 
             if (write_position > read_position) {
                 remote_buffer_size = write_position - read_position;
@@ -257,8 +276,14 @@ private:
             }
 
             // Start NOC read to copy device_print buffer from remote L1 to local L1 for processing.
-            uint64_t noc_remote_buffer_address = get_noc_addr(noc_location->x, noc_location->y, remote_buffer_address);
-            noc_remote_buffer_address |= (uint64_t)noc_location->high_address_bits << 32;
+            uint64_t noc_remote_buffer_address;
+            if constexpr (EnableNocLocationCache) {
+                // Cached address already has x,y embedded
+                noc_remote_buffer_address = remote_buffer_address;
+            } else {
+                // Non-cached address needs to be converted to NOC address with x,y coordinates
+                noc_remote_buffer_address = get_noc_addr64(noc_location->x, noc_location->y, remote_buffer_address);
+            }
             noc_async_read(
                 noc_remote_buffer_address, current_l1_buffer_address + buffer_l1_alignment, remote_buffer_size);
 
@@ -323,22 +348,24 @@ private:
 
     void update_read_pointers(uint32_t start_index, uint32_t end_index) {
         for (uint32_t j = start_index; j < end_index; j++) {
-            uint32_t index = noc_locations_to_process[j];
-            uint32_t rw_pointer_address_in_l1 = l1_rw_pointers_buffer_start + index * rw_pointers_entry_size;
-            uint32_t remote_l1_address = noc_locations[index].rw_ptr_addr;
-            uint32_t alignment = remote_l1_address & (NocL1ToL1Alignment - 1);
-            volatile tt_l1_ptr uint32_t* rw_pointers =
-                (volatile tt_l1_ptr uint32_t*)(rw_pointer_address_in_l1 + alignment);
-            uint64_t w_noc_addr;
+            uint32_t i = noc_locations_to_process[j];
+            uint32_t rw_pointer_address_in_l1 = l1_rw_pointers_buffer_start + i * rw_pointers_entry_size;
+            uint64_t remote_l1_address;
+
             if constexpr (EnableNocLocationCache) {
-                w_noc_addr = rw_noc_addresses[index];
+                remote_l1_address = rw_noc_addresses[i];
             } else {
-                w_noc_addr = get_noc_addr(noc_locations[index].x, noc_locations[index].y, remote_l1_address);
-                w_noc_addr |= (uint64_t)noc_locations[index].high_address_bits << 32;
+                remote_l1_address =
+                    get_noc_addr64(noc_locations[i].x, noc_locations[i].y, noc_locations[i].rw_ptr_addr);
             }
 
-            // +4 is to update read pointer which is after write pointer.
-            noc_async_write(rw_pointer_address_in_l1 + alignment + 4, w_noc_addr + 4, 4);
+            uint32_t alignment = remote_l1_address & (NocL1ToL1Alignment - 1);
+
+            // +sizeof(uint32_t) is to update read pointer which is after write pointer.
+            noc_async_write(
+                rw_pointer_address_in_l1 + alignment + sizeof(uint32_t),
+                remote_l1_address + sizeof(uint32_t),
+                sizeof(uint32_t));
         }
     }
 
@@ -381,6 +408,8 @@ private:
     // Cache for NOC addresses of read/write pointers of remote NOC locations to avoid converting them in every
     // iteration.
     uint64_t rw_noc_addresses[EnableNocLocationCache ? MaxNocLocations : 0];
+    uint16_t cache_buffer_offsets[EnableNocLocationCache ? MaxNocLocations : 0];
+    uint16_t cache_buffer_sizes[EnableNocLocationCache ? MaxNocLocations : 0];
 };
 
 // TODO: Check if we should have separate implementation of process_noc_locations for D2H sockets...
