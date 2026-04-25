@@ -1,10 +1,21 @@
 # Total machine-hours available per SKU per week.
 # This is the denominator for all budget calculations.
-# Update when hardware capacity changes.
+# Update when hardware capacity changes or fleet size grows.
+#
+# Source: Snowflake TTDATASF.SW_TEST.CICD_JOB, 28-day average (tt-metal only).
+# tt-metal is currently the sole user of all these SKUs (cross-repo query
+# returned zero usage for tt-xla, tt-mlir, tt-shield, tt-forge-*, tt-exalens).
+# Values = observed weekly usage + 20% headroom, rounded up to nearest 100.
+#
+# CIv1 (in-service bare-metal) and CIv2 (cloud-provisioned) are combined
+# under each canonical SKU name used by budget_check.py's RUNNER_SKU_MAP.
 
-N150: 5000
-N300: 2000
-p150b: 1500
-p300b: 800
-LLMBOX: 500
-galaxy: 200
+# --- Wormhole ---
+N150:   3700   # CIv1 1047 + CIv2 1965 = 3012 h/wk observed
+N300:  23500   # CIv1 13498 + CIv2 6053 = 19551 h/wk observed (includes galaxy multi-host)
+LLMBOX: 1400   # CIv1 WH-LLMBox 653 + CIv2 N300-llmbox 506 = 1159 h/wk observed
+galaxy: 3900   # CIv1 wh_galaxy 3164 + bh_galaxy 38 = 3202 h/wk observed
+
+# --- Blackhole ---
+p150b:  5400   # CIv1 P150b 316 + CIv2 3564 + LoudBox (blackhole alias) 550 = 4430 h/wk
+p300b:  1600   # CIv1 P300 305 + P100 471 + QuietBox 273 + DeskBox 135 + CIv2 P100a 93 = 1277 h/wk
