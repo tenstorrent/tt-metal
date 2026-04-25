@@ -32,8 +32,9 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(24) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<24>();
+    constexpr auto q_args = TensorAccessorArgs<25>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -167,6 +168,9 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
+
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
@@ -223,7 +227,12 @@ void kernel_main() {
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
-            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+            const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+
+            // Balanced causal skip: this Q chunk is handled by the paired device. Reader sends
+            // nothing (no Q, no K/V) — compute's normalize-only path on the last ring iter does
+            // not read Q (normalize uses only restored sum/out).
+            if (balanced_skip_q) {
                 continue;
             }
 

@@ -137,17 +137,29 @@ void complete_restore(
 // Only 3 barriers fire per ring iteration (one per TRID):
 //   Q[0]: wB(TRID_INNER), Q[N-2]: wB(TRID_LAST), Q[N-1]: wB(TRID_FIRST).
 // Start from 1 — TRID 0 is the default for all NOC writes and must not be used
-// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row on last
-// ring iter) would inflate the outstanding count and stall the barrier.
+// for per-TRID barriers, as unrelated writes (e.g. write_out_row_by_row_no_pop
+// on last ring iter) would inflate the outstanding count and stall the barrier.
 constexpr uint32_t TRID_FIRST = 1;
 constexpr uint32_t TRID_INNER = 2;
 constexpr uint32_t TRID_LAST = 3;
 
-// Row-by-row drain of output tiles from cb_out to DRAM.
-// Waits for each row group (sbh tile-rows), writes to DRAM, pops.
-// Overlaps DMA with compute: writes issue as soon as each row is ready.
+// Row-by-row drain of output tiles from cb_out to DRAM — WITHOUT popping.
+// Waits cumulatively for each row group (sbh tile-rows) so writes issue as
+// soon as a group is ready (overlapping DMA with compute), but leaves the
+// consumed tiles in the CB. Caller is responsible for `cb_pop_front(cb_out,
+// num_row_groups * sbh * out_cols)` *after* waiting for NOC reads of this
+// source L1 to complete — either a TRID-tagged flush (save-accumulators
+// path) or a full noc_async_write_barrier (final-output path).
+//
+// Why deferred pop: cb_pop_front releases L1 slots back to the producer
+// (compute). If slots are released while NOC reads are still in flight from
+// those same L1 addresses, the producer can refill them — sending compute's
+// new bytes to DRAM instead of the intended output. The caller's flush /
+// barrier guarantees NOC has finished reading before we pop.
+//
+// Returns the total number of tiles the caller must pop once safe.
 template <typename ReaderType>
-void write_out_row_by_row(
+uint32_t write_out_row_by_row_no_pop(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const Slice& out_slice,
     const uint32_t end_seq_tile,
@@ -158,10 +170,20 @@ void write_out_row_by_row(
     const uint32_t out_cols = out_slice.get_d3_size();
     const uint32_t row_tiles = sbh * out_cols;
     const uint32_t num_row_groups = out_rows / sbh;
+    const uint32_t total_tiles = num_row_groups * row_tiles;
 
+    uint32_t read_ptr = 0;
     for (uint32_t rg = 0; rg < num_row_groups; ++rg) {
-        cb_wait_front(cb_out, row_tiles);
-        uint32_t read_ptr = get_read_ptr(cb_out);
+        // Cumulative wait: block until (rg+1)*row_tiles tiles have been pushed
+        // by compute. This preserves the compute-drain overlap: writer starts
+        // issuing writes as soon as the first row group is ready, not after
+        // all row groups are pushed.
+        cb_wait_front(cb_out, (rg + 1) * row_tiles);
+        if (rg == 0) {
+            // CB read_ptr doesn't move without cb_pop_front, so capture once
+            // and advance manually for subsequent row groups.
+            read_ptr = get_read_ptr(cb_out);
+        }
         for (uint32_t r = 0; r < sbh; r++) {
             for (uint32_t col = 0; col < out_cols; ++col) {
                 cat_out_generator.maybe_write_tile(
@@ -174,8 +196,8 @@ void write_out_row_by_row(
                 read_ptr += tile_bytes;
             }
         }
-        cb_pop_front(cb_out, row_tiles);
     }
+    return total_tiles;
 }
 
 // Save all 3 accumulators (out, max, sum) to DRAM, tagged with a TRID for prefetch barriers.
@@ -202,7 +224,8 @@ void save_accumulators_with_trid(
     const uint32_t save_trid) {
     noc_async_write_set_trid(save_trid);
 
-    write_out_row_by_row(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh);
+    const uint32_t out_tiles_to_pop =
+        write_out_row_by_row_no_pop(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh);
 
     // Bulk drain of max/sum
     cb_wait_front(cb_max_out, Sq_chunk_t);
@@ -221,10 +244,14 @@ void save_accumulators_with_trid(
     }
 
     noc_async_write_flushed_with_trid(save_trid);
-    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row on last ring iter).
+    // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_out_row_by_row_no_pop on last ring iter).
     // Without this, subsequent noc_async_write calls would inflate save_trid's outstanding count,
     // causing noc_async_write_barrier_with_trid(save_trid) to wait for unrelated writes.
     noc_async_write_set_trid(0);
+    // Pop cb_out AFTER the trid-flush above: the flush guarantees NOC has
+    // finished reading this call's source L1 bytes, so compute can now
+    // safely reserve and reuse those slots.
+    cb_pop_front(cb_out, out_tiles_to_pop);
     cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
 }
@@ -416,8 +443,8 @@ void kernel_main() {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, is_causal>();
     }
 
-    const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
+        fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
@@ -511,11 +538,14 @@ void kernel_main() {
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
+                const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
+
                 const auto qi =
                     get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
                 const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
-                // 1. Complete restore (ring_iter > 0 only)
+                // 1. Complete restore + prefetch run for ALL Q chunks (including balanced-skipped)
+                // to keep the prefetch pipeline in sync across ring iters.
                 if (!single_q_chunk && ring_iter > 0) {
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
                 }
@@ -559,7 +589,15 @@ void kernel_main() {
                 //   Q[0]: wB(TRID_INNER) — clears all prev-ring inner saves
                 //   Q[N-2]: wB(TRID_LAST) — clears prev-ring Q[N-1] save
                 //   Q[1..N-3]: skip — TRID_INNER already cleared at Q[0]
-                if (!single_q_chunk && ring_iter > 0) {
+                //
+                // Skip the prefetch when this Q is on the normalize-only path
+                // (balanced_skip_q + is_last_ring_iter): normalize produces cb_out incrementally
+                // and blocks on cb_out space; cb_out can't drain until this writer gets to
+                // write_out (below). A cb_reserve_back(cb_prev_out) here would block until
+                // normalize finishes, creating a cycle with cb_out. Deferred prefetch below
+                // runs after write_out to break the cycle.
+                const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
+                if (!single_q_chunk && ring_iter > 0 && !defer_prefetch) {
                     const uint32_t next_q_index = q_index + 1;
                     if (next_q_index < q_per_core) {
                         const uint32_t next_trid =
@@ -567,7 +605,8 @@ void kernel_main() {
                         if (next_trid != TRID_INNER || next_q_index == 1) {
                             noc_async_write_barrier_with_trid(next_trid);
                         }
-                        const uint32_t gq = global_q_chunk + 1;
+                        const uint32_t gq =
+                            remap_q_index(global_q_start + next_q_index, num_q_chunks, use_zigzag_balancing);
                         const uint32_t nb_pf = gq / (NH * num_q_chunks);
                         const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
                         const uint32_t qc_pf = gq % num_q_chunks;
@@ -592,9 +631,9 @@ void kernel_main() {
                     }
                 }
                 // Cross-ring: Q[N-1] → Q[0] of next ring iter.
-                if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
+                if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
                     noc_async_write_barrier_with_trid(TRID_FIRST);
-                    const uint32_t gq = global_q_start;
+                    const uint32_t gq = remap_q_index(global_q_start, num_q_chunks, use_zigzag_balancing);
                     const uint32_t nb_pf = gq / (NH * num_q_chunks);
                     const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
                     const uint32_t qc_pf = gq % num_q_chunks;
@@ -644,23 +683,37 @@ void kernel_main() {
                     deferred.pending = false;
                 }
 
-                // === Compute runs K-loop for this Q chunk ===
+                // Balanced causal skip: on non-last ring iters, compute pops staging and
+                // doesn't push the K-loop signal. Writer skips signal wait + save + write.
+                // On the last ring iter, compute runs normalize-only and pushes the signal;
+                // fall through to signal wait + write (no save — no ping-pong state to save).
+                if (balanced_skip_q && !is_last_ring_iter) {
+                    continue;
+                }
+
+                // === Compute runs K-loop (or normalize-only on last iter) ===
 
                 // Wait for compute to signal last K-chunk start (multi-Q only).
+                // Normalize-only path also pushes this signal.
                 if (!single_q_chunk) {
                     cb_wait_front(cb_signal, 1);
                     cb_pop_front(cb_signal, 1);
                 }
 
                 if (is_last_ring_iter) {
-                    write_out_row_by_row(
+                    const uint32_t final_out_tiles_to_pop = write_out_row_by_row_no_pop(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         end_seq_tile,
                         cb_out,
                         tile_bytes,
                         out_subblock_h);
-                    noc_async_write_barrier();
+                    // Per-Q: only need source-L1-read completion before cb_pop_front
+                    // so compute's producer can safely reuse those slots. DRAM-arrival
+                    // barrier is hoisted out of the Q loop (once at end of last ring
+                    // iter) to save N−1 DRAM round-trips per core.
+                    noc_async_writes_flushed();
+                    cb_pop_front(cb_out, final_out_tiles_to_pop);
                 } else if (!single_q_chunk) {
                     deferred.pending = true;
                     deferred.trid = q_index == 0 ? TRID_FIRST : (q_index == last_q_index ? TRID_LAST : TRID_INNER);
@@ -668,6 +721,50 @@ void kernel_main() {
                     deferred.nq = nq;
                     deferred.qi = qi;
                 }
+
+                // Delayed intra-ring prefetch for normalize-only Qs: skipped earlier to avoid
+                // cycling cb_prev_out <-> cb_out with compute's normalize. Now cb_out has been
+                // drained by write_out above, and compute's normalize has fully freed cb_prev_out.
+                if (defer_prefetch && !single_q_chunk) {
+                    const uint32_t next_q_index = q_index + 1;
+                    if (next_q_index < q_per_core) {
+                        const uint32_t next_trid =
+                            next_q_index == 0 ? TRID_FIRST : (next_q_index == last_q_index ? TRID_LAST : TRID_INNER);
+                        if (next_trid != TRID_INNER || next_q_index == 1) {
+                            noc_async_write_barrier_with_trid(next_trid);
+                        }
+                        const uint32_t gq =
+                            remap_q_index(global_q_start + next_q_index, num_q_chunks, use_zigzag_balancing);
+                        const uint32_t nb_pf = gq / (NH * num_q_chunks);
+                        const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
+                        const uint32_t qc_pf = gq % num_q_chunks;
+                        const auto qi_pf = get_q_chunk_info(
+                            qc_pf, nb_pf, nq_pf, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                        issue_restore_reads(
+                            qi_pf.is_joint_q ? joint_out_generator : out_generator,
+                            stats_writer,
+                            stats_tile_logical,
+                            nb_pf,
+                            nq_pf,
+                            Sq_chunk_t,
+                            qi_pf.out_slice,
+                            qi_pf.stats_seq_start_tile,
+                            qi_pf.stats_seq_end_tile,
+                            sum_offset,
+                            cb_prev_out,
+                            cb_max_in,
+                            cb_sum_in,
+                            tile_bytes,
+                            stats_tile_bytes);
+                    }
+                }
+            }
+            // Hoisted DRAM-arrival barrier: on the last ring iter, write_out_row_by_row_no_pop
+            // issued N untagged NOC writes (one per Q on this core). Wait once at the end of the
+            // Q loop for all of them to land in DRAM, before the outer ring-iter loop advances
+            // or the op teardown runs. Previously this was a per-Q barrier inside the loop.
+            if (is_last_ring_iter) {
+                noc_async_write_barrier();
             }
         } else {
             for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
