@@ -83,7 +83,7 @@ void kernel_main() {
                 }
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             } else {
@@ -107,7 +107,7 @@ void kernel_main() {
                 }
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             }

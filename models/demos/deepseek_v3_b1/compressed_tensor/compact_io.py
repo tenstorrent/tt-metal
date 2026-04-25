@@ -41,19 +41,22 @@ def pack_compact_tiles(
     assignment_2d: np.ndarray,
     tile_hw: int = DEFAULT_TILE_HW,
 ) -> bytes:
-    """Pack a (K, N) weight matrix to compact tile bytes in logical row-major order.
+    """Pack a (K, N) weight matrix to compact tile bytes in row-major tile order.
 
     Zero tiles (code 3 / bfp0) contribute 0 bytes — they are skipped entirely.
     The returned byte string is tightly packed; use *assignment_2d* with
     :func:`unpack_compact_tiles` to reconstruct tile offsets during load.
 
     Args:
-        w_kn: ``(K, N)`` float32 numpy array in logical tile order (pre-DRAM-shuffle).
+        w_kn: ``(K, N)`` float32 numpy array in tile order.
         assignment_2d: ``(tiles_h, tiles_w)`` int8 tile format codes.
-        tile_hw: Tile dimension (default 32).
+        tile_hw: Tile dimension (default 32). Must equal ``DEFAULT_TILE_HW`` (32); any
+            other value raises ``ValueError`` because the underlying BFP pack/unpack
+            primitives are hardcoded to 32-element groups.  The parameter exists only
+            for documentation completeness and is never varied in practice.
 
     Returns:
-        Flat ``bytes``, variable-length per tile, logical row-major order.
+        Flat ``bytes``, variable-length per tile, row-major order.
     """
     if tile_hw != DEFAULT_TILE_HW:
         raise ValueError(f"tile_hw={tile_hw} is not supported; underlying BFP primitives require {DEFAULT_TILE_HW}")

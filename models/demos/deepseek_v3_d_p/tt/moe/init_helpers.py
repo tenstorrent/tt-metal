@@ -643,6 +643,52 @@ def create_gate_weights(
     }
 
 
+def load_gate_weights_from_hf(
+    model_id: str,
+    layer_idx: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict:
+    """
+    Load MoE gate (router) weights from a HuggingFace checkpoint.
+
+    Args:
+        model_id: HuggingFace model ID or local checkpoint path
+        layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
+        dtype: Target dtype for the returned tensors
+
+    Returns dict matching MoEGate / ``create_gate_weights`` format:
+        "weight": (n_routed_experts, dim) — HF convention
+        "e_score_correction_bias": (n_routed_experts,)
+
+    Raises:
+        FileNotFoundError: If checkpoint files cannot be found
+        KeyError: If the expected gate keys are missing (e.g. non-MoE layer)
+    """
+    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+    prefix = f"model.layers.{layer_idx}.mlp.gate."
+    state_dict = load_hf_state_dict_filtered(model_id, [prefix])
+
+    weight_key = f"model.layers.{layer_idx}.mlp.gate.weight"
+    bias_key = f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"
+
+    if weight_key not in state_dict:
+        raise KeyError(f"Gate weight not found at {weight_key}. Layer {layer_idx} may not be an MoE layer.")
+    if bias_key not in state_dict:
+        raise KeyError(f"Gate bias not found at {bias_key}. Layer {layer_idx} may not be an MoE layer.")
+
+    gate_weight = state_dict[weight_key].to(dtype)
+    gate_bias = state_dict[bias_key].to(dtype)
+
+    logger.info(
+        f"Loaded gate weights from {model_id} layer {layer_idx}: weight={gate_weight.shape}, bias={gate_bias.shape}"
+    )
+    return {
+        "weight": gate_weight,
+        "e_score_correction_bias": gate_bias,
+    }
+
+
 def create_torch_expert_weights(
     num_experts: int,
     emb_dim: int,

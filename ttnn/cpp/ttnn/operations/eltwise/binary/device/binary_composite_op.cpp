@@ -6,7 +6,7 @@
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
-#include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -103,7 +103,7 @@ Tensor minimum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary_ng::detail::unary_ng_impl(
+            return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
                 memory_config,
@@ -147,7 +147,7 @@ Tensor maximum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary_ng::detail::unary_ng_impl(
+            return ttnn::operations::unary::detail::unary_impl(
                 input_a,
                 {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
                 memory_config,

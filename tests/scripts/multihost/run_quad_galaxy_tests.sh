@@ -113,7 +113,7 @@ resolve_deepseekv3_cache() {
 }
 
 resolve_deepseekv3_model() {
-    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
+    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
     local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
 
     if [[ ! -d "${model_path}" ]]; then
@@ -211,7 +211,7 @@ setup_quad_galaxy_env() {
 }
 
 # Compute pytest --timeout value.
-# When DEEPSEEK_V3_CACHE_OVERRIDE is set (cache recalculation), add 6 hours.
+# When DEEPSEEK_V3_CACHE_OVERRIDE is set (custom DeepSeek cache dir), add 6 hours.
 _demo_timeout() {
     local base_timeout=$1
     local cache_extra=21600  # 6 hours
@@ -714,7 +714,7 @@ main() {
             echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
-            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
+            echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2
             exit 1
             ;;
     esac
