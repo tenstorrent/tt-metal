@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass [0-9]|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly_dead|initialized)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass [0-9]|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -196,7 +196,7 @@ echo ""
 
 # ─── NEWLY DEAD CHANNELS ───
 echo "=== NEWLY DEAD CHANNELS ==="
-grep -E 'newly.dead|newly_dead|dead.*channel|channel.*dead' "$CLEAN" 2>/dev/null | \
+grep -E 'newly.dead|newly_dead|dead.*channel|channel.*dead|configure_fabric_cores.*newly.dead' "$CLEAN" 2>/dev/null | \
 grep -iE '(info|warning|error)' | \
 python3 -c "
 import sys, re, signal
@@ -210,7 +210,7 @@ for line in sys.stdin:
         seen.add(key)
         print('  ' + msg[:140])
 " || true
-DEAD_CH=$(grep -cE 'newly.dead|newly_dead' "$CLEAN" 2>/dev/null || echo 0)
+DEAD_CH=$(grep -cE 'newly.dead|newly_dead|configure_fabric_cores.*newly.dead' "$CLEAN" 2>/dev/null || echo 0)
 [[ "${DEAD_CH:-0}" -eq 0 ]] && echo "  (none detected)"
 echo ""
 
@@ -319,6 +319,177 @@ else:
             seen.add(key)
             print(f'  {msg}')
     print(f'  => {len(events)} rescue_stuck_dispatch event(s). Each stream write = 5s UMD timeout; many streams = minutes of hang.')
+"
+echo ""
+
+# ─── FIX AD DETECTION ───
+echo "=== FIX AD (hard-reset stuck dispatch cores) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'rescue_stuck_dispatch_cores.*hard.*reset|hard BRISC reset|performing hard BRISC reset', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'\d+', 'N', msg)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX AD triggered: {len(events)} hard-BRISC-reset event(s) on stuck dispatch cores')
+"
+echo ""
+
+# ─── FIX W DETECTION ───
+echo "=== FIX W (all-dead clean return) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.*clean return', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'\d+', 'N', msg)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX W triggered: entire ERISC layer dead, clean return path taken ({len(events)} event(s))')
+"
+echo ""
+
+# ─── FIX AA DETECTION ───
+echo "=== FIX AA (AllGather skip — relay path broken) ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'FIX AA|relay path broken.*skipping AllGather|skipping AllGather', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'\d+', 'N', msg)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => FIX AA triggered: AllGather skipped due to broken relay path ({len(events)} event(s))')
+"
+echo ""
+
+# ─── PHASE 4 MUX STATUS PROGRESSION ───
+echo "=== PHASE 4 MUX STATUS PROGRESSION ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'Phase 4.*still waiting.*status=0x|Phase 4.*MUX', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'status=0x[0-9a-fA-F]+', 'status=0xN', msg)
+        key = re.sub(r'\d+ms', 'Nms', key)
+        key = re.sub(r'Device \d+', 'Dev N', key)
+        key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => {len(events)} Phase 4 MUX line(s). Check whether status=0x values progress or repeat (stuck).')
+"
+echo ""
+
+# ─── PHASE 2.5 ERISC TERMINATION LATENCY ───
+echo "=== PHASE 2.5 ERISC TERMINATION LATENCY ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+timing_events = []
+timeout_events = []
+for line in lines:
+    if re.search(r'Phase 2\.?5.*ERISC.*TERMINATED.*ms|Phase 2\.?5.*terminated.*[0-9]+ms', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        timing_events.append(msg[:140])
+    elif re.search(r'Phase 2\.?5.*timeout', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        timeout_events.append(msg[:140])
+if not timing_events and not timeout_events:
+    print('  (none detected)')
+else:
+    if timing_events:
+        print(f'  Termination timing ({len(timing_events)} line(s)):')
+        seen = set()
+        for msg in timing_events:
+            key = re.sub(r'[0-9]+ms', 'Nms', msg)
+            key = re.sub(r'Device \d+', 'Dev N', key)
+            key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+            if key not in seen:
+                seen.add(key)
+                print(f'    {msg}')
+    if timeout_events:
+        print(f'  Timeouts ({len(timeout_events)} line(s)):')
+        seen = set()
+        for msg in timeout_events:
+            key = re.sub(r'Device \d+', 'Dev N', msg)
+            key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+            if key not in seen:
+                seen.add(key)
+                print(f'    {msg}')
+"
+echo ""
+
+# ─── DEVICE MMIO CLASSIFICATION ───
+echo "=== DEVICE MMIO CLASSIFICATION ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    content = f.read()
+mmio_devs = set()
+non_mmio_devs = set()
+# grep for mmio=true / mmio=false lines and extract device IDs
+for line in content.splitlines():
+    if re.search(r'mmio=true', line, re.I):
+        for m in re.finditer(r'[Dd]evice[_ ](\d+)|chip_id=(\d+)', line):
+            devid = m.group(1) or m.group(2)
+            mmio_devs.add(devid)
+    if re.search(r'mmio=false', line, re.I):
+        for m in re.finditer(r'[Dd]evice[_ ](\d+)|chip_id=(\d+)', line):
+            devid = m.group(1) or m.group(2)
+            non_mmio_devs.add(devid)
+if not mmio_devs and not non_mmio_devs:
+    print('  (no mmio= labels found in log)')
+else:
+    mmio_sorted = sorted(mmio_devs, key=lambda x: int(x))
+    non_mmio_sorted = sorted(non_mmio_devs, key=lambda x: int(x))
+    print(f'  MMIO devices ({len(mmio_sorted)}): {mmio_sorted}')
+    print(f'  non-MMIO devices ({len(non_mmio_sorted)}): {non_mmio_sorted}')
+    if non_mmio_sorted:
+        print(f'  => non-MMIO failures indicate relay path issues (firmware loaded via MMIO relay)')
+    if mmio_sorted:
+        print(f'  => MMIO failures indicate direct hardware or firmware init problems')
 "
 echo ""
 
@@ -458,6 +629,9 @@ HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null ||
 HAS_FORCE_RESET=$(grep -c 'assert_risc_reset_at_core\|force.reset' "$CLEAN" 2>/dev/null || echo 0)
 FIX_Z=$(grep -c 'is_fabric_relay_path_broken\|relay.*broken.*completion_queue\|CQ.*relay.*broken' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AB=$(grep -c 'hard-reset.*MMIO\|RiscFirmwareInitializer.*teardown\|MMIO ETH.*reset' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AD=$(grep -cE 'rescue_stuck_dispatch_cores.*hard.*reset|hard BRISC reset|performing hard BRISC reset' "$CLEAN" 2>/dev/null || echo 0)
+FIX_W=$(grep -cE 'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.*clean return' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AA=$(grep -ciE 'FIX AA|relay path broken.*skipping AllGather|skipping AllGather' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -499,6 +673,15 @@ if [ "${FIX_Z:-0}" -gt 0 ]; then
 fi
 if [ "${FIX_AB:-0}" -gt 0 ]; then
     echo "  => FIX AB triggered: hard-reset of MMIO ETH channels at process teardown"
+fi
+if [ "${FIX_AD:-0}" -gt 0 ]; then
+    echo "  => FIX AD triggered: hard BRISC reset on stuck dispatch cores (${FIX_AD} event(s))"
+fi
+if [ "${FIX_W:-0}" -gt 0 ]; then
+    echo "  => FIX W triggered: all-dead clean return path — entire ERISC layer was dead (${FIX_W} event(s))"
+fi
+if [ "${FIX_AA:-0}" -gt 0 ]; then
+    echo "  => FIX AA triggered: AllGather skipped due to broken relay path (${FIX_AA} event(s))"
 fi
 echo ""
 echo "========================================================================"
