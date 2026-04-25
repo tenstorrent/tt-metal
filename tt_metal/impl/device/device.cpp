@@ -1962,6 +1962,45 @@ void Device::wait_for_fabric_workers_ready() {
         // In that state, Phase 5b reads would either throw 5-second timeouts (accumulating
         // seconds per channel) or hang indefinitely (relay ERISC alive but peer fabric
         // firmware never responds to UMD relay protocol).  Skip Phase 5b entirely instead.
+        //
+        // Safety note on non-MMIO relay reads in Phase 5:
+        // For non-MMIO devices, ReadFromDeviceL1 routes through the UMD ETH relay on the MMIO
+        // device.  The function-entry guard (fabric_relay_path_broken_, ~line 1765) prevents
+        // re-entry after the relay path is known broken.  However, on the FIRST quiesce call,
+        // fabric_relay_path_broken_ is false and this read executes.  If the relay ERISC on
+        // the MMIO device is alive but running fabric firmware (not UMD relay protocol), the
+        // read HANGS rather than throws — hanging bypasses the catch block below and blocks
+        // indefinitely until TT_METAL_OPERATION_TIMEOUT_SECONDS fires at the process level.
+        //
+        // Defensive guard: if fabric_relay_path_broken_ has been set between the function-entry
+        // check and here (e.g. set concurrently from another device's quiesce path), bail before
+        // entering the relay read.  For the first quiesce, log that we are entering the relay
+        // read path so CI logs clearly show where a potential hang originates.
+        if (!this->is_mmio_capable() && fabric_relay_path_broken_) {
+            // fabric_relay_path_broken_ set between function-entry check and here.
+            // Return rather than enter a relay read that would hang or accumulate 5s UMD timeout.
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} (non-MMIO) Phase 5: "
+                "fabric_relay_path_broken_ set before relay read — returning early to avoid "
+                "blocking relay read.  (R3: defensive guard)",
+                this->id());
+            return;
+        }
+        if (!this->is_mmio_capable()) {
+            // Informational: non-MMIO Phase 5 poll goes through UMD ETH relay.
+            // If the relay ERISC is alive but running fabric firmware, this poll loop may
+            // hang until TT_METAL_OPERATION_TIMEOUT_SECONDS fires rather than throwing.
+            // The catch block handles throws and sets fabric_relay_path_broken_; a hang
+            // cannot be caught without a thread-based timeout.  See FIX U/V comments above.
+            log_info(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} (non-MMIO) Phase 5: "
+                "entering relay read path via UMD ETH relay on MMIO device. "
+                "If this hangs, the relay ERISC is running fabric firmware and not "
+                "responding to UMD relay protocol — process timeout will fire.",
+                this->id());
+        }
         bool phase5_relay_read_threw = false;
 
         // Skip the handshake poll if the master channel is pre-known dead.
@@ -2149,6 +2188,10 @@ void Device::wait_for_fabric_workers_ready() {
             // NOTE: If Phase 5's read hangs rather than throws (relay ERISC alive but peer
             // fabric firmware ignores UMD relay protocol), we never reach this point.  That
             // scenario requires a non-blocking UMD probe or thread-based timeout.
+            // The R3 defensive guard above this loop logs when a non-MMIO device enters the
+            // relay read path and short-circuits if fabric_relay_path_broken_ is set between
+            // the function-entry check and the read — but it cannot prevent a hang when
+            // fabric_relay_path_broken_ is still false (first quiesce, relay not yet known broken).
             log_warning(
                 tt::LogMetal,
                 "wait_for_fabric_workers_ready: Device {} Phase 5: relay path broken "
