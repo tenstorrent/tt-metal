@@ -295,6 +295,10 @@ bool MetalEnvImpl::set_fabric_config(
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
+    // Clear timed-out chip set from any previous teardown so get_teardown_timed_out_chips()
+    // always reflects the most recent run.
+    teardown_timed_out_chips_.clear();
+
     // Before releasing the ETH cores, wait for the fabric router firmware on each chip to
     // finish its teardown.  The ETH router writes EDMStatus::TERMINATED to edm_status_address
     // when it exits.  If we skip this wait, the next process that opens the same devices may
@@ -373,6 +377,11 @@ void MetalEnvImpl::teardown_fabric_config() {
                         // This is a confirmed policy decision, not an ongoing experiment.  Timed-out
                         // channels where the relay path is broken are handled by the hard-reset at process
                         // exit (FIX AB), which runs after all fabric firmware has stopped.
+                        //
+                        // FIX AB extension: record this chip_id so FabricFirmwareInitializer::post_teardown()
+                        // can set fabric_teardown_timed_out_ on the Device, enabling FIX AB hard-reset at
+                        // process exit even when fabric_relay_path_broken_ was not set.
+                        teardown_timed_out_chips_.insert(chip_id);
                         ++chip_force_reset_count;
                         ++total_force_reset_count;
                         break;

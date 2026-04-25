@@ -268,29 +268,48 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         if (descriptor_->metal_context().is_device_manager_initialized() && get_control_plane_) {
             auto& dm = descriptor_->metal_context().device_manager();
             bool any_non_mmio_relay_broken = false;
+            // FIX AB extension: also fires on teardown timeout to recover channels left with
+            // stale state when timeout occurred without relay breaking.  Teardown-timed-out
+            // devices set fabric_teardown_timed_out_ (see FabricFirmwareInitializer::post_teardown).
+            bool any_teardown_timed_out = false;
             const auto all_ids = cluster_.all_chip_ids();
             const auto mmio_ids = cluster_.mmio_chip_ids();
             for (tt::ChipId device_id : all_ids) {
-                if (mmio_ids.count(device_id)) {
-                    continue;  // skip MMIO devices — we only care about non-MMIO relay state
-                }
                 // Use get_device() (private, friend access) instead of get_active_device():
                 // by the time teardown() runs, dev->close() has already been called by
                 // DeviceManager::close_devices(), setting initialized_=false.
                 // get_active_device() asserts is_initialized(), but fabric_relay_path_broken_
-                // is still valid in memory after close — we just need raw Device* access.
+                // and fabric_teardown_timed_out_ are still valid in memory after close — we
+                // just need raw Device* access.
                 const Device* dev = dm->get_device(device_id);
-                if (dev && dev->is_fabric_relay_path_broken()) {
+                if (!dev) {
+                    continue;
+                }
+                if (!mmio_ids.count(device_id) && dev->is_fabric_relay_path_broken()) {
                     any_non_mmio_relay_broken = true;
-                    break;
+                }
+                if (dev->is_fabric_teardown_timed_out()) {
+                    any_teardown_timed_out = true;
+                }
+                if (any_non_mmio_relay_broken && any_teardown_timed_out) {
+                    break;  // no need to scan further
                 }
             }
-            if (any_non_mmio_relay_broken) {
-                log_warning(
-                    tt::LogAlways,
-                    "teardown: FIX AB — at least one non-MMIO device has fabric_relay_path_broken. "
-                    "Hard-resetting active ETH channels on all MMIO devices via PCIe to restore "
-                    "UMD base relay firmware for the next process.");
+            if (any_non_mmio_relay_broken || any_teardown_timed_out) {
+                if (any_non_mmio_relay_broken) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AB — at least one non-MMIO device has fabric_relay_path_broken. "
+                        "Hard-resetting active ETH channels on all MMIO devices via PCIe to restore "
+                        "UMD base relay firmware for the next process.");
+                }
+                if (any_teardown_timed_out) {
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX AB extension — at least one device has fabric_teardown_timed_out. "
+                        "Hard-resetting active ETH channels on all MMIO devices via PCIe to recover "
+                        "channels left with stale firmware state after teardown timeout.");
+                }
                 for (const tt::ChipId mmio_id : cluster_.mmio_chip_ids()) {
                     for (const auto& logical_core :
                          this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {

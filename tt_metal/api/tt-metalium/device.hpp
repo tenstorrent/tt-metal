@@ -190,6 +190,7 @@ public:
 
     virtual bool is_mmio_capable() const = 0;
     virtual bool is_fabric_relay_path_broken() const { return false; }
+    virtual bool is_fabric_teardown_timed_out() const { return false; }
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.

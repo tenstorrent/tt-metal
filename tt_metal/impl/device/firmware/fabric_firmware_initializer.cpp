@@ -684,8 +684,29 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
 }
 
 void FabricFirmwareInitializer::post_teardown() {
-    // Reset fabric config
+    // Reset fabric config.  This call triggers MetalEnvImpl::teardown_fabric_config(), which
+    // populates teardown_timed_out_chips_ with any chip IDs where TERMINATED was not reached
+    // within the timeout.  Read those IDs after the call and set fabric_teardown_timed_out_ on
+    // the corresponding Device objects so FIX AB can hard-reset their MMIO ETH channels at
+    // process exit, even if fabric_relay_path_broken_ was not set on any non-MMIO device.
     descriptor_->metal_context().set_fabric_config(tt::tt_fabric::FabricConfig::DISABLED);
+
+    // FIX AB extension: propagate teardown timeout flag to Device objects.
+    const auto& timed_out_chips = descriptor_->env_impl().get_teardown_timed_out_chips();
+    if (!timed_out_chips.empty() && descriptor_->metal_context().is_device_manager_initialized()) {
+        auto& dm = descriptor_->metal_context().device_manager();
+        for (const ChipId chip_id : timed_out_chips) {
+            Device* dev = dm->get_device(chip_id);
+            if (dev) {
+                dev->set_fabric_teardown_timed_out();
+                log_warning(
+                    tt::LogAlways,
+                    "post_teardown: FIX AB extension — chip {} teardown timed out; "
+                    "fabric_teardown_timed_out_ set on device for hard-reset at process exit",
+                    chip_id);
+            }
+        }
+    }
 }
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }

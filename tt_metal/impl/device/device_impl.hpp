@@ -189,6 +189,10 @@ public:
 
     bool is_mmio_capable() const override;
     bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_.load(); }
+    bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
+    // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
+    // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
+    void set_fabric_teardown_timed_out() { fabric_teardown_timed_out_.store(true); }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -267,6 +271,14 @@ private:
     // FIX P2 (#42429): ETH channel IDs confirmed dead during configure_fabric() — no firmware
     // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
     // expect them to reach READY_FOR_TRAFFIC.
+    //
+    // THREAD-SAFETY NOTE: This field is NOT thread-safe (no mutex, not atomic).
+    // It is written during configure_fabric() and read during Phase 5b of
+    // wait_for_fabric_workers_ready().  This is currently safe because the mesh-level caller
+    // (MeshDevice / DeviceManager) serializes configure_fabric() and
+    // wait_for_fabric_workers_ready() — configure always completes before any quiesce
+    // restart begins.  Future refactors that parallelize these calls MUST maintain this
+    // serialization invariant or protect this field with a mutex.
     std::unordered_set<uint32_t> fabric_pre_dead_channels_;
     // FIX I2 (#42429): True when this MMIO device's master ETH channel connects to a
     // dead-relay peer.  Firmware was loaded on this device but the peer will never complete
@@ -282,6 +294,17 @@ private:
     // calls (e.g. from GTest TearDown) skip Phase 5 and ENTRY snapshot relay reads
     // entirely, preventing 5s-per-channel timeout accumulation and indefinite hangs.
     std::atomic<bool> fabric_relay_path_broken_{false};
+
+    // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
+    // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
+    // only fires for non-MMIO relay failures), this flag can be set on ANY device — MMIO or
+    // non-MMIO — wherever a teardown timeout occurred without the relay breaking.  Timed-out
+    // channels are left running partial fabric firmware and will corrupt the next session's
+    // UMD relay reads.  FIX AB in risc_firmware_initializer.cpp reads this flag at process
+    // exit and hard-resets MMIO ETH channels via PCIe to restore UMD base relay firmware.
+    // Must be std::atomic<bool> for cross-thread safety (teardown and FIX AB may run on
+    // different threads at process exit).
+    std::atomic<bool> fabric_teardown_timed_out_{false};
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
