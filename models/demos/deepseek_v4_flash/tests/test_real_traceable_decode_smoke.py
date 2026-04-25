@@ -15,9 +15,12 @@ import torch
 
 import models.demos.deepseek_v4_flash.ttnn_attention_projection as attention_projection
 import ttnn
+from models.demos.deepseek_v4_flash.real_paged_sdpa_decode_trace_smoke import run_paged_sdpa_decode_trace_smoke
 from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
     TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
+    TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
+    TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
     TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
     TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
     TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
@@ -181,6 +184,8 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["cache_update"]["per_step_updated_rows"] == [[4]]
     assert result["cache_update"]["dynamic_update_index_in_trace"] is False
     assert result["cache_update"]["cache_read_window_dynamic"] is False
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE
+    assert result["cache_update"]["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE
     assert result["cache_update"]["rope_position_dynamic"] is False
     assert result["rope_position_api"] == TRACEABLE_DECODE_ROPE_POSITION_STATIC
     assert result["rope_position_dynamic"] is False
@@ -278,6 +283,7 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         in result["traceable_decode_scope"]["excluded_from_trace"]
     )
     assert result["attention_path"]["mode"] == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+    assert result["attention_path"]["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE
     assert result["attention_path"]["host_provided_attention_output"] is False
     assert result["attention_path"]["cache_window"] == {
         "start": 4,
@@ -445,6 +451,7 @@ def test_cpu_traceable_decode_subpath_can_report_dynamic_rope_position_probe(tmp
     assert result["rope_position_api"] == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
     assert result["cache_update"]["dynamic_update_index_in_trace"] is True
     assert result["cache_read_window_dynamic"] is False
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE
     assert result["rope_position_dynamic"] is True
     assert result["rope_position_status"] == "replay_mutable_device_tensor_embedding"
     assert result["rope_positions"] == [4, 5]
@@ -754,3 +761,40 @@ def test_traceable_decode_subpath_gated_galaxy_dynamic_rope_position_single_capt
         assert step["accuracy"]["attention_output"]["passed"] is True
         assert step["accuracy"]["combined_ffn_output"]["passed"] is True
         assert step["accuracy"]["residual_output"]["passed"] is True
+
+
+def test_paged_sdpa_decode_gated_galaxy_current_position_single_capture_replay() -> None:
+    if os.environ.get("DSV4_FLASH_TRACEABLE_DECODE", "0") != "1":
+        pytest.skip("Set DSV4_FLASH_TRACEABLE_DECODE=1 to run the paged SDPA decode trace replay proof")
+
+    if os.environ.get("IRD_NUM_PCIE_CHIPS") == "32":
+        os.environ.setdefault("TT_VISIBLE_DEVICES", "0")
+
+    result = run_paged_sdpa_decode_trace_smoke(device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")))
+
+    assert result["passed"], json.dumps(result["accuracy_by_step"], indent=2, sort_keys=True)
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    assert result["attention_read_api_kind"] == "paged_sdpa_decode"
+    assert result["one_trace_capture_replayed_across_positions"] is True
+    assert result["trace_capture"]["capture_count"] == 1
+    assert result["trace_capture"]["single_capture_replayed_across_positions"] is True
+    assert result["trace_capture"]["cur_pos_tensor_dynamic"] is True
+    assert result["trace_capture"]["q_input_dynamic"] is True
+    assert result["trace_capture"]["cache_read_current_position_dynamic"] is True
+    assert result["trace_capture"]["host_boundaries_inside_trace"] == []
+    assert result["dynamic_cache_read_current_position"]["status"] == "proved"
+    assert result["dynamic_cache_read_current_position"]["dynamic"] is True
+    assert result["dynamic_cache_write_position"]["status"] == "not_in_scope"
+    assert result["dynamic_rope_position"]["status"] == "not_in_scope"
+    assert result["attention_path"]["simplified_dense_paged_attention_stepping_stone"] is True
+    assert result["attention_path"]["true_deepseek_sparse_indexer_semantics"] is False
+    assert result["attention_path"]["production_autoregressive_decode"] is False
+    assert result["cache_rows_pages_read_per_step"][0]["rows"]["count"] == 32
+    assert result["cache_rows_pages_read_per_step"][1]["rows"]["count"] == 96
+    assert result["cache_rows_pages_read_per_step"][0]["pages"]["logical_pages"] == [0]
+    assert result["cache_rows_pages_read_per_step"][1]["pages"]["logical_pages"] == [0, 1]
+    assert result["output_difference"]["passed"] is True
+    assert result["output_difference"]["max_abs"] > 1.0
+    assert len(result["accuracy_by_step"]) == 2
+    for step in result["accuracy_by_step"]:
+        assert step["accuracy"]["attention_output"]["passed"] is True

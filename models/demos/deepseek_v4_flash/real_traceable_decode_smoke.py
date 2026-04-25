@@ -102,6 +102,8 @@ TRACEABLE_DECODE_ATTENTION_MODES = (
     TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
 )
 DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE = TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE = "ttnn.slice(kv_cache_fixed_window)"
+TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE = "ttnn.transformer.paged_scaled_dot_product_attention_decode"
 TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR = "update_cache"
 TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR = "paged_update_cache"
 TRACEABLE_DECODE_CACHE_UPDATE_APIS = (
@@ -1556,7 +1558,9 @@ def _run_ttnn_traceable_decode_subpath(
                 "cache_update_index_dynamic": True,
                 "cache_update_index_kind": "replay_mutable_device_tensor",
                 "cache_read_window_dynamic": False,
+                "dynamic_cache_read_current_position": False,
                 "cache_read_window_status": "static_single_capture_initial_position",
+                "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
                 "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
                 "rope_position_kind": "replay_mutable_device_tensor"
                 if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
@@ -1662,7 +1666,9 @@ def _run_ttnn_traceable_decode_subpath(
             "cache_update_index_dynamic": False,
             "cache_update_index_kind": "static_host_argument_per_trace_capture",
             "cache_read_window_dynamic": False,
+            "dynamic_cache_read_current_position": False,
             "cache_read_window_status": "static_per_trace_capture",
+            "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
             "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
             "rope_position_kind": "replay_mutable_device_tensor"
             if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
@@ -1848,7 +1854,9 @@ def _base_result(
         "update_index_source": update_index_source,
         "per_step_cache_rows_updated": [[int(value)] for value in cache_update_indices],
         "cache_read_window_dynamic": False,
+        "dynamic_cache_read_current_position": False,
         "cache_read_window_status": cache_read_window_status,
+        "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
         "rope_position_dynamic": uses_device_rope_position,
         "rope_position_status": rope_position_status,
         "rope_position_kind": rope_position_kind,
@@ -1873,7 +1881,9 @@ def _base_result(
             "cache_layout": "[batch=1, heads=1, cache_len, kv_output_dim]",
             "device_resident_inside_trace": True,
             "cache_read_window_dynamic": False,
+            "dynamic_cache_read_current_position": False,
             "cache_read_window_status": cache_read_window_status,
+            "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
             "rope_position_dynamic": uses_device_rope_position,
             "rope_position_api": rope_position_api,
             "rope_position_kind": rope_position_kind,
@@ -1902,7 +1912,9 @@ def _base_result(
             "cache_update_index_dynamic": uses_device_update_index,
             "current_position_dynamic": False,
             "cache_read_window_dynamic": False,
+            "dynamic_cache_read_current_position": False,
             "cache_read_window_status": cache_read_window_status,
+            "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
             "rope_position_dynamic": uses_device_rope_position,
             "rope_position_kind": rope_position_kind,
             "rope_position_status": rope_position_status,
@@ -1982,6 +1994,8 @@ def _base_result(
             "cache_update_index_source": update_index_source,
             "cache_write_index_dynamic_in_trace": uses_device_update_index,
             "cache_read_window_dynamic_in_trace": False,
+            "dynamic_cache_read_current_position_in_trace": False,
+            "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
             "rope_position_api": rope_position_api,
             "rope_position_dynamic_in_trace": uses_device_rope_position,
             "router_mode": router_summary["mode"],
@@ -2040,6 +2054,7 @@ def _base_result(
             if uses_device_update_index
             else "static_host_scalar",
             "cache_read_window": cache_read_window_status,
+            "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
             "rope_position": rope_position_status,
             "production_autoregressive_decode": False,
             "production_autoregressive_decode_blocker": (
@@ -2139,7 +2154,9 @@ def _base_result(
             "cache_update_index_dynamic": uses_device_update_index,
             "cache_update_index_kind": update_index_kind,
             "cache_read_window_dynamic": False,
+            "dynamic_cache_read_current_position": False,
             "cache_read_window_status": cache_read_window_status,
+            "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
             "rope_position_dynamic": uses_device_rope_position,
             "rope_position_kind": rope_position_kind,
             "rope_position_status": rope_position_status,
@@ -2377,6 +2394,8 @@ def _decode_steps_detail(
                 "cache_rows_updated": [position],
                 "cache_window_rows": [window_start, window_start + int(seq_len)],
                 "cache_read_window_dynamic": False,
+                "dynamic_cache_read_current_position": False,
+                "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
                 "rope_position_index": rope_position,
                 "rope_position_rows": [rope_position, rope_position + int(seq_len)],
                 "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
@@ -3421,6 +3440,10 @@ def _position_dependent_decode_inventory(
                 "feed SDPA decode-style tensors Q [1,b,nh,dh], K/V caches [b,nkv,s,dh] or paged "
                 "[blocks,nkv,block,dh], with true separate V channels"
             ),
+            "focused_proof": (
+                "models.demos.deepseek_v4_flash.real_paged_sdpa_decode_trace_smoke proves one captured trace can "
+                "replay across cur_pos_tensor values and read different paged cache rows"
+            ),
         },
         "static_bound_ops_remaining": [
             "ttnn.slice(kv_cache_fixed_window) start/end are Python arguments in this module path",
@@ -3455,6 +3478,7 @@ def _attention_path_summary(
     qk_mode = attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
     summary = {
         "mode": attention_mode,
+        "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
         "attention_output_source": "in_trace_from_q_projection_and_device_kv_cache_window",
         "host_provided_attention_output": False,
         "device_q_projection_contributes": True,
@@ -3467,6 +3491,7 @@ def _attention_path_summary(
         else "host_scalar",
         "cache_write_index_dynamic": cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
         "cache_read_window_dynamic": False,
+        "dynamic_cache_read_current_position": False,
         "cache_read_window_position_source": "static_python_slice_bounds",
         "cache_window": {
             "start": window_start,
