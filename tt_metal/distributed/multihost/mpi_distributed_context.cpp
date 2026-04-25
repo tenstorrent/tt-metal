@@ -759,17 +759,11 @@ MPIContext::~MPIContext() {
     if (was_mpi_finalized()) {
         return;  // MPI_Finalize() already called
     }
-    // comm_ vs group_: different object types. MPI_COMM_WORLD is predefined at MPI_Init; MPI_Finalize tears
-    // down the whole runtime — never MPI_Comm_free(MPI_COMM_WORLD). MPI_Comm_group(comm_, &group_) allocates
-    // a separate MPI_Group (same process set as comm_) that we own and must MPI_Group_free — not the comm.
-    // group_ is kept for APIs that take MPI_Group (e.g. Group_incl, translate_ranks).
+    // MPI_Comm_group allocates a group handle even for MPI_COMM_WORLD; always free it.
     if (group_ != MPI_GROUP_NULL) {
         MPI_Group_free(&group_);
         group_ = MPI_GROUP_NULL;
     }
-    // Omitting Group_free above (or dropping group_ without redesign) leaks one MPI_Group per context — handle
-    // growth and possible resource exhaustion in long-lived or many-context workloads.
-    // Only Comm_dup / Comm_split / … handles; never MPI_COMM_WORLD or MPI_COMM_NULL.
     if (comm_ != MPI_COMM_WORLD && comm_ != MPI_COMM_NULL) {
         MPI_Comm_free(&comm_);
         comm_ = MPI_COMM_NULL;
