@@ -234,6 +234,92 @@ SENTINEL=$(grep -c '0x49706550' "$CLEAN" 2>/dev/null || echo 0)
 echo "  (0x49706550 sentinel occurrences: ${SENTINEL:-0})"
 GLOBAL_DL=$(grep -cE 'Global deadline expired|global.*deadline.*channel' "$CLEAN" 2>/dev/null || echo 0)
 echo "  (Global deadline teardown events: ${GLOBAL_DL:-0})"
+# Canary detections
+CANARY_COUNT=$(grep -c '0xA0A0A0A0\|A0A0A0A0' "$CLEAN" 2>/dev/null || echo 0)
+if [ "$CANARY_COUNT" -gt 0 ]; then
+    echo "  => CANARY 0xA0A0A0A0 detected $CANARY_COUNT times (fabric firmware crashed before INITIALIZATION_STARTED)"
+    grep '0xA0A0A0A0\|A0A0A0A0' "$CLEAN" | head -5 | while IFS= read -r line; do
+        echo "    $line" | cut -c1-140
+    done
+else
+    echo "  0xA0A0A0A0 canary: (none detected)"
+fi
+echo ""
+
+# ─── PHASE 5B SENTINELS ───
+echo "=== PHASE 5B SENTINELS ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+deadline_skip = []
+read_exc = []
+for line in lines:
+    dev = re.search(r'Device (\d+)', line)
+    chan = re.search(r'chan[= ](\d+)', line)
+    devid = dev.group(1) if dev else '?'
+    chanid = chan.group(1) if chan else '?'
+    if '0xDEAD5B5B' in line or 'DEAD5B5B' in line.upper():
+        deadline_skip.append((devid, chanid))
+    if '0xDEADECE7' in line or 'DEADECE7' in line.upper():
+        read_exc.append((devid, chanid))
+if not deadline_skip and not read_exc:
+    print('  (none detected)')
+else:
+    for devid, chanid in deadline_skip:
+        print(f'  Device {devid} chan {chanid}: deadline-skipped (0xDEAD5B5B)')
+    for devid, chanid in read_exc:
+        print(f'  Device {devid} chan {chanid}: read-exception (0xDEADECE7)')
+    print(f'  => deadline-skipped: {len(deadline_skip)}, read-exception: {len(read_exc)}')
+"
+echo ""
+
+# ─── QUIESCE INVOCATION COUNT ───
+echo "=== QUIESCE INVOCATION COUNT ==="
+python3 -c "
+import re, sys
+from collections import defaultdict
+with open('$CLEAN') as f:
+    lines = f.readlines()
+counts = defaultdict(int)
+for line in lines:
+    if 'ENTRY snapshot' in line:
+        dev = re.search(r'Device (\d+)', line)
+        if dev:
+            counts[dev.group(1)] += 1
+if not counts:
+    print('  (no ENTRY snapshot lines found)')
+else:
+    for dev, cnt in sorted(counts.items(), key=lambda x: int(x[0])):
+        flag = ' *** CASCADING QUIESCE ***' if cnt > 1 else ''
+        print(f'  Device {dev}: {cnt} quiesce invocation(s){flag}')
+    if any(c > 1 for c in counts.values()):
+        print('  => Double-quiesce cascade detected. Second quiesce is triggered by GTest TearDown after test failure.')
+"
+echo ""
+
+# ─── RESCUE STUCK DISPATCH ───
+echo "=== RESCUE STUCK DISPATCH ==="
+python3 -c "
+import re, sys
+with open('$CLEAN') as f:
+    lines = f.readlines()
+events = []
+for line in lines:
+    if re.search(r'rescue_stuck_dispatch|rescue.*dispatch|stuck.*dispatch', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        events.append(msg[:140])
+if not events:
+    print('  (none detected)')
+else:
+    seen = set()
+    for msg in events:
+        key = re.sub(r'\d+', 'N', msg)
+        if key not in seen:
+            seen.add(key)
+            print(f'  {msg}')
+    print(f'  => {len(events)} rescue_stuck_dispatch event(s). Each stream write = 5s UMD timeout; many streams = minutes of hang.')
+"
 echo ""
 
 # ─── ENTRY SNAPSHOT vs PHASE 5 STATUS COMPARISON ───
@@ -367,9 +453,11 @@ fi
 
 # Detect which failure patterns are present, then emit a targeted diagnosis.
 HAS_RELAY_BROKEN=$(grep -c 'relay.*path.*broken\|fabric_relay_path_broken_' "$CLEAN" 2>/dev/null || echo 0)
-HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeout.*MUX' "$CLEAN" 2>/dev/null || echo 0)
+HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeout.*MUX|Timeout.*MUX READY_FOR_TRAFFIC|MUX READY_FOR_TRAFFIC.*[Tt]imeout|Timeout waiting for fabric MUX' "$CLEAN" 2>/dev/null || echo 0)
 HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null || echo 0)
 HAS_FORCE_RESET=$(grep -c 'assert_risc_reset_at_core\|force.reset' "$CLEAN" 2>/dev/null || echo 0)
+FIX_Z=$(grep -c 'is_fabric_relay_path_broken\|relay.*broken.*completion_queue\|CQ.*relay.*broken' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AB=$(grep -c 'hard-reset.*MMIO\|RiscFirmwareInitializer.*teardown\|MMIO ETH.*reset' "$CLEAN" 2>/dev/null || echo 0)
 
 if [[ "${HAS_RELAY_BROKEN:-0}" -gt 0 ]]; then
     DIAGNOSIS="UMD relay path breakdown (fabric_relay_path_broken_ set). After Phase 3 loaded
@@ -406,5 +494,11 @@ Last logged action: $LAST_METAL_MSG
 
 Diagnosis: $DIAGNOSIS
 SUMMARY_EOF
+if [ "${FIX_Z:-0}" -gt 0 ]; then
+    echo "  => FIX Z triggered: relay path broken check in read_completion_queue_event — test was skipped or fast-failed"
+fi
+if [ "${FIX_AB:-0}" -gt 0 ]; then
+    echo "  => FIX AB triggered: hard-reset of MMIO ETH channels at process teardown"
+fi
 echo ""
 echo "========================================================================"
