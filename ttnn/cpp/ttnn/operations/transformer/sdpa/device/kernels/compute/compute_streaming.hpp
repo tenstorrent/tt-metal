@@ -693,8 +693,7 @@ static __attribute__((noinline, noclone)) void sdpa_inner_loop_step(
     const uint32_t causal_diag_idx = 0) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
-    // TODO: pick up the size of dest from dest_helper once it is merged to main.
-    constexpr uint32_t dst_size = 8;
+    constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
     constexpr uint32_t q_subblock_num_tiles = qkt_subblock_h * in0_block_w;
@@ -1485,7 +1484,7 @@ void sdpa_ring_v2(
 
             // Normalize accumulated state → cb_normalized_out (= cb_out).
             // normalize_row_streaming consumes sum and out from staging CBs.
-            constexpr uint32_t norm_dst_size = 8;
+            constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
             normalize_row_streaming<false, vDHt, norm_dst_size>(
                 q_prev_norm.sum, q_prev_norm.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, Sq_chunk_t);
 
