@@ -3015,6 +3015,18 @@ void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
+    // CANARY (#42429): Written as the very first L1 store in kernel_main(), before
+    // POSTCODE(INITIALIZATION_STARTED).  After write_launch_msg_to_core transitions this ERISC
+    // from base-UMD relay (0x49706550) to fabric firmware, there is a narrow window before
+    // POSTCODE fires where the firmware is running but edm_status is still 0x49706550.
+    // If the firmware crashes in this window, terminate_stale_erisc_routers() would mistake
+    // it for a live base-UMD relay and skip soft-reset (wrong — the ERISC is crashed).
+    // Writing 0xA0A0A0A0 here eliminates that ambiguity:
+    //   0x49706550 → base-UMD relay never transitioned (skip soft-reset, correct)
+    //   0xA0A0A0A0 → fabric firmware entered kernel_main but crashed before INITIALIZATION_STARTED
+    //                (soft-reset needed — terminate_stale_erisc_routers handles this)
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_status_ptr_addr) = 0xA0A0A0A0u;
+
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         channel_trimming_usage_recorder.reset();
     }

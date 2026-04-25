@@ -391,6 +391,13 @@ void Device::configure_fabric(
         return;
     }
 
+    // Reset relay-broken flag: configure_fabric() initialises fresh fabric firmware on all
+    // channels, including the MMIO device's relay ERISCs.  After this call the UMD relay path
+    // is valid again, so fabric_relay_path_broken_ must be cleared so that the next quiesce
+    // cycle does not falsely short-circuit Phase 2.5, Phase 3, and Phase 5 for non-MMIO
+    // devices.  (#42429 — flag is set in quiesce ENTRY snapshot / Phase 5 catch block).
+    fabric_relay_path_broken_ = false;
+
     // FIX P2 (#42429): Persist pre_dead_channels so quiesce Phase 5 can skip them.
     // These channels have no fabric firmware loaded; Phase 5's READY_FOR_TRAFFIC check must
     // not throw for them (they will never reach that state).
@@ -1040,8 +1047,9 @@ void Device::quiesce_and_restart_fabric_workers() {
             this->id());
         log_info(
             tt::LogMetal,
-            "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete — "
-            "all cores relaunched. Handshake completion deferred to wait_for_fabric_workers_ready().",
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3 skipped — "
+            "relay path broken; configure_fabric_cores/WriteRuntimeArgs/write_launch_msg "
+            "omitted. wait_for_fabric_workers_ready() will also skip Phase 5 for this device.",
             this->id());
         return;
     }
@@ -1260,6 +1268,17 @@ void Device::quiesce_and_restart_fabric_workers() {
         "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete — "
         "all cores relaunched. Handshake completion deferred to wait_for_fabric_workers_ready().",
         this->id());
+    log_info(
+        tt::LogMetal,
+        "quiesce_and_restart_fabric_workers: Device {} SUMMARY — "
+        "relay_path_broken={} mmio={} "
+        "Phase1=done Phase2=done Phase2.5={} Phase3={} "
+        "(wait_for_fabric_workers_ready() handles Phase4+Phase5)",
+        this->id(),
+        fabric_relay_path_broken_,
+        this->is_mmio_capable(),
+        (fabric_relay_path_broken_ && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
+        (fabric_relay_path_broken_ && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done");
 }
 
 void Device::wait_for_fabric_workers_ready() {
@@ -1615,6 +1634,8 @@ void Device::wait_for_fabric_workers_ready() {
         for (size_t i = 0; i < chans.size(); i++) {
             pending.push_back(i);
         }
+        const size_t total_chans = chans.size();
+        size_t chans_checked = 0;  // channels for which a read was attempted (vs deadline-skipped)
 
         std::vector<UnhealthyChannel> unhealthy;
         const auto hc_start = std::chrono::steady_clock::now();
@@ -1650,14 +1671,18 @@ void Device::wait_for_fabric_workers_ready() {
                         tt::LogMetal,
                         "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline "
                         "exceeded ({}ms) before reading chan {} — treating as "
-                        "not-READY_FOR_TRAFFIC without attempting read",
+                        "not-READY_FOR_TRAFFIC without attempting read "
+                        "({}/{} channels checked so far)",
                         this->id(),
                         pre_read_elapsed,
-                        ch.eth_chan_id);
+                        ch.eth_chan_id,
+                        chans_checked,
+                        total_chans);
                     still_pending.push_back(idx);
                     still_pending_statuses.push_back({ch.eth_chan_id, 0xdeadbeef});
                     continue;
                 }
+                chans_checked++;
 
                 try {
                     detail::ReadFromDeviceL1(

@@ -741,6 +741,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
     uint32_t corrupt_count = 0;
+    uint32_t canary_count = 0;  // channels with 0xA0A0A0A0 (crashed before INITIALIZATION_STARTED)
     uint32_t stale_running_count = 0;
     uint32_t stale_timeout_count = 0;
 
@@ -884,7 +885,14 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             // cascade — corrupt L1 values persist across container restarts and would otherwise
             // re-poison every subsequent session until hardware reset.
             static constexpr uint32_t kBaseUmdFirmwareSentinel = 0x49706550u;
+            // CANARY value written at the very top of fabric_erisc_router.cpp kernel_main()
+            // (#42429).  Means the ERISC transitioned away from base-UMD and entered fabric
+            // firmware, but crashed before POSTCODE(INITIALIZATION_STARTED).  This is distinct
+            // from both a live base-UMD relay (0x49706550) and a valid EDMStatus value — it
+            // indicates a firmware crash-before-init that needs a soft-reset + retry.
+            static constexpr uint32_t kFabricKernelMainCanary = 0xA0A0A0A0u;
             const bool is_base_umd = (status_buf[0] == kBaseUmdFirmwareSentinel);
+            const bool is_canary = (status_buf[0] == kFabricKernelMainCanary);
 
             if (is_base_umd) {
                 // Live relay firmware — touch nothing.  configure_fabric_cores() handles the
@@ -901,6 +909,23 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
                     "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
                     "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
+                    dev->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+            } else if (is_canary) {
+                // 0xA0A0A0A0 canary: fabric firmware entered kernel_main() but crashed before
+                // POSTCODE(INITIALIZATION_STARTED).  The ERISC is not running any live firmware —
+                // send no TERMINATE, but DO add to probe_dead_channels so configure_fabric_cores()
+                // will soft-reset it cleanly.  Do NOT zero edm_status_address — the canary will be
+                // overwritten by the next firmware load, so there is no cascade risk.
+                probe_dead_channels.insert(eth_chan_id);
+                canary_count++;
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                    "(fabric kernel_main canary) — fabric firmware crashed before "
+                    "INITIALIZATION_STARTED. Adding to probe_dead_channels for soft-reset "
+                    "by configure_fabric_cores (no TERMINATE needed — firmware is dead).",
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
@@ -1045,13 +1070,14 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
         }
     }
 
-    if (corrupt_count > 0 || stale_running_count > 0 || !base_umd_channels.empty()) {
+    if (corrupt_count > 0 || canary_count > 0 || stale_running_count > 0 || !base_umd_channels.empty()) {
         log_info(
             tt::LogMetal,
-            "terminate_stale_erisc_routers: Device {} summary: corrupt={} stale_running={} "
-            "stale_term_timeout={} (of stale_running) probe_dead={} base_umd={}",
+            "terminate_stale_erisc_routers: Device {} summary: corrupt={} canary={} "
+            "stale_running={} stale_term_timeout={} (of stale_running) probe_dead={} base_umd={}",
             dev->id(),
             corrupt_count,
+            canary_count,
             stale_running_count,
             stale_timeout_count,
             probe_dead_channels.size(),

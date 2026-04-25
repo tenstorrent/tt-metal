@@ -144,6 +144,133 @@ echo "status= values (from health checks):"
 grep -oE 'status=0x[0-9a-fA-F]+' "$CLEAN" | sort | uniq -c | sort -rn | head -10
 echo ""
 
+# ─── RELAY PATH BROKEN ESCALATION ───
+echo "=== RELAY PATH BROKEN ==="
+python3 -c "
+import sys, re
+with open('$CLEAN') as f:
+    lines = f.readlines()
+broken_events = []
+for line in lines:
+    if re.search(r'relay.*path.*broken|fabric_relay_path_broken_', line, re.I):
+        msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+        dev = re.search(r'Device (\d+)', msg)
+        devid = dev.group(1) if dev else '?'
+        phase = re.search(r'Phase [0-9.]+', msg)
+        phase_str = phase.group(0) if phase else '(no phase)'
+        broken_events.append((devid, phase_str, msg[:120]))
+if not broken_events:
+    print('  (none detected — relay path not set broken in this log)')
+else:
+    seen = set()
+    for devid, phase, msg in broken_events:
+        key = re.sub(r'Device \d+', 'Dev N', msg)
+        key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+        if key not in seen:
+            seen.add(key)
+            print(f'  Device {devid} / {phase}: {msg}')
+    devs = sorted(set(d for d,_,_ in broken_events))
+    print(f'  => Devices with relay_path_broken: {devs} ({len(broken_events)} total events)')
+"
+echo ""
+
+# ─── FORCE RESETS / PHASE 2 TIMEOUTS ───
+echo "=== FORCE RESETS (assert_risc_reset_at_core events) ==="
+grep -E 'assert_risc_reset_at_core|force.reset|risc_reset' "$CLEAN" 2>/dev/null | \
+grep -iE '(info|warning|error)' | \
+python3 -c "
+import sys, re, signal
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+seen = set()
+for line in sys.stdin:
+    msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+    key = re.sub(r'Device \d+', 'Dev N', msg)
+    key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+    if key not in seen:
+        seen.add(key)
+        print('  ' + msg[:140])
+" || true
+MUX_RESETS=$(grep -c 'assert_risc_reset_at_core\|force.reset.*ETH\|ETH.*force.reset' "$CLEAN" 2>/dev/null || echo 0)
+echo "  (total matching lines: ${MUX_RESETS:-0})"
+echo ""
+
+# ─── NEWLY DEAD CHANNELS ───
+echo "=== NEWLY DEAD CHANNELS ==="
+grep -E 'newly.dead|newly_dead|dead.*channel|channel.*dead' "$CLEAN" 2>/dev/null | \
+grep -iE '(info|warning|error)' | \
+python3 -c "
+import sys, re, signal
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+seen = set()
+for line in sys.stdin:
+    msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+    key = re.sub(r'Device \d+', 'Dev N', msg)
+    key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+    if key not in seen:
+        seen.add(key)
+        print('  ' + msg[:140])
+" || true
+DEAD_CH=$(grep -cE 'newly.dead|newly_dead' "$CLEAN" 2>/dev/null || echo 0)
+[[ "${DEAD_CH:-0}" -eq 0 ]] && echo "  (none detected)"
+echo ""
+
+# ─── PRE-INIT STATE ───
+echo "=== PRE-INIT STATE (stale/corrupt channel scan) ==="
+grep -E 'pre.?init|stale|0x49706550|canary|kBaseUmd|base.UMD.*relay|terminate_stale' "$CLEAN" 2>/dev/null | \
+grep -iE '(info|warning|error)' | \
+python3 -c "
+import sys, re, signal
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+seen = set()
+for line in sys.stdin:
+    msg = re.sub(r'^.*\|\s*(Metal|Test|Fabric|Always)\s*\|\s*', '', line).rstrip()
+    key = re.sub(r'Device \d+', 'Dev N', msg)
+    key = re.sub(r'chan[= ]\d+', 'chan=N', key)
+    if key not in seen:
+        seen.add(key)
+        print('  ' + msg[:140])
+" || true
+SENTINEL=$(grep -c '0x49706550' "$CLEAN" 2>/dev/null || echo 0)
+echo "  (0x49706550 sentinel occurrences: ${SENTINEL:-0})"
+GLOBAL_DL=$(grep -cE 'Global deadline expired|global.*deadline.*channel' "$CLEAN" 2>/dev/null || echo 0)
+echo "  (Global deadline teardown events: ${GLOBAL_DL:-0})"
+echo ""
+
+# ─── ENTRY SNAPSHOT vs PHASE 5 STATUS COMPARISON ───
+echo "=== ENTRY SNAPSHOT vs PHASE 5 STATUS (per device) ==="
+python3 -c "
+import sys, re
+with open('$CLEAN') as f:
+    content = f.read()
+
+# Collect ENTRY snapshot lines: 'ENTRY ... edm_status=0x...'
+entry = {}
+for m in re.finditer(r'ENTRY.*?Device (\d+).*?chan[= ](\d+).*?edm_status=(0x[0-9a-fA-F]+)', content):
+    key = (m.group(1), m.group(2))
+    entry[key] = m.group(3)
+for m in re.finditer(r'Device (\d+).*?ENTRY.*?chan[= ](\d+).*?edm_status=(0x[0-9a-fA-F]+)', content):
+    key = (m.group(1), m.group(2))
+    entry[key] = m.group(3)
+
+# Collect Phase 5 / Phase 5b final status lines
+phase5 = {}
+for m in re.finditer(r'Phase 5[b]?.*?Device (\d+).*?chan[= ](\d+).*?(?:status|edm_status)=(0x[0-9a-fA-F]+)', content):
+    key = (m.group(1), m.group(2))
+    phase5[key] = m.group(3)
+
+all_keys = sorted(set(list(entry.keys()) + list(phase5.keys())), key=lambda x: (int(x[0]), int(x[1])))
+if not all_keys:
+    print('  (no per-channel status data found in log)')
+else:
+    print(f'  {\"Device\":>6} {\"Chan\":>4} {\"ENTRY\":>12} {\"Phase5\":>12} {\"Changed?\":>10}')
+    for dev, chan in all_keys:
+        e = entry.get((dev, chan), '?')
+        p = phase5.get((dev, chan), '?')
+        changed = '  YES' if e != p and e != '?' and p != '?' else ''
+        print(f'  {dev:>6} {chan:>4} {e:>12} {p:>12} {changed:>10}')
+"
+echo ""
+
 # ─── ERRORS/WARNINGS ───
 echo "=== ERRORS/WARNINGS (filtered, deduplicated) ==="
 grep -iE '(warning|error)' "$CLEAN" | \
@@ -250,14 +377,15 @@ Problem devices: ${PROBLEM_DEVS:-none detected}
 
 Last logged action: $LAST_METAL_MSG
 
-Diagnosis: During fabric quiesce (teardown), Phase 5b L1 reads on non-MMIO
-devices timed out with ~5s UMD relay timeouts per channel. Each failed read
-accumulated ~5s of wall time. After the last logged Phase 5b warning, the
-job hung for ~${HANG_DUR} until the GHA runner canceled it. The root cause
-is UMD relay path breakdown after Phase 3 loaded fabric firmware on
-Device 0's relay ERISCs — subsequent reads via those relay channels either
+Diagnosis: During fabric quiesce (teardown), L1 reads on non-MMIO
+devices timed out with ~5s UMD relay timeouts per channel. Each failed
+read accumulated ~5s of wall time. After the last logged warning, the job
+hung for ~${HANG_DUR} until the GHA runner canceled it. The root cause is
+UMD relay path breakdown after Phase 3 loaded fabric firmware on the MMIO
+device's relay ERISCs — subsequent reads via those relay channels either
 timeout (5s each) or hang indefinitely (relay ERISC alive but peer fabric
-firmware never responds to UMD relay protocol).
+firmware never responds to UMD relay protocol). Check RELAY PATH BROKEN
+and ENTRY SNAPSHOT sections above for which devices/channels were affected.
 SUMMARY_EOF
 echo ""
 echo "========================================================================"
