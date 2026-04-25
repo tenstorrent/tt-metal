@@ -35,6 +35,7 @@ from ....utils.check import assert_quality
     ("mesh_device", "sp", "tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
         pytest.param((2, 4), (2, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((4, 8), (4, 0), (8, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8sp0tp1", id="4x8sp0tp1"),
     ],
     indirect=["mesh_device"],
 )

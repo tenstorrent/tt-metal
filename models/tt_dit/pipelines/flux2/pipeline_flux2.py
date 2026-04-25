@@ -271,12 +271,13 @@ class Flux2Pipeline:
         num_links=None,
         topology=ttnn.Topology.Linear,
         is_fsdp=None,
-        use_torch_text_encoder=True,
+        use_torch_text_encoder=False,
         dummy_weights=False,
     ):
         wh_config = {
             (1, 2): {"sp": (1, 0), "tp": (2, 1), "vae_tp": (2, 1), "num_links": 1, "is_fsdp": True},
             (2, 4): {"sp": (2, 0), "tp": (4, 1), "vae_tp": (4, 1), "num_links": 1, "is_fsdp": True},
+            (4, 8): {"sp": (4, 0), "tp": (8, 1), "vae_tp": (4, 0), "num_links": 4, "is_fsdp": True},
         }
         bh_config = {
             (2, 2): {"sp": (2, 0), "tp": (2, 1), "vae_tp": (2, 1), "num_links": 2, "is_fsdp": True},

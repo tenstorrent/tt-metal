@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
-from transformers import AutoProcessor
+from transformers import AutoTokenizer
 
 import ttnn
 
@@ -55,7 +55,7 @@ class MistralTokenizerEncoderPair:
         self._is_fsdp = is_fsdp
         self._encoder_loaded = True
 
-        self._tokenizer = AutoProcessor.from_pretrained(checkpoint, subfolder=tokenizer_subfolder)
+        self._tokenizer = AutoTokenizer.from_pretrained(checkpoint, subfolder=tokenizer_subfolder)
         self._encoder = self._load_encoder(checkpoint, subfolder, use_torch=use_torch)
 
     def _load_encoder(self, checkpoint: str, subfolder: str, *, use_torch: bool) -> MistralTextEncoder:
@@ -169,7 +169,7 @@ def _format_input(prompts: list[str], system_message: str) -> list[list[dict]]:
 def _get_mistral_prompt_embeds(
     *,
     prompts: list[str],
-    tokenizer: AutoProcessor,
+    tokenizer,
     text_encoder: MistralTextEncoder,
     mesh_device: ttnn.MeshDevice,
 ) -> torch.Tensor:

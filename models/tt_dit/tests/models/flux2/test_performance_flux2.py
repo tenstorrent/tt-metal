@@ -27,12 +27,14 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
         [(2, 4), (2, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 2],
         [(2, 2), (2, 0), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+        [(4, 8), (4, 0), (8, 1), (4, 0), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "wh_1x2sp0tp1",
         "wh_2x4sp0tp1",
         "bh_2x4sp0tp1",
         "2x2sp0tp1",
+        "wh_4x8sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -248,6 +250,13 @@ def test_flux2_pipeline_performance(
             "vae_decoding_time": 1.3,
             "total_time": 17.0,
         }
+    elif tuple(mesh_device.shape) == (4, 8) and not is_blackhole():
+        expected_metrics = {
+            "total_encoding_time": 2.0,
+            "denoising_steps_time": 0.70 * num_inference_steps,
+            "vae_decoding_time": 1.5,
+            "total_time": 24.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
@@ -275,6 +284,7 @@ def test_flux2_pipeline_performance(
             (1, 2): "WH_T3K",
             (2, 2): "BH_QB",
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
+            (4, 8): "WH_Galaxy",
         }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
