@@ -988,6 +988,36 @@ void Device::quiesce_and_restart_fabric_workers() {
 
     log_info(tt::LogMetal, "quiesce_and_restart_fabric_workers: Device {} entering Phase 3 (re-configure + re-launch)", this->id());
 
+    // FIX Q (#42429): Skip Phase 3 entirely for non-MMIO devices when the relay path is known broken.
+    //
+    // All Phase 3 operations (configure_fabric_cores L1 writes, WriteRuntimeArgsToDevice,
+    // ConfigureDeviceWithProgram, l1_barrier, write_launch_msg_to_core) route through the
+    // UMD non-MMIO relay for non-MMIO devices.  When fabric_relay_path_broken_ is true, the
+    // relay ERISC on the MMIO device is running fabric firmware (not UMD relay firmware), so
+    // relay WRITES have no timeout and hang indefinitely — unlike relay reads which throw a
+    // 5s UMD timeout.  This causes the entire test process to hang until the CI job-level
+    // 660s timeout fires.
+    //
+    // When fabric_relay_path_broken_ is true, Phase 5 (wait_for_fabric_workers_ready) is also
+    // skipped, so there is no handshake to complete for this device.  Skipping Phase 3 is
+    // safe: the device state is already degraded, and the relay cannot be used until the
+    // next TT-Metal session initializes the fabric from scratch.
+    if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
+        log_warning(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3: relay path known broken "
+            "(fabric_relay_path_broken_) and device is non-MMIO — skipping all relay writes "
+            "(configure_fabric_cores, WriteRuntimeArgs, l1_barrier, write_launch_msg) to prevent "
+            "indefinite relay hang.  Phase 5 will also be skipped for this device.",
+            this->id());
+        log_info(
+            tt::LogMetal,
+            "quiesce_and_restart_fabric_workers: Device {} Phase 3 complete — "
+            "all cores relaunched. Handshake completion deferred to wait_for_fabric_workers_ready().",
+            this->id());
+        return;
+    }
+
     // FIX N (#42429): For non-MMIO devices, skip soft reset in configure_fabric_cores.
     //
     // assert_risc_reset on a non-MMIO ETH channel resets the entire ETH core including
