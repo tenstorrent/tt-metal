@@ -25,12 +25,14 @@ SELECTIVE_MATERIALIZATION_SCHEMA_VERSION = 1
 DEFAULT_LAYER_ROUTER_NORMS_LAYER = 3
 DEFAULT_LAYER_EXPERT_MLP_LAYER = 3
 DEFAULT_LAYER_EXPERT_MLP_EXPERT = 0
+DEFAULT_LAYER_SHARED_EXPERT_MLP_LAYER = 3
 DEFAULT_MAX_TENSORS = 8
 DEFAULT_MAX_BYTES = 16 * 1024 * 1024
 LAYER_ROUTER_NORMS_SELECTOR = "layer-router-norms"
 SLICE_ARTIFACT_FILENAME = "selected_tensors.safetensors"
 SLICE_MANIFEST_FILENAME = "materialized_slice_manifest.json"
 EXPERT_MLP_PROJECTIONS = ("w1", "w2", "w3")
+SHARED_EXPERT_MLP_PROJECTIONS = ("w1", "w2", "w3")
 
 _SAFETENSORS_DTYPE_BYTES = {
     "BOOL": 1,
@@ -194,6 +196,19 @@ def layer_expert_mlp_keys(index: RealCheckpointTensorIndex, *, layer: int, exper
 
     prefix = f"layers.{layer}.ffn.experts.{expert}"
     keys = [f"{prefix}.{projection}.{kind}" for projection in EXPERT_MLP_PROJECTIONS for kind in ("weight", "scale")]
+    for key in keys:
+        index.location(key)
+    return keys
+
+
+def layer_shared_expert_mlp_keys(index: RealCheckpointTensorIndex, *, layer: int) -> list[str]:
+    if layer < 0:
+        raise ValueError(f"layer must be non-negative, got {layer}")
+
+    prefix = f"layers.{layer}.ffn.shared_experts"
+    keys = [
+        f"{prefix}.{projection}.{kind}" for projection in SHARED_EXPERT_MLP_PROJECTIONS for kind in ("weight", "scale")
+    ]
     for key in keys:
         index.location(key)
     return keys
