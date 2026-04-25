@@ -1889,36 +1889,42 @@ void Device::wait_for_fabric_workers_ready() {
                         "  dev={} chan={} status=0x{:08x}({})\n",
                         this->id(), u.eth_chan_id, u.actual_status, edm_status_str(u.actual_status));
                 }
-                // FIX V (#42429): On a non-MMIO device, if ALL truly-unhealthy channels are at
-                // 0x0, 0xDEAD5B5B (deadline-skipped), or 0xDEADECE7 (read exception), the
-                // device's ETH channels never booted fabric firmware — the relay path is broken.
-                // Set fabric_relay_path_broken_ and return cleanly rather than TT_THROWing,
-                // which would trigger a cascading teardown second quiesce that re-flashes MMIO
-                // relay channels mid-boot and causes a second cascade failure.  This mirrors the
-                // Phase 5 relay read exception path (FIX U) and the ENTRY snapshot deadline
-                // exceeded path (FIX S/T).
-                if (!this->is_mmio_capable()) {
-                    const bool all_dead = std::all_of(
-                        truly_unhealthy.begin(),
-                        truly_unhealthy.end(),
-                        [](const UnhealthyChannel& u) {
-                            return u.actual_status == 0x0 ||
-                                   u.actual_status == 0xDEAD5B5B ||
-                                   u.actual_status == 0xDEADECE7;
-                        });
-                    if (all_dead) {
+                // FIX V/W (#42429): If ALL truly-unhealthy channels are at 0x0,
+                // 0xDEAD5B5B (deadline-skipped), or 0xDEADECE7 (read exception), the
+                // device's ETH channels never booted fabric firmware after Phase 3.
+                // For non-MMIO devices this means the UMD relay path is broken (FIX V).
+                // For MMIO devices this means a cascade from a peer device's relay failure
+                // caused the firmware never to respond (FIX W).  In both cases TT_THROW
+                // is wrong: it triggers a teardown second quiesce that hits
+                // rescue_stuck_dispatch_cores via the still-broken UMD relay on non-MMIO
+                // devices, accumulating 5-second timeouts per stream for 8+ minutes.
+                // Instead: log_error + return cleanly.
+                const bool all_dead = std::all_of(
+                    truly_unhealthy.begin(),
+                    truly_unhealthy.end(),
+                    [](const UnhealthyChannel& u) {
+                        return u.actual_status == 0x0 ||
+                               u.actual_status == 0xDEAD5B5B ||
+                               u.actual_status == 0xDEADECE7;
+                    });
+                if (all_dead) {
+                    if (!this->is_mmio_capable()) {
+                        // Non-MMIO: set flag so Phase 2.5/3/5 relay ops are skipped in
+                        // subsequent quiesce (reads through UMD relay would hang).
                         fabric_relay_path_broken_ = true;
-                        log_warning(
-                            tt::LogMetal,
-                            "wait_for_fabric_workers_ready: Device {} Phase 5b: deadline exceeded "
-                            "with {} channel(s) at 0x0/0xDEAD5B5B/0xDEADECE7 on non-MMIO device — "
-                            "setting fabric_relay_path_broken_=true to skip relay ops in "
-                            "subsequent quiesce.  (FIX V: #42429)\n{}",
-                            this->id(),
-                            truly_unhealthy.size(),
-                            details);
-                        return;
                     }
+                    log_error(
+                        tt::LogMetal,
+                        "wait_for_fabric_workers_ready: Device {} Phase 5b: all {} truly-unhealthy "
+                        "channel(s) stuck at 0x0/0xDEAD5B5B/0xDEADECE7 (mmio={}) — "
+                        "ETH firmware did not boot after Phase 3, probable cascade from peer "
+                        "device relay failure.  Returning cleanly to prevent teardown "
+                        "rescue_stuck_dispatch_cores cascade.  (FIX W: #42429)\n{}",
+                        this->id(),
+                        truly_unhealthy.size(),
+                        this->is_mmio_capable(),
+                        details);
+                    return;
                 }
                 // Interpret the observed status before throwing so the reader knows
                 // whether this is a timing issue or genuine hardware/firmware failure.
