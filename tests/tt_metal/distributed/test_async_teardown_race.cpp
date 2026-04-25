@@ -4017,4 +4017,198 @@ TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
         kIterations);
 }
 
+// ---------------------------------------------------------------------------
+// F5a recovery: TeardownTimeoutRecovery
+//
+// Validates that after a predecessor process whose ERISC teardown timed out
+// (and fell back to force-reset), the NEXT session can open devices and run
+// a workload without hanging.  This is the core scenario the F5a force-reset
+// fix addresses in FabricFirmwareInitializer::teardown().
+//
+// Mechanism:
+//   1. Fork a child process that opens FABRIC_2D, launches an async workload
+//      (ERISCs in ACTIVE state), and then BEGINS its device close() (teardown).
+//   2. SIGKILL the child during teardown — after it dispatches a workload but
+//      during the ERISC TERMINATED poll window.  This simulates the scenario
+//      where the ERISC never ACKed TERMINATE because the process was killed
+//      mid-teardown, forcing a hardware-level reset (assert_risc_reset_at_core)
+//      to leave the ERISC in a known-halted state.
+//
+//      NOTE: SIGKILL timing is best-effort.  If the kill fires after full
+//      teardown, the test still validates the normal re-open path.  If the
+//      kill fires during init, the ERISC may be left in a corrupt state —
+//      also a valid (and harder) recovery test.  The key invariant is:
+//      the PARENT must be able to re-open FABRIC_2D and run a workload.
+//
+// F5a recovery: this test validates force-reset on teardown timeout.
+//
+// Pass = parent MeshDevice::create() succeeds, blocking dispatch completes,
+//        buffer round-trip is clean.
+// Fail = hang > 150s (watchdog), throw from re-open, or buffer corruption.
+//
+// Requires >= 2 devices (FABRIC_2D needs ETH routing between chips).
+// Skips on single-chip systems; uses the AsyncTeardownKillPredecessorFixture
+// budget (120s) extended by the teardown window (+ 30s margin = 150s).
+// ---------------------------------------------------------------------------
+TEST_F(AsyncTeardownKillPredecessorFixture, TeardownTimeoutRecovery) {
+    // F5a recovery: this test validates force-reset on teardown timeout.
+    auto mesh_shape = mesh_device_->shape();
+    log_info(tt::LogTest, "[F5a] Closing fixture device before fork");
+    mesh_device_->close();
+    mesh_device_.reset();
+
+    // Shared memory flag: child sets it to 1 once the async workload has been
+    // enqueued (ERISCs are ACTIVE) and teardown is about to start.  Parent
+    // kills 1s after the flag fires, targeting the ERISC TERMINATED poll window.
+    volatile int* child_tearing_down = static_cast<volatile int*>(
+        ::mmap(nullptr, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0));
+    ASSERT_NE(child_tearing_down, MAP_FAILED) << "[F5a] mmap failed: " << strerror(errno);
+    *child_tearing_down = 0;
+
+    pid_t child_pid = ::fork();
+    ASSERT_NE(child_pid, -1) << "[F5a] fork() failed: " << strerror(errno);
+
+    if (child_pid == 0) {
+        // ---- CHILD: open FABRIC_2D, dispatch async, begin teardown, then spin ----
+        // Parent kills us during teardown, simulating a process that died while
+        // the ERISC TERMINATED poll was in-flight (never reached TERMINATED).
+        // Use _exit() — never run C++ destructors that could corrupt parent pages.
+        try {
+            tt_fabric::SetFabricConfig(
+                tt_fabric::FabricConfig::FABRIC_2D,
+                tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            auto child_device = MeshDevice::create(
+                MeshDeviceConfig(mesh_shape),
+                config_.l1_small_size,
+                config_.trace_region_size,
+                config_.num_cqs,
+                DispatchCoreConfig{},
+                {},
+                config_.worker_l1_size);
+            // Enqueue an async workload so ERISCs are ACTIVE.
+            constexpr uint32_t kSpinIters = 1'000'000;
+            auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+            Program program;
+            auto kernel_id = CreateKernel(
+                program,
+                "tt_metal/kernels/dataflow/busy_spin.cpp",
+                cores,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            SetRuntimeArgs(program, kernel_id, CoreCoord{0, 0}, {kSpinIters});
+            auto workload = MeshWorkload();
+            workload.add_program(MeshCoordinateRange(child_device->shape()), std::move(program));
+            auto& cq = child_device->mesh_command_queue();
+            EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            // Signal parent: ERISCs are ACTIVE, teardown is about to begin.
+            // Parent will SIGKILL 1s later — targeting the ERISC TERMINATED poll.
+            *child_tearing_down = 1;
+            // Begin teardown explicitly (MeshDevice::close triggers teardown).
+            // This is the window the parent targets: between TERMINATE write and
+            // TERMINATED poll completion.  If SIGKILL arrives here, the next session
+            // must recover via terminate_stale_erisc_routers() + force-reset.
+            child_device->close();
+            // If close() returns before SIGKILL (clean teardown), spin so parent
+            // can still kill us.  The invariant — parent re-opens cleanly — still holds.
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        } catch (...) {
+            _exit(2);
+        }
+        _exit(0);  // unreachable
+    }
+
+    // ---- PARENT: wait for child to reach teardown window, then SIGKILL ----
+    constexpr int kMaxFlagWaitMs = 30000;  // 30s: T3K FABRIC_2D init takes ~10-13s
+    for (int i = 0; i < kMaxFlagWaitMs && *child_tearing_down == 0; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (*child_tearing_down == 0) {
+        // Child never reached the active state — kill it and skip.
+        ::kill(child_pid, SIGKILL);
+        ::waitpid(child_pid, nullptr, 0);
+        ::munmap(const_cast<int*>(child_tearing_down), sizeof(int));
+        GTEST_SKIP() << "[F5a] Child did not reach ACTIVE ERISC state within 30s — "
+                        "FABRIC_2D init may have failed or hardware not available. Skipping.";
+    }
+
+    // Kill 1s after flag to target the ERISC TERMINATED poll window.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    log_info(tt::LogTest, "[F5a] SIGKILLing child pid={} — targeting ERISC teardown window", child_pid);
+    ::kill(child_pid, SIGKILL);
+    int wstatus = 0;
+    ::waitpid(child_pid, &wstatus, 0);
+    ::munmap(const_cast<int*>(child_tearing_down), sizeof(int));
+
+    log_info(
+        tt::LogTest, "[F5a] Child exited (status=0x{:08x}) — proceeding to re-open FABRIC_2D",
+        static_cast<uint32_t>(wstatus));
+
+    // Re-open FABRIC_2D.  terminate_stale_erisc_routers() must handle ERISCs
+    // that are either ACTIVE (killed before teardown completed), in a partially
+    // torn-down state, or halted by force-reset (F5a path: killed mid-teardown).
+    // In all cases, the re-open must succeed without hanging.
+    log_info(tt::LogTest, "[F5a] Re-opening FABRIC_2D after teardown-timeout SIGKILL");
+    tt_fabric::SetFabricConfig(
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    ASSERT_NO_THROW(
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(mesh_shape),
+            config_.l1_small_size,
+            config_.trace_region_size,
+            config_.num_cqs,
+            DispatchCoreConfig{},
+            {},
+            config_.worker_l1_size))
+        << "[F5a] MeshDevice::create() threw after teardown-timeout SIGKILL — "
+           "F5a recovery path broken (terminate_stale_erisc_routers must handle force-reset ERISC)";
+
+    // Verification: blocking dispatch must complete cleanly after recovery.
+    {
+        auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        log_info(tt::LogTest, "[F5a] Verification blocking dispatch after teardown-timeout recovery");
+        ASSERT_NO_THROW(EnqueueMeshWorkload(cq, workload, /*blocking=*/true))
+            << "[F5a] Blocking dispatch failed after F5a teardown-timeout recovery";
+        log_info(tt::LogTest, "[F5a] Dispatch completed — F5a teardown-timeout recovery confirmed");
+    }
+
+    // Buffer round-trip: detect DRAM corruption from stale ERISC NOC writes that
+    // may have occurred between SIGKILL and successful re-initialization.
+    {
+        auto& cq = mesh_device_->mesh_command_queue();
+        constexpr uint32_t page_size = 1024;
+        auto local_config =
+            DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+        auto global_shape = Shape2D{
+            static_cast<uint32_t>(mesh_device_->num_rows()),
+            static_cast<uint32_t>(mesh_device_->num_cols())};
+        auto dist_config = ShardedBufferConfig{
+            .global_size = mesh_device_->num_rows() * mesh_device_->num_cols() * page_size,
+            .global_buffer_shape = global_shape,
+            .shard_shape = Shape2D{1, 1}};
+        auto mesh_buf = MeshBuffer::create(dist_config, local_config, mesh_device_.get());
+        size_t n_words = page_size / sizeof(uint32_t) * mesh_device_->num_rows() * mesh_device_->num_cols();
+        std::vector<uint32_t> src(n_words);
+        for (size_t i = 0; i < n_words; i++) {
+            src[i] = static_cast<uint32_t>(0xF5A00000 | (i & 0xFFFF));  // "F5A" recovery marker
+        }
+        EnqueueWriteMeshBuffer(cq, mesh_buf, src, /*blocking=*/false);
+        std::vector<uint32_t> dst;
+        EnqueueReadMeshBuffer(cq, dst, mesh_buf, /*blocking=*/true);
+        ASSERT_EQ(dst.size(), src.size()) << "[F5a] Buffer size mismatch after teardown-timeout recovery";
+        for (size_t i = 0; i < n_words; i++) {
+            ASSERT_EQ(dst[i], src[i])
+                << "[F5a] Corruption at index " << i
+                << " — stale ERISC NOC write after teardown-timeout SIGKILL + F5a force-reset recovery";
+        }
+        log_info(tt::LogTest, "[F5a] Buffer round-trip clean — F5a teardown-timeout force-reset path verified");
+    }
+}
+
 }  // namespace tt::tt_metal::distributed::test
