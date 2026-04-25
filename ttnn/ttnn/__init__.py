@@ -124,12 +124,20 @@ from ttnn._ttnn.multi_device import (
     using_distributed_env,
     Rank,
     Size,
+    SubcontextId,
     init_distributed_context,
     is_initialized as distributed_context_is_initialized,
     get_rank as distributed_context_get_rank,
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
     allgather_int as distributed_context_allgather_int,
+    subcontext_id as distributed_context_subcontext_id,
+    subcontext_count as distributed_context_subcontext_count,
+    subcontext_sizes as distributed_context_subcontext_sizes,
+    subcontext_size as distributed_context_subcontext_size,
+    local_to_world_rank as distributed_context_local_to_world_rank,
+    world_rank as distributed_context_world_rank,
+    world_size as distributed_context_world_size,
 )
 
 from ttnn._ttnn.events import (
