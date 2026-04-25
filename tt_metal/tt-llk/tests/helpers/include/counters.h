@@ -52,19 +52,16 @@ namespace llk_perf
 {
 
 // Start: no-op. BRISC handles arm before TRISCs start.
-__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void start_perf_counters(std::uint32_t zone)
+__attribute__((always_inline)) inline void start_perf_counters(std::uint32_t zone)
 {
     asm volatile("" : : "r"(zone) : "memory");
 }
 
-// Stop: all threads write per-thread L1 flag to signal BRISC.
-__attribute__((noinline, section(".text.zzz_perf_counters"))) inline void stop_perf_counters(std::uint32_t zone)
+// Stop: all threads write per-thread L1 flag to signal BRISC. Always runs in WC
+// (function only compiled with PERF_COUNTERS_COMPILED); BRISC has already armed
+// counters before TRISCs start, so no runtime enabled-flag check is needed.
+__attribute__((always_inline)) inline void stop_perf_counters(std::uint32_t zone)
 {
-    if (*reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_ENABLED_FLAG_ADDR) == 0)
-    {
-        asm volatile("" : : "r"(zone) : "memory");
-        return;
-    }
     volatile std::uint32_t* stop_flags = reinterpret_cast<volatile std::uint32_t*>(perf_counters_stop_flags_addr(zone));
     std::uint32_t tid                  = 0;
 #if defined(LLK_TRISC_MATH)
