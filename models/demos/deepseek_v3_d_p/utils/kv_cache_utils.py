@@ -104,8 +104,10 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
             for chunk in range(chunks_per_device_group):
                 location = ttnn.experimental.disaggregation.KvCacheLocation()
 
-                # This needs proper handling in KvCacheLocation(), just add it up atm
-                noc_addr = dram_bank_0_addr + curr_bank_id + curr_bank_offset
+                # Encode as (bank_id << 32) | per_bank_offset.
+                # dram_bank_0_addr is the allocatable base within each bank.
+                # curr_bank_offset grows by chunk_size_bytes each time bank wraps.
+                noc_addr = (curr_bank_id << 32) | (dram_bank_0_addr + curr_bank_offset)
                 location.noc_addr = noc_addr
                 location.size_bytes = chunk_size_bytes
                 location.device_group_index = group_idx
