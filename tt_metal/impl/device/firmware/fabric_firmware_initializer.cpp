@@ -762,7 +762,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
     uint32_t corrupt_count = 0;
-    uint32_t canary_count = 0;  // channels with 0xA0A0A0A0 (crashed before INITIALIZATION_STARTED)
+    uint32_t canary_count = 0;  // channels with 0xA0A0A0A0 or 0xDEADB07E (crashed / launch lost)
     uint32_t stale_running_count = 0;
     uint32_t stale_timeout_count = 0;
 
@@ -912,8 +912,15 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             // from both a live base-UMD relay (0x49706550) and a valid EDMStatus value — it
             // indicates a firmware crash-before-init that needs a soft-reset + retry.
             static constexpr uint32_t kFabricKernelMainCanary = 0xA0A0A0A0u;
+            // HOST PRE-LAUNCH CANARY: written by configure_fabric() BEFORE write_launch_msg_to_core.
+            // Disambiguates the 0x49706550 ambiguity: if a prior session sent the launch message
+            // and the ERISC crashed before writing 0xA0A0A0A0, L1 would still show 0x49706550
+            // (indistinguishable from a live relay).  The host canary breaks this by stamping
+            // 0xDEADB07E before the launch message is sent — so this session can detect the gap.
+            static constexpr uint32_t kHostPreLaunchCanary = 0xDEADB07Eu;
             const bool is_base_umd = (status_buf[0] == kBaseUmdFirmwareSentinel);
             const bool is_canary = (status_buf[0] == kFabricKernelMainCanary);
+            const bool is_host_canary = (status_buf[0] == kHostPreLaunchCanary);
 
             if (is_base_umd) {
                 // Live relay firmware — touch nothing.  configure_fabric_cores() handles the
@@ -947,6 +954,24 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     "(fabric kernel_main canary) — fabric firmware crashed before "
                     "INITIALIZATION_STARTED. Adding to probe_dead_channels for soft-reset "
                     "by configure_fabric_cores (no TERMINATE needed — firmware is dead).",
+                    dev->id(),
+                    eth_chan_id,
+                    status_buf[0]);
+            } else if (is_host_canary) {
+                // 0xDEADB07E host pre-launch canary: configure_fabric() wrote this before sending
+                // the launch message but the ERISC never transitioned to writing 0xA0A0A0A0.
+                // The ERISC is not running any live firmware (launch was lost or ERISC crashed
+                // before reaching kernel_main).  Treat identically to kFabricKernelMainCanary:
+                // flag for soft-reset, do NOT zero L1 (the next firmware load will overwrite it).
+                probe_dead_channels.insert(eth_chan_id);
+                canary_count++;
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                    "(host-pre-launch canary 0xDEADB07E) — host wrote launch canary but ERISC "
+                    "never wrote firmware canary 0xA0A0A0A0. Soft-reset needed. "
+                    "Adding to probe_dead_channels for soft-reset by configure_fabric_cores "
+                    "(no TERMINATE needed — firmware is dead).",
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
@@ -1094,7 +1119,8 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     if (corrupt_count > 0 || canary_count > 0 || stale_running_count > 0 || !base_umd_channels.empty()) {
         log_info(
             tt::LogMetal,
-            "terminate_stale_erisc_routers: Device {} summary: corrupt={} canary={} "
+            "terminate_stale_erisc_routers: Device {} summary: corrupt={} "
+            "canary={} (0xA0A0A0A0 firmware or 0xDEADB07E host-pre-launch) "
             "stale_running={} stale_term_timeout={} (of stale_running) probe_dead={} base_umd={}",
             dev->id(),
             corrupt_count,

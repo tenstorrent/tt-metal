@@ -508,6 +508,23 @@ void Device::configure_fabric(
     }
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = env_impl.get_hal();
+
+    // HOST PRE-LAUNCH CANARY (#42429 race-condition fix):
+    // Write kHostPreLaunchCanary to router_sync_address for each ETH channel BEFORE sending the
+    // launch message.  This lets terminate_stale_erisc_routers() in the NEXT session distinguish:
+    //   0x49706550  → base-UMD relay, launch message never sent     (leave alone)
+    //   0xDEADB07E  → host wrote canary but ERISC never started     (soft-reset needed)
+    //   0xA0A0A0A0  → ERISC entered kernel_main but crashed early   (soft-reset needed)
+    //   EDMStatus   → valid fabric firmware state
+    // Channels in skip_soft_reset_channels carry live UMD relay firmware — must NOT be disturbed.
+    const auto& control_plane_cf = MetalContext::instance().get_control_plane();
+    const auto& fabric_context_cf = control_plane_cf.get_fabric_context();
+    const auto& builder_ctx_cf = fabric_context_cf.get_builder_context();
+    const auto router_sync_address =
+        builder_ctx_cf.get_fabric_router_sync_address_and_status().first;
+    static constexpr uint32_t kHostPreLaunchCanary = 0xDEADB07Eu;
+    std::vector<uint32_t> canary_buf{kHostPreLaunchCanary};
+
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
@@ -544,6 +561,37 @@ void Device::configure_fabric(
                         logical_core.y,
                         e.what());
                     continue;
+                }
+            }
+
+            // Write host-side pre-launch canary so terminate_stale_erisc_routers() in the next
+            // session can distinguish "UMD relay never launched" (0x49706550) from "launch sent
+            // but ERISC crashed before writing 0xA0A0A0A0 firmware canary" (0xDEADB07E).
+            // Skip channels in skip_soft_reset_channels (live UMD relay — must NOT disturb).
+            if (core_type == CoreType::ETH) {
+                bool is_skip_reset_chan = false;
+                try {
+                    auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    is_skip_reset_chan = skip_soft_reset_channels.count(eth_chan) > 0;
+                } catch (...) {
+                    // Cannot resolve channel — conservatively skip canary write.
+                    is_skip_reset_chan = true;
+                }
+                if (!is_skip_reset_chan) {
+                    try {
+                        detail::WriteToDeviceL1(
+                            this, logical_core, router_sync_address, canary_buf, CoreType::ETH);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogMetal,
+                            "configure_fabric: Device {} core ({},{}) host-canary write failed: {}",
+                            this->id_,
+                            logical_core.x,
+                            logical_core.y,
+                            e.what());
+                    }
                 }
             }
 
