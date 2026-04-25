@@ -60,6 +60,8 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_init.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -3862,6 +3864,157 @@ TEST_F(PhaseZFixture, PhaseZ_RelayBrokenCQFastThrow) {
                     "Add Device::set_fabric_relay_path_broken_for_test(bool) to device_impl.hpp "
                     "to enable the full < 100ms fast-throw timing assertion. "
                     "Part A (accessor sanity) already passed above.";
+}
+
+// ---------------------------------------------------------------------------
+// AllGather-in-the-loop regression test for the quiesce ERISC race condition.
+//
+// Root cause of the original CI failure (see AI-JOURNAL.md for full analysis):
+//   AllGather iteration 1 passes; iteration 2 hangs because quiesce_devices()
+//   called quiesce_and_restart_fabric_workers() which, in Phase 3, overwrote
+//   every active ERISC's L1 firmware *before* the ERISC had finished draining
+//   its ETH TXQ.  The ERISC then ran corrupted firmware, generated invalid NOC
+//   traffic at 0x880030060, and the next AllGather hung in completion queue wait.
+//
+// This test is the end-to-end regression for that bug.  It runs:
+//   1. AllGather on a T3K 1x4 FABRIC_2D mesh
+//   2. quiesce_devices()   (triggers ERISC terminate + L1 reload)
+//   3. Repeat for N=5 iterations
+//
+// All three prior fixes must be in place for this to pass:
+//   - Phase 2.5 ERISC TERMINATE poll before L1 overwrite (quiesce_and_restart_fabric_workers)
+//   - AllGather writer wait_for_fabric_endpoint_terminated() before exit
+//   - tt_fabric_mux TERMINATED write decoupled from ETH close_finish() ACK
+//
+// Regression target: must not hang (exit=124) or produce incorrect output on
+// any iteration when run on a T3K (4-chip Wormhole ring) with FABRIC_2D active.
+//
+// Uses QuiesceStressFixture (FABRIC_2D, 5-minute budget, >= 2 devices required).
+// The T3K-specific guard skips on single-chip and 2-chip (N300) topologies since
+// the original hang only manifested on the 4-device ring where non-MMIO ERISCs
+// act as forwarding nodes.
+// ---------------------------------------------------------------------------
+TEST_F(QuiesceStressFixture, AllGatherQuiesceLoop) {
+    // Require at least 4 devices: the original hang is specific to the T3K
+    // 4-chip ring topology where non-MMIO devices forward AllGather packets.
+    const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+    if (num_devices < 4) {
+        GTEST_SKIP() << "AllGatherQuiesceLoop requires >= 4 devices (T3K ring topology). "
+                        "Found " << num_devices << " device(s). "
+                        "The original AllGather-quiesce hang only manifests on non-MMIO "
+                        "forwarding ERISCs present in a 4+ device mesh.";
+    }
+
+    constexpr int kIterations = 5;
+
+    // Small tensor: enough data to exercise all ERISC channels, small enough
+    // that each iteration completes quickly within the 5-minute test budget.
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 32, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+
+    // Build 1x4 submesh views for per-device tensor placement and readback.
+    // mesh_device_ is the full system mesh opened by QuiesceStressFixture.
+    // We pick the first 4 devices (row 0, cols 0-3) to form the AllGather ring.
+    std::vector<std::shared_ptr<distributed::MeshDevice>> submeshes;
+    constexpr int kNumRingDevices = 4;
+    for (int col = 0; col < kNumRingDevices; col++) {
+        submeshes.push_back(
+            mesh_device_->create_submesh(MeshShape(1, 1), distributed::MeshCoordinate(0, col)));
+    }
+
+    for (int iter = 0; iter < kIterations; iter++) {
+        log_info(
+            tt::LogTest,
+            "[AllGatherQuiesceLoop] Iteration {}/{}: building input tensors",
+            iter + 1,
+            kIterations);
+
+        // Step 1: create per-device input tensors.
+        // Device i holds a tensor filled with float(i) so the gathered result
+        // along dim=0 is [0, 1, 2, 3] (repeated per element), giving a
+        // deterministic expected output that detects DRAM corruption from
+        // stale ERISC NOC writes.
+        std::vector<ttnn::Tensor> tensors;
+        for (int dev_idx = 0; dev_idx < kNumRingDevices; dev_idx++) {
+            std::vector<bfloat16> data(
+                tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+            tensors.push_back(
+                Tensor::from_vector(std::move(data), tensor_spec)
+                    .to_device(submeshes[dev_idx].get()));
+        }
+
+        // Step 2: aggregate into a single multi-device tensor on the parent mesh,
+        // then quiesce so ERISC firmware is in a clean READY state before the op.
+        auto aggregated = tt::tt_metal::experimental::unit_mesh::aggregate(tensors);
+        mesh_device_->quiesce_devices();
+
+        log_info(
+            tt::LogTest,
+            "[AllGatherQuiesceLoop] Iteration {}/{}: launching all_gather()",
+            iter + 1,
+            kIterations);
+
+        // Step 3: AllGather along dim=0 — routes packets through non-MMIO
+        // forwarding ERISCs.  Without the quiesce fixes this hangs on iter 2+.
+        auto gathered = ttnn::all_gather(aggregated, /* dim */ 0);
+
+        // Step 4: quiesce_devices() — the critical path.
+        // Calls quiesce_and_restart_fabric_workers():
+        //   Phase 2.5: TERMINATE each active ERISC and poll for EDMStatus::TERMINATED
+        //   Phase 3:   configure_fabric_cores() — overwrite ERISC L1 with new firmware
+        //   Phase 4:   wait for ERISC READY_FOR_TRAFFIC
+        // Pre-fix: Phase 3 ran without Phase 2.5 guard, corrupting mid-send ERISCs.
+        log_info(
+            tt::LogTest,
+            "[AllGatherQuiesceLoop] Iteration {}/{}: calling quiesce_devices()",
+            iter + 1,
+            kIterations);
+        ASSERT_NO_THROW(mesh_device_->quiesce_devices())
+            << "[AllGatherQuiesceLoop] quiesce_devices() threw on iteration " << (iter + 1);
+
+        // Step 5: readback and correctness check.
+        // Stale ERISC NOC writes during Phase 3 overwrite device DRAM, corrupting
+        // the gathered tensor's data.  Verify the expected [0,1,2,3,0,1,2,...] pattern.
+        auto disaggregated = tt::tt_metal::experimental::unit_mesh::disaggregate(gathered);
+        ASSERT_EQ(static_cast<int>(disaggregated.size()), kNumRingDevices)
+            << "[AllGatherQuiesceLoop] Wrong number of output shards on iteration " << (iter + 1);
+
+        for (int dev_idx = 0; dev_idx < kNumRingDevices; dev_idx++) {
+            auto data = disaggregated[dev_idx].to_vector<bfloat16>();
+            ASSERT_FALSE(data.empty())
+                << "[AllGatherQuiesceLoop] Empty readback at dev_idx=" << dev_idx
+                << " iteration=" << (iter + 1);
+            // Each shard should contain all kNumRingDevices slices concatenated along dim=0.
+            // Element at logical position p came from device (p / per_device_vol).
+            const size_t per_device_vol = tensor_spec.logical_shape().volume();
+            ASSERT_EQ(data.size(), per_device_vol * kNumRingDevices)
+                << "[AllGatherQuiesceLoop] Output size mismatch at dev_idx=" << dev_idx
+                << " iteration=" << (iter + 1);
+            for (size_t i = 0; i < data.size(); i++) {
+                float expected = static_cast<float>(i / per_device_vol);
+                EXPECT_EQ(static_cast<float>(data[i]), expected)
+                    << "[AllGatherQuiesceLoop] Data corruption at element " << i
+                    << " dev_idx=" << dev_idx << " iteration=" << (iter + 1)
+                    << " (expected=" << expected << " got=" << static_cast<float>(data[i]) << ")";
+            }
+        }
+
+        // Step 6: destroy tensors cleanly — exercises wait_for_pending_events().
+        disaggregated.clear();
+        { auto tmp = std::move(gathered); }
+
+        log_info(
+            tt::LogTest,
+            "[AllGatherQuiesceLoop] Iteration {}/{}: PASSED",
+            iter + 1,
+            kIterations);
+    }
+
+    log_info(
+        tt::LogTest,
+        "[AllGatherQuiesceLoop] All {} iterations passed — AllGather-quiesce race condition not reproduced",
+        kIterations);
 }
 
 }  // namespace tt::tt_metal::distributed::test

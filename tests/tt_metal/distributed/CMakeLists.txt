@@ -31,12 +31,14 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
+        TTNN::CPP
 )
 
 target_include_directories(
     distributed_unit_tests
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:TTNN::CPP,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
 )
 
