@@ -197,7 +197,7 @@ public:
     bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
     // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
     // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
-    void set_fabric_teardown_timed_out() { fabric_teardown_timed_out_.store(true); }
+    void set_fabric_teardown_timed_out() override { fabric_teardown_timed_out_.store(true); }
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
