@@ -1821,7 +1821,6 @@ class WanEncoder(Module):
         output_tile_BTHWC = self.quant_conv(output_tile_BTHWC)
         output_BTHWC = ttnn.to_layout(output_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
-        output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]
         return (output_BCTHW, new_logical_h)
 
