@@ -990,7 +990,7 @@ class RankBinding(BaseModel):
     subcontext_size: Optional[int] = Field(
         None,
         ge=1,
-        description="Number of ranks in this sub-context (sets TT_RUN_SUBCONTEXT_SIZE)",
+        description="Number of ranks in this sub-context (merged mapping only; folded into TT_RUN_SUBCONTEXT_SIZES)",
     )
     mesh_graph_desc_path: Optional[Path] = Field(
         None,
@@ -1298,14 +1298,22 @@ def parse_rank_bindings_mapping(
     if not raw_map:
         raise ValueError(f"'{map_key}' must not be empty")
 
-    sub_ids = sorted(raw_map.keys(), key=int)
+    raw_keys = list(raw_map.keys())
+    try:
+        sub_ids = [int(k) for k in raw_keys]
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"'{map_key}' keys must be integers (got {raw_keys}): {e}")
+    expected_ids = list(range(len(sub_ids)))
+    if sub_ids != expected_ids:
+        raise ValueError(
+            f"'{map_key}' keys must be dense and monotonic starting at 0 " f"(expected {expected_ids}, got {sub_ids})"
+        )
     merged_rank_bindings: List[RankBinding] = []
     first_mesh: Optional[Path] = None
     merged_global_env: Dict[str, str] = {}
     global_offset = 0
-    subcontext_sizes_ordered: List[int] = []
 
-    for sub_id in sub_ids:
+    for sub_id in raw_keys:
         overlay_value = raw_map[sub_id]
         overlay_path = Path(overlay_value)
         if not overlay_path.is_absolute():
@@ -1327,7 +1335,6 @@ def parse_rank_bindings_mapping(
                 merged_global_env[k] = v
 
         sub_n = len(sub_config.rank_bindings)
-        subcontext_sizes_ordered.append(sub_n)
         sid_int = int(sub_id)
         for binding in sorted(sub_config.rank_bindings, key=lambda b: b.rank):
             merged_rank_bindings.append(
@@ -1342,8 +1349,12 @@ def parse_rank_bindings_mapping(
             )
         global_offset += sub_n
 
-    merged_global_env["TT_RUN_SUBCONTEXT_COUNT"] = str(len(subcontext_sizes_ordered))
-    merged_global_env["TT_RUN_SUBCONTEXT_SIZES"] = ",".join(str(s) for s in subcontext_sizes_ordered)
+    size_per_sub: Dict[int, int] = {}
+    for b in merged_rank_bindings:
+        if b.subcontext_id is not None and b.subcontext_size is not None:
+            size_per_sub[int(b.subcontext_id)] = int(b.subcontext_size)
+    if size_per_sub:
+        merged_global_env["TT_RUN_SUBCONTEXT_SIZES"] = ",".join(str(size_per_sub[i]) for i in sorted(size_per_sub))
 
     merged = TTRunConfig(
         rank_bindings=merged_rank_bindings,
@@ -1401,8 +1412,6 @@ ENV_BLOCKLIST = frozenset(
         "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
         "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
         "TT_RUN_SUBCONTEXT_ID",  # Set when using merged rank-bindings mapping
-        "TT_RUN_SUBCONTEXT_SIZE",
-        "TT_RUN_SUBCONTEXT_COUNT",
         "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
         # Should only come from rank binding env_overrides
@@ -1511,8 +1520,6 @@ def get_rank_environment(
 
     if binding.subcontext_id is not None:
         env["TT_RUN_SUBCONTEXT_ID"] = str(binding.subcontext_id)
-    if binding.subcontext_size is not None:
-        env["TT_RUN_SUBCONTEXT_SIZE"] = str(binding.subcontext_size)
 
     if config.mock_cluster_rank_binding:
         env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = str(config.mock_cluster_rank_binding[binding.rank])
