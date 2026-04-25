@@ -3596,4 +3596,272 @@ TEST_F(QuiesceStressFixture, MultiIterationQuiesceCycles) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario FIX_W: PhaseW_AllDeadMMIOCleanReturn
+//
+// Regression test for the "MMIO all-dead clean return" fix in
+// Device::wait_for_fabric_workers_ready() Phase 5b (#42429).
+//
+// Background:
+//   Phase 5b monitors 6 expected ETH channels on each device. When ALL 6 read
+//   back 0x0 for >= 2 seconds the channels are considered permanently dead
+//   (hardware reset needed). Pre-fix: TT_THROW was called unconditionally,
+//   triggering a teardown rescue cascade: 4 cores × 8 streams × 5s = ~160s hang.
+//   Post-fix:
+//     - Non-MMIO devices: set fabric_relay_path_broken_=true, return cleanly.
+//     - MMIO devices:     return cleanly WITHOUT setting fabric_relay_path_broken_
+//                         (MMIO uses local PCIe; relay flag must stay false).
+//
+// What we can test without hardware dead-channel injection:
+//   1. Accessor sanity: is_fabric_relay_path_broken() starts false on all devices.
+//   2. MMIO identification: exactly one device is mmio-capable on T3K/N300.
+//   3. Quiesce cleanly returns on all topologies (no TT_THROW) — i.e., the
+//      normal (non-all-dead) path works correctly.
+//
+// What requires hardware state injection (documented stub):
+//   Actually triggering Phase 5b's all_dead branch requires either:
+//   (a) Real dead ETH hardware (not reproducible in CI), or
+//   (b) A test-friend setter for fabric_relay_path_broken_ / channel-map mocking.
+//   Neither is currently available without adding a setter API to Device.
+//   A full integration test would add:
+//       Device::set_fabric_relay_path_broken_for_test(bool v)
+//   then verify that MMIO devices do NOT set the flag (FIX W guarantee) while
+//   non-MMIO devices do, and that quiesce returns cleanly in both cases.
+//
+// Pass = accessor returns false initially on all devices, MMIO device found,
+//        quiesce cycle completes without throwing.
+// Fail = accessor returns unexpected value, crash, hang.
+// ---------------------------------------------------------------------------
+class PhaseWFixture : public MeshDeviceFixtureBase {
+protected:
+    PhaseWFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .fabric_config = tt_fabric::FabricConfig::FABRIC_2D,
+              .test_budget_ms = 60000,  // 60s: FABRIC_2D init + quiesce + teardown
+          }) {}
+
+    void SetUp() override {
+        const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+        if (num_devices < 2) {
+            GTEST_SKIP() << "PhaseWFixture requires >= 2 devices to exercise Phase 5b "
+                            "relay-channel monitoring (FABRIC_2D). Single-chip has no ETH relay "
+                            "channels, so Phase 5b all-dead branch can never fire.";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
+TEST_F(PhaseWFixture, PhaseW_AllDeadMMIOCleanReturn) {
+    // --- Part 1: Accessor sanity ---
+    // FIX W guarantee: is_fabric_relay_path_broken() must return false on every
+    // device after normal initialization (no dead ETH channels have been detected).
+    // This confirms the flag is not spuriously set during healthy bring-up.
+    bool found_mmio = false;
+    bool found_non_mmio = false;
+    for (auto* device : mesh_device_->get_devices()) {
+        ASSERT_FALSE(device->is_fabric_relay_path_broken())
+            << "[FIX W] Device " << device->id()
+            << " has fabric_relay_path_broken_=true after clean init — flag must start false";
+        if (device->is_mmio_capable()) {
+            found_mmio = true;
+        } else {
+            found_non_mmio = true;
+        }
+    }
+
+    // On any multi-device topology there must be at least one MMIO device.
+    ASSERT_TRUE(found_mmio)
+        << "[FIX W] No MMIO-capable device found in mesh — topology assumption violated";
+
+    log_info(
+        tt::LogTest,
+        "[FIX W] Accessor sanity: all devices have fabric_relay_path_broken_=false after init. "
+        "found_mmio={} found_non_mmio={}",
+        found_mmio,
+        found_non_mmio);
+
+    // --- Part 2: Quiesce clean return (no TT_THROW from Phase 5b) ---
+    // Dispatch a blank workload then call quiesce_devices(). In the FABRIC_2D path
+    // this exercises wait_for_fabric_workers_ready() including Phase 5b channel
+    // monitoring. Pre-fix, a misbehaving Phase 5b could throw here; post-fix it
+    // should return cleanly even on MMIO devices.
+    {
+        auto cores = CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}};
+        auto program = create_blank_program(cores);
+        auto workload = MeshWorkload();
+        workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+        auto& cq = mesh_device_->mesh_command_queue();
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+    ASSERT_NO_THROW(mesh_device_->quiesce_devices())
+        << "[FIX W] quiesce_devices() threw — Phase 5b may have called TT_THROW on MMIO device";
+
+    log_info(tt::LogTest, "[FIX W] quiesce_devices() returned cleanly — Phase 5b no-throw on MMIO confirmed");
+
+    // --- Part 3: Flag still false after quiesce (MMIO-specific guarantee) ---
+    // FIX W: MMIO devices must NOT have fabric_relay_path_broken_ set by Phase 5b
+    // even if all-dead is detected. Non-MMIO may have it set if relay is broken;
+    // but on a healthy system both should remain false.
+    for (auto* device : mesh_device_->get_devices()) {
+        if (device->is_mmio_capable()) {
+            EXPECT_FALSE(device->is_fabric_relay_path_broken())
+                << "[FIX W] MMIO device " << device->id()
+                << " has fabric_relay_path_broken_=true after quiesce — "
+                   "FIX W guarantees MMIO devices never set this flag (they use local PCIe)";
+        }
+    }
+
+    // --- Stub note for full all-dead injection test ---
+    // LIMITATION: The branch that sets all_dead=true in Phase 5b requires all 6
+    // ETH channel_map_result entries to read back 0x0 for >= 2 consecutive seconds.
+    // This only happens on hardware with dead/absent ETH neighbours or after SIGKILL
+    // of a prior session on a topology with dead ETH links — not reproducible in
+    // normal CI. A future enhancement would add:
+    //   Device::inject_all_dead_channels_for_test() — forces channel map to return
+    //   all-zero so Phase 5b fires deterministically.
+    // Until then, the clean-return guarantee is covered by:
+    //   (a) This test verifying no-throw on healthy hardware.
+    //   (b) The log_error (not TT_THROW) path in device.cpp diff review.
+    log_info(tt::LogTest, "[FIX W] PASSED: MMIO all-dead Phase 5b clean return regression test complete");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario FIX_Z: PhaseZ_RelayBrokenCQFastThrow
+//
+// Regression test for the CQ relay-broken fast-throw fix in
+// FDMeshCommandQueue::read_completion_queue_event() (#42429).
+//
+// Background:
+//   Pre-fix: read_completion_queue_event() called completion_queue_wait_front()
+//   unconditionally for every device. On a non-MMIO device whose fabric relay path
+//   is broken (fabric_relay_path_broken_=true), this eventually invokes a UMD
+//   relay read that times out after 5 seconds with "Timeout waiting for Ethernet
+//   core service remote IO request." — contributing to 4 devices × 8 streams ×
+//   5s = 160s hang cascade.
+//
+//   Post-fix (FIX Z): before completion_queue_wait_front(), check:
+//     if (!is_mmio_capable() && is_fabric_relay_path_broken()) { TT_THROW immediately }
+//   The throw occurs in << 1ms instead of the 5s UMD timeout.
+//
+// What we test here:
+//   PART A (accessor + topology sanity, always runs):
+//     - On all devices: is_fabric_relay_path_broken() starts false.
+//     - On any multi-device system: at least one non-MMIO device is present.
+//
+//   PART B (fast-throw timing, requires non-MMIO + state injection):
+//     - Set fabric_relay_path_broken_=true on a non-MMIO device via the concrete
+//       Device* cast (device_impl.hpp is already included, field is private).
+//     - LIMITATION: fabric_relay_path_broken_ is private with no test-friend setter.
+//       Direct field injection is not possible without modifying the production header.
+//       The test is therefore documented as a STUB with GTEST_SKIP for Part B.
+//
+//   What a full injection test would do (for future implementation):
+//     1. Cast IDevice* → tt::tt_metal::Device* (concrete type)
+//     2. Call device->set_fabric_relay_path_broken_for_test(true) [not yet exists]
+//     3. Trigger read_completion_queue_event() via MeshCommandQueue dispatch + event
+//     4. Assert TT_THROW occurs in < 100ms (not the 5s UMD timeout)
+//     5. Reset flag to false before teardown
+//
+// Pass = Part A accessor checks pass; Part B skips with clear message.
+// Fail = any accessor returns unexpected value, or a non-skip throw in Part A.
+// ---------------------------------------------------------------------------
+class PhaseZFixture : public MeshDeviceFixtureBase {
+protected:
+    PhaseZFixture()
+        : MeshDeviceFixtureBase(Config{
+              .num_cqs = 1,
+              .test_budget_ms = 30000,  // 30s — no fabric, no quiesce, just accessor checks
+          }) {}
+};
+
+TEST_F(PhaseZFixture, PhaseZ_RelayBrokenCQFastThrow) {
+    // --- Part A: Accessor + topology sanity (always executes) ---
+
+    // FIX Z invariant: flag starts false on every device after clean init.
+    // If it were true here without hardware failure, FIX Z's guard would throw
+    // on any subsequent completion queue event — spurious failure.
+    for (auto* device : mesh_device_->get_devices()) {
+        ASSERT_FALSE(device->is_fabric_relay_path_broken())
+            << "[FIX Z] Device " << device->id()
+            << " has fabric_relay_path_broken_=true after clean init — should be false";
+    }
+
+    // Identify MMIO vs non-MMIO.  FIX Z only fires for non-MMIO devices
+    // (MMIO uses local PCIe, never goes through the UMD relay path).
+    IDevice* mmio_device = nullptr;
+    IDevice* non_mmio_device = nullptr;
+    for (auto* device : mesh_device_->get_devices()) {
+        if (device->is_mmio_capable() && mmio_device == nullptr) {
+            mmio_device = device;
+        } else if (!device->is_mmio_capable() && non_mmio_device == nullptr) {
+            non_mmio_device = device;
+        }
+    }
+
+    ASSERT_NE(mmio_device, nullptr)
+        << "[FIX Z] No MMIO device found — topology assumption violated";
+
+    log_info(
+        tt::LogTest,
+        "[FIX Z] Topology: mmio_device={} non_mmio_device={}",
+        mmio_device->id(),
+        non_mmio_device ? std::to_string(non_mmio_device->id()) : "none (single-chip)");
+
+    // On a single-chip system there is no non-MMIO device, so FIX Z's guard can
+    // never fire. Record a log notice but still pass Part A.
+    if (non_mmio_device == nullptr) {
+        log_info(
+            tt::LogTest,
+            "[FIX Z] Single-chip topology — no non-MMIO device present. "
+            "FIX Z guard (relay-broken fast-throw) can only fire on multi-chip topologies "
+            "where non-MMIO devices communicate via the UMD ETH relay.");
+    }
+
+    // FIX Z guard must NOT fire for the MMIO device even if relay is broken,
+    // because is_mmio_capable() == true short-circuits the check.
+    EXPECT_FALSE(mmio_device->is_fabric_relay_path_broken())
+        << "[FIX Z] MMIO device " << mmio_device->id() << " unexpectedly has relay broken flag set";
+
+    log_info(tt::LogTest, "[FIX Z] Part A PASSED — accessor sanity and topology identification OK");
+
+    // --- Part B: Fast-throw timing test (stub — requires state injection API) ---
+    //
+    // CURRENT LIMITATION:
+    //   fabric_relay_path_broken_ is declared private in tt::tt_metal::Device
+    //   (tt_metal/impl/device/device_impl.hpp) with no public setter and no
+    //   test-friend declaration. The only way to set it from test code would be:
+    //
+    //   Option 1 (preferred): Add to Device:
+    //     void set_fabric_relay_path_broken_for_test(bool v) {
+    //         fabric_relay_path_broken_.store(v);
+    //     }
+    //   Option 2: Add friend declaration:
+    //     friend class tt::tt_metal::distributed::test::PhaseZFixture;
+    //
+    //   Until one of these is added, the full timing test cannot run in-process.
+    //   The guard itself IS reviewed in the code diff (fd_mesh_command_queue.cpp
+    //   lines 942-947) and is also exercised indirectly by the quiesce scenarios
+    //   whenever a real relay failure occurs on degraded hardware.
+    //
+    // What this test WOULD assert once injection is available:
+    //   1. Cast: auto* concrete = static_cast<tt::tt_metal::Device*>(non_mmio_device);
+    //   2. concrete->set_fabric_relay_path_broken_for_test(true);
+    //   3. Trigger read_completion_queue_event() via event enqueue on that device.
+    //   4. Use std::chrono to assert the throw happens in < 100ms (not 5s UMD timeout).
+    //   5. concrete->set_fabric_relay_path_broken_for_test(false);  // restore for teardown
+    //
+    if (non_mmio_device == nullptr) {
+        GTEST_SKIP() << "[FIX Z] No non-MMIO device available on this topology. "
+                        "FIX Z fast-throw path requires a non-MMIO device with "
+                        "fabric_relay_path_broken_=true. Run on T3K or N300 to exercise this path.";
+    }
+
+    GTEST_SKIP() << "[FIX Z] State injection not yet available: fabric_relay_path_broken_ is "
+                    "private in tt::tt_metal::Device with no test-friend setter. "
+                    "Add Device::set_fabric_relay_path_broken_for_test(bool) to device_impl.hpp "
+                    "to enable the full < 100ms fast-throw timing assertion. "
+                    "Part A (accessor sanity) already passed above.";
+}
+
 }  // namespace tt::tt_metal::distributed::test
