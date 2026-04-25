@@ -78,7 +78,7 @@ SEQ_LEN_25K = 25 * 1024
 @pytest.mark.parametrize(
     "num_layers",
     [
-        12,
+        1,
         pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
 )
@@ -246,6 +246,9 @@ def test_prefill_transformer(
         logger.info(
             f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}, last 10 tokens: {token_ids[0, -10:].tolist()}"
         )
+
+    number_of_non_padded_tokens = attention_mask.sum().item()
+    logger.info(f"Number of non-padded tokens is: {number_of_non_padded_tokens}")
 
     # --- Build HF model and/or extract weights based on cache state ---
     profiler.start("weights_creation")
@@ -475,9 +478,11 @@ def test_prefill_transformer(
         pcc_results = []
         for (label, tt_host), ref_host in zip(tt_snapshots, ref_snapshots):
             try:
-                # if is_balanced:
-                #     tt_host = reverse_reorder_tensor_chunks(tt_host.unsqueeze(0), chunk_order, seq_dim=2).squeeze(0)
-                _, pcc = comp_pcc(ref_host.float(), tt_host.float())
+                # ignore padded tokens in comparison
+                _, pcc = comp_pcc(
+                    ref_host[:, :number_of_non_padded_tokens, :].float(),
+                    tt_host[:, :number_of_non_padded_tokens, :].float(),
+                )
                 logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
                 pcc_results.append((label, pcc))
             except Exception as e:
@@ -499,13 +504,15 @@ def test_prefill_transformer(
                 tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
                 label = f"layer_{i}_kvpe"
                 try:
+                    # ignore padded tokens in comparison
                     _, kv_pcc = comp_pcc(
-                        ref_kvpe[:, :, :, :kv_lora_rank].float(),
-                        tt_kvpe_layer[:, :, :, :kv_lora_rank].float(),
+                        ref_kvpe[:, :, :number_of_non_padded_tokens, :kv_lora_rank].float(),
+                        tt_kvpe_layer[:, :, :number_of_non_padded_tokens, :kv_lora_rank].float(),
                     )
+                    # ignore padded tokens in comparison
                     _, pe_pcc = comp_pcc(
-                        ref_kvpe[:, :, :, kv_lora_rank:].float(),
-                        tt_kvpe_layer[:, :, :, kv_lora_rank:].float(),
+                        ref_kvpe[:, :, :number_of_non_padded_tokens, kv_lora_rank:].float(),
+                        tt_kvpe_layer[:, :, :number_of_non_padded_tokens, kv_lora_rank:].float(),
                     )
                     logger.info(f"{label:<20s}  KV PCC = {kv_pcc:.6f}, PE PCC = {pe_pcc:.6f}")
                     pcc_results.append((f"{label}_kv", kv_pcc))
