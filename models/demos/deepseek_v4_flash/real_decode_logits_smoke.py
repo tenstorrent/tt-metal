@@ -31,21 +31,14 @@ from models.demos.deepseek_v4_flash.real_decode_decoder_layer_smoke import (
 )
 from models.demos.deepseek_v4_flash.real_decode_decoder_layer_smoke import _base_result as _decode_base_result
 from models.demos.deepseek_v4_flash.real_decode_decoder_layer_smoke import (
+    _prepare_decode_ffn_fanout,
     _run_ttnn_decode_decoder_layer_slice,
     _validate_runtime_config,
     _validate_smoke_args,
     build_torch_decode_attention_runtime_reference,
     build_torch_decode_cache_prep_reference,
 )
-from models.demos.deepseek_v4_flash.real_expert_smoke import decode_real_expert_weights
-from models.demos.deepseek_v4_flash.real_ffn_smoke import (
-    _accuracy_summary,
-    _pcc,
-    _tensor_summary,
-    build_torch_ffn_reference,
-    layer_ffn_keys,
-    validate_real_ffn_slice,
-)
+from models.demos.deepseek_v4_flash.real_ffn_smoke import _accuracy_summary, _pcc, _tensor_summary
 from models.demos.deepseek_v4_flash.real_kv_projection_smoke import decode_real_kv_projection_weights
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
     PREFILL_ATTENTION_RUNTIME_TTNN_TILE_MULTIPLE,
@@ -59,13 +52,10 @@ from models.demos.deepseek_v4_flash.real_prefill_cache_prep_smoke import (
 )
 from models.demos.deepseek_v4_flash.real_prefill_decoder_layer_smoke import (
     _load_attention_and_ffn_selector_slice,
-    _load_missing_tensors,
     _metadata_groups,
     _residual_add,
-    _resolve_selected_expert,
     _unique_keys,
 )
-from models.demos.deepseek_v4_flash.real_shared_expert_smoke import decode_real_shared_expert_weights
 
 REAL_DECODE_LOGITS_SMOKE_SCHEMA_VERSION = 1
 DEFAULT_DECODE_LOGITS_LAYER = DEFAULT_DECODE_DECODER_LAYER
@@ -180,20 +170,25 @@ def run_real_decode_logits_smoke(
         current_position=current_position,
     )
     post_attention_residual = _residual_add(decode_activation, attention_reference["attention_output_projected"])
-    selected_expert, router_preview = _resolve_selected_expert(
-        tensors,
-        config=config,
-        layer=layer,
-        requested_expert=expert,
-        post_attention_residual=post_attention_residual,
-    )
 
-    ffn_keys = layer_ffn_keys(index, layer=layer, expert=selected_expert)
-    tensors, metadata = _load_missing_tensors(
-        index,
+    (
         tensors,
         metadata,
         ffn_keys,
+        activated_experts,
+        router_preview,
+        routed_weights_by_expert,
+        shared_weights,
+        ffn_reference,
+        ffn_input_ids,
+    ) = _prepare_decode_ffn_fanout(
+        index,
+        tensors,
+        metadata,
+        config=config,
+        layer=layer,
+        requested_expert=expert,
+        activation=post_attention_residual,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
@@ -206,18 +201,6 @@ def run_real_decode_logits_smoke(
         already_loaded_metadata=metadata,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
-    )
-    validate_real_ffn_slice(tensors, config=config, layer=layer, expert=selected_expert)
-    routed_weights = decode_real_expert_weights(tensors, config=config, layer=layer, expert=selected_expert)
-    shared_weights = decode_real_shared_expert_weights(tensors, config=config, layer=layer)
-    ffn_reference = build_torch_ffn_reference(
-        tensors,
-        routed_weights,
-        shared_weights,
-        config=config,
-        layer=layer,
-        expert=selected_expert,
-        activation=post_attention_residual,
     )
     logits_reference = build_torch_decode_logits_reference(
         ffn_reference["residual_output"],
@@ -248,7 +231,7 @@ def run_real_decode_logits_smoke(
     result = _decode_base_result(
         snapshot_dir=snapshot_dir,
         layer=layer,
-        expert=selected_expert,
+        activated_experts=activated_experts,
         requested_expert=expert,
         prefill_seq_len=prefill_seq_len,
         current_position=current_position,
@@ -257,6 +240,7 @@ def run_real_decode_logits_smoke(
         metadata_groups=metadata_groups,
         reference=reference,
         router_preview=router_preview,
+        ffn_input_ids=ffn_input_ids,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
@@ -289,11 +273,11 @@ def run_real_decode_logits_smoke(
         tensors,
         q_weights,
         kv_weights,
-        routed_weights,
+        routed_weights_by_expert,
         shared_weights,
         config=config,
         layer=layer,
-        expert=selected_expert,
+        input_ids=ffn_input_ids,
         prefill_activation=prefill_activation,
         decode_activation=decode_activation,
         current_position=current_position,

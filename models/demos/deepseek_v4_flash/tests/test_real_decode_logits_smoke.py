@@ -109,7 +109,9 @@ def test_cpu_real_decode_logits_smoke_projects_decoder_hidden_to_logits(tmp_path
         "lm_head": 4096,
         "total": 4224,
     }
-    assert result["payload_bytes"]["total"] == 32940
+    assert result["fanout_scope"]["activated_expert_count"] == 2
+    assert len(result["activated_experts"]) == 2
+    assert result["payload_bytes"]["total"] == 34860
     assert result["reference"]["final_norm"]["shape"] == [1, 1, 1, 32]
     assert result["reference"]["logits"]["shape"] == [1, 1, 1, 64]
     assert len(result["reference"]["top_k"]) == 3
@@ -134,7 +136,7 @@ def test_cpu_real_decode_logits_smoke_refuses_budget_overruns(tmp_path: Path) ->
             snapshot,
             layer=3,
             prefill_seq_len=4,
-            max_bytes=32939,
+            max_bytes=34859,
             cpu_only=True,
         )
 
@@ -184,6 +186,8 @@ def test_cpu_real_decode_logits_smoke_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["output_shapes"]["logits"] == [1, 1, 1, 16]
     assert payload["final_norm_lm_head"]["lm_head_shape_loaded"] == [16, 32]
     assert payload["payload_bytes"]["final_norm_lm_head"]["total"] == 1152
+    assert payload["fanout_scope"]["activated_expert_count"] == 2
+    assert payload["payload_bytes"]["total"] == 31788
     assert payload["reference"]["top_k"][0]["id"] >= 8
     assert payload["reference"]["top_k"][0]["id"] < 24
     assert payload["ttnn_ops"] == []
@@ -223,3 +227,4 @@ def test_real_decode_logits_smoke_ttnn_real_snapshot_matches_torch() -> None:
     assert result["output_shapes"]["logits"][-1] == result["vocab"]["vocab_size"]
     assert result["final_norm_lm_head"]["loaded_keys"]["final_norm"] == "norm.weight"
     assert result["final_norm_lm_head"]["loaded_keys"]["lm_head"] in {"head.weight", "embed.weight"}
+    assert result["fanout_scope"]["activated_expert_count"] == result["model"]["num_experts_per_tok"]

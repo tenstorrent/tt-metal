@@ -86,6 +86,9 @@ def test_cpu_real_decode_decoder_layer_smoke_composes_prefill_cache_decode_atten
     assert result["passed"] is True
     assert result["requested_expert"] is None
     assert 0 <= result["expert"] < 4
+    assert result["fanout_scope"]["activated_expert_count"] == 2
+    assert result["fanout_scope"]["topk"] == 2
+    assert result["ffn_fanout_info"]["activated_experts"]["topk_is_full"] is True
     assert result["prefill_sequence_length"] == 4
     assert result["decode_tokens"] == 1
     assert result["current_position"] == 4
@@ -113,12 +116,9 @@ def test_cpu_real_decode_decoder_layer_smoke_composes_prefill_cache_decode_atten
         "attention_output_projected": [1, 1, 1, 32],
         "post_attention_residual": [1, 1, 1, 32],
         "ffn_norm": [1, 1, 1, 32],
-        "selected_expert_output": [
-            1,
-            1,
-            result["selected_expert_info"]["selected_route"]["selected_token_count"],
-            32,
-        ],
+        "per_expert_selected_output": {
+            str(expert): [1, 1, 1, 32] for expert in result["fanout_scope"]["activated_expert_ids"]
+        },
         "routed_output": [1, 1, 1, 32],
         "shared_output": [1, 1, 1, 32],
         "combined_ffn_output": [1, 1, 1, 32],
@@ -130,11 +130,12 @@ def test_cpu_real_decode_decoder_layer_smoke_composes_prefill_cache_decode_atten
         "layers.3.ffn.gate.weight",
         "layers.3.ffn.gate.bias",
     ]
-    assert result["loaded_tensor_groups"]["ffn"]["count"] == 15
-    assert result["payload_bytes"]["total"] == 28716
+    assert result["loaded_tensor_groups"]["ffn"]["count"] == 21
+    assert result["payload_bytes"]["total"] == 30636
+    assert result["payload_bytes"]["ffn"]["routed_experts"] == 3840
     assert result["sparse_attention_inputs"]["current_position_included"] is True
     assert result["sparse_attention_inputs"]["runtime_topk_idxs"]["shape"] == [1, 1, 5]
-    assert result["selected_expert_info"]["selected_route"]["selected_token_count"] == 1
+    assert all(route["selected_token_count"] == 1 for route in result["ffn_fanout_info"]["per_expert_routes"].values())
     assert {boundary["name"] for boundary in result["host_boundaries"]} >= {
         "prefill_cache_readback",
         "decode_rope_cache_prep_host",
@@ -207,10 +208,11 @@ def test_cpu_real_decode_decoder_layer_smoke_cli_outputs_json(tmp_path: Path) ->
     assert payload["layer"] == 3
     assert payload["current_position"] == 4
     assert payload["next_position"] == 5
-    assert payload["payload_bytes"]["total"] == 28716
+    assert payload["payload_bytes"]["total"] == 30636
     assert payload["cache_sizes"]["attention_cache_length"] == 5
     assert payload["output_shapes"]["decode_input_hidden_states"] == [1, 1, 1, 32]
     assert payload["output_shapes"]["post_ffn_residual"] == [1, 1, 1, 32]
+    assert payload["fanout_scope"]["activated_expert_count"] == 2
     assert payload["ttnn_ops"] == []
     assert payload["host_boundaries"][-1]["name"] == "ffn_residual_host_add"
     assert payload["accuracy"]["cpu_reference"]["passed"] is True
@@ -243,7 +245,8 @@ def test_real_decode_decoder_layer_smoke_ttnn_real_snapshot_matches_torch() -> N
     assert result["current_position"] == 32
     assert result["cache_sizes"]["attention_cache_length"] == 33
     assert result["sparse_attention_inputs"]["current_position_included"] is True
-    assert result["selected_expert_info"]["selected_route"]["selected_token_count"] == 1
+    assert result["fanout_scope"]["activated_expert_count"] == result["model"]["num_experts_per_tok"]
+    assert all(route["selected_token_count"] == 1 for route in result["ffn_fanout_info"]["per_expert_routes"].values())
     assert result["output_shapes"]["post_ffn_residual"] == [1, 1, 1, result["model"]["hidden_size"]]
 
 
