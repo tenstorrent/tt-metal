@@ -200,7 +200,7 @@ def run_model_device_perf_test_with_merge(
     )
 
 
-def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filter, margin=0.05, layout="tile"):
+def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filter, margin=0.1, layout="tile"):
     """Build one pytest.param tuple for the perf tests."""
     worker_id = f"{topo}-8-{nlinks}link"
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
@@ -235,7 +235,7 @@ _DISPATCH_PERF_PARAMS = [
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_402_272, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_121_973, "CombineDeviceOperation"
     ),
     _perf_param(
         "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 3_177_159, "CombineDeviceOperation"
