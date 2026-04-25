@@ -1331,10 +1331,10 @@ void Device::quiesce_and_restart_fabric_workers() {
         "Phase1=done Phase2=done Phase2.5={} Phase3={} "
         "(wait_for_fabric_workers_ready() handles Phase4+Phase5)",
         this->id(),
-        fabric_relay_path_broken_,
+        fabric_relay_path_broken_.load(),
         this->is_mmio_capable(),
-        (fabric_relay_path_broken_ && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
-        (fabric_relay_path_broken_ && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done");
+        (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done",
+        (fabric_relay_path_broken_.load() && !this->is_mmio_capable()) ? "skipped(relay_broken)" : "done");
 }
 
 void Device::wait_for_fabric_workers_ready() {
@@ -1734,7 +1734,7 @@ void Device::wait_for_fabric_workers_ready() {
                 "MMIO relay channels mid-boot.  (FIX U/V: #42429)",
                 this->id(),
                 phase5_relay_read_threw,
-                fabric_relay_path_broken_);
+                fabric_relay_path_broken_.load());
             return;
         } else {
         constexpr uint32_t kHealthCheckTimeoutMs = 2000;
