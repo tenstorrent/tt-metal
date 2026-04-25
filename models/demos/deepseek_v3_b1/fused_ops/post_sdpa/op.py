@@ -190,8 +190,6 @@ class PostSDPA:
         sdpa_cluster_axis=0,
         sdpa_position_id_tensor_mesh=None,
         sdpa_per_device_chunk_size=0,
-        sdpa_num_l_chunks_override=None,
-        sdpa_compute_block_size_override=None,
     ):
         """
         Compute per-device program context for the post_sdpa fused operation.
@@ -357,8 +355,6 @@ class PostSDPA:
                 packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
                 l1_alignment=sdpa_l1_alignment,
                 max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(),
-                num_l_chunks_override=sdpa_num_l_chunks_override,
-                compute_block_size_override=sdpa_compute_block_size_override,
             )
             sdpa_input_page_size_bytes = sdpa_config.input_page_size_bytes
             sdpa_out_tiles = sdpa_config.out_tiles
@@ -1479,8 +1475,6 @@ class PostSDPA:
         sdpa_cluster_axis=0,
         sdpa_position_id_tensor_mesh=None,
         sdpa_per_device_chunk_size=0,
-        sdpa_num_l_chunks_override=None,
-        sdpa_compute_block_size_override=None,
     ):
         """
         Execute post_sdpa fused operation with optional SDPA reduce-to-all and CCL all-reduce.
@@ -1521,8 +1515,6 @@ class PostSDPA:
             sdpa_cluster_axis=sdpa_cluster_axis,
             sdpa_position_id_tensor_mesh=sdpa_position_id_tensor_mesh,
             sdpa_per_device_chunk_size=sdpa_per_device_chunk_size,
-            sdpa_num_l_chunks_override=sdpa_num_l_chunks_override,
-            sdpa_compute_block_size_override=sdpa_compute_block_size_override,
         )
 
         mesh_device = input_tensor_mesh.device()

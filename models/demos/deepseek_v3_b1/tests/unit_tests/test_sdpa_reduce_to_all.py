@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,7 +17,7 @@ from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaRedu
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     create_fabric_router_config,
     get_env_int,
-    parse_positive_env_int,
+    get_optional_env_int,
     run_trace_benchmark,
 )
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
@@ -35,17 +34,11 @@ TRACE_POSITION_ID = 3500
 TRACE_SCATTER_ENABLED = False
 
 ENV_MAX_PAYLOAD_SIZE = "SDPA_REDUCE_TO_ALL_MAX_PAYLOAD_SIZE_BYTES"
-MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+TRACE_MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 ENV_NUM_L_CHUNKS = "SDPA_REDUCE_TO_ALL_NUM_L_CHUNKS"
-TRACE_NUM_L_CHUNKS = None
-_trace_num_l_chunks_raw = os.getenv(ENV_NUM_L_CHUNKS)
-if _trace_num_l_chunks_raw is not None and _trace_num_l_chunks_raw.strip() != "":
-    TRACE_NUM_L_CHUNKS = parse_positive_env_int(ENV_NUM_L_CHUNKS, _trace_num_l_chunks_raw)
+TRACE_NUM_L_CHUNKS = get_optional_env_int(ENV_NUM_L_CHUNKS)
 ENV_COMPUTE_BLOCK_SIZE = "SDPA_REDUCE_TO_ALL_COMPUTE_BLOCK_SIZE"
-TRACE_COMPUTE_BLOCK_SIZE = None
-_trace_compute_block_size_raw = os.getenv(ENV_COMPUTE_BLOCK_SIZE)
-if _trace_compute_block_size_raw is not None and _trace_compute_block_size_raw.strip() != "":
-    TRACE_COMPUTE_BLOCK_SIZE = parse_positive_env_int(ENV_COMPUTE_BLOCK_SIZE, _trace_compute_block_size_raw)
+TRACE_COMPUTE_BLOCK_SIZE = get_optional_env_int(ENV_COMPUTE_BLOCK_SIZE)
 
 
 @dataclass(frozen=True)
@@ -389,7 +382,7 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            "fabric_router_config": create_fabric_router_config(MAX_PAYLOAD_SIZE),
+            "fabric_router_config": create_fabric_router_config(TRACE_MAX_PAYLOAD_SIZE),
             "trace_region_size": 2965504,
         }
     ],
@@ -407,7 +400,7 @@ def test_sdpa_reduce_to_all_trace(
         bh_2d_mesh_device,
         scatter_enabled=TRACE_SCATTER_ENABLED,
         position_id=TRACE_POSITION_ID,
-        max_payload_size_bytes=MAX_PAYLOAD_SIZE,
+        max_payload_size_bytes=TRACE_MAX_PAYLOAD_SIZE,
         num_l_chunks_override=TRACE_NUM_L_CHUNKS,
         compute_block_size_override=TRACE_COMPUTE_BLOCK_SIZE,
     )
@@ -415,7 +408,7 @@ def test_sdpa_reduce_to_all_trace(
     logger.info(
         "Running SDPA reduce-to-all trace: "
         f"forwarder_cores=2, scatter={'enabled' if TRACE_SCATTER_ENABLED else 'disabled'}, "
-        f"position_id={TRACE_POSITION_ID}, max_payload_size_bytes={MAX_PAYLOAD_SIZE}, "
+        f"position_id={TRACE_POSITION_ID}, max_payload_size_bytes={TRACE_MAX_PAYLOAD_SIZE}, "
         f"num_l_chunks={'default' if TRACE_NUM_L_CHUNKS is None else TRACE_NUM_L_CHUNKS}, "
         f"compute_block_size={'default' if TRACE_COMPUTE_BLOCK_SIZE is None else TRACE_COMPUTE_BLOCK_SIZE}"
     )
