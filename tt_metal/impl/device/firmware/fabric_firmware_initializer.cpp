@@ -15,6 +15,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt_metal.hpp>
 #include "device/device_impl.hpp"
+#include "device/device_manager.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
 

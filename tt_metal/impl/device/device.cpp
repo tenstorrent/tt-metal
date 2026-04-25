@@ -1323,8 +1323,25 @@ void Device::quiesce_and_restart_fabric_workers() {
                 try {
                     detail::ReadFromDeviceL1(
                         this, logical_core, erisc_sync_addr_pre, 4, pre_launch_buf, CoreType::ETH);
+                } catch (const std::exception& e) {
+                    pre_launch_buf[0] = 0xDEADBEEF;
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Phase 3 pre-launch status "
+                        "read threw for ETH logical ({},{}) — proceeding with 0xDEADBEEF: {}",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
                 } catch (...) {
                     pre_launch_buf[0] = 0xDEADBEEF;
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Phase 3 pre-launch status "
+                        "read threw unknown exception for ETH logical ({},{}) — proceeding with 0xDEADBEEF",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y);
                 }
                 log_info(
                     tt::LogMetal,

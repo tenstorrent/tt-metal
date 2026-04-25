@@ -551,6 +551,27 @@ for line in sys.stdin:
 " | head -25
 echo ""
 
+# ─── OPERATION TIMEOUT EVENTS ───
+echo "=== OPERATION TIMEOUT EVENTS (TT_METAL_OPERATION_TIMEOUT_SECONDS) ==="
+python3 -c "
+import sys, re
+events = []
+with open('$CLEAN') as f:
+    for line in f:
+        line = line.rstrip()
+        if re.search(r'TT_METAL_OPERATION_TIMEOUT|operation.*timeout.*seconds|OperationTimeout|Operation.*timed out', line, re.I):
+            events.append(line)
+if events:
+    for e in events[:20]:
+        print('  ' + e[:200])
+    if len(events) > 20:
+        print(f'  ... and {len(events)-20} more')
+    print(f'  => {len(events)} operation-level timeout event(s) detected')
+else:
+    print('  (none detected)')
+"
+echo ""
+
 # ─── HANG INDICATORS ───
 echo "=== HANG INDICATORS (gaps > 30s between consecutive GHA timestamps) ==="
 python3 -c "
@@ -628,7 +649,7 @@ HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeou
 HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null || echo 0)
 HAS_FORCE_RESET=$(grep -c 'assert_risc_reset_at_core\|force.reset' "$CLEAN" 2>/dev/null || echo 0)
 FIX_Z=$(grep -c 'is_fabric_relay_path_broken\|relay.*broken.*completion_queue\|CQ.*relay.*broken' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AB=$(grep -c 'hard-reset.*MMIO\|RiscFirmwareInitializer.*teardown\|MMIO ETH.*reset' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AB=$(grep -cE 'hard-reset.*MMIO|RiscFirmwareInitializer.*teardown|MMIO ETH.*reset|fabric_teardown_timed_out_.*set.*device|FIX AB extension' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AD=$(grep -cE 'rescue_stuck_dispatch_cores.*hard.*reset|hard BRISC reset|performing hard BRISC reset' "$CLEAN" 2>/dev/null || echo 0)
 FIX_W=$(grep -cE 'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.*clean return' "$CLEAN" 2>/dev/null || echo 0)
 FIX_AA=$(grep -ciE 'FIX AA|relay path broken.*skipping AllGather|skipping AllGather' "$CLEAN" 2>/dev/null || echo 0)
