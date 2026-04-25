@@ -22,7 +22,8 @@ from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
 
 DEMO_NAME = "deepseek_v4_flash_tiny_scaffold"
 DEMO_NOTE = (
-    "Tiny scaffold/demo only: synthetic checkpoint, decoder layer stack, TTNN LM head; not a full model/perf result."
+    "Tiny scaffold/demo only: synthetic checkpoint, decoder layer stack, TTNN LM head, batch-1 "
+    "host-owned compressed decode cache; not a full model/perf result or final optimized decode kernel."
 )
 DEFAULT_TOKENS = 32
 DEFAULT_LAYER = 2
@@ -30,6 +31,7 @@ DEFAULT_TOP_K = 5
 DEFAULT_WARMUP_RUNS = 1
 DEFAULT_MEASURE_RUNS = 1
 DEFAULT_DECODE_STEPS = 0
+DEFAULT_GENERATE_STEPS = 0
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,22 @@ class DemoTimings:
     run_s: float
     total_s: float
     decode_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class GenerationTimings:
+    prefill_s: float
+    decode_s: float
+    total_s: float
+
+
+@dataclass(frozen=True)
+class TinyGenerationResult:
+    prefill_logits: torch.Tensor
+    decode_logits: torch.Tensor
+    generated_token_ids: torch.Tensor
+    cache_current_position: int
+    timings: GenerationTimings
 
 
 def create_arg_parser() -> argparse.ArgumentParser:
@@ -94,6 +112,12 @@ def create_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DECODE_STEPS,
         help="Run this many deterministic batch-1 decode steps after the prefill input.",
     )
+    parser.add_argument(
+        "--generate-steps",
+        type=_nonnegative_int,
+        default=DEFAULT_GENERATE_STEPS,
+        help="Run this many greedy batch-1 generated decode steps after the prefill input.",
+    )
     return parser
 
 
@@ -101,6 +125,8 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
     total_start = time.perf_counter()
     setup_start = time.perf_counter()
     layer_ids = _demo_layer_ids(args)
+    if args.decode_steps > 0 and args.generate_steps > 0:
+        raise ValueError("Pass either --decode-steps or --generate-steps, not both")
     with prepared_tiny_checkpoint(
         preprocessed_path=args.preprocessed_path,
         artifact_dir=args.artifact_dir,
@@ -111,6 +137,7 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
         input_ids = deterministic_input_ids(tokens=args.tokens, vocab_size=vocab_size)
         decode_input_ids = deterministic_decode_input_ids(tokens=args.decode_steps, vocab_size=vocab_size)
         decode_requested = args.decode_steps > 0
+        generate_requested = args.generate_steps > 0
         setup_s = time.perf_counter() - setup_start
 
         ttnn = _import_ttnn()
@@ -138,7 +165,14 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
 
             warmup_start = time.perf_counter()
             for _ in range(args.warmup_runs):
-                if decode_requested:
+                if generate_requested:
+                    run_tiny_generation_loop(
+                        model,
+                        input_ids=input_ids,
+                        generate_steps=args.generate_steps,
+                        synchronize=lambda: _synchronize_submeshes(ttnn, mesh_device),
+                    )
+                elif decode_requested:
                     _run_prefill_decode_sequence(
                         model,
                         input_ids=input_ids,
@@ -156,9 +190,24 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
             logits = None
             decode_logits = None
             decode_s = 0.0
+            generation_result = None
+            generation_prefill_s = 0.0
+            generation_decode_s = 0.0
+            generation_total_s = 0.0
             run_start = time.perf_counter()
             for _ in range(args.measure_runs):
-                if decode_requested:
+                if generate_requested:
+                    generation_result = run_tiny_generation_loop(
+                        model,
+                        input_ids=input_ids,
+                        generate_steps=args.generate_steps,
+                        synchronize=lambda: _synchronize_submeshes(ttnn, mesh_device),
+                    )
+                    logits = generation_result.prefill_logits
+                    generation_prefill_s += generation_result.timings.prefill_s
+                    generation_decode_s += generation_result.timings.decode_s
+                    generation_total_s += generation_result.timings.total_s
+                elif decode_requested:
                     logits, decode_logits, measured_decode_s = _run_prefill_decode_sequence(
                         model,
                         input_ids=input_ids,
@@ -171,6 +220,18 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
                     logits = model(input_ids)
                     _synchronize_submeshes(ttnn, mesh_device)
             run_s = time.perf_counter() - run_start
+            if generation_result is not None:
+                generation_result = TinyGenerationResult(
+                    prefill_logits=generation_result.prefill_logits,
+                    decode_logits=generation_result.decode_logits,
+                    generated_token_ids=generation_result.generated_token_ids,
+                    cache_current_position=generation_result.cache_current_position,
+                    timings=GenerationTimings(
+                        prefill_s=generation_prefill_s / args.measure_runs,
+                        decode_s=generation_decode_s / args.measure_runs,
+                        total_s=generation_total_s / args.measure_runs,
+                    ),
+                )
         finally:
             model = None
             gc.collect()
@@ -208,6 +269,8 @@ def run_tiny_model_demo(args: argparse.Namespace) -> dict:
             warmup_runs=args.warmup_runs,
             measure_runs=args.measure_runs,
             decode_steps=args.decode_steps,
+            generate_steps=args.generate_steps,
+            generation_result=generation_result,
         )
 
 
@@ -258,10 +321,71 @@ def deterministic_decode_input_ids(*, tokens: int, vocab_size: int) -> torch.Ten
     return deterministic_input_ids(tokens=tokens, vocab_size=vocab_size)
 
 
+def greedy_next_token_id(logits: torch.Tensor) -> torch.Tensor:
+    if logits.ndim != 3 or logits.shape[0] != 1:
+        raise ValueError(f"logits must have shape [1, tokens, vocab], got {tuple(logits.shape)}")
+    if logits.shape[1] == 0:
+        raise ValueError("logits must contain at least one token")
+    if logits.shape[2] == 0:
+        raise ValueError("logits must contain at least one vocab entry")
+    return torch.argmax(logits[0, -1].float(), dim=-1).reshape(1, 1).to(torch.int64)
+
+
+def run_tiny_generation_loop(
+    model,
+    *,
+    input_ids: torch.Tensor,
+    generate_steps: int,
+    synchronize,
+    timer=time.perf_counter,
+) -> TinyGenerationResult:
+    if generate_steps < 0:
+        raise ValueError(f"generate_steps must be non-negative, got {generate_steps}")
+
+    total_start = timer()
+    prefill_start = timer()
+    prefill_logits, cache = model.prefill_with_decode_cache(input_ids)
+    synchronize()
+    prefill_s = timer() - prefill_start
+
+    current_logits = prefill_logits
+    generated_token_ids = []
+    decode_logits = []
+    decode_s = 0.0
+    for _ in range(generate_steps):
+        next_token = greedy_next_token_id(current_logits)
+        generated_token_ids.append(next_token)
+        decode_start = timer()
+        current_logits, cache = model.decode_step(next_token, cache=cache)
+        synchronize()
+        decode_s += timer() - decode_start
+        decode_logits.append(current_logits)
+
+    if generated_token_ids:
+        generated_tokens = torch.cat(generated_token_ids, dim=1)
+        generated_logits = torch.cat(decode_logits, dim=1)
+    else:
+        generated_tokens = torch.empty(1, 0, dtype=torch.int64)
+        generated_logits = prefill_logits.new_empty((1, 0, prefill_logits.shape[-1]))
+
+    return TinyGenerationResult(
+        prefill_logits=prefill_logits,
+        decode_logits=generated_logits,
+        generated_token_ids=generated_tokens,
+        cache_current_position=int(cache.current_position),
+        timings=GenerationTimings(
+            prefill_s=prefill_s,
+            decode_s=decode_s,
+            total_s=timer() - total_start,
+        ),
+    )
+
+
 def summarize_demo_result(
     *,
     logits: torch.Tensor,
     decode_logits: torch.Tensor | None = None,
+    generation_result: TinyGenerationResult | None = None,
     input_ids: torch.Tensor,
     timings: DemoTimings,
     checkpoint: PreparedCheckpoint,
@@ -269,6 +393,7 @@ def summarize_demo_result(
     warmup_runs: int,
     measure_runs: int,
     decode_steps: int = 0,
+    generate_steps: int = 0,
     layer: int | None = None,
     layer_ids: tuple[int, ...] | None = None,
 ) -> dict:
@@ -284,6 +409,10 @@ def summarize_demo_result(
         raise ValueError("layer_ids must be non-empty")
     if decode_steps < 0:
         raise ValueError(f"decode_steps must be non-negative, got {decode_steps}")
+    if generate_steps < 0:
+        raise ValueError(f"generate_steps must be non-negative, got {generate_steps}")
+    if decode_steps > 0 and generate_steps > 0:
+        raise ValueError("decode_steps and generate_steps are mutually exclusive")
 
     first_token = logits[0, 0].float()
     top_count = min(top_k, first_token.shape[0])
@@ -305,6 +434,7 @@ def summarize_demo_result(
             "warmup_runs": int(warmup_runs),
             "measure_runs": int(measure_runs),
             "decode_steps": int(decode_steps),
+            "generate_steps": int(generate_steps),
         },
         "logits": {
             "shape": list(logits.shape),
@@ -341,7 +471,91 @@ def summarize_demo_result(
             ],
         }
         summary["timing_s"]["decode"] = _round_float(timings.decode_s)
+    if generation_result is not None:
+        summary["generation"] = summarize_generation_result(
+            generation_result,
+            prompt_tokens=int(input_ids.shape[1]),
+            top_k=top_k,
+        )
     return summary
+
+
+def summarize_generation_result(
+    result: TinyGenerationResult,
+    *,
+    prompt_tokens: int,
+    top_k: int,
+) -> dict:
+    if result.decode_logits.ndim != 3 or result.decode_logits.shape[0] != 1:
+        raise ValueError(
+            f"decode_logits must have shape [1, generated_tokens, vocab], got {tuple(result.decode_logits.shape)}"
+        )
+    if tuple(result.generated_token_ids.shape[:1]) != (1,):
+        raise ValueError(
+            "generated_token_ids must have shape [1, generated_tokens], "
+            f"got {tuple(result.generated_token_ids.shape)}"
+        )
+    generated_tokens = int(result.generated_token_ids.shape[1])
+    if int(result.decode_logits.shape[1]) != generated_tokens:
+        raise ValueError(
+            f"decode_logits token count {result.decode_logits.shape[1]} does not match generated token count "
+            f"{generated_tokens}"
+        )
+    metrics = summarize_generation_metrics(
+        prompt_tokens=prompt_tokens,
+        generated_tokens=generated_tokens,
+        timings=result.timings,
+    )
+    summary = {
+        "generated_token_ids": [int(token) for token in result.generated_token_ids[0].tolist()],
+        "decode_cache_current_position": int(result.cache_current_position),
+        "metrics": metrics,
+        "decode_logits": {
+            "shape": list(result.decode_logits.shape),
+            "checksum": _round_float(float(result.decode_logits.float().sum().item())),
+        },
+    }
+    if generated_tokens > 0:
+        final_token = result.decode_logits[0, -1].float()
+        top_count = min(top_k, final_token.shape[0])
+        top_values, top_indices = torch.topk(final_token, k=top_count)
+        summary["decode_logits"]["final_token_top_k"] = [
+            {"id": int(index.item()), "value": _round_float(float(value.item()))}
+            for index, value in zip(top_indices, top_values)
+        ]
+    else:
+        summary["decode_logits"]["final_token_top_k"] = []
+    return summary
+
+
+def summarize_generation_metrics(
+    *,
+    prompt_tokens: int,
+    generated_tokens: int,
+    timings: GenerationTimings,
+) -> dict:
+    _validate_nonnegative_number(timings.prefill_s, "prefill_s")
+    _validate_nonnegative_number(timings.decode_s, "decode_s")
+    _validate_nonnegative_number(timings.total_s, "total_s")
+    if prompt_tokens <= 0:
+        raise ValueError(f"prompt_tokens must be positive, got {prompt_tokens}")
+    if generated_tokens < 0:
+        raise ValueError(f"generated_tokens must be non-negative, got {generated_tokens}")
+
+    per_token_decode_s = timings.decode_s / generated_tokens if generated_tokens > 0 else 0.0
+    decode_tokens_per_s_per_user = (
+        generated_tokens / timings.decode_s if generated_tokens > 0 and timings.decode_s > 0 else 0.0
+    )
+    return {
+        "prompt_tokens": int(prompt_tokens),
+        "generated_tokens": int(generated_tokens),
+        "users": 1,
+        "prefill_latency_s": _round_float(timings.prefill_s),
+        "total_decode_latency_s": _round_float(timings.decode_s),
+        "per_token_decode_latency_s": _round_float(per_token_decode_s),
+        "generation_total_latency_s": _round_float(timings.total_s),
+        "effective_decode_tokens_s_per_user": _round_float(decode_tokens_per_s_per_user),
+    }
 
 
 def _run_prefill_decode_sequence(
@@ -453,6 +667,11 @@ def _demo_compress_ratios(layer_ids: tuple[int, ...], *, num_hidden_layers: int)
 
 def _round_float(value: float) -> float:
     return round(float(value), 6)
+
+
+def _validate_nonnegative_number(value: float, label: str) -> None:
+    if value < 0:
+        raise ValueError(f"{label} must be non-negative, got {value}")
 
 
 def main() -> None:
