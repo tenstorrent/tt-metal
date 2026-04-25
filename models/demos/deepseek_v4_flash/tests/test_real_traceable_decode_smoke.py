@@ -103,18 +103,40 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         "ttnn.linear(wo_b)",
         "ttnn.add(hidden,attention_projected)",
         "ttnn.rms_norm(ffn_norm)",
+        "ttnn.linear(router_gate)",
+        "ttnn.softplus(router_logits)",
+        "ttnn.sqrt(router_softplus)",
+        "ttnn.add(router_scores,router_bias)",
+        "ttnn.topk(router_selection_scores)",
+        "ttnn.gather(router_scores,router_topk_indices)",
+        "ttnn.sum(router_topk_route_scores)",
+        "ttnn.div(router_topk_route_scores,router_weight_sum)",
+        "ttnn.mul(router_route_weights,routed_scaling_factor)",
+        "ttnn.slice(router_route_weights_topk_prefix)",
+        "ttnn.mul(router_selected_route_weights,decode_row_mask)",
         "TtRoutedExpertMLP(selected_topk_prefix)",
-        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.mul(routed_hidden,device_router_route_weight)",
         "ttnn.add(routed_expert_outputs)",
         "TtSharedExpertMLP",
         "ttnn.add(shared_output,routed_output)",
         "ttnn.add(post_attention_residual,combined_ffn_output)",
     ]
+    assert result["traceability_flags"]["router_gate_matmul_in_trace"] is True
+    assert result["traceability_flags"]["router_scoring_in_trace"] is True
+    assert result["traceability_flags"]["router_topk_in_trace"] is True
+    assert result["traceability_flags"]["router_route_weights_in_trace"] is True
+    assert result["traceability_flags"]["router_expert_dispatch_dynamic_in_trace"] is False
+    assert result["router_trace"]["mode"] == "device_gate_scoring_topk_route_weights_static_dispatch"
+    assert result["router_trace"]["topk_in_trace"] is True
+    assert result["router_trace"]["route_weights_in_trace"] is True
+    assert result["router_trace"]["expert_dispatch"] == "static_preflight"
+    assert result["router_trace"]["selected_expert_ids"] == [3]
+    assert result["router_trace"]["expected_full_topk_expert_ids"] == [3, 2]
     assert (
-        "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host"
+        "dynamic MoE expert dispatch; selected expert modules are statically instantiated from a host preflight plan"
         in result["traceable_decode_scope"]["excluded_from_trace"]
     )
-    assert result["selected_routing"]["selection_boundary"] == "host_pretrace_router_topk"
+    assert result["selected_routing"]["selection_boundary"] == "host_preflight_static_dispatch_device_router_weights"
     assert result["selected_routing"]["topk_prefix_limit"] == 1
     assert result["selected_routing"]["topk_prefix_is_full"] is False
     assert result["selected_routing"]["full_topk_mode"] is False
@@ -207,11 +229,17 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["reference"]["attention_output"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["post_attention_residual"]["shape"] == [1, 1, 4, 32]
+    assert result["reference"]["router_logits"]["shape"] == [1, 1, 4, 4]
+    assert result["reference"]["router_topk_indices"]["shape"] == [1, 1, 4, 2]
+    assert result["reference"]["router_route_weights"]["shape"] == [1, 1, 4, 2]
+    assert result["reference"]["router_selected_route_weights_masked"]["shape"] == [1, 1, 4, 1]
+    assert result["reference"]["router_decode_topk_indices"]["shape"] == [1, 1, 1, 2]
+    assert result["reference"]["router_decode_route_weights"]["shape"] == [1, 1, 1, 2]
     assert result["reference"]["routed_output"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["combined_ffn_output"]["shape"] == [1, 1, 4, 32]
     assert result["reference"]["residual_output"]["shape"] == [1, 1, 4, 32]
-    assert "router_topk_pretrace" in result["host_boundaries_outside_trace"]
-    assert "route_weight_host_to_device" in result["host_boundaries_outside_trace"]
+    assert "router_static_dispatch_preflight" in result["host_boundaries_outside_trace"]
+    assert "router_decode_row_mask_host_to_device" in result["host_boundaries_outside_trace"]
     assert "kv_cache_seed_host_to_device" in result["host_boundaries_outside_trace"]
     assert "rope_table_host_to_device" in result["host_boundaries_outside_trace"]
     assert "attention_output_host_to_device" not in result["host_boundaries_outside_trace"]
@@ -284,6 +312,12 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["selected_routing"]["topk_prefix_limit"] == 2
     assert payload["selected_routing"]["topk_prefix_is_full"] is True
     assert payload["selected_routing"]["full_topk_mode"] is True
+    assert payload["router_trace"]["mode"] == "device_gate_scoring_topk_route_weights_static_dispatch"
+    assert payload["router_trace"]["gate_matmul_in_trace"] is True
+    assert payload["router_trace"]["scoring_in_trace"] is True
+    assert payload["router_trace"]["topk_in_trace"] is True
+    assert payload["router_trace"]["route_weights_in_trace"] is True
+    assert payload["router_trace"]["expert_dispatch"] == "static_preflight"
     assert payload["attention_path"]["host_provided_attention_output"] is False
     assert payload["attention_path"]["kv_source"]["kv_split_in_trace"] is True
     assert payload["attention_path"]["kv_source"]["true_kv_split_in_trace"] is False
@@ -304,6 +338,8 @@ def test_cpu_traceable_decode_subpath_cli_outputs_json(tmp_path: Path) -> None:
     assert payload["reference"]["attention_probs"]["shape"] == [1, 4, 4, 4]
     assert payload["reference"]["attention_output"]["shape"] == [1, 1, 4, 32]
     assert payload["reference"]["attention_projected"]["shape"] == [1, 1, 4, 32]
+    assert payload["reference"]["router_logits"]["shape"] == [1, 1, 4, 4]
+    assert payload["reference"]["router_route_weights"]["shape"] == [1, 1, 4, 2]
 
 
 def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
@@ -340,11 +376,19 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert "ttnn.matmul(q_heads,k_heads_transposed)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.softmax(qk_scores)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.matmul(attention_probs,value_heads)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.linear(router_gate)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.topk(router_selection_scores)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.mul(router_route_weights,routed_scaling_factor)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.linear(routed_w1_selected_topk_prefix)" in result["trace_capture"]["traced_operations"]
     assert result["selected_routing"]["topk_prefix_limit"] == result["selected_routing"]["full_topk"]
     assert result["selected_routing"]["topk_prefix_is_full"] is True
     assert result["routed_expert_execution"]["full_topk_executed"] is True
     assert result["selected_routing"]["route_weights_device_resident_inside_trace"] is True
+    assert result["traceability_flags"]["router_gate_matmul_in_trace"] is True
+    assert result["traceability_flags"]["router_scoring_in_trace"] is True
+    assert result["traceability_flags"]["router_topk_in_trace"] is True
+    assert result["traceability_flags"]["router_route_weights_in_trace"] is True
+    assert result["traceability_flags"]["router_expert_dispatch_dynamic_in_trace"] is False
     assert (
         "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows"
         in result["traceable_decode_scope"]["excluded_from_trace"]
@@ -360,6 +404,9 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["accuracy"]["attention_output"]["passed"] is True
     assert result["accuracy"]["attention_projected"]["passed"] is True
     assert result["accuracy"]["post_attention_residual"]["passed"] is True
+    assert result["accuracy"]["router_decode_route_weights"]["passed"] is True
+    assert result["accuracy"]["router_decode_topk_indices"]["required_for_pass"] is False
+    assert result["router_trace"]["topk_indices_accuracy_required_for_pass"] is False
     assert result["accuracy"]["routed_output"]["passed"] is True
     assert result["accuracy"]["combined_ffn_output"]["passed"] is True
     assert result["accuracy"]["residual_output"]["passed"] is True

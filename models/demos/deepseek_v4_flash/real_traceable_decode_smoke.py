@@ -229,7 +229,6 @@ class TtTraceableDecodeSubpath:
             swiglu_limit=float(config.swiglu_limit),
         )
         self.routed_experts: dict[int, TtRoutedExpertMLP] = {}
-        self.routed_route_weights: dict[int, object] = {}
         for expert in route_plan.selected_expert_ids:
             if expert not in weights.routed_experts:
                 raise KeyError(f"Missing routed expert weights for selected expert {expert}")
@@ -244,15 +243,43 @@ class TtTraceableDecodeSubpath:
                 swiglu_limit=float(config.swiglu_limit),
             )
             self.routed_experts[expert] = routed_module
-            self.routed_route_weights[expert] = _to_tt_route_weight(
-                route_plan.per_expert_route_weight[expert],
-                intermediate_size=routed_module.intermediate_size,
+        self.kv_output_dim = _kv_output_dim(config)
+        self.attention_cache_repeat_factor = _attention_cache_repeat_factor(config)
+        self.router_mode = _router_mode(config=config, weights=weights)
+        self.router_gate = _to_tt_linear_weight(
+            weights.router_gate,
+            device=device,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
+        self.router_bias = (
+            _to_tt_router_bias(
+                weights.router_bias,
+                token_rows=self.static_token_rows,
                 device=device,
                 dtype=dtype,
                 memory_config=memory_config,
             )
-        self.kv_output_dim = _kv_output_dim(config)
-        self.attention_cache_repeat_factor = _attention_cache_repeat_factor(config)
+            if weights.router_bias is not None
+            else None
+        )
+        self.static_router_indices = (
+            _to_tt_static_router_indices(
+                route_plan.router_indices,
+                token_rows=self.static_token_rows,
+                device=device,
+                memory_config=memory_config,
+            )
+            if weights.router_tid2eid is not None
+            else None
+        )
+        self.router_row_mask = _to_tt_router_decode_row_mask(
+            token_rows=self.static_token_rows,
+            decode_token_index=route_plan.decode_token_index,
+            device=device,
+            dtype=dtype,
+            memory_config=memory_config,
+        )
         self.wkv = _to_tt_linear_weight(
             weights.kv.wkv,
             device=device,
@@ -349,14 +376,61 @@ class TtTraceableDecodeSubpath:
             epsilon=float(self.config.rms_norm_eps),
             memory_config=self.memory_config,
         )
-        shared_output = self.shared_expert(ffn_norm_output)
-        routed_expert_outputs = {
-            f"routed_expert_{expert}_output": routed_module(
-                ffn_norm_output,
-                route_weight=self.routed_route_weights[expert],
-            )
-            for expert, routed_module in self.routed_experts.items()
+        router_outputs = _ttnn_router_path(
+            ffn_norm_output,
+            router_gate=self.router_gate,
+            router_bias=self.router_bias,
+            static_router_indices=self.static_router_indices,
+            config=self.config,
+            memory_config=self.memory_config,
+        )
+        router_selected_route_weights = _ttnn_topk_prefix(
+            router_outputs["router_route_weights"],
+            topk_prefix=self.route_plan.topk_prefix,
+            memory_config=self.memory_config,
+        )
+        router_selected_route_weights_masked = ttnn.mul(
+            router_selected_route_weights,
+            self.router_row_mask,
+            memory_config=self.memory_config,
+        )
+        router_decode_topk_indices = _ttnn_decode_token_slice(
+            router_outputs["router_topk_indices"],
+            decode_token_index=self.route_plan.decode_token_index,
+            memory_config=self.memory_config,
+        )
+        router_decode_route_weights = _ttnn_decode_token_slice(
+            router_outputs["router_route_weights"],
+            decode_token_index=self.route_plan.decode_token_index,
+            memory_config=self.memory_config,
+        )
+        router_decode_selected_route_weights = _ttnn_decode_token_slice(
+            router_selected_route_weights,
+            decode_token_index=self.route_plan.decode_token_index,
+            memory_config=self.memory_config,
+        )
+        router_outputs = {
+            **router_outputs,
+            "router_selected_route_weights": router_selected_route_weights,
+            "router_selected_route_weights_masked": router_selected_route_weights_masked,
+            "router_decode_topk_indices": router_decode_topk_indices,
+            "router_decode_route_weights": router_decode_route_weights,
+            "router_decode_selected_route_weights": router_decode_selected_route_weights,
         }
+        shared_output = self.shared_expert(ffn_norm_output)
+        routed_expert_outputs = {}
+        for slot, (expert, routed_module) in enumerate(self.routed_experts.items()):
+            route_weight = _ttnn_route_weight_for_topk_slot(
+                router_outputs["router_route_weights"],
+                slot=slot,
+                route_mask=self.router_row_mask,
+                intermediate_size=routed_module.intermediate_size,
+                memory_config=self.memory_config,
+            )
+            routed_expert_outputs[f"routed_expert_{expert}_output"] = routed_module(
+                ffn_norm_output,
+                route_weight=route_weight,
+            )
         routed_output = _sum_ttnn_tensors(
             routed_expert_outputs.values(),
             memory_config=self.memory_config,
@@ -375,6 +449,7 @@ class TtTraceableDecodeSubpath:
             "attention_projected": attention_projected,
             "post_attention_residual": post_attention_residual,
             "ffn_norm_output": ffn_norm_output,
+            **router_outputs,
             "shared_output": shared_output,
             **routed_expert_outputs,
             "routed_output": routed_output,
@@ -557,11 +632,17 @@ def run_traceable_decode_subpath_smoke(
     result["trace_capture_passed"] = bool(result["trace_capture"]["capture_passed"])
     result["trace_execute_replay_passed"] = bool(result["trace_capture"]["execute_replay_passed"])
     result["guard_status"] = _guard_status(result["trace_capture"])
-    result["ttnn_ops"] = _traceable_decode_ttnn_ops(attention_mode)
+    result["ttnn_ops"] = _traceable_decode_ttnn_ops(
+        attention_mode,
+        config=config,
+        weights=weights,
+        route_plan=route_plan,
+    )
     result["trace_capture"]["traced_operations"] = list(result["ttnn_ops"])
     result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs.items()}
-    result["accuracy"] = {
-        name: _traceable_accuracy_summary(
+    result["accuracy"] = {}
+    for name, expected in _traceable_accuracy_items(replay_reference):
+        accuracy = _traceable_accuracy_summary(
             name,
             expected,
             ttnn_outputs[name],
@@ -569,13 +650,24 @@ def run_traceable_decode_subpath_smoke(
             rtol=rtol,
             atol=atol,
         )
-        for name, expected in replay_reference.items()
-    }
+        accuracy["required_for_pass"] = _traceable_accuracy_required_for_pass(name)
+        result["accuracy"][name] = accuracy
+    if "router_decode_topk_indices" in result["accuracy"]:
+        result["router_trace"]["device_topk_indices_match_torch_reference"] = bool(
+            result["accuracy"]["router_decode_topk_indices"].get("allclose", False)
+        )
+        result["router_trace"]["topk_indices_accuracy_required_for_pass"] = bool(
+            result["accuracy"]["router_decode_topk_indices"]["required_for_pass"]
+        )
+    if "router_decode_route_weights" in result["accuracy"]:
+        result["router_trace"]["device_route_weights_match_torch_reference_allclose"] = bool(
+            result["accuracy"]["router_decode_route_weights"].get("allclose", False)
+        )
     result["passed"] = bool(
         result["trace_capture"]["attempted"]
         and result["trace_capture"]["capture_passed"]
         and result["trace_capture"]["execute_replay_passed"]
-        and all(item["passed"] for item in result["accuracy"].values())
+        and all(item["passed"] for item in result["accuracy"].values() if bool(item.get("required_for_pass", True)))
     )
     return result
 
@@ -738,6 +830,12 @@ def build_torch_traceable_decode_subpath_reference(
         weights.ffn_norm,
         eps=float(config.rms_norm_eps),
     ).unsqueeze(1)
+    router_intermediates = _torch_router_trace(
+        ffn_norm_output,
+        weights,
+        config=config,
+        route_plan=route_plan,
+    )
     shared_output = (
         swiglu_expert(
             ffn_norm_output[:, 0].reshape(-1, int(config.hidden_size)),
@@ -790,6 +888,7 @@ def build_torch_traceable_decode_subpath_reference(
         "attention_projected": attention_projected.to(torch.bfloat16),
         "post_attention_residual": post_attention_residual.to(torch.bfloat16),
         "ffn_norm_output": ffn_norm_output.to(torch.bfloat16),
+        **router_intermediates,
         "shared_output": shared_output.to(torch.bfloat16),
         **routed_expert_outputs,
         "routed_output": routed_output.to(torch.bfloat16),
@@ -855,6 +954,89 @@ def build_traceable_decode_route_plan(
         input_ids=input_ids,
         per_expert_route_weight=per_expert_route_weight,
     )
+
+
+def _torch_router_trace(
+    ffn_norm_output: torch.Tensor,
+    weights: TraceableDecodeWeights,
+    *,
+    config: DeepSeekV4FlashConfig,
+    route_plan: TraceableDecodeRoutePlan | None,
+) -> dict[str, torch.Tensor]:
+    _validate_activation(ffn_norm_output, hidden_size=int(config.hidden_size))
+    router_logits = torch.matmul(ffn_norm_output.float(), weights.router_gate.float().T)
+    if str(config.scoring_func) == "softmax":
+        router_scores = router_logits.softmax(dim=-1)
+    elif str(config.scoring_func) == "sigmoid":
+        router_scores = router_logits.sigmoid()
+    elif str(config.scoring_func) == "sqrtsoftplus":
+        router_scores = F.softplus(router_logits).sqrt()
+    else:
+        raise ValueError(f"Unsupported DeepSeek V4 Flash scoring_func {config.scoring_func!r}")
+
+    router_selection_scores = (
+        router_scores if weights.router_bias is None else router_scores + weights.router_bias.float().view(1, 1, 1, -1)
+    )
+    input_ids = (
+        _traceable_decode_input_ids(weights.router_tid2eid, seq_len=int(ffn_norm_output.shape[-2]))
+        if route_plan is None
+        else route_plan.input_ids
+    )
+    if weights.router_tid2eid is not None:
+        if input_ids is None:
+            raise ValueError("input_ids is required for traceable decode hash router reference")
+        router_topk_indices = weights.router_tid2eid[input_ids.reshape(-1)].to(torch.long)
+        router_topk_indices = router_topk_indices.reshape(
+            int(ffn_norm_output.shape[0]),
+            1,
+            int(ffn_norm_output.shape[-2]),
+            int(config.num_experts_per_tok),
+        )
+        router_topk_selection_scores = router_selection_scores.gather(-1, router_topk_indices)
+    else:
+        router_topk_selection_scores, router_topk_indices = router_selection_scores.topk(
+            int(config.num_experts_per_tok),
+            dim=-1,
+        )
+
+    if weights.router_bias is None and weights.router_tid2eid is None:
+        router_topk_route_scores = router_topk_selection_scores
+    else:
+        router_topk_route_scores = router_scores.gather(-1, router_topk_indices)
+
+    if str(config.scoring_func) == "softmax":
+        router_route_weights = router_topk_route_scores * float(config.routed_scaling_factor)
+    else:
+        router_route_weights = router_topk_route_scores / (router_topk_route_scores.sum(dim=-1, keepdim=True) + 1e-20)
+        router_route_weights = router_route_weights * float(config.routed_scaling_factor)
+
+    topk_prefix = int(config.num_experts_per_tok) if route_plan is None else int(route_plan.topk_prefix)
+    decode_token_index = 0 if route_plan is None else int(route_plan.decode_token_index)
+    router_selected_route_weights = router_route_weights[..., :topk_prefix].contiguous()
+    row_mask = torch.zeros_like(router_selected_route_weights[..., :1])
+    row_mask[..., decode_token_index : decode_token_index + 1, :] = 1.0
+    router_selected_route_weights_masked = router_selected_route_weights * row_mask
+    router_decode_topk_indices = router_topk_indices[:, :, decode_token_index : decode_token_index + 1, :].contiguous()
+    router_decode_route_weights = router_route_weights[
+        :, :, decode_token_index : decode_token_index + 1, :
+    ].contiguous()
+    router_decode_selected_route_weights = router_selected_route_weights[
+        :, :, decode_token_index : decode_token_index + 1, :
+    ].contiguous()
+    return {
+        "router_logits": router_logits.to(torch.bfloat16),
+        "router_scores": router_scores.to(torch.bfloat16),
+        "router_selection_scores": router_selection_scores.to(torch.bfloat16),
+        "router_topk_selection_scores": router_topk_selection_scores.to(torch.bfloat16),
+        "router_topk_indices": router_topk_indices.to(torch.uint16),
+        "router_topk_route_scores": router_topk_route_scores.to(torch.bfloat16),
+        "router_route_weights": router_route_weights.to(torch.bfloat16),
+        "router_selected_route_weights": router_selected_route_weights.to(torch.bfloat16),
+        "router_selected_route_weights_masked": router_selected_route_weights_masked.to(torch.bfloat16),
+        "router_decode_topk_indices": router_decode_topk_indices.to(torch.uint16),
+        "router_decode_route_weights": router_decode_route_weights.to(torch.bfloat16),
+        "router_decode_selected_route_weights": router_decode_selected_route_weights.to(torch.bfloat16),
+    }
 
 
 def default_guarded_symbols() -> tuple[GuardedSymbol, ...]:
@@ -1089,14 +1271,20 @@ def _base_result(
     guarded_labels = [symbol.label for symbol in default_guarded_symbols()]
     routed_expert_ids_loaded = [int(expert) for expert in weights.routed_experts]
     routed_expert_ids_executed = list(route_plan.selected_expert_ids)
+    router_summary = _router_trace_summary(route_plan, config=config, weights=weights)
     excluded_from_trace = [
         "true DeepSeek K/V split; this slice creates explicit K and V tensors from one compressed cache window",
         "dynamic sparse indexer top-k and per-token cache gather",
         "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows",
-        "router scoring/top-k/hash selection; selected expert ids and route weights are precomputed on host",
+        "dynamic MoE expert dispatch; selected expert modules are statically instantiated from a host preflight plan",
         "cache advancement beyond the fixed traced update index",
         "embedding and logits",
     ]
+    if not router_summary["topk_in_trace"]:
+        excluded_from_trace.insert(
+            4,
+            "router top-k for hash-routed layers; tid2eid metadata is still materialized as static device indices",
+        )
     if attention_mode == TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE:
         excluded_from_trace.insert(3, "QK scoring, softmax, and value reduction in legacy q+kv blend mode")
         excluded_from_trace.insert(4, "Q/K RoPE split in legacy q+kv blend mode")
@@ -1138,6 +1326,14 @@ def _base_result(
             "softmax_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "context_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "host_attention_or_context_input": False,
+            "router_mode": router_summary["mode"],
+            "router_gate_matmul_in_trace": router_summary["gate_matmul_in_trace"],
+            "router_scoring_in_trace": router_summary["scoring_in_trace"],
+            "router_topk_in_trace": router_summary["topk_in_trace"],
+            "router_route_weights_in_trace": router_summary["route_weights_in_trace"],
+            "router_indices_dynamic_in_trace": router_summary["indices_dynamic_in_trace"],
+            "router_expert_dispatch_dynamic_in_trace": False,
+            "router_expert_dispatch_static_in_trace": True,
         },
         "model": {
             "hidden_size": int(config.hidden_size),
@@ -1165,17 +1361,23 @@ def _base_result(
         "traceable_decode_scope": {
             "name": "traceable_decode_subpath",
             "not_full_forward": True,
-            "inside_trace": _traceable_decode_inside_trace_ops(attention_mode),
+            "inside_trace": _traceable_decode_inside_trace_ops(
+                attention_mode,
+                config=config,
+                weights=weights,
+                route_plan=route_plan,
+            ),
             "path": (
                 "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
                 "fixed device cache-window read plus q projection -> grouped wo_a/wo_b/post-attention residual; "
-                "post-attention residual -> ffn_norm/preselected routed top-k fanout plus shared expert/residual"
+                "post-attention residual -> ffn_norm/device router weights/static routed fanout plus shared expert/residual"
             ),
             "logical_decode_token_policy": (
                 "the first token is the logical decode token; tensor shape is tile-padded/static for trace replay"
             ),
             "excluded_from_trace": excluded_from_trace,
         },
+        "router_trace": router_summary,
         "selected_routing": _route_plan_summary(route_plan, config=config),
         "routed_expert_execution": {
             "loaded_expert_ids": routed_expert_ids_loaded,
@@ -1262,17 +1464,21 @@ def _base_result(
                 "description": "preselected routed expert FP4 weights and scales are decoded on host before TTNN module setup",
             },
             {
-                "name": "router_topk_pretrace",
+                "name": "router_static_dispatch_preflight",
                 "location": "before protected traceable decode region",
                 "description": (
-                    "router scoring/top-k runs on host for the logical decode token; the protected trace receives "
-                    "fixed selected expert ids and route weights"
+                    "router scoring/top-k runs on host before trace only to choose the static expert modules to load "
+                    "and to provide torch validation targets; the protected trace recomputes supported router "
+                    "logits, scores, top-k/indices, and route weights on device"
                 ),
             },
             {
-                "name": "route_weight_host_to_device",
+                "name": "router_decode_row_mask_host_to_device",
                 "location": "before trace capture",
-                "description": "precomputed route weights are expanded and uploaded as device tensors during module setup",
+                "description": (
+                    "a fixed row mask is uploaded during module setup so device-computed route weights only affect "
+                    "the logical decode token inside the static trace shape"
+                ),
             },
             {
                 "name": "kv_cache_seed_host_to_device",
@@ -1305,14 +1511,19 @@ def _base_result(
         "host_boundaries_outside_trace": [
             "real_weight_decode_to_bf16",
             "routed_fp4_decode_to_bf16",
-            "router_topk_pretrace",
-            "route_weight_host_to_device",
+            "router_static_dispatch_preflight",
+            "router_decode_row_mask_host_to_device",
             "kv_cache_seed_host_to_device",
             "rope_table_host_to_device",
             "activation_host_to_device",
             "trace_output_readback",
         ],
-        "reference_ops": _traceable_decode_reference_ops(attention_mode),
+        "reference_ops": _traceable_decode_reference_ops(
+            attention_mode,
+            config=config,
+            weights=weights,
+            route_plan=route_plan,
+        ),
         "ttnn_ops": [],
         "inputs": {
             "capture_activation": _tensor_summary(activation),
@@ -1414,27 +1625,180 @@ def _to_tt_kv_cache(
     )
 
 
-def _to_tt_route_weight(
-    route_weight: torch.Tensor,
+def _to_tt_router_bias(
+    bias: torch.Tensor,
     *,
-    intermediate_size: int,
+    token_rows: int,
     device,
     dtype,
     memory_config,
 ):
-    if route_weight.ndim != 3 or tuple(route_weight.shape[:1]) != (1,) or int(route_weight.shape[-1]) != 1:
-        raise ValueError(f"route_weight must have shape [1, tokens, 1], got {tuple(route_weight.shape)}")
-    expanded = (
-        route_weight.reshape(1, 1, int(route_weight.shape[-2]), 1)
-        .expand(1, 1, int(route_weight.shape[-2]), int(intermediate_size))
-        .contiguous()
-        .to(torch.bfloat16)
-    )
+    if bias.ndim != 1:
+        raise ValueError(f"router bias must have shape [experts], got {tuple(bias.shape)}")
+    expanded = bias.reshape(1, 1, 1, -1).expand(1, 1, int(token_rows), int(bias.shape[0])).contiguous()
     return ttnn.from_torch(
-        expanded,
+        expanded.to(torch.bfloat16),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _to_tt_static_router_indices(
+    indices: torch.Tensor,
+    *,
+    token_rows: int,
+    device,
+    memory_config,
+):
+    if indices.ndim != 4 or tuple(indices.shape[:3]) != (1, 1, 1):
+        raise ValueError(f"router indices must have shape [1, 1, 1, topk], got {tuple(indices.shape)}")
+    if int(indices.max().item()) > 65535:
+        raise ValueError("static router indices exceed ttnn.uint16 range")
+    expanded = indices.to(torch.uint16).expand(1, 1, int(token_rows), int(indices.shape[-1])).contiguous()
+    return ttnn.from_torch(
+        expanded,
+        device=device,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _to_tt_router_decode_row_mask(
+    *,
+    token_rows: int,
+    decode_token_index: int,
+    device,
+    dtype,
+    memory_config,
+):
+    if not 0 <= int(decode_token_index) < int(token_rows):
+        raise ValueError(f"decode_token_index must be in [0, {token_rows}), got {decode_token_index}")
+    mask = torch.zeros((1, 1, int(token_rows), 1), dtype=torch.bfloat16)
+    mask[0, 0, int(decode_token_index), 0] = 1
+    return ttnn.from_torch(
+        mask,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _ttnn_router_path(
+    ffn_norm_output,
+    *,
+    memory_config,
+    router_gate,
+    router_bias,
+    static_router_indices,
+    config: DeepSeekV4FlashConfig,
+) -> dict[str, object]:
+    router_logits = ttnn.linear(ffn_norm_output, router_gate, memory_config=memory_config)
+    router_scores = _ttnn_router_scores(
+        router_logits,
+        scoring_func=str(config.scoring_func),
+        memory_config=memory_config,
+    )
+    router_selection_scores = (
+        ttnn.add(router_scores, router_bias, memory_config=memory_config) if router_bias is not None else router_scores
+    )
+    if static_router_indices is None:
+        router_topk_selection_scores, router_topk_indices = ttnn.topk(
+            router_selection_scores,
+            k=int(config.num_experts_per_tok),
+            dim=-1,
+            largest=True,
+            sorted=True,
+            memory_config=memory_config,
+        )
+    else:
+        router_topk_indices = static_router_indices
+        router_topk_selection_scores = ttnn.gather(router_selection_scores, dim=3, index=router_topk_indices)
+
+    if router_bias is None and static_router_indices is None:
+        router_topk_route_scores = router_topk_selection_scores
+    else:
+        router_topk_route_scores = ttnn.gather(router_scores, dim=3, index=router_topk_indices)
+
+    if str(config.scoring_func) == "softmax":
+        router_route_weights = ttnn.mul(
+            router_topk_route_scores,
+            float(config.routed_scaling_factor),
+            memory_config=memory_config,
+        )
+    else:
+        route_weight_sum = ttnn.sum(router_topk_route_scores, dim=3, keepdim=True) + 1e-20
+        router_route_weights = ttnn.div(router_topk_route_scores, route_weight_sum, memory_config=memory_config)
+        router_route_weights = ttnn.mul(
+            router_route_weights,
+            float(config.routed_scaling_factor),
+            memory_config=memory_config,
+        )
+    return {
+        "router_logits": router_logits,
+        "router_scores": router_scores,
+        "router_selection_scores": router_selection_scores,
+        "router_topk_selection_scores": router_topk_selection_scores,
+        "router_topk_indices": router_topk_indices,
+        "router_topk_route_scores": router_topk_route_scores,
+        "router_route_weights": router_route_weights,
+    }
+
+
+def _ttnn_router_scores(router_logits, *, scoring_func: str, memory_config):
+    if scoring_func == "softmax":
+        return ttnn.softmax(router_logits, dim=-1, memory_config=memory_config)
+    if scoring_func == "sigmoid":
+        return ttnn.sigmoid(router_logits, memory_config=memory_config)
+    if scoring_func == "sqrtsoftplus":
+        return ttnn.sqrt(ttnn.softplus(router_logits, memory_config=memory_config), memory_config=memory_config)
+    raise ValueError(f"Unsupported DeepSeek V4 Flash scoring_func {scoring_func!r}")
+
+
+def _ttnn_route_weight_for_topk_slot(
+    route_weights,
+    *,
+    slot: int,
+    route_mask,
+    intermediate_size: int,
+    memory_config,
+):
+    if slot < 0 or slot >= int(route_weights.shape[-1]):
+        raise ValueError(f"route slot {slot} is outside route_weights top-k width {route_weights.shape[-1]}")
+    token_rows = int(route_weights.shape[-2])
+    slot_weight = ttnn.slice(
+        route_weights,
+        (0, 0, 0, int(slot)),
+        (1, 1, token_rows, int(slot) + 1),
+        memory_config=memory_config,
+    )
+    slot_weight = ttnn.mul(slot_weight, route_mask, memory_config=memory_config)
+    return ttnn.repeat(slot_weight, ttnn.Shape((1, 1, 1, int(intermediate_size))))
+
+
+def _ttnn_topk_prefix(route_weights, *, topk_prefix: int, memory_config):
+    if int(topk_prefix) == int(route_weights.shape[-1]):
+        return route_weights
+    if int(topk_prefix) <= 0 or int(topk_prefix) > int(route_weights.shape[-1]):
+        raise ValueError(f"topk_prefix must be in [1, {route_weights.shape[-1]}], got {topk_prefix}")
+    return ttnn.slice(
+        route_weights,
+        (0, 0, 0, 0),
+        (1, 1, int(route_weights.shape[-2]), int(topk_prefix)),
+        memory_config=memory_config,
+    )
+
+
+def _ttnn_decode_token_slice(tensor, *, decode_token_index: int, memory_config):
+    if not 0 <= int(decode_token_index) < int(tensor.shape[-2]):
+        raise ValueError(f"decode_token_index must be in [0, {tensor.shape[-2]}), got {decode_token_index}")
+    return ttnn.slice(
+        tensor,
+        (0, 0, int(decode_token_index), 0),
+        (1, 1, int(decode_token_index) + 1, int(tensor.shape[-1])),
         memory_config=memory_config,
     )
 
@@ -1798,7 +2162,44 @@ def _traceable_decode_attention_ops(attention_mode: str) -> list[str]:
     ]
 
 
-def _traceable_decode_projection_and_ffn_ops() -> list[str]:
+def _traceable_decode_router_ops(
+    *,
+    config: DeepSeekV4FlashConfig,
+    weights: TraceableDecodeWeights,
+    route_plan: TraceableDecodeRoutePlan,
+) -> list[str]:
+    ops = ["ttnn.linear(router_gate)"]
+    if str(config.scoring_func) == "softmax":
+        ops.append("ttnn.softmax(router_logits)")
+    elif str(config.scoring_func) == "sigmoid":
+        ops.append("ttnn.sigmoid(router_logits)")
+    elif str(config.scoring_func) == "sqrtsoftplus":
+        ops.extend(["ttnn.softplus(router_logits)", "ttnn.sqrt(router_softplus)"])
+    else:
+        raise ValueError(f"Unsupported DeepSeek V4 Flash scoring_func {config.scoring_func!r}")
+    if weights.router_bias is not None:
+        ops.append("ttnn.add(router_scores,router_bias)")
+    if weights.router_tid2eid is None:
+        ops.append("ttnn.topk(router_selection_scores)")
+    else:
+        ops.append("ttnn.gather(router_selection_scores,static_tid2eid_indices)")
+    if weights.router_bias is not None or weights.router_tid2eid is not None:
+        ops.append("ttnn.gather(router_scores,router_topk_indices)")
+    if str(config.scoring_func) != "softmax":
+        ops.extend(["ttnn.sum(router_topk_route_scores)", "ttnn.div(router_topk_route_scores,router_weight_sum)"])
+    ops.append("ttnn.mul(router_route_weights,routed_scaling_factor)")
+    if int(route_plan.topk_prefix) != int(route_plan.full_topk):
+        ops.append("ttnn.slice(router_route_weights_topk_prefix)")
+    ops.append("ttnn.mul(router_selected_route_weights,decode_row_mask)")
+    return ops
+
+
+def _traceable_decode_projection_and_ffn_ops(
+    *,
+    config: DeepSeekV4FlashConfig,
+    weights: TraceableDecodeWeights,
+    route_plan: TraceableDecodeRoutePlan,
+) -> list[str]:
     return [
         "TtAttentionProjection.project_output",
         "ttnn.slice(attention_output_group_0..N)",
@@ -1807,8 +2208,9 @@ def _traceable_decode_projection_and_ffn_ops() -> list[str]:
         "ttnn.linear(wo_b)",
         "ttnn.add(hidden,attention_projected)",
         "ttnn.rms_norm(ffn_norm)",
+        *_traceable_decode_router_ops(config=config, weights=weights, route_plan=route_plan),
         "TtRoutedExpertMLP(selected_topk_prefix)",
-        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.mul(routed_hidden,device_router_route_weight)",
         "ttnn.add(routed_expert_outputs)",
         "TtSharedExpertMLP",
         "ttnn.add(shared_output,routed_output)",
@@ -1816,15 +2218,27 @@ def _traceable_decode_projection_and_ffn_ops() -> list[str]:
     ]
 
 
-def _traceable_decode_inside_trace_ops(attention_mode: str) -> list[str]:
+def _traceable_decode_inside_trace_ops(
+    attention_mode: str,
+    *,
+    config: DeepSeekV4FlashConfig,
+    weights: TraceableDecodeWeights,
+    route_plan: TraceableDecodeRoutePlan,
+) -> list[str]:
     return [
         *_traceable_decode_common_ops(),
         *_traceable_decode_attention_ops(attention_mode),
-        *_traceable_decode_projection_and_ffn_ops(),
+        *_traceable_decode_projection_and_ffn_ops(config=config, weights=weights, route_plan=route_plan),
     ]
 
 
-def _traceable_decode_ttnn_ops(attention_mode: str) -> list[str]:
+def _traceable_decode_ttnn_ops(
+    attention_mode: str,
+    *,
+    config: DeepSeekV4FlashConfig,
+    weights: TraceableDecodeWeights,
+    route_plan: TraceableDecodeRoutePlan,
+) -> list[str]:
     return [
         *_traceable_decode_common_ops(),
         *_traceable_decode_attention_ops(attention_mode),
@@ -1834,6 +2248,7 @@ def _traceable_decode_ttnn_ops(attention_mode: str) -> list[str]:
         "ttnn.linear(wo_b)",
         "ttnn.add(hidden,attention_projected)",
         "ttnn.rms_norm(ffn_norm)",
+        *_traceable_decode_router_ops(config=config, weights=weights, route_plan=route_plan),
         "ttnn.linear(shared_w1)",
         "ttnn.linear(shared_w3)",
         "ttnn.mul(silu(shared_gate),shared_up)",
@@ -1841,7 +2256,7 @@ def _traceable_decode_ttnn_ops(attention_mode: str) -> list[str]:
         "ttnn.linear(routed_w1_selected_topk_prefix)",
         "ttnn.linear(routed_w3_selected_topk_prefix)",
         "ttnn.mul(silu(routed_gate),routed_up)",
-        "ttnn.mul(routed_hidden,preselected_route_weight)",
+        "ttnn.mul(routed_hidden,device_router_route_weight)",
         "ttnn.linear(routed_w2_selected_topk_prefix)",
         "ttnn.add(routed_expert_outputs)",
         "ttnn.add(shared_output,routed_output)",
@@ -1849,7 +2264,13 @@ def _traceable_decode_ttnn_ops(attention_mode: str) -> list[str]:
     ]
 
 
-def _traceable_decode_reference_ops(attention_mode: str) -> list[str]:
+def _traceable_decode_reference_ops(
+    attention_mode: str,
+    *,
+    config: DeepSeekV4FlashConfig,
+    weights: TraceableDecodeWeights,
+    route_plan: TraceableDecodeRoutePlan,
+) -> list[str]:
     attention_mode = _validate_attention_mode(attention_mode)
     attention_ops = (
         [
@@ -1873,6 +2294,28 @@ def _traceable_decode_reference_ops(attention_mode: str) -> list[str]:
             "torch.reshape(context_heads_to_attention_output)",
         ]
     )
+    router_ops = ["torch.linear(router_gate)"]
+    if str(config.scoring_func) == "softmax":
+        router_ops.append("torch.softmax(router_logits)")
+    elif str(config.scoring_func) == "sigmoid":
+        router_ops.append("torch.sigmoid(router_logits)")
+    elif str(config.scoring_func) == "sqrtsoftplus":
+        router_ops.append("torch.sqrt(torch.softplus(router_logits))")
+    else:
+        raise ValueError(f"Unsupported DeepSeek V4 Flash scoring_func {config.scoring_func!r}")
+    if weights.router_bias is not None:
+        router_ops.append("torch.add(router_scores,router_bias)")
+    router_ops.append(
+        "torch.topk(router_selection_scores)" if weights.router_tid2eid is None else "torch.tid2eid_static_indices"
+    )
+    if weights.router_bias is not None or weights.router_tid2eid is not None:
+        router_ops.append("torch.gather(router_scores,router_topk_indices)")
+    if str(config.scoring_func) != "softmax":
+        router_ops.append("torch.normalize_router_route_weights")
+    router_ops.append("torch.mul(router_route_weights,routed_scaling_factor)")
+    if int(route_plan.topk_prefix) != int(route_plan.full_topk):
+        router_ops.append("torch.slice(router_route_weights_topk_prefix)")
+    router_ops.append("torch.mul(router_selected_route_weights,decode_row_mask)")
     return [
         "torch.rms_norm_reference(attn_norm)",
         "torch.linear(wq_a)",
@@ -1886,7 +2329,8 @@ def _traceable_decode_reference_ops(attention_mode: str) -> list[str]:
         "torch.linear(wo_b)",
         "torch.add(hidden,attention_projected)",
         "torch.rms_norm_reference(ffn_norm)",
-        "torch.routed_swiglu_expert_reference(preselected_topk_prefix)",
+        *router_ops,
+        "torch.routed_swiglu_expert_reference(static_dispatch_device_router_weights)",
         "torch.shared_swiglu_expert_reference",
         "torch.add(shared_output,routed_output)",
         "torch.add(post_attention_residual,combined_ffn_output)",
@@ -2027,13 +2471,83 @@ def _guard_status(trace_capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _router_mode(*, config: DeepSeekV4FlashConfig, weights: TraceableDecodeWeights) -> str:
+    if weights.router_tid2eid is not None:
+        return "device_gate_scoring_static_tid2eid_indices_static_dispatch"
+    return "device_gate_scoring_topk_route_weights_static_dispatch"
+
+
+def _router_trace_summary(
+    route_plan: TraceableDecodeRoutePlan,
+    *,
+    config: DeepSeekV4FlashConfig,
+    weights: TraceableDecodeWeights,
+) -> dict[str, Any]:
+    uses_tid2eid = weights.router_tid2eid is not None
+    selected_indices = [int(value) for value in route_plan.selected_indices.reshape(-1).tolist()]
+    full_indices = [int(value) for value in route_plan.router_indices.reshape(-1).tolist()]
+    static_token_rows = _route_plan_static_token_rows(route_plan)
+    return {
+        "mode": _router_mode(config=config, weights=weights),
+        "gate_matmul_in_trace": True,
+        "scoring_in_trace": True,
+        "bias_in_trace": weights.router_bias is not None,
+        "tid2eid_static_indices_in_trace": uses_tid2eid,
+        "topk_in_trace": not uses_tid2eid,
+        "indices_dynamic_in_trace": not uses_tid2eid,
+        "route_weights_in_trace": True,
+        "route_weight_normalization_in_trace": str(config.scoring_func) != "softmax",
+        "route_weight_decode_row_mask_in_trace": True,
+        "expert_ids_dynamic": False,
+        "expert_dispatch": "static_preflight",
+        "expert_dispatch_dynamic_in_trace": False,
+        "expert_dispatch_static_in_trace": True,
+        "selected_expert_ids": selected_indices,
+        "expected_expert_ids": selected_indices,
+        "expected_full_topk_expert_ids": full_indices,
+        "selected_topk_prefix": int(route_plan.topk_prefix),
+        "full_topk": int(route_plan.full_topk),
+        "topk_prefix_is_full": int(route_plan.topk_prefix) == int(route_plan.full_topk),
+        "scoring_func": str(config.scoring_func),
+        "routed_scaling_factor": float(config.routed_scaling_factor),
+        "router_logits_shape": [1, 1, static_token_rows, int(config.n_routed_experts)],
+        "router_topk_shape": [1, 1, static_token_rows, int(route_plan.full_topk)],
+        "selected_route_weights_shape": [
+            1,
+            1,
+            static_token_rows,
+            int(route_plan.topk_prefix),
+        ],
+        "accuracy_scope": "logical_decode_row",
+        "full_static_rows_reported_as_diagnostics": True,
+        "static_dispatch_note": (
+            "device router weights are consumed by the selected expert slots, but the expert modules are still "
+            "chosen by the host preflight plan because dynamic expert dispatch is not wired into this trace path"
+        ),
+        "topk_blockers": []
+        if not uses_tid2eid
+        else [
+            "hash-routed layers select experts from tid2eid[input_ids]; this path uploads static indices for the "
+            "fixed decode token instead of performing a device-side dynamic metadata lookup"
+        ],
+        "next_dispatch_step": (
+            "feed router_topk_indices into a device-side expert dispatch/remap path and instantiate experts from "
+            "device-selected ids instead of the host preflight plan"
+        ),
+    }
+
+
 def _route_plan_summary(route_plan: TraceableDecodeRoutePlan, *, config: DeepSeekV4FlashConfig) -> dict[str, Any]:
     selected_weights = [float(value) for value in route_plan.selected_weights.reshape(-1).float().tolist()]
     selected_indices = [int(value) for value in route_plan.selected_indices.reshape(-1).tolist()]
     full_weights = [float(value) for value in route_plan.router_weights.reshape(-1).float().tolist()]
     full_indices = [int(value) for value in route_plan.router_indices.reshape(-1).tolist()]
+    topk_in_trace = route_plan.input_ids is None
     return {
-        "selection_boundary": "host_pretrace_router_topk",
+        "selection_boundary": "host_preflight_static_dispatch_device_router_weights",
+        "router_mode": "device_gate_scoring_topk_route_weights_static_dispatch"
+        if topk_in_trace
+        else "device_gate_scoring_static_tid2eid_indices_static_dispatch",
         "decode_token_index": int(route_plan.decode_token_index),
         "logical_decode_token_only": True,
         "static_token_rows_in_trace": int(next(iter(route_plan.per_expert_route_weight.values())).shape[1]),
@@ -2050,12 +2564,18 @@ def _route_plan_summary(route_plan: TraceableDecodeRoutePlan, *, config: DeepSee
         "full_router_indices_for_decode_token": full_indices,
         "full_router_weights_for_decode_token": full_weights,
         "route_weights_device_resident_inside_trace": True,
+        "route_weights_source": "device_router_topk"
+        if topk_in_trace
+        else "device_router_scoring_static_tid2eid_indices",
+        "device_topk_indices_in_trace": topk_in_trace,
+        "dynamic_expert_dispatch_in_trace": False,
+        "static_expert_dispatch": True,
         "router_scoring_func": str(config.scoring_func),
         "routed_scaling_factor": float(config.routed_scaling_factor),
         "input_ids": _optional_tensor_summary(route_plan.input_ids),
         "limitation": (
-            "router/top-k is host-computed before trace; this trace replays a fixed selected top-k route plan "
-            "for the logical decode token, optionally limited by topk_prefix_limit"
+            "expert ids still come from a host preflight plan for static expert module construction; "
+            "supported router scoring/top-k/route-weight production runs on device inside the protected trace"
         ),
     }
 
@@ -2071,6 +2591,27 @@ def _route_plan_static_token_rows(route_plan: TraceableDecodeRoutePlan) -> int:
 
 def _optional_tensor_summary(tensor: torch.Tensor | None) -> dict[str, Any] | None:
     return None if tensor is None else _tensor_summary(tensor)
+
+
+def _traceable_accuracy_items(reference: Mapping[str, torch.Tensor]):
+    informational_router_rows = {
+        "router_topk_selection_scores",
+        "router_topk_indices",
+        "router_topk_route_scores",
+        "router_route_weights",
+        "router_selected_route_weights",
+    }
+    for name, expected in reference.items():
+        if name in informational_router_rows:
+            continue
+        yield name, expected
+
+
+def _traceable_accuracy_required_for_pass(name: str) -> bool:
+    router_dispatch_diagnostics = {
+        "router_decode_topk_indices",
+    }
+    return name not in router_dispatch_diagnostics
 
 
 def _traceable_accuracy_summary(
@@ -2106,6 +2647,17 @@ def _traceable_accuracy_summary(
         summary["pcc_note"] = (
             "softmax probabilities are reported with PCC, but pass/fail is gated by allclose because "
             "near-uniform probability rows can have low-variance PCC despite small absolute error"
+        )
+    if name in {"router_decode_route_weights", "router_decode_selected_route_weights"} and summary["allclose"]:
+        summary["passed"] = True
+        summary["pcc_note"] = (
+            "decode-row router weights are reported with PCC, but pass/fail is gated by allclose because "
+            "small top-k weight vectors can have low-variance PCC despite small absolute error"
+        )
+    if name == "router_decode_topk_indices":
+        summary["diagnostic_note"] = (
+            "device top-k indices are reported against the torch preflight reference, but static expert dispatch "
+            "does not consume these ids yet; this metric is not required for smoke pass/fail"
         )
     if name in projection_outputs:
         summary[
