@@ -20,6 +20,8 @@ from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
     TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
     TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
+    TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+    TRACEABLE_DECODE_ROPE_POSITION_STATIC,
     TraceableDecodeHostFallbackError,
     TraceableDecodeHostGuard,
     run_traceable_decode_subpath_smoke,
@@ -180,6 +182,13 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["cache_update"]["dynamic_update_index_in_trace"] is False
     assert result["cache_update"]["cache_read_window_dynamic"] is False
     assert result["cache_update"]["rope_position_dynamic"] is False
+    assert result["rope_position_api"] == TRACEABLE_DECODE_ROPE_POSITION_STATIC
+    assert result["rope_position_dynamic"] is False
+    assert result["rope_positions"] == [4]
+    assert result["position_dependent_decode_inventory"]["dynamic_rope_position"]["status"] == "available"
+    assert result["position_dependent_decode_inventory"]["dynamic_cache_read_current_position"]["status"] == (
+        "available_not_integrated"
+    )
     assert result["cache_update"]["single_capture_replay_across_positions"] is False
     assert result["cache_update"]["device_resident_inside_trace"] is True
     assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
@@ -200,10 +209,10 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
         "ttnn.transpose(q_heads_token_major_to_heads)",
         "ttnn.rms_norm(q_heads)",
         "ttnn.slice(q_nope/q_rope)",
-        "ttnn.rotary_embedding_llama(q_rope)",
+        "ttnn.experimental.rotary_embedding_llama(q_rope)",
         "ttnn.concat(q_nope,q_rope_rotated)",
         "ttnn.slice(kv_cache_window_to_k_nope/k_rope)",
-        "ttnn.rotary_embedding_llama(k_rope)",
+        "ttnn.experimental.rotary_embedding_llama(k_rope)",
         "ttnn.concat(k_nope,k_rope_rotated)",
         "ttnn.repeat(k_cache_to_attention_heads)",
         "ttnn.repeat(v_cache_window_to_attention_heads)",
@@ -329,6 +338,8 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["reference"]["kv_output"]["shape"] == [1, 1, 4, 8]
     assert result["reference"]["kv_cache"]["shape"] == [1, 1, 64, 8]
     assert result["reference"]["attention_cache_window"]["shape"] == [1, 1, 4, 8]
+    assert result["reference"]["rope_cos"]["shape"] == [1, 1, 4, 4]
+    assert result["reference"]["rope_sin"]["shape"] == [1, 1, 4, 4]
     assert result["reference"]["attention_q_heads_pre_norm"]["shape"] == [1, 4, 4, 8]
     assert result["reference"]["attention_q_heads_norm"]["shape"] == [1, 4, 4, 8]
     assert result["reference"]["attention_q_nope"]["shape"] == [1, 4, 4, 4]
@@ -396,6 +407,7 @@ def test_cpu_traceable_decode_subpath_reports_two_static_cache_positions(tmp_pat
     assert result["cache_update"]["dynamic_update_index_in_trace"] is False
     assert result["cache_read_window_dynamic"] is False
     assert result["rope_position_dynamic"] is False
+    assert result["rope_positions"] == [4, 5]
     assert result["multi_position_replay"]["carried_device_kv_cache_state"] is True
     assert result["multi_position_replay"]["single_capture_replayed_across_positions"] is False
     assert result["multi_position_replay"]["recaptured_per_position"] is True
@@ -411,6 +423,43 @@ def test_cpu_traceable_decode_subpath_reports_two_static_cache_positions(tmp_pat
     assert result["reference_by_step"][1]["position"] == 5
     assert result["replay_reference_by_step"][1]["position"] == 5
     assert result["accuracy_by_step"][1]["accuracy"]["cpu_reference"]["passed"] is True
+
+
+def test_cpu_traceable_decode_subpath_can_report_dynamic_rope_position_probe(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=3,
+        seq_len=4,
+        max_bytes=24 * 1024,
+        routed_topk_prefix=1,
+        decode_steps=2,
+        cpu_only=True,
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+        rope_position_api=TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+    )
+
+    assert result["passed"] is True
+    assert result["cache_update_api"] == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
+    assert result["rope_position_api"] == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is True
+    assert result["cache_read_window_dynamic"] is False
+    assert result["rope_position_dynamic"] is True
+    assert result["rope_position_status"] == "replay_mutable_device_tensor_embedding"
+    assert result["rope_positions"] == [4, 5]
+    assert result["attention_path_by_step"][0]["cache_window"]["start"] == 4
+    assert result["attention_path_by_step"][1]["cache_window"]["start"] == 4
+    assert result["attention_path_by_step"][0]["rope"]["position_rows"] == [4, 8]
+    assert result["attention_path_by_step"][1]["rope"]["position_rows"] == [5, 9]
+    assert result["attention_path_by_step"][1]["rope"]["position_dynamic"] is True
+    assert result["decode_steps_detail"][1]["cache_window_rows"] == [4, 8]
+    assert result["decode_steps_detail"][1]["rope_position_rows"] == [5, 9]
+    assert result["decode_steps_detail"][1]["rope_position_dynamic"] is True
+    assert result["position_dependent_decode_inventory"]["dynamic_rope_position"]["status"] == "used"
+    assert result["position_dependent_decode_inventory"]["dynamic_cache_read_current_position"]["status"] == (
+        "available_not_integrated"
+    )
 
 
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
@@ -557,8 +606,8 @@ def test_traceable_decode_subpath_gated_galaxy_trace_replay() -> None:
     assert result["host_boundaries_inside_trace"] == []
     assert result["cache_update"]["device_resident_inside_trace"] is True
     assert "ttnn.linear(grouped_wo_a_group_0..N)" in result["trace_capture"]["traced_operations"]
-    assert "ttnn.rotary_embedding_llama(q_rope)" in result["trace_capture"]["traced_operations"]
-    assert "ttnn.rotary_embedding_llama(k_rope)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.experimental.rotary_embedding_llama(q_rope)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.experimental.rotary_embedding_llama(k_rope)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.matmul(q_heads,k_heads_transposed)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.softmax(qk_scores)" in result["trace_capture"]["traced_operations"]
     assert "ttnn.matmul(attention_probs,value_heads)" in result["trace_capture"]["traced_operations"]
@@ -652,6 +701,56 @@ def test_traceable_decode_subpath_gated_galaxy_paged_cache_write_single_capture_
     for step in result["accuracy_by_step"]:
         assert step["accuracy"]["kv_cache"]["passed"] is True
         assert step["accuracy"]["attention_cache_window"]["passed"] is True
+        assert step["accuracy"]["attention_output"]["passed"] is True
+        assert step["accuracy"]["combined_ffn_output"]["passed"] is True
+        assert step["accuracy"]["residual_output"]["passed"] is True
+
+
+def test_traceable_decode_subpath_gated_galaxy_dynamic_rope_position_single_capture_replay() -> None:
+    if os.environ.get("DSV4_FLASH_TRACEABLE_DECODE", "0") != "1":
+        pytest.skip("Set DSV4_FLASH_TRACEABLE_DECODE=1 to run the Galaxy dynamic RoPE replay smoke")
+
+    snapshot = Path(os.environ.get("DSV4_FLASH_REAL_SNAPSHOT_DIR", str(REAL_SNAPSHOT_DIR)))
+    if not snapshot.is_dir():
+        pytest.fail(f"Real DeepSeek V4 Flash snapshot is missing: {snapshot}")
+
+    decode_steps = int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_STEPS", "2"))
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_LAYER", "3")),
+        seq_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_SEQ_LEN", "32")),
+        cache_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_CACHE_LEN", str(96))),
+        decode_steps=decode_steps,
+        device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
+        trace_region_size=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_TRACE_REGION_SIZE", str(64 * 1024 * 1024))),
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+        rope_position_api=TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+    )
+
+    assert result["passed"], json.dumps(result["accuracy_by_step"], indent=2, sort_keys=True)
+    assert result["one_trace_capture_replayed_across_positions"] is (decode_steps > 1)
+    assert result["trace_capture"]["capture_count"] == 1
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is True
+    assert result["cache_read_window_dynamic"] is False
+    assert result["rope_position_api"] == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
+    assert result["rope_position_dynamic"] is True
+    assert result["trace_capture"]["rope_position_dynamic"] is True
+    assert result["trace_capture"]["rope_position_status"] == "replay_mutable_device_tensor_embedding"
+    assert result["position_dependent_decode_inventory"]["dynamic_rope_position"]["status"] == "used"
+    assert result["position_dependent_decode_inventory"]["dynamic_cache_read_current_position"]["status"] == (
+        "available_not_integrated"
+    )
+    assert "rope_position_index_host_to_device" in result["host_boundaries_outside_trace"]
+    assert "ttnn.embedding(rope_position_idxs,rope_cos_table)" in result["trace_capture"]["traced_operations"]
+    assert "ttnn.embedding(rope_position_idxs,rope_sin_table)" in result["trace_capture"]["traced_operations"]
+    assert len(result["accuracy_by_step"]) == decode_steps
+    for step, position in zip(result["decode_steps_detail"], result["positions_used"]):
+        assert step["cache_window_rows"][0] == result["positions_used"][0]
+        assert step["rope_position_rows"][0] == position
+        assert step["rope_position_dynamic"] is True
+    for step in result["accuracy_by_step"]:
+        assert step["accuracy"]["rope_cos"]["passed"] is True
+        assert step["accuracy"]["rope_sin"]["passed"] is True
         assert step["accuracy"]["attention_output"]["passed"] is True
         assert step["accuracy"]["combined_ffn_output"]["passed"] is True
         assert step["accuracy"]["residual_output"]["passed"] is True
