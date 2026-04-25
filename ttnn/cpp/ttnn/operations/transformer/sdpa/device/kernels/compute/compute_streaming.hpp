@@ -596,8 +596,9 @@ static SDPA_NOINLINE void apply_lightweight_mask_streaming(
     uint32_t q_start_tile = 0,
     uint32_t k_start_tile = 0,
     uint32_t active_Sk = num_cols) {
+    // Caller-owned contract (see function comment): pack state for mask_cb is initialized
+    // before entry via copy_tile_to_dst_init_short + llk_pack_reconfig_l1_acc(1).
     uint32_t boundary_col = num_cols - num_padded - (has_partial ? 1 : 0);
-    copy_tile_to_dst_init_short(mask_cb);
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
 
@@ -1382,6 +1383,7 @@ void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
     const uint32_t num_kv_chunks,
+    const uint32_t num_q_chunks,
     const uint32_t ring_iter,
     const uint32_t ring_id,
     const uint32_t num_local_k_chunks,
@@ -1427,12 +1429,11 @@ void sdpa_ring_v2(
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
-    // Q chunks per head for causal position and zigzag remapping
-    const uint32_t num_q_chunks_per_head = (local_padded_Nt + Sq_chunk_t - 1) / Sq_chunk_t;
-
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
-        // Compute Q chunk index (with optional zigzag remapping for causal balancing)
-        uint32_t q_chunk = remap_q_index(q, num_q_chunks_per_head, use_zigzag_balancing) % num_q_chunks_per_head;
+        // Compute Q chunk index (with optional zigzag remapping for causal balancing).
+        // num_q_chunks is total per-head chunks (local + joint), matching the divisor the
+        // writer/reader use to flatten (batch, head, q_chunk) — see ring_joint_sdpa.cpp.
+        uint32_t q_chunk = remap_q_index(q, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
 
         // Causal K-chunk limit and Q start tile for this Q chunk
         uint32_t causal_k_limit = num_kv_chunks;
@@ -1460,7 +1461,7 @@ void sdpa_ring_v2(
         // On non-last ring iters: full skip (reader/writer also skip).
         // On last ring iter: normalize-only path — accumulated state from prior iters needs
         // normalization. Reader sends Q (for pop) but no K/V. Writer restores + drains output.
-        if (skip_first_half_q && (q_chunk < num_q_chunks_per_head / 2)) {
+        if (skip_first_half_q && (q_chunk < num_q_chunks / 2)) {
             if (!is_last_ring_iter) {
                 // Pop staging — compute is the designated consumer of staging CBs.
                 // Writer pushed via complete_restore; writer's issue_restore_reads for the

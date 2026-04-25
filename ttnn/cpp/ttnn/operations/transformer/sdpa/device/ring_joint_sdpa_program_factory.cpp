@@ -333,7 +333,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // guarantees it — but kept explicit for clarity of the subblock-tiling requirement.
     const bool use_streaming_compute =
         !fp32_dest_acc_en && qk_out_subblock_h <= 2 && Sk_chunk_t % qk_out_subblock_w == 0 && qk_in0_num_subblocks > 1;
-    log_info(
+    log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
         use_streaming_compute,
