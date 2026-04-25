@@ -104,13 +104,19 @@
       /ci/tt-metal/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod_ci.yaml
 
     echo "=== SP4 superpod: running tt-run ==="
-    TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --skip-executable-check \
-      --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
-      --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
-      /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+    TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
+    --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+    --rank-binding blitz_decode_pipeline_rank_binding_superpod_ci.yaml \
+    python -m models.demos.deepseek_v3_b1.demo.cli \
+    --max-new-tokens 2048 \
+    --weights real \
+    --cache-path /home/esmal/cache \
+    --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+    --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+
   skus:
     bh_sp4:
-      timeout: 60
+      timeout: 120
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sp4
