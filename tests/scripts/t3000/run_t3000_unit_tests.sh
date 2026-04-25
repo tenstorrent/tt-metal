@@ -195,8 +195,12 @@ run_t3000_ttnn_tests() {
   # fork()+SIGKILL simulates predecessor test being killed; ERISCs left in ACTIVE state;
   # parent re-opens → terminate_stale_erisc_routers() ACTIVE path exercised for the first
   # time. This is the exact CI failure scenario the fix was written to handle. (+15s wait)
-  timeout 360 ./build/test/tt_metal/distributed/distributed_unit_tests \
-    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*' ; record_test
+  # FabricFirmwareInitializer: compile-time enum coverage check (no device required).
+  # QuiesceStressFixture: 5-cycle FABRIC_2D quiesce stress (Scenario AB).
+  # PhaseWFixture: FIX W regression — all-dead MMIO clean-return invariant.
+  # PhaseZFixture: FIX Z regression — relay-broken CQ fast-throw accessor check.
+  timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
+    --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*' ; record_test
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
