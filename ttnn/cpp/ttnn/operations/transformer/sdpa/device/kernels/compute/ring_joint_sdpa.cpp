@@ -258,6 +258,7 @@ void kernel_main() {
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
+                num_q_chunks,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
