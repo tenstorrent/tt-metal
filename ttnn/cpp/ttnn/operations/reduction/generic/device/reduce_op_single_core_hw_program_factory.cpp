@@ -35,7 +35,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     // must not reach this code path. Instead negative scalers are handled via the two-step
     // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
 
-    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, user scale for post-mul)
+    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, 1/scalar for post-div).
     const bfloat16 bfloat_scaler_user = bfloat16::truncate(operation_attributes.scaler);
     const bfloat16 bfloat_one = bfloat16::truncate(1.0f);
     const bool is_min_or_max = (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN) ||
@@ -44,7 +44,9 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     const uint32_t packed_reduce_unity = pack_two_bfloat16_into_uint32({bfloat_one, bfloat_one});
     uint32_t packed_scaler_value = 0;
     if (min_max_scaler_cb) {
-        packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_user, bfloat_scaler_user});
+        TT_FATAL(operation_attributes.scaler != 0.0f, "Scalar must be non-zero for post-div scaling");
+        const bfloat16 bfloat_recip = bfloat16::truncate(1.0f / operation_attributes.scaler);
+        packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_recip, bfloat_recip});
     } else {
         TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
         float scaler = std::sqrt(operation_attributes.scaler);

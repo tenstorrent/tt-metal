@@ -23,7 +23,7 @@ void kernel_main() {
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 #ifdef REDUCE_MINMAX_TWO_TILE_SCALER
-    // Same two-tile contract as the interleaved H reader: unity for reduce_tile, then full user scale for post-mul.
+    // Two-tile scaler contract: tile0 unity for reduce_tile; tile1 = 1/scalar for SFPU post-div.
     constexpr uint32_t packed_reduce_unity = get_compile_time_arg_val(3);
     constexpr uint32_t packed_post_scale = get_compile_time_arg_val(4);
     generate_reduce_scaler(cb_id_in2, packed_reduce_unity);

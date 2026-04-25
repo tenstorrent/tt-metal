@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t packed_reduce_unity = get_compile_time_arg_val(0);
     constexpr uint32_t packed_post_scale = get_compile_time_arg_val(1);
     constexpr auto tensor_args = TensorAccessorArgs<2>();
-    // For Scaler CB: tile0 = 1.0 for reduce_tile; tile1 = user scale for SFPU post-mul.
+    // For Scaler CB: tile0 = 1.0 for reduce_tile; tile1 = 1/scalar for SFPU post-div.
     generate_reduce_scaler(cb_id_in2, packed_reduce_unity);
     generate_reduce_scaler_for_minmax(cb_id_in2, packed_post_scale);
 #else

@@ -28,13 +28,20 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t Ht = H / tile_height;
     uint32_t HtWt = Ht * Wt;
 
-    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, user scale for post-mul)
+    // Min/max, scalar != 1.0: two packed tiles for scaler CB (unity for reduce_tile, 1/scalar for post-div).
     bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     bfloat16 bfloat_one = bfloat16::truncate(1.0f);
     const bool is_min_or_max = (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN) ||
                                (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX);
     const bool min_max_scaler_cb = is_min_or_max && (bfloat_scaler_value != bfloat_one);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    uint32_t packed_scaler_value;
+    if (min_max_scaler_cb) {
+        TT_FATAL(operation_attributes.scaler != 0.0f, "Scalar must be non-zero for post-div scaling");
+        const bfloat16 bfloat_recip = bfloat16::truncate(1.0f / operation_attributes.scaler);
+        packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_recip, bfloat_recip});
+    } else {
+        packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    }
     uint32_t packed_reduce_unity = pack_two_bfloat16_into_uint32({bfloat_one, bfloat_one});
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =

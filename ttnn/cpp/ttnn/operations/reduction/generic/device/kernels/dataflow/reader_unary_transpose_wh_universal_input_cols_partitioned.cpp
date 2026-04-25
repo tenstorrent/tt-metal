@@ -28,7 +28,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
 #ifdef REDUCE_MINMAX_TWO_TILE_SCALER
-    // For Scaler CB: tile0 = 1.0 for reduce_tile; tile1 = user scale for SFPU post-mul.
+    // For Scaler CB: tile0 = 1.0 for reduce_tile; tile1 = 1/scalar for SFPU post-div.
     constexpr uint32_t packed_reduce_unity = get_compile_time_arg_val(4);
     constexpr uint32_t packed_post_scale = get_compile_time_arg_val(5);
     generate_reduce_scaler(cb_id_in2, packed_reduce_unity);

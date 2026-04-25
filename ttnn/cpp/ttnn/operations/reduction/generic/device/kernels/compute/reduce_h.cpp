@@ -64,16 +64,16 @@ void kernel_main() {
 #ifdef REDUCE_MINMAX_TWO_TILE_SCALER
             /* Apply user-provided scaling factor to the reduced output.
              * In the two-tile scaler configuration, reduction uses unity scaling,
-             * then the final reduced result is multiplied by the user scale.
+             * then the final reduced result is divided by (1/scalar) == multiplied by scalar.
              */
             uint32_t ntiles = chunk_end - wt;
             // Switch from reduce op to SFPU binary op.
             reduce_uninit();
             copy_tile_init(tt::CBIndex::c_2);
             copy_tile(tt::CBIndex::c_2, 1, ntiles);
-            mul_binary_tile_init();
+            div_binary_tile_init();
             for (uint32_t i = 0; i < ntiles; ++i) {
-                mul_binary_tile(i, ntiles, i);
+                div_binary_tile(i, ntiles, i);
             }
             // Prepare for the next chunk's reduce_tile calls.
             reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);

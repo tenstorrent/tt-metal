@@ -143,14 +143,14 @@ void kernel_main() {
 #ifdef REDUCE_MINMAX_TWO_TILE_SCALER
             /* Apply user-provided scaling factor to the reduced output.
              * In the two-tile scaler configuration, reduction uses unity scaling,
-             * then the final reduced result is multiplied by the user scale.
+             * then the final reduced result is divided by (1/scalar) == multiplied by scalar.
              */
             reconfig_data_format_srca(cb_scaler);
             copy_tile_init(cb_scaler);
-            copy_tile(cb_scaler, 1, ntiles);  // tile 0 unity (reduce_tile), tile 1 user scale (post-mul)
-            mul_binary_tile_init();
+            copy_tile(cb_scaler, 1, ntiles);  // tile 0 unity (reduce_tile), tile 1 1/scalar (post-div)
+            div_binary_tile_init();
             for (uint32_t i = 0; i < ntiles; ++i) {
-                mul_binary_tile(i, ntiles, i);
+                div_binary_tile(i, ntiles, i);
             }
 #endif
             tile_regs_commit();

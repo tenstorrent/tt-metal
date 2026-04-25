@@ -102,12 +102,12 @@ void kernel_main() {
 #ifdef REDUCE_MINMAX_TWO_TILE_SCALER
             /* Apply user-provided scaling factor to the reduced output.
              * In the two-tile scaler configuration, reduction uses unity scaling,
-             * then the final reduced result is multiplied by the user scale.
+             * then the final reduced result is divided by (1/scalar) == multiplied by scalar.
              */
             copy_tile_init(cb_scaler);
             copy_tile(cb_scaler, 1, 1);
-            mul_binary_tile_init();
-            mul_binary_tile(dst_idx, 1, dst_idx);
+            div_binary_tile_init();
+            div_binary_tile(dst_idx, 1, dst_idx);
 #endif
             cb_output_obj.reserve_back(onetile);
             tile_regs_commit();
