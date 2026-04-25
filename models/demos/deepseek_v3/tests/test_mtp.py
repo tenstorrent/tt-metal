@@ -373,12 +373,16 @@ def _assert_reference_start_tokens(payload: dict, gen: Any, context: str) -> Non
 
 
 def _load_reference_payload(reference_path: Path) -> dict:
+    _require_reference_payload(reference_path)
+    return torch.load(reference_path, map_location="cpu")
+
+
+def _require_reference_payload(reference_path: Path) -> None:
     if not reference_path.exists():
         pytest.skip(
             f"Missing MTP reference IO at {reference_path}. "
             "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
         )
-    return torch.load(reference_path, map_location="cpu")
 
 
 def _load_reference_payload_for_generator(
@@ -1406,6 +1410,8 @@ def test_mtp_prefill_priming(
     """Validate prefill priming for MTP (user0) and post-prefill accept rate."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
+    reference_path = _get_reference_path(num_steps)
+    _require_reference_payload(reference_path)
 
     prefill_seq_tile = ttnn.TILE_SIZE
     max_prompt_len = num_steps - 2
@@ -1432,7 +1438,7 @@ def test_mtp_prefill_priming(
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP prefill priming test.")
 
-        payload, _reference_path = _load_reference_payload_for_generator(
+        payload, _ = _load_reference_payload_for_generator(
             gen,
             num_steps,
             context="MTP prefill priming",
@@ -1537,6 +1543,8 @@ def test_mtp_verify_batching_aliasing(
     """Validate verify-lane batching + page-table aliasing invariance."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
+    reference_path = _get_reference_path(num_steps)
+    _require_reference_payload(reference_path)
 
     with _prepare_generator(
         mesh_device=mesh,
@@ -1548,7 +1556,7 @@ def test_mtp_verify_batching_aliasing(
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping verify-lane batching test.")
 
-        payload, _reference_path = _load_reference_payload_for_generator(
+        payload, _ = _load_reference_payload_for_generator(
             gen,
             num_steps,
             context="MTP verify batching aliasing",
