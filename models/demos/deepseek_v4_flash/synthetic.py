@@ -197,6 +197,7 @@ def _tiny_tensors(config: dict, generator: torch.Generator) -> dict[str, torch.T
     hc_dim = hc_mult * hidden
     tensors: dict[str, torch.Tensor] = {
         "embed.weight": _randn((vocab, hidden), generator),
+        "norm.weight": torch.ones(hidden, dtype=torch.float32),
         "head.weight": _randn((vocab, hidden), generator),
         "hc_head_fn": _randn((hc_mult, hc_dim), generator, dtype=torch.float32),
         "hc_head_base": torch.zeros(hc_mult, dtype=torch.float32),
