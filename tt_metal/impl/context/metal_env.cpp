@@ -365,23 +365,38 @@ void MetalEnvImpl::teardown_fabric_config() {
                         log_warning(
                             tt::LogMetal,
                             "[teardown_fabric_config] Timeout waiting for ETH router TERMINATED on chip {} chan {} "
-                            "(status=0x{:08x}), skipping force-reset (F5a: deliberate policy — force-resetting a "
-                            "mid-teardown ERISC drops the ETH PHY link and corrupts partner-chip ERISC state; "
-                            "relay-path broken channels are handled by hard-reset at process exit via FIX AB)",
+                            "(status=0x{:08x}): force-resetting ERISC to clear stale 0x49706550 UMD relay sentinel "
+                            "from L1 (F5a updated policy — see FIX AB for hard-reset at process exit)",
                             chip_id,
                             chan_id,
                             status.empty() ? 0u : status[0]);
-                        // F5a: deliberately skip assert_risc_reset_at_core for channels that did not reach
-                        // TERMINATED within the timeout.  Force-resetting a mid-teardown ERISC drops the ETH
-                        // PHY link, leaving the partner ERISC with a stale edm_status_address value.
-                        // This is a confirmed policy decision, not an ongoing experiment.  Timed-out
-                        // channels where the relay path is broken are handled by the hard-reset at process
-                        // exit (FIX AB), which runs after all fabric firmware has stopped.
-                        //
+                        // F5a (updated): after 5s timeout the ERISC is uncooperative.  Force-reset it so
+                        // the next session starts with a clean UMD relay state rather than stale 0x49706550.
                         // FIX AB extension: record this chip_id so FabricFirmwareInitializer::post_teardown()
                         // can set fabric_teardown_timed_out_ on the Device, enabling FIX AB hard-reset at
                         // process exit even when fabric_relay_path_broken_ was not set.
                         teardown_timed_out_chips_.insert(chip_id);
+                        // After 5s timeout, the ERISC is uncooperative. Force-reset it so the next
+                        // session starts with a clean UMD relay state rather than stale 0x49706550.
+                        try {
+                            auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, static_cast<int>(chan_id));
+                            tt_cxy_pair core_loc(chip_id, virtual_core);
+                            cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                            cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                            log_info(
+                                tt::LogMetal,
+                                "[teardown_fabric_config] chip {} chan {}: force-reset after teardown timeout",
+                                chip_id,
+                                chan_id);
+                        } catch (const std::exception& e) {
+                            log_warning(
+                                tt::LogMetal,
+                                "[teardown_fabric_config] chip {} chan {}: force-reset after timeout failed: {}. "
+                                "ERISC left in undefined state.",
+                                chip_id,
+                                chan_id,
+                                e.what());
+                        }
                         ++chip_force_reset_count;
                         ++total_force_reset_count;
                         break;
@@ -404,9 +419,8 @@ void MetalEnvImpl::teardown_fabric_config() {
                 // which resumes the heartbeat.  This is safe post-TERMINATED: ERISC has already
                 // halted cleanly, no in-flight NOC writes remain, and resetting only ERISC0 (not the
                 // subordinate ERISC/NCRISC) keeps the ETH PHY link alive (per the F5a policy).
-                // Note: we deliberately skip this for timed-out channels (terminated_cleanly=false)
-                // because force-resetting a mid-teardown ERISC drops the ETH PHY link and corrupts
-                // partner-chip state — this is the established F5a policy, not an experiment.
+                // Note: timed-out channels (terminated_cleanly=false) are handled above in the timeout
+                // branch which unconditionally force-resets the ERISC (F5a updated policy).
                 if (terminated_cleanly) {
                     try {
                         auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, static_cast<int>(chan_id));
