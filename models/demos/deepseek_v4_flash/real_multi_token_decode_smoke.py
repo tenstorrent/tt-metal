@@ -7,7 +7,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -177,6 +178,8 @@ def run_real_multi_token_decode_smoke(
     proving the attention/compressed/indexer cache state advances across tokens.
     """
 
+    wall_start = time.perf_counter()
+    phase_start = wall_start
     layers = tuple(int(layer) for layer in layers)
     _validate_multi_token_args(
         layers=layers,
@@ -224,6 +227,7 @@ def run_real_multi_token_decode_smoke(
         raise ValueError("max_tensors must leave room for the embedding payload")
     if remaining_bytes <= 0:
         raise ValueError("max_bytes must leave room for the embedding payload")
+    setup_load_seconds = _elapsed_seconds(phase_start)
 
     tensors: dict[str, torch.Tensor] = {}
     metadata: list[TensorMetadata] = []
@@ -235,6 +239,7 @@ def run_real_multi_token_decode_smoke(
     prefill_input_ids = token_ids[:, :prefill_seq_len].contiguous()
     supplied_decode_ids = token_ids[:, prefill_seq_len:].contiguous()
 
+    phase_start = time.perf_counter()
     (
         layer_assets,
         initial_reference_caches,
@@ -252,10 +257,13 @@ def run_real_multi_token_decode_smoke(
         max_tensors=remaining_tensors,
         max_bytes=remaining_bytes,
     )
+    prefill_build_seconds = _elapsed_seconds(phase_start)
 
     reference_cache_states = initial_reference_caches
     decode_steps_reference: list[_DecodeStep] = []
+    decode_build_step_seconds: list[float] = []
     for step_index in range(decode_steps):
+        step_start = time.perf_counter()
         current_position = int(prefill_seq_len + step_index)
         feed_input_ids = supplied_decode_ids[:, step_index : step_index + 1].contiguous()
         decode_step, reference_cache_states, metadata = _build_reference_decode_step(
@@ -273,7 +281,9 @@ def run_real_multi_token_decode_smoke(
             max_bytes=remaining_bytes,
         )
         decode_steps_reference.append(decode_step)
+        decode_build_step_seconds.append(_elapsed_seconds(step_start))
 
+    phase_start = time.perf_counter()
     logits_weights = load_decode_logits_weights(
         index,
         config=config,
@@ -285,15 +295,22 @@ def run_real_multi_token_decode_smoke(
         max_bytes=remaining_bytes,
     )
     all_metadata = [*metadata, *logits_weights.metadata]
-    reference_logits_by_step = [
-        build_torch_decode_logits_reference(
-            step.stack_hidden,
-            logits_weights.norm_weight,
-            logits_weights.head_weight,
-            config=config,
+    logits_build_step_seconds: list[float] = []
+    reference_logits_by_step = []
+    for step in decode_steps_reference:
+        step_start = time.perf_counter()
+        reference_logits_by_step.append(
+            build_torch_decode_logits_reference(
+                step.stack_hidden,
+                logits_weights.norm_weight,
+                logits_weights.head_weight,
+                config=config,
+            )
         )
-        for step in decode_steps_reference
-    ]
+        logits_build_step_seconds.append(_elapsed_seconds(step_start))
+    logits_build_seconds = _elapsed_seconds(phase_start)
+
+    phase_start = time.perf_counter()
     result = _base_result(
         snapshot_dir=snapshot_dir,
         layers=layers,
@@ -315,6 +332,31 @@ def run_real_multi_token_decode_smoke(
         max_bytes=max_bytes,
         top_k=top_k,
     )
+    result["timing"] = {
+        "setup_load_seconds": setup_load_seconds,
+        "prefill_build_seconds": prefill_build_seconds,
+        "decode_build_total_seconds": _sum_seconds(decode_build_step_seconds),
+        "decode_build_step_seconds": [
+            {
+                "step_index": int(step.step_index),
+                "current_position": int(step.current_position),
+                "seconds": seconds,
+            }
+            for step, seconds in zip(decode_steps_reference, decode_build_step_seconds)
+        ],
+        "logits_build_total_seconds": logits_build_seconds,
+        "logits_build_step_seconds": [
+            {
+                "step_index": int(step.step_index),
+                "current_position": int(step.current_position),
+                "seconds": seconds,
+            }
+            for step, seconds in zip(decode_steps_reference, logits_build_step_seconds)
+        ],
+        "result_build_seconds": _elapsed_seconds(phase_start),
+        "ttnn": {},
+        "end_to_end_wall_seconds": None,
+    }
 
     if cpu_only:
         result.pop("_reference_prefill_tensors", None)
@@ -326,6 +368,7 @@ def run_real_multi_token_decode_smoke(
             }
         }
         result["passed"] = True
+        result["timing"]["end_to_end_wall_seconds"] = _elapsed_seconds(wall_start)
         return result
 
     if prefill_seq_len % PREFILL_ATTENTION_RUNTIME_TTNN_TILE_MULTIPLE != 0:
@@ -334,6 +377,7 @@ def run_real_multi_token_decode_smoke(
             f"{PREFILL_ATTENTION_RUNTIME_TTNN_TILE_MULTIPLE}, got {prefill_seq_len}"
         )
 
+    phase_start = time.perf_counter()
     ttnn_outputs = _run_ttnn_multi_token_stack(
         tensors,
         layer_assets,
@@ -343,6 +387,8 @@ def run_real_multi_token_decode_smoke(
         initial_prefill_hidden=initial_prefill_hidden,
         device_id=device_id,
     )
+    result["timing"]["ttnn"] = ttnn_outputs.get("timing", {})
+    result["timing"]["ttnn_total_seconds"] = _elapsed_seconds(phase_start)
     _augment_result_for_ttnn(
         result,
         ttnn_outputs=ttnn_outputs,
@@ -362,6 +408,7 @@ def run_real_multi_token_decode_smoke(
         logits_atol=logits_atol,
         top_logit_atol=top_logit_atol,
     )
+    result["timing"]["end_to_end_wall_seconds"] = _elapsed_seconds(wall_start)
     return result
 
 
@@ -705,11 +752,15 @@ def _run_ttnn_multi_token_stack(
     initial_prefill_hidden: torch.Tensor,
     device_id: int,
 ) -> dict[str, Any]:
+    ttnn_wall_start = time.perf_counter()
     prefill_hidden = initial_prefill_hidden
     cache_states: list[_LayerCacheState] = []
     prefill_hidden_by_layer: dict[int, torch.Tensor] = {}
     prefill_summaries: list[dict[str, Any]] = []
+    prefill_layer_seconds: list[dict[str, Any]] = []
+    prefill_start = time.perf_counter()
     for asset_index, asset in enumerate(layer_assets):
+        layer_start = time.perf_counter()
         materialize_prefill_output = asset_index != len(layer_assets) - 1
         if materialize_prefill_output:
             if asset.prefill_routed_weights_by_expert is None or asset.prefill_shared_weights is None:
@@ -760,9 +811,20 @@ def _run_ttnn_multi_token_stack(
                 }
             )
         cache_states.append(_initial_cache_state_from_prefill(layer=asset.layer, reference=cache_outputs))
+        prefill_layer_seconds.append(
+            {
+                "layer": int(asset.layer),
+                "cache_only": not materialize_prefill_output,
+                "seconds": _elapsed_seconds(layer_start),
+            }
+        )
+    prefill_total_seconds = _elapsed_seconds(prefill_start)
 
     step_outputs = []
+    decode_step_seconds: list[dict[str, Any]] = []
+    logits_step_seconds: list[dict[str, Any]] = []
     for step in steps:
+        decode_start = time.perf_counter()
         hidden = step.initial_hidden
         next_cache_states = []
         layer_outputs = []
@@ -801,12 +863,29 @@ def _run_ttnn_multi_token_stack(
                     "cache_after": next_cache_state,
                 }
             )
+        decode_seconds = _elapsed_seconds(decode_start)
+        logits_start = time.perf_counter()
         logits_outputs = _run_ttnn_decode_logits_from_hidden(
             hidden,
             logits_weights.norm_weight,
             logits_weights.head_weight,
             config=config,
             device_id=device_id,
+        )
+        logits_seconds = _elapsed_seconds(logits_start)
+        decode_step_seconds.append(
+            {
+                "step_index": int(step.step_index),
+                "current_position": int(step.current_position),
+                "seconds": decode_seconds,
+            }
+        )
+        logits_step_seconds.append(
+            {
+                "step_index": int(step.step_index),
+                "current_position": int(step.current_position),
+                "seconds": logits_seconds,
+            }
         )
         step_outputs.append(
             {
@@ -823,6 +902,15 @@ def _run_ttnn_multi_token_stack(
         "prefill_summaries": prefill_summaries,
         "steps": step_outputs,
         "final_cache_states": tuple(cache_states),
+        "timing": {
+            "prefill_total_seconds": prefill_total_seconds,
+            "prefill_layer_seconds": prefill_layer_seconds,
+            "decode_total_seconds": _sum_seconds(item["seconds"] for item in decode_step_seconds),
+            "decode_step_seconds": decode_step_seconds,
+            "logits_total_seconds": _sum_seconds(item["seconds"] for item in logits_step_seconds),
+            "logits_step_seconds": logits_step_seconds,
+            "total_seconds": _elapsed_seconds(ttnn_wall_start),
+        },
     }
 
 
@@ -1734,6 +1822,14 @@ def _validate_multi_token_runtime_config(
             f"multi-token decode smoke currently requires prefill_seq_len + decode_steps <= sliding_window "
             f"{config.sliding_window}, got {prefill_seq_len + decode_steps}"
         )
+
+
+def _elapsed_seconds(start: float) -> float:
+    return round(max(0.0, time.perf_counter() - start), 6)
+
+
+def _sum_seconds(values: Iterable[float]) -> float:
+    return round(sum(float(value) for value in values), 6)
 
 
 def _optional_int_env(name: str, default: int | None = None) -> int | None:
