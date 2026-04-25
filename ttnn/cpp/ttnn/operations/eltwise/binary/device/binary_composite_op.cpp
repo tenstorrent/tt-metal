@@ -253,6 +253,13 @@ Tensor div(
         (rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
+    // Workaround for known bfloat16 div-by-zero / sign-of-zero bug in fast_and_approximate
+    // mode (issues #26339, #26399). The pre-legacy-removal path used FLOAT32 typecast as a
+    // safety guard; we restore the same invariant by suppressing fast_and_approximate when
+    // the rounding-mode path is taken on bfloat16.
+    const bool suppress_fap = fast_and_approximate_mode && input.dtype() == DataType::BFLOAT16;
+    const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
+
     std::optional<Tensor> divided = ttnn::divide(
         input,
         value,
@@ -262,7 +269,7 @@ Tensor div(
         post_activations,
         lhs_activations,
         rhs_activations,
-        fast_and_approximate_mode,
+        effective_fap,
         sub_core_grids);
 
     if (rounding_mode == "trunc") {
@@ -361,6 +368,13 @@ Tensor div(
         (rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
+    // Workaround for known bfloat16 div-by-zero / sign-of-zero bug in fast_and_approximate
+    // mode (issues #26339, #26399). The pre-legacy-removal path used FLOAT32 typecast as a
+    // safety guard; we restore the same invariant by suppressing fast_and_approximate when
+    // the rounding-mode path is taken on bfloat16.
+    const bool suppress_fap = fast_and_approximate_mode && input_dtype == DataType::BFLOAT16;
+    const bool effective_fap = suppress_fap ? false : fast_and_approximate_mode;
+
     std::optional<Tensor> divided = ttnn::divide(
         input_a,
         input_b,
@@ -370,7 +384,7 @@ Tensor div(
         post_activations,
         lhs_activations,
         rhs_activations,
-        fast_and_approximate_mode,
+        effective_fap,
         sub_core_grids);
 
     if (rounding_mode == "trunc") {
