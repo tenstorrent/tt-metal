@@ -31,8 +31,7 @@ if str(REPO_ROOT_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT_FOR_IMPORTS))
 
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.config import (
-    DEFAULT_SDPA_REDUCE_COMPUTE_BLOCK_SIZE,
-    DEFAULT_SDPA_REDUCE_NUM_L_CHUNKS,
+    SDPA_REDUCE_TUNING_BY_MAX_PAYLOAD_SIZE_BYTES,
     resolve_sdpa_reduce_config,
 )
 
@@ -48,6 +47,13 @@ SDPA_TRACE_NUM_LINKS = 2
 SDPA_TRACE_TILE_HEIGHT = 8
 SDPA_TRACE_TILE_WIDTH = 32
 SDPA_TRACE_BYTES_PER_ELEMENT = 2
+
+
+def format_sdpa_tuning_matrix() -> str:
+    return ", ".join(
+        f"{payload} -> ({tuning.num_l_chunks}, {tuning.compute_block_size})"
+        for payload, tuning in sorted(SDPA_REDUCE_TUNING_BY_MAX_PAYLOAD_SIZE_BYTES.items())
+    )
 
 
 @dataclass(frozen=True)
@@ -645,11 +651,7 @@ def render_summary_section(
         total_l_tiles = derive_sdpa_total_l_tiles(config)
         lines.append("Sweep: num_l_chunks x compute_block_size x max_payload_size_bytes")
         lines.append(f"For this shape, total_l_tiles per worker = {total_l_tiles}.")
-        lines.append(
-            "Tuned standalone defaults: "
-            f"num_l_chunks={DEFAULT_SDPA_REDUCE_NUM_L_CHUNKS}, "
-            f"compute_block_size={DEFAULT_SDPA_REDUCE_COMPUTE_BLOCK_SIZE}."
-        )
+        lines.append(f"Tuned payload matrix: {format_sdpa_tuning_matrix()}.")
         lines.append(
             "Invalid cells are shown as n/a when a forced L chunk payload exceeds the configured fabric max payload "
             "or a compute block size does not divide the total L tiles."
@@ -854,11 +856,7 @@ def render_details_section(
         total_l_tiles = derive_sdpa_total_l_tiles(config)
         lines.append("Sweep: num_l_chunks x compute_block_size x max_payload_size_bytes")
         lines.append(f"For this shape, total_l_tiles per worker = {total_l_tiles}.")
-        lines.append(
-            "Tuned standalone defaults: "
-            f"num_l_chunks={DEFAULT_SDPA_REDUCE_NUM_L_CHUNKS}, "
-            f"compute_block_size={DEFAULT_SDPA_REDUCE_COMPUTE_BLOCK_SIZE}."
-        )
+        lines.append(f"Tuned payload matrix: {format_sdpa_tuning_matrix()}.")
         lines.append(
             "Invalid cells are shown as n/a when a forced L chunk payload exceeds the configured fabric max payload "
             "or a compute block size does not divide the total L tiles."

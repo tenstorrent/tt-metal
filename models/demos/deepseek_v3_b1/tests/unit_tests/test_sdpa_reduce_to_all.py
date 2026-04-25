@@ -215,6 +215,7 @@ def build_sdpa_reduce_to_all_test_inputs(
         bytes_per_element=2,
         max_payload_size_bytes=max_payload_size_bytes,
         num_l_chunks_override=num_l_chunks_override,
+        compute_block_size_override=compute_block_size_override,
     )
 
     num_forwarder_cores = 2
@@ -382,7 +383,7 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize("num_iter, num_warmup_iter", [(50, 25)])
+@pytest.mark.parametrize("num_iter, num_warmup_iter", [(100, 25)])
 @pytest.mark.parametrize(
     "device_params",
     [

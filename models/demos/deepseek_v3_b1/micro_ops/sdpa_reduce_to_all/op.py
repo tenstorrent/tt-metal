@@ -49,12 +49,16 @@ def compute_forwarder_scratch_size(
     num_links: int = SDPA_REDUCE_DEFAULT_NUM_LINKS,
     max_payload_size_bytes: int | None = None,
     num_l_chunks_override: int | None = None,
+    compute_block_size_override: int | None = None,
 ):
     """
     Compute the total forwarder scratch buffer size in bytes for SDPA reduce-to-all.
 
     This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
     """
+    if max_payload_size_bytes is None:
+        max_payload_size_bytes = ttnn.get_tt_fabric_max_payload_size_bytes()
+
     config = resolve_sdpa_reduce_config(
         batch_size=batch_size,
         l_width=l_width,
@@ -66,6 +70,7 @@ def compute_forwarder_scratch_size(
         packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
         max_payload_size_bytes=max_payload_size_bytes,
         num_l_chunks_override=num_l_chunks_override,
+        compute_block_size_override=compute_block_size_override,
     )
 
     return 2 * config.slots_per_round * config.slot_size * 2
