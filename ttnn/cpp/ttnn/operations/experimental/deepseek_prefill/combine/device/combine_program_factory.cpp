@@ -267,23 +267,20 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_1,
         "dispatched_metadata_scratch");
+
     // c_2: expert_token_counts scratch on sender.
     // Sized one extra page larger than the raw counter data so reader_combine can append
     // its receive_buf_addr (get_write_ptr(c_18)) immediately after the counter pages before the
     // multicast, giving idle cores a host-side-free way to discover the sender's receive buffer.
-    // Extra space is one full counter_page_size (not l1_alignment) to keep cb_size divisible by page_size.
-    {
-        uint32_t counter_pages = detail::get_num_pages(expert_token_counts);
-        uint32_t counter_page_size = detail::get_aligned_page_size(expert_token_counts);
-        auto data_format = tt::tt_metal::datatype_to_dataformat_converter(expert_token_counts.dtype());
-        // One extra page holds the single receive_buf_addr (uint32) appended after counter data.
-        uint32_t extra_pages = 1;
-        uint32_t cb_size = (counter_pages + extra_pages) * counter_page_size;
-        tt::tt_metal::CircularBufferConfig c2_config =
-            tt::tt_metal::CircularBufferConfig(cb_size, {{tt::CBIndex::c_2, data_format}})
-                .set_page_size(tt::CBIndex::c_2, counter_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, c2_config);
-    }
+    uint32_t extra_pages = is_tile_layout ? 1 : 0;
+    // c_2: expert_token_counts (reader-only, full tensor)
+    detail::create_tensor_cb(
+        program,
+        sender_core_grid,
+        expert_token_counts,
+        /*buffering_factor=*/detail::get_num_pages(expert_token_counts) + extra_pages,
+        /*cb_id=*/tt::CBIndex::c_2,
+        "expert_token_counts");
 
     if (is_tile_layout) {
         // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only)
