@@ -505,6 +505,7 @@ def fast_device_to_host(
                 use_hyperparams=True,
                 use_persistent_buffer=True,
             )
+            gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
                 repeat_dims = [1] * len(gathered_tensor.shape)
@@ -513,8 +514,6 @@ def fast_device_to_host(
                 gathered_tensor = ttnn.mesh_partition(gathered_tensor, dim=inter_dim, cluster_axis=inter_host_axis)
             if pre_transfer_fn is not None:
                 gathered_tensor = pre_transfer_fn(gathered_tensor)
-            else:
-                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
         elif pre_transfer_fn is not None:
             gathered_tensor = pre_transfer_fn(gathered_tensor)
 
