@@ -127,7 +127,12 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), src_dtype
     )(src_shape)
 
-    torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor)
+    # torch.scatter requires self and src to have the same dtype.
+    # The master trace may record different ttnn dtypes (e.g. BFLOAT8_B vs BFLOAT16)
+    # that map to different torch types. Use float32 for golden computation.
+    torch_output_tensor = torch.scatter(
+        torch_input_tensor.float(), dim, torch_index_tensor, torch_src_tensor.float()
+    ).to(torch_input_tensor.dtype)
 
     is_host = storage_type and "HOST" in str(storage_type)
 

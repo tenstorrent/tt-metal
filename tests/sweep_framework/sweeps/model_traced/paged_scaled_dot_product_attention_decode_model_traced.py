@@ -142,8 +142,13 @@ def run(
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_a)(shape_a)
     torch_input_b = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_b)(shape_b)
     torch_input_c = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_c)(shape_c)
-    torch_input_d = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_d)(shape_d)
-    torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), dtype_e)(shape_e)
+    # page_table (input_d) must be INT32 — generate random page indices
+    torch_input_d = torch.randint(0, 64, shape_d, dtype=torch.int32)
+    # cur_pos_tensor (input_e) and page_table (input_d) must be INT32
+    # Override dtype_e to INT32 since master trace requires it for cur_pos
+    dtype_e = ttnn.int32
+    dtype_d = ttnn.int32
+    torch_input_e = torch.randint(0, 128, shape_e, dtype=torch.int32)
 
     # TODO: Compute a true PyTorch attention golden using traced K/V/page table inputs.
     torch_output_tensor = torch_input_a.clone()

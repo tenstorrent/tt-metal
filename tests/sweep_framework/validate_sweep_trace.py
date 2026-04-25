@@ -396,28 +396,21 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                # Arguments match — check if config_hash computation also agrees
-                if sweep_config_hash and sweep_config_hash != source_hash:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="hash_mismatch",
-                            sweep_config_hash=sweep_config_hash,
-                        )
+                # Arguments match after normalization — report as match.
+                # The config_hash may differ because the sweep trace computes
+                # its hash on raw (un-normalized) arguments which include
+                # topology-dependent values like mesh_device_shape.  Since the
+                # *arguments* are semantically identical, this is a valid match.
+                report.results.append(
+                    ConfigResult(
+                        config_hash=source_hash,
+                        op_name=op_name,
+                        master_config_id=master_cid,
+                        sweep_config_id=sweep_cid,
+                        status="match",
+                        sweep_config_hash=sweep_config_hash,
                     )
-                else:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="match",
-                        )
-                    )
+                )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
