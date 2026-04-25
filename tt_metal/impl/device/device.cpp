@@ -930,9 +930,8 @@ void Device::quiesce_and_restart_fabric_workers() {
     //
     // We send the TERMINATE signal directly to each active ERISC channel and wait for
     // it to write EDMStatus::TERMINATED before proceeding.  On timeout we log a warning
-    // and continue — configure_fabric_cores() will still safely overwrite L1 and boot
-    // fresh firmware.  We do NOT assert_risc_reset_at_core on WH: resetting an ERISC
-    // tears down the ETH PHY link and breaks non-MMIO L1 access for the whole mesh.
+    // and force-reset the ERISC (assert_risc_reset_at_core) to guarantee it is halted
+    // before Phase 3 overwrites its L1 — preventing mid-packet-send data corruption.
     // FIX R (#42429): Skip Phase 2.5 entirely for non-MMIO devices when relay path is broken.
     //
     // Phase 2.5 L1 reads go through the UMD non-MMIO relay.  When fabric_relay_path_broken_
@@ -1081,20 +1080,39 @@ void Device::quiesce_and_restart_fabric_workers() {
                     eth_chan_id,
                     p25_elapsed);
             } else {
-                // Do NOT assert_risc_reset_at_core on WH ERISCs: resetting tears down the
-                // ETH PHY link, breaking non-MMIO L1 access for the entire mesh.
-                // configure_fabric_cores() in Phase 3 will safely overwrite L1.
                 log_warning(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
                     "ERISC did not terminate within budget {}ms (actual elapsed {}ms, status=0x{:08x} {}) — "
-                    "continuing without reset (WH: resetting ERISC tears down ETH PHY link)",
+                    "force-resetting ERISC to guarantee it is halted before Phase 3 overwrites L1",
                     this->id(),
                     eth_chan_id,
                     erisc_timeout_ms,
                     p25_elapsed,
                     status_buf[0],
                     edm_status_str_q(status_buf[0]));
+                // R1: Force-reset the unresponsive ERISC before Phase 3 writes new firmware to its L1.
+                // Without this, Phase 3's configure_fabric_cores() may overwrite L1 while the ERISC
+                // is mid-packet-send, causing data corruption (the same issue this branch fixes).
+                try {
+                    const auto eth_virtual_core = virtual_core_from_logical_core(eth_logical_core, CoreType::ETH);
+                    env_impl.get_cluster().assert_risc_reset_at_core(
+                        tt_cxy_pair(this->id(), eth_virtual_core), tt::umd::RiscType::ALL);
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "force-reset applied — ERISC halted before Phase 3 L1 overwrite",
+                        this->id(),
+                        eth_chan_id);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
+                        "force-reset failed — Phase 3 L1 overwrite may be unsafe: {}",
+                        this->id(),
+                        eth_chan_id,
+                        e.what());
+                }
             }
         }
     }
