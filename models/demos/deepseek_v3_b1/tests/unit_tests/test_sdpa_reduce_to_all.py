@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,14 +13,12 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
-from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import (
-    SdpaReduceToAll,
-    _round_up,
-    compute_forwarder_scratch_size,
-)
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.config import round_up
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll, compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     create_fabric_router_config,
     get_env_int,
+    parse_positive_env_int,
     run_trace_benchmark,
 )
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
@@ -37,6 +36,16 @@ TRACE_SCATTER_ENABLED = False
 
 ENV_MAX_PAYLOAD_SIZE = "SDPA_REDUCE_TO_ALL_MAX_PAYLOAD_SIZE_BYTES"
 MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+ENV_NUM_L_CHUNKS = "SDPA_REDUCE_TO_ALL_NUM_L_CHUNKS"
+TRACE_NUM_L_CHUNKS = None
+_trace_num_l_chunks_raw = os.getenv(ENV_NUM_L_CHUNKS)
+if _trace_num_l_chunks_raw is not None and _trace_num_l_chunks_raw.strip() != "":
+    TRACE_NUM_L_CHUNKS = parse_positive_env_int(ENV_NUM_L_CHUNKS, _trace_num_l_chunks_raw)
+ENV_COMPUTE_BLOCK_SIZE = "SDPA_REDUCE_TO_ALL_COMPUTE_BLOCK_SIZE"
+TRACE_COMPUTE_BLOCK_SIZE = None
+_trace_compute_block_size_raw = os.getenv(ENV_COMPUTE_BLOCK_SIZE)
+if _trace_compute_block_size_raw is not None and _trace_compute_block_size_raw.strip() != "":
+    TRACE_COMPUTE_BLOCK_SIZE = parse_positive_env_int(ENV_COMPUTE_BLOCK_SIZE, _trace_compute_block_size_raw)
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,8 @@ class SdpaReduceToAllTestInputs:
     l_width: int
     scale_value: float
     per_device_chunk_size: int
+    num_l_chunks_override: int | None
+    compute_block_size_override: int | None
     forwarder_cores: list[Any]
     input_l_mesh: Any
     input_ms_mesh: Any
@@ -68,6 +79,8 @@ def build_sdpa_reduce_to_all_test_inputs(
     scatter_enabled: bool,
     position_id: int,
     max_payload_size_bytes: int | None = None,
+    num_l_chunks_override: int | None = None,
+    compute_block_size_override: int | None = None,
 ) -> SdpaReduceToAllTestInputs:
     l_shape = [BATCH_SIZE, L_WIDTH * NUM_CORES]
     ms_shape = [BATCH_SIZE, MS_WIDTH * NUM_CORES]
@@ -201,11 +214,12 @@ def build_sdpa_reduce_to_all_test_inputs(
         tile_width=32,
         bytes_per_element=2,
         max_payload_size_bytes=max_payload_size_bytes,
+        num_l_chunks_override=num_l_chunks_override,
     )
 
     num_forwarder_cores = 2
     forwarder_shard_width_elements = forwarder_buffer_size_bytes // (tile.tile_shape[0] * 2)
-    forwarder_shard_width_elements = _round_up(forwarder_shard_width_elements, tile.tile_shape[1])
+    forwarder_shard_width_elements = round_up(forwarder_shard_width_elements, tile.tile_shape[1])
 
     forwarder_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(forwarder_cores[0], forwarder_cores[1])})
     forwarder_shard_spec = ttnn.ShardSpec(
@@ -267,6 +281,8 @@ def build_sdpa_reduce_to_all_test_inputs(
         l_width=L_WIDTH,
         scale_value=SCALE_VALUE,
         per_device_chunk_size=PER_DEVICE_CHUNK_SIZE,
+        num_l_chunks_override=num_l_chunks_override,
+        compute_block_size_override=compute_block_size_override,
         forwarder_cores=forwarder_cores,
         input_l_mesh=input_l_mesh,
         input_ms_mesh=input_ms_mesh,
@@ -297,6 +313,8 @@ def run_sdpa_reduce_to_all(inputs: SdpaReduceToAllTestInputs):
         scatter_dest_grid=inputs.scatter_grid,
         position_id_tensor_mesh=inputs.position_id_tensor_mesh,
         per_device_chunk_size=inputs.per_device_chunk_size,
+        num_l_chunks_override=inputs.num_l_chunks_override,
+        compute_block_size_override=inputs.compute_block_size_override,
     )
 
 
@@ -364,14 +382,14 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
-@pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
+@pytest.mark.parametrize("num_iter, num_warmup_iter", [(50, 25)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(MAX_PAYLOAD_SIZE),
-            "trace_region_size": 573440,
+            "trace_region_size": 2965504,
         }
     ],
     indirect=["device_params"],
@@ -389,12 +407,16 @@ def test_sdpa_reduce_to_all_trace(
         scatter_enabled=TRACE_SCATTER_ENABLED,
         position_id=TRACE_POSITION_ID,
         max_payload_size_bytes=MAX_PAYLOAD_SIZE,
+        num_l_chunks_override=TRACE_NUM_L_CHUNKS,
+        compute_block_size_override=TRACE_COMPUTE_BLOCK_SIZE,
     )
 
     logger.info(
         "Running SDPA reduce-to-all trace: "
         f"forwarder_cores=2, scatter={'enabled' if TRACE_SCATTER_ENABLED else 'disabled'}, "
-        f"position_id={TRACE_POSITION_ID}, max_payload_size_bytes={MAX_PAYLOAD_SIZE}"
+        f"position_id={TRACE_POSITION_ID}, max_payload_size_bytes={MAX_PAYLOAD_SIZE}, "
+        f"num_l_chunks={'default' if TRACE_NUM_L_CHUNKS is None else TRACE_NUM_L_CHUNKS}, "
+        f"compute_block_size={'default' if TRACE_COMPUTE_BLOCK_SIZE is None else TRACE_COMPUTE_BLOCK_SIZE}"
     )
 
     output_mesh = run_trace_benchmark(

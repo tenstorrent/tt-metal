@@ -191,6 +191,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("scale_fp32"),
             get_named_compile_time_arg_val("tiles_per_l_chunk"),
             get_named_compile_time_arg_val("num_l_chunks"),
+            get_named_compile_time_arg_val("compute_block_size"),
             get_named_compile_time_arg_val("position_enabled"),
             get_named_compile_time_arg_val("per_device_chunk_size"),
             get_named_compile_time_arg_val("final_reduction")>;

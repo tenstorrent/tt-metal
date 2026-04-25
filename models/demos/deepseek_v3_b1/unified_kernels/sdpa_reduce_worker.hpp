@@ -506,6 +506,7 @@ struct SdpaReduceWorker {
         uint32_t scaleFp32,
         uint32_t tilesPerLChunk,
         uint32_t numLChunks,
+        uint32_t computeBlockSize,
         uint32_t positionEnabled,
         uint32_t perDeviceChunkSize,
         uint32_t finalReduction>
@@ -526,22 +527,8 @@ struct SdpaReduceWorker {
         static constexpr uint32_t total_l_tiles = transport_num_l_chunks * transport_tiles_per_l_chunk;
         // Blackhole's non-dense SDPA srcB-reuse path tops out at 8 logical 8x32 tiles per block.
         static constexpr uint32_t max_compute_block_size = 8;
-
-        static constexpr uint32_t derive_compute_block_size() {
-            if constexpr (transport_tiles_per_l_chunk <= max_compute_block_size) {
-                return transport_tiles_per_l_chunk;
-            } else {
-                for (uint32_t candidate = max_compute_block_size; candidate > 0; --candidate) {
-                    if ((total_l_tiles % candidate) == 0) {
-                        return candidate;
-                    }
-                }
-                return 1;
-            }
-        }
-
         // SDPA uses "block_size" terminology on the compute path.
-        static constexpr uint32_t block_size = derive_compute_block_size();
+        static constexpr uint32_t block_size = computeBlockSize;
         static_assert(block_size > 0, "compute block_size must be > 0");
         static_assert(block_size <= max_compute_block_size, "compute block_size exceeds supported maximum");
         static_assert(total_l_tiles % block_size == 0, "total_l_tiles must be divisible by compute block_size");
