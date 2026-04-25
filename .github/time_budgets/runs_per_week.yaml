@@ -1,0 +1,16 @@
+# How many times each pipeline runs per week (weekday average × 5).
+# For pipeline_reorg test YAMLs: key = the test yaml filename (with .yaml).
+# For regular workflow YAMLs: key = the workflow filename (with .yaml).
+#
+# These are used to convert per-run timeout costs into weekly machine-hours.
+# Update when pipeline frequency changes (e.g. after gate restructuring).
+
+# --- Regular workflows ---
+pr-gate.yaml:             256   # ~51 PRs/day × 5 days
+merge-gate.yaml:           49   # ~10 merges/day × 5 days
+post-commit.yaml:          49
+
+# --- pipeline_reorg test yamls ---
+# (keyed by filename, not the workflow that calls them)
+# galaxy_e2e_tests.yaml:   10
+# wormhole_unit_tests.yaml: 256
