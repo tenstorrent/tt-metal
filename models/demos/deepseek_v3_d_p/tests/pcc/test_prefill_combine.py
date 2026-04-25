@@ -312,6 +312,7 @@ def test_ttnn_combine(
     topology,
     use_predictable_data,
     run_pcc_check,
+    dispatched_buffer_layout=ttnn.TILE_LAYOUT,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     torch.manual_seed(42)
@@ -412,7 +413,7 @@ def test_ttnn_combine(
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
         mesh_mapper=mesh_mapper,
-        layout=ttnn.TILE_LAYOUT,
+        layout=dispatched_buffer_layout,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
@@ -511,3 +512,56 @@ def test_ttnn_combine(
     result.assert_passed("Combine data mismatch")
 
     logger.debug("✅ TTNN combine operation matches torch reference!")
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
+    [
+        pytest.param(128, 7 * 1024, 16, 4, 2, True, id="pcc"),
+        pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True], ids=["predictable"])
+def test_combine_row_major_layout(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    run_pcc_check,
+):
+    """Test TTNN combine operation with ROW_MAJOR input layout."""
+    test_ttnn_combine(
+        mesh_device=mesh_device,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        capacity_factor=capacity_factor,
+        num_links=num_links,
+        topology=topology,
+        use_predictable_data=use_predictable_data,
+        run_pcc_check=run_pcc_check,
+        dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
