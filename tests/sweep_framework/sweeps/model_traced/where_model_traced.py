@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -152,7 +153,8 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, input_tensor_c, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
         e2e_perf = stop_measuring_time(start_time)
     else:
         # Tensor creation
@@ -191,7 +193,8 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, scalar_true, scalar_false, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison
