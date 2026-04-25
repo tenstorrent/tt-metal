@@ -1219,13 +1219,31 @@ void Device::quiesce_and_restart_fabric_workers() {
     // router without soft reset.
     // FIX M confirmed this mechanism works: base-UMD → fabric firmware transition via
     // write_launch_msg_to_core alone succeeded in CI run #24830129500.
+    //
+    // FIX AD (#42429): Extend FIX N to MMIO devices during quiesce.
+    //
+    // MMIO ETH channels that act as UMD dispatch tunnel relay senders (connecting MMIO
+    // to non-MMIO peers via the card-internal ETH link) must NOT be soft-reset during
+    // quiesce Phase 3.  When an MMIO device's ETH channel is asserted into reset via
+    // assert_risc_reset_at_core, the UMD ETH relay path to the non-MMIO peer dies
+    // immediately — the ETH NOC and relay sender ERISC are both halted.  Any subsequent
+    // non-MMIO Phase 5 relay read then times out after 5 s (UMD ETH relay timeout),
+    // setting fabric_relay_path_broken_ and cascading into a permanently-broken second
+    // quiesce.
+    //
+    // After Phase 2.5, MMIO ETH channels are in TERMINATED state (fabric router kernel
+    // exited, BRISC polling for next launch msg).  In TERMINATED state the ETH core is
+    // NOT halted — only the kernel exited.  write_launch_msg_to_core alone (no soft
+    // reset) is therefore sufficient to restart the fabric router on MMIO channels,
+    // and preserves the ETH relay path for non-MMIO peers throughout the quiesce.
+    //
+    // All active channels (MMIO and non-MMIO) now skip the soft reset in quiesce Phase 3.
     tt::tt_fabric::FabricCoresHealth quiesce_health;
     {
         std::unordered_set<uint32_t> quiesce_skip_reset_chans;
-        if (!this->is_mmio_capable()) {
-            for (const auto& [chan, unused_direction] : active_channels) {
-                quiesce_skip_reset_chans.insert(chan);
-            }
+        // Skip soft reset for all channels (MMIO and non-MMIO) — see FIX N and FIX AD above.
+        for (const auto& [chan, unused_direction] : active_channels) {
+            quiesce_skip_reset_chans.insert(chan);
         }
         quiesce_health = tt::tt_fabric::configure_fabric_cores(this, {}, quiesce_skip_reset_chans);
     }
