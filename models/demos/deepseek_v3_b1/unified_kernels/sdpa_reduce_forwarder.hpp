@@ -81,6 +81,8 @@ struct SdpaReduceForwarder {
 
     private:
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        static constexpr uint8_t forwarder_to_fabric_noc = 0;
+
         /**
          * Process ready slots from a semaphore and forward packets.
          * Returns updated sent_mask.
@@ -112,7 +114,7 @@ struct SdpaReduceForwarder {
 
                 fabric_connection
                     .template send_current_slot_stateful_non_blocking_from_address<use_posted_transport_writes>(
-                        slot_addr, actual_packet_size);
+                        slot_addr, actual_packet_size, forwarder_to_fabric_noc);
 
                 sent_mask |= (1u << slot);
                 cached_free_write_slots--;
@@ -132,7 +134,8 @@ struct SdpaReduceForwarder {
             auto fabric_connection =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             fabric_connection.open();
-            fabric_connection.template setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
+            fabric_connection.template setup_stateful_send_cmd_bufs<use_posted_transport_writes>(
+                forwarder_to_fabric_noc);
 
             // Interleaved R1/R2 forwarding loop
             volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_sem_addr);
@@ -156,9 +159,9 @@ struct SdpaReduceForwarder {
             } while (r1_sent_mask != CT::all_sent_mask || r2_sent_mask != CT::all_sent_mask);
 
             if constexpr (use_posted_transport_writes) {
-                noc_async_posted_writes_flushed();
+                noc_async_posted_writes_flushed(forwarder_to_fabric_noc);
             } else {
-                noc_async_writes_flushed();
+                noc_async_writes_flushed(forwarder_to_fabric_noc);
             }
 
             noc_semaphore_set(r1_sem_ptr, 0);
