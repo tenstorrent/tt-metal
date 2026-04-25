@@ -28,10 +28,19 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    create_kv_chunk_address_table,
+    init_kvpe_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_norm_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
@@ -65,6 +74,7 @@ SEQ_LEN_25K = 25 * 1024
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
 @pytest.mark.parametrize("isl_total", [SEQ_LEN_1K, SEQ_LEN_25K])
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "num_layers",
     [
@@ -115,6 +125,7 @@ def test_prefill_transformer(
     config_only,
     mesh_device,
     device_params,
+    is_balanced,
     isl_total,
     num_layers,
     n_routed_experts,
@@ -303,6 +314,7 @@ def test_prefill_transformer(
         state_dict=state_dict,
         num_layers=num_layers,
         seq_len=isl_total,
+        is_balanced=is_balanced,
         num_links=num_links,
         topology=topology,
         sp_axis=sp_axis,
@@ -336,8 +348,34 @@ def test_prefill_transformer(
         num_kvpe_cache_layers=num_layers,
     )
 
+    # create kv_cache dissagregation table
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_layers
+    lookup_table_config.max_sequence_length = isl_total
+    lookup_table_config.num_slots = 1
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+
+    # just create atm for demo purposes, don't actually use it
+    lookup_table = create_kv_chunk_address_table(
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=isl_total,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+    )
+
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding
+    if is_balanced == True:
+        chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
+        token_ids = (
+            reorder_tensor_chunks(token_ids.unsqueeze(1).unsqueeze(-1), chunk_order, seq_dim=2).squeeze(1).squeeze(-1)
+        )
+
     token_ids_reshaped = token_ids.reshape(sp_factor, 1, isl_per_chip)
 
     tt_tokens = ttnn.from_torch(
@@ -362,10 +400,24 @@ def test_prefill_transformer(
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
 
+    tt_snapshots = None
     if pcc_validation:
         tt_output, tt_snapshots = result
     else:
         tt_output = result
+
+    if tt_snapshots is not None and is_balanced == True:
+        # Reorder tensors
+        for i, (label, tt_host_tensor) in enumerate(tt_snapshots):
+            if tt_host_tensor.dim() == 3:
+                tt_host_tensor = reverse_reorder_tensor_chunks(
+                    tt_host_tensor.unsqueeze(0), chunk_order, seq_dim=2
+                ).squeeze(0)
+            elif tt_host_tensor.dim() == 4:
+                tt_host_tensor = reverse_reorder_tensor_chunks(tt_host_tensor, chunk_order, seq_dim=2)
+            else:
+                assert False, "Unsupported number of dims"
+            tt_snapshots[i] = (label, tt_host_tensor)
 
     # --- Validate output shape ---
     expected_per_device_shape = [1, 1, isl_per_chip, emb_dim // tp_factor]
@@ -423,6 +475,8 @@ def test_prefill_transformer(
         pcc_results = []
         for (label, tt_host), ref_host in zip(tt_snapshots, ref_snapshots):
             try:
+                # if is_balanced:
+                #     tt_host = reverse_reorder_tensor_chunks(tt_host.unsqueeze(0), chunk_order, seq_dim=2).squeeze(0)
                 _, pcc = comp_pcc(ref_host.float(), tt_host.float())
                 logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
                 pcc_results.append((label, pcc))
@@ -437,9 +491,12 @@ def test_prefill_transformer(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
             ).to(torch.bfloat16)
             # Shape: [num_layers, tp_factor, seq_total, head_dim] — take first TP replica
+            tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]
+            if is_balanced:
+                tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
             kv_lora_rank = config.kv_lora_rank
             for i, ref_kvpe in enumerate(ref_kvpe_list):
-                tt_kvpe_layer = tt_kvpe_all[i : i + 1, :1, :, :]
+                tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
                 label = f"layer_{i}_kvpe"
                 try:
                     _, kv_pcc = comp_pcc(
