@@ -273,14 +273,30 @@ def replicate_with_topology(
     import ast as _ast
     import re
 
-    tensor = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=layout,
-        device=mesh_device,
-        memory_config=memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # Create tensor in ROW_MAJOR first, then convert to target layout.
+    # When from_torch creates a TILE_LAYOUT mesh tensor directly, the tile
+    # padding (e.g. dim from 8→32) overwrites logical_shape(), causing the
+    # operation tracer to record the padded size instead of the original.
+    # Going through ROW_MAJOR preserves the logical shape through to_layout().
+    if layout == ttnn.TILE_LAYOUT:
+        tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
+    else:
+        tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     if tensor_placement:
         placement_raw = tensor_placement.get("placement", "")
