@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <random>
 #include <tt-metalium/core_coord.hpp>
@@ -16,6 +17,7 @@
 
 #include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -921,6 +923,66 @@ inline uint32_t clamp_to_max_fetch(
 }
 }  // namespace PackedWriteUtils
 
+// SD (slow dispatch) buffer constants — used by SlowDispatchBaseTestFixture
+static constexpr uint32_t SD_LOG_DISPATCH_BUFFER_PAGE_SIZE = 12;
+static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << SD_LOG_DISPATCH_BUFFER_PAGE_SIZE;
+static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BLOCKS = 4;
+static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 768 * 1024;
+static constexpr uint32_t SD_DISPATCH_BUFFER_BLOCK_SIZE_PAGES =
+    SD_DISPATCH_BUFFER_SIZE_BYTES / SD_DISPATCH_BUFFER_PAGE_SIZE / SD_DISPATCH_BUFFER_SIZE_BLOCKS;
+static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
+
+// Configures a dispatch kernel variant (IS_D / IS_H) and returns its handle.
+// Returns KernelHandle so the caller can call SetRuntimeArgs.
+template <bool is_dram_variant, bool is_host_variant>
+tt_metal::KernelHandle configure_kernel_variant(
+    tt_metal::Program& program,
+    const std::string& path,
+    const std::map<std::string, std::string>& defines_in,
+    std::vector<uint32_t> compile_args,
+    CoreCoord my_core,
+    CoreCoord phys_my_core,
+    CoreCoord phys_upstream_core,
+    CoreCoord phys_downstream_core,
+    tt_metal::IDevice* device,
+    tt_metal::NOC my_noc_index,
+    tt_metal::NOC upstream_noc_index,
+    tt_metal::NOC downstream_noc_index) {
+    auto my_virtual = device->virtual_noc0_coordinate(my_noc_index, phys_my_core);
+    auto upstream_virtual = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
+    auto downstream_virtual = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
+
+    std::map<std::string, std::string> defines = {
+        {"DISPATCH_KERNEL", "1"},
+        {"MY_NOC_X", std::to_string(my_virtual.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual.y)},
+        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(upstream_noc_index))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"FD_CORE_TYPE", "0"},
+        {"IS_D_VARIANT", std::to_string(static_cast<uint32_t>(is_dram_variant))},
+        {"IS_H_VARIANT", std::to_string(static_cast<uint32_t>(is_host_variant))},
+    };
+    compile_args.push_back(static_cast<uint32_t>(is_dram_variant));
+    compile_args.push_back(static_cast<uint32_t>(is_host_variant));
+    defines.insert(defines_in.begin(), defines_in.end());
+
+    return tt_metal::CreateKernel(
+        program,
+        path,
+        {my_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = my_noc_index,
+            .compile_args = compile_args,
+            .defines = defines,
+            .opt_level = tt_metal::KernelBuildOptLevel::Os});
+}
+
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
@@ -1161,4 +1223,279 @@ protected:
         }
     }
 };
+
+// SlowDispatchBaseTestFixture validates the dispatcher kernel in isolation without the FD
+// infrastructure. Uses spoof_prefetch.cpp to page pre-written commands into the dispatcher's
+// ring buffer. Requires TT_METAL_SLOW_DISPATCH_MODE=1.
+class SlowDispatchBaseTestFixture : public ::testing::Test {
+protected:
+    std::unique_ptr<DispatchPayloadGenerator> payload_generator_;
+    static constexpr CoreCoord default_worker_start = {0, 1};
+    static constexpr uint32_t bytes_per_16B_unit = 16;
+
+    tt_metal::IDevice* device_ = nullptr;
+    uint32_t dispatch_buffer_page_size_ = SD_DISPATCH_BUFFER_PAGE_SIZE;
+    uint32_t max_fetch_bytes_ = 0;
+    bool send_to_all_ = true;
+    DispatchTestConfig cfg_;
+
+    static constexpr CoreCoord spoof_prefetch_core_ = {0, 0};
+    static constexpr CoreCoord dispatch_core_ = {4, 0};
+
+    void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+            return;
+        }
+        device_ = tt_metal::CreateDevice(0);
+
+        DispatchPayloadGenerator::Config pgcfg;
+        pgcfg.use_coherent_data = cfg_.use_coherent_data;
+        pgcfg.perf_test = cfg_.perf_test;
+        pgcfg.min_xfer_size_bytes = cfg_.min_xfer_size_bytes;
+        pgcfg.max_xfer_size_bytes = cfg_.max_xfer_size_bytes;
+        std::random_device rd;
+        pgcfg.seed = rd();
+        payload_generator_ = std::make_unique<DispatchPayloadGenerator>(pgcfg);
+        log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
+        dispatch_buffer_page_size_ = cfg_.dispatch_buffer_page_size;
+        send_to_all_ = cfg_.send_to_all;
+        max_fetch_bytes_ =
+            tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER).max_prefetch_command_size();
+    }
+
+    void TearDown() override {
+        if (device_) {
+            tt_metal::CloseDevice(device_);
+            device_ = nullptr;
+        }
+    }
+
+    bool validate_dispatch_mode() {
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            log_info(tt::LogTest, "SD dispatcher suite requires TT_METAL_SLOW_DISPATCH_MODE");
+            return false;
+        }
+        return true;
+    }
+
+    virtual void execute_generated_commands(
+        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
+        DeviceData& device_data,
+        size_t /*num_cores_to_log*/,
+        uint32_t num_iterations,
+        bool /*wait_for_completion*/ = true,
+        bool /*wait_for_host_writes*/ = false) {
+        // 1. Serialize all iterations to a flat byte vector.
+        // Each command must start at a page boundary: cq_dispatch.cpp calls
+        // round_up_pow2(cmd_ptr, dispatch_cb_page_size) after every command.
+        //
+        // HostMemDeviceCommand always prepends a CQPrefetchCmd relay-inline header before
+        // the dispatch payload and appends a pcie-alignment tail (≤63 B).  In FD the prefetcher
+        // strips both.  In SD we strip both by reading relay_inline.length, which DeviceCommand
+        // sets to the exact dispatch content size (before pcie padding) at command-build time.
+        const uint32_t page_size = SD_DISPATCH_BUFFER_PAGE_SIZE;
+        constexpr size_t prefetch_hdr = sizeof(CQPrefetchCmd);  // bytes to skip at front
+        std::vector<uint8_t> raw;
+        for (uint32_t i = 0; i < num_iterations; ++i) {
+            for (const auto& cmd : commands_per_iteration) {
+                TT_ASSERT(cmd.size_bytes() > prefetch_hdr, "Command too small to contain prefetch header");
+                // relay_inline.length is set by DeviceCommand to the exact dispatch content size,
+                // excluding the pcie alignment tail that follows it in the HostMemDeviceCommand.
+                size_t content = reinterpret_cast<const CQPrefetchCmd*>(cmd.data())->relay_inline.length;
+                const auto* p = reinterpret_cast<const uint8_t*>(cmd.data()) + prefetch_hdr;
+                TT_ASSERT(content <= cmd.size_bytes() - prefetch_hdr, "content exceeds payload");
+                raw.insert(raw.end(), p, p + content);
+                // Pad to the next page boundary so the next command starts page-aligned.
+                uint32_t rem = raw.size() % page_size;
+                if (rem) {
+                    raw.resize(raw.size() + (page_size - rem), 0);
+                }
+            }
+        }
+
+        // 3. Append terminate command as its own page.
+        {
+            DeviceCommandCalculator calc;
+            calc.add_dispatch_terminate();
+            HostMemDeviceCommand term_cmd(calc.write_offset_bytes());
+            term_cmd.add_dispatch_terminate();
+            TT_ASSERT(term_cmd.size_bytes() > prefetch_hdr, "Terminate command too small");
+            size_t content = reinterpret_cast<const CQPrefetchCmd*>(term_cmd.data())->relay_inline.length;
+            const auto* p = reinterpret_cast<const uint8_t*>(term_cmd.data()) + prefetch_hdr;
+            raw.insert(raw.end(), p, p + content);
+            uint32_t rem2 = raw.size() % page_size;
+            if (rem2) {
+                raw.resize(raw.size() + (page_size - rem2), 0);
+            }
+        }
+
+        TT_ASSERT(raw.size() % page_size == 0);
+        const uint32_t cmd_cb_pages = raw.size() / page_size;
+        const uint32_t dispatch_buffer_pages = SD_DISPATCH_BUFFER_SIZE_BYTES / page_size;
+        log_info(
+            tt::LogTest,
+            "SD: cmd_cb_pages={} dispatch_buffer_pages={} raw_bytes={}",
+            cmd_cb_pages,
+            dispatch_buffer_pages,
+            raw.size());
+
+        auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        uint32_t dispatch_l1_unreserved_base =
+            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, page_size);
+        TT_ASSERT((l1_buf_base & (page_size - 1)) == 0);
+
+        const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_->id());
+        TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
+        TT_FATAL(
+            SD_DISPATCH_BUFFER_SIZE_BYTES + l1_buf_base <= soc_desc.worker_l1_size,
+            "SD dispatch buffer too large for L1");
+
+        // 5. Write commands to spoof core's L1
+        CoreCoord phys_spoof = device_->worker_core_from_logical_core(spoof_prefetch_core_);
+        CoreCoord phys_disp = device_->worker_core_from_logical_core(dispatch_core_);
+
+        std::vector<uint32_t> cmds_words(raw.size() / sizeof(uint32_t));
+        std::memcpy(cmds_words.data(), raw.data(), raw.size());
+        tt_metal::MetalContext::instance().get_cluster().write_core(
+            cmds_words.data(),
+            cmds_words.size() * sizeof(uint32_t),
+            tt_cxy_pair(device_->id(), phys_spoof),
+            l1_buf_base);
+
+        // 6. Build program
+        tt_metal::Program program = tt_metal::CreateProgram();
+
+        const uint32_t spoof_prefetch_core_sem_0_id =
+            tt_metal::CreateSemaphore(program, {spoof_prefetch_core_}, dispatch_buffer_pages);
+        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {dispatch_core_}, 0);
+        TT_ASSERT(dispatch_core_sem_id == spoof_prefetch_core_sem_0_id, "Semaphore IDs must match across cores");
+        const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {spoof_prefetch_core_}, 0);
+        const uint32_t dispatch_cb_sem = spoof_prefetch_core_sem_0_id;
+
+        std::vector<uint32_t> spoof_args = {
+            l1_buf_base,                       // 0: dispatch_cb_base
+            SD_LOG_DISPATCH_BUFFER_PAGE_SIZE,  // 1
+            dispatch_buffer_pages,             // 2
+            dispatch_cb_sem,                   // 3
+            l1_buf_base,                       // 4: cmd_cb_base (same region, pre-loaded)
+            cmd_cb_pages,                      // 5
+            SD_PREFETCHER_PAGE_BATCH_SIZE,     // 6
+            prefetch_sync_sem,                 // 7
+        };
+        std::map<std::string, std::string> prefetch_defines = {
+            {"MY_NOC_X", std::to_string(phys_spoof.x)},
+            {"MY_NOC_Y", std::to_string(phys_spoof.y)},
+            {"DISPATCH_NOC_X", std::to_string(phys_disp.x)},
+            {"DISPATCH_NOC_Y", std::to_string(phys_disp.y)},
+            {"FD_CORE_TYPE", "0"},
+        };
+        auto sp = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
+            {spoof_prefetch_core_},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = spoof_args,
+                .defines = prefetch_defines});
+        tt_metal::SetRuntimeArgs(program, sp, spoof_prefetch_core_, {1u});
+
+        uint32_t num_compute_cores =
+            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+
+        std::map<std::string, std::string> dispatch_defines = {
+            {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
+            {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(SD_LOG_DISPATCH_BUFFER_PAGE_SIZE)},
+            {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
+            {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_cb_sem)},
+            {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dispatch_cb_sem)},
+            {"DISPATCH_CB_BLOCKS", std::to_string(SD_DISPATCH_BUFFER_SIZE_BLOCKS)},
+            {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+            {"COMMAND_QUEUE_BASE_ADDR", "0"},
+            {"COMPLETION_QUEUE_BASE_ADDR", "0"},
+            {"COMPLETION_QUEUE_SIZE", "0"},
+            {"DOWNSTREAM_CB_BASE", "0"},
+            {"DOWNSTREAM_CB_SIZE", "0"},
+            {"MY_DOWNSTREAM_CB_SEM_ID", "0"},
+            {"DOWNSTREAM_CB_SEM_ID", "0"},
+            {"SPLIT_PREFETCH", "0"},
+            {"PREFETCH_H_NOC_XY", "0"},
+            {"PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR", "0"},
+            {"PREFETCH_H_MAX_CREDITS", "0"},
+            {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},
+            {"DISPATCH_S_SYNC_SEM_BASE_ADDR", "0"},
+            {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+            {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
+             std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
+            {"MCAST_GO_SIGNAL_ADDR", "0"},
+            {"UNICAST_GO_SIGNAL_ADDR", "0"},
+            {"DISTRIBUTED_DISPATCHER", "0"},
+            {"HOST_COMPLETION_Q_WR_PTR",
+             std::to_string(memmap.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR))},
+            {"DEV_COMPLETION_Q_WR_PTR",
+             std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR))},
+            {"DEV_COMPLETION_Q_RD_PTR",
+             std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD))},
+            {"DEV_DISPATCH_PROGRESS_PTR",
+             std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
+            {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
+            {"VIRTUALIZE_UNICAST_CORES", "0"},
+            {"NUM_VIRTUAL_UNICAST_CORES", "0"},
+            {"NUM_PHYSICAL_UNICAST_CORES", "0"},
+            {"FABRIC_HEADER_RB_BASE", "0"},
+            {"FABRIC_HEADER_RB_ENTRIES", "0"},
+            {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+            {"FABRIC_MUX_X", "0"},
+            {"FABRIC_MUX_Y", "0"},
+            {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+            {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+            {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+            {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+            {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+            {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+            {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+            {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+            {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+            {"WORKER_CREDITS_STREAM_ID", "0"},
+            {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+            {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+            {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+            {"NUM_HOPS", "0"},
+            {"EW_DIM", "0"},
+            {"TO_MESH_ID", "0"},
+            {"FABRIC_2D", "0"},
+            {"WORKER_MCAST_GRID", "0"},
+            {"NUM_WORKER_CORES_TO_MCAST", "0"},
+            {"OFFSETOF_MY_DEV_ID", "0"},
+            {"OFFSETOF_TO_DEV_ID", "1"},
+            {"OFFSETOF_ROUTER_DIRECTION", "2"},
+        };
+
+        auto dispatch_kernel = configure_kernel_variant<true, true>(
+            program,
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_defines,
+            {},
+            dispatch_core_,
+            phys_disp,
+            phys_spoof,
+            {0, 0},
+            device_,
+            tt_metal::NOC::NOC_0,
+            tt_metal::NOC::NOC_1,
+            tt_metal::NOC::NOC_0);
+
+        // my_dev_id=0, to_dev_id=0, router_direction=0
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, dispatch_core_, {0u, 0u, 0u});
+
+        // 7. Launch and validate
+        device_data.overflow_check(device_);
+        tt_metal::detail::LaunchProgram(device_, program);
+        const bool pass = device_data.validate(device_);
+        EXPECT_TRUE(pass) << "SD Dispatcher test failed validation";
+    }
+};
+
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common
