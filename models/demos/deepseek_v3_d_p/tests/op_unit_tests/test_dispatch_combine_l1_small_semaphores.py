@@ -39,7 +39,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
     torch.manual_seed(42)
 
     seq_len_per_chip = 64
-    emb_dim = 128
+    emb_dim = 256
     num_routed_experts = 16
     num_experts_per_tok = 2
     capacity_factor = 2

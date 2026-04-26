@@ -99,6 +99,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
@@ -110,6 +115,7 @@ def test_ttnn_dispatch(
     num_links,
     topology,
     use_predictable_data,
+    input_layout,
     verbose,
     run_pcc_check,
 ):
@@ -168,7 +174,7 @@ def test_ttnn_dispatch(
     mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
     tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        x, mesh_mapper=mesh_mapper_replicated, layout=input_layout, device=mesh_device, dtype=ttnn.bfloat16
     )
 
     tt_weights = ttnn.from_torch(

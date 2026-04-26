@@ -410,7 +410,6 @@ class TtMoe(LightweightModule):
         # Step 2: Dispatch (enabled)
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)  # to be overlaped with dispatch
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
             x,
