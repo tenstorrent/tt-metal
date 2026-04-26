@@ -37,7 +37,7 @@ inline void _llk_pack_srcs_config_()
 }
 
 /**
- * @brief Unpacks tiles to SrcS, Each SrcS slice is only 8*16*16bit
+ * @brief Unpacks a single operand to SrcS. Each SrcS slice is only 8*16*16bit.
  * @tparam INSTRN_COUNT: The number of instructions to place in the auto-loop, auto-loop will then
  * be looped by INSTRN_LOOP_COUNT set in the hw_config
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
