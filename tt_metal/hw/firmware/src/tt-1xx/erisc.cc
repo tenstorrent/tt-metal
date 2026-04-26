@@ -141,7 +141,10 @@ void __attribute__((noinline)) Application(void) {
             }
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV ||
+                launch_msg_address->kernel_config.mode == DISPATCH_MODE_NONE) {
+                // DISPATCH_MODE_NONE (e.g. during FW init) must also notify dispatcher and advance ring buffer,
+                // since all worker cores receive GO signals via multicast.
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
