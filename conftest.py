@@ -1205,7 +1205,12 @@ def ttnn_graph_report(request):
             if json_path.exists():
                 from ttnn.graph_report import import_report
 
-                import_report(json_path, report_path)
+                try:
+                    import_report(json_path, report_path)
+                finally:
+                    json_path.unlink(missing_ok=True)
+                    python_io_sidecar = json_path.with_suffix(".python_io.json")
+                    python_io_sidecar.unlink(missing_ok=True)
 
             config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)
