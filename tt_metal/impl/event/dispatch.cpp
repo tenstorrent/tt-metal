@@ -86,7 +86,7 @@ void issue_record_event_commands(
     }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    log_warning(
+    log_trace(
         tt::LogMetal,
         "[issue_record_event] device={} event={} cq={} distributed_dispatcher={} "
         "num_worker_counters={} clear_count={} notify_host={}",
@@ -99,7 +99,7 @@ void issue_record_event_commands(
         notify_host);
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
-        log_warning(
+        log_trace(
             tt::LogMetal,
             "[issue_record_event]   sub_device[{}] expected_workers={}",
             offset_index,
@@ -112,7 +112,7 @@ void issue_record_event_commands(
     // drained prior commands) or (b) the subsequent on-device wait. A hang between
     // "[issue_record_event] reserve begin" and "reserve ok" fingerprints (a);
     // anything later fingerprints (b). See chip3_t3k_ccl_hang plan item 2a.
-    log_warning(
+    log_trace(
         tt::LogMetal,
         "[issue_record_event] reserve begin device={} event={} cq={} sizeB={}",
         device_id,
@@ -120,7 +120,7 @@ void issue_record_event_commands(
         cq_id,
         cmd_sequence_sizeB);
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    log_warning(tt::LogMetal, "[issue_record_event] reserve ok device={} event={} cq={}", device_id, event_id, cq_id);
+    log_trace(tt::LogMetal, "[issue_record_event] reserve ok device={} event={} cq={}", device_id, event_id, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 

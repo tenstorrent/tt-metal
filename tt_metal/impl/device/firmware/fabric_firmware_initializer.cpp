@@ -24,6 +24,7 @@
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
+#include "device/edm_status_utils.hpp"
 
 // Timeout hierarchy (all host-side wall-clock):
 //   5000ms — teardown/init per-phase: covers full firmware startup/shutdown cycle
@@ -37,51 +38,8 @@
 
 namespace tt::tt_metal {
 
-namespace {
-
-// Returns a human-readable name for a known EDMStatus value, or "(unknown)" if the value
-// does not match any enumerator. This is the single source of truth for EDMStatus → string
-// mapping; is_known_edm_status() delegates to this function.
-//
-// UPDATE THIS FUNCTION WHEN ADDING NEW EDMStatus VALUES in
-// tt_metal/fabric/fabric_edm_packet_header.hpp (currently 15 enumerators).
-// ALSO UPDATE: edm_status_str() in device.cpp (parallel switch for log messages).
-static const char* edm_status_name(tt::tt_fabric::EDMStatus s) {
-    switch (s) {
-        case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";
-        case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:   return "REMOTE_HANDSHAKE_COMPLETE";
-        case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:    return "LOCAL_HANDSHAKE_COMPLETE";
-        case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:           return "READY_FOR_TRAFFIC";
-        case tt::tt_fabric::EDMStatus::TERMINATED:                  return "TERMINATED";
-        case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:      return "INITIALIZATION_STARTED";
-        case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:             return "TXQ_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:      return "STREAM_REG_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED: return "DOWNSTREAM_EDM_SETUP_STARTED";
-        case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:      return "EDM_VCS_SETUP_COMPLETE";
-        case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE: return "ETHERNET_HANDSHAKE_COMPLETE";
-        case tt::tt_fabric::EDMStatus::VCS_OPENED:                  return "VCS_OPENED";
-        case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:   return "ROUTING_TABLE_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:     return "INITIALIZATION_COMPLETE";
-        default: return "(unknown)";
-    }
-}
-
-// Returns true iff `status` is one of the well-known EDMStatus sentinel values written by
-// a live fabric ERISC router at some point in its lifecycle. Any other nonzero value at
-// the router_sync_address indicates the L1 slot is corrupt or has been overwritten by
-// unrelated NOC traffic — the ERISC is NOT running recognizable firmware and the
-// TERMINATE handshake will not complete.
-//
-// Delegates to edm_status_name() so there is only one switch over EDMStatus values.
-bool is_known_edm_status(uint32_t status) {
-    // Cast raw uint32_t to the enum and check if edm_status_name recognises it.
-    // "(unknown)" is the sentinel returned for unrecognised values.
-    const char* name = edm_status_name(static_cast<tt::tt_fabric::EDMStatus>(status));
-    return name[0] != '(';
-}
-
-}  // namespace
+// edm_status_name(), edm_status_str(), and is_known_edm_status() are defined in
+// device/edm_status_utils.hpp (shared with device.cpp).
 
 // Thread-local compile seam — default-constructed (empty std::function) in all threads.
 // Only set by tests via set_compile_fn_for_testing() before MeshDevice::create().

@@ -69,6 +69,7 @@
 #include "fabric/fabric_tensix_builder_impl.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "device/edm_status_utils.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -383,37 +384,8 @@ void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_qu
 // Sentinels 0xDEAD5B5B (deadline-skipped) and 0xDEADECE7 (read-exception) are also named.
 // Defined once here and shared by configure_fabric(), quiesce_and_restart_fabric_workers(),
 // phase5b_erisc_health_check(), and wait_for_fabric_workers_ready() to avoid duplication.
-namespace {
-// Maps a raw edm_status uint32_t to a human-readable name for log messages.
-// MAINTENANCE: keep this switch in sync with edm_status_name() in
-// fabric_firmware_initializer.cpp.  The compile-time test
-// FabricFirmwareInitializer.EdmStatusEnumCountMatchesSwitchCoverage
-// (test_async_teardown_race.cpp) catches new EDMStatus enumerators but cannot
-// reach this file-scope static.  If you add a case here, add it there too.
-static const char* edm_status_str(uint32_t v) {
-    switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
-        case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:        return "INITIALIZATION_STARTED";
-        case tt::tt_fabric::EDMStatus::STARTED:                       return "STARTED";
-        case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE:      return "LOCAL_HANDSHAKE_COMPLETE";
-        case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE:     return "REMOTE_HANDSHAKE_COMPLETE";
-        case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC:             return "READY_FOR_TRAFFIC";
-        case tt::tt_fabric::EDMStatus::TERMINATED:                    return "TERMINATED";
-        case tt::tt_fabric::EDMStatus::TXQ_INITIALIZED:               return "TXQ_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED:        return "STREAM_REG_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED:  return "DOWNSTREAM_EDM_SETUP_STARTED";
-        case tt::tt_fabric::EDMStatus::EDM_VCS_SETUP_COMPLETE:        return "EDM_VCS_SETUP_COMPLETE";
-        case tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED: return "WORKER_INTERFACES_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE:   return "ETHERNET_HANDSHAKE_COMPLETE";
-        case tt::tt_fabric::EDMStatus::VCS_OPENED:                    return "VCS_OPENED";
-        case tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED:     return "ROUTING_TABLE_INITIALIZED";
-        case tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE:       return "INITIALIZATION_COMPLETE";
-        default: break;
-    }
-    if (v == 0xDEAD5B5B) return "(deadline-skipped)";
-    if (v == 0xDEADECE7) return "(read-exception)";
-    return "(unknown)";
-}
-}  // namespace
+// edm_status_str(), edm_status_name(), and is_known_edm_status() are defined in
+// device/edm_status_utils.hpp (shared with fabric_firmware_initializer.cpp).
 
 bool Device::compile_fabric() {
     fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
@@ -1957,8 +1929,6 @@ bool Device::phase5b_erisc_health_check(
     const metal_SocDescriptor& soc_desc_p5,
     uint32_t router_sync_addr,
     uint32_t expected_ready) {
-    // edm_status_str() is a file-scope static helper defined above compile_fabric().
-
     constexpr uint32_t kHealthCheckTimeoutMs = 2000;
     // Log unhealthy channels every 200ms for observability.
     constexpr uint32_t kHCIntermediateLogMs = 200;
@@ -2342,8 +2312,6 @@ void Device::wait_for_fabric_workers_ready() {
 
     auto tensix_config_mode = MetalContext::instance().get_fabric_tensix_config();
     const bool has_tensix_mux = (tensix_config_mode != tt::tt_fabric::FabricTensixConfig::DISABLED);
-
-    // edm_status_str() is a file-scope static helper defined above compile_fabric().
 
     // Phase 4: Wait for each MUX core to reach READY_FOR_TRAFFIC before returning.
     //

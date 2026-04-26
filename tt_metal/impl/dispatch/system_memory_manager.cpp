@@ -736,6 +736,11 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         uint32_t old_fences = this->prefetch_q_dev_fences[cq_id];
         if (fence != old_fences) {
             uint32_t consumed = count_consumed(old_fences, fence);
+            TT_ASSERT(
+                consumed <= this->prefetch_q_in_flight[cq_id],
+                "system_memory_manager: consumed {} > in_flight {} — underflow clamped",
+                consumed,
+                this->prefetch_q_in_flight[cq_id]);
             this->prefetch_q_in_flight[cq_id] =
                 (consumed <= this->prefetch_q_in_flight[cq_id]) ? this->prefetch_q_in_flight[cq_id] - consumed : 0;
             this->prefetch_q_dev_fences[cq_id] = fence;
@@ -758,6 +763,11 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
                     &fence2, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
                 if (fence2 != old_fences) {
                     uint32_t consumed = count_consumed(old_fences, fence2);
+                    TT_ASSERT(
+                        consumed <= this->prefetch_q_in_flight[cq_id],
+                        "system_memory_manager: consumed {} > in_flight {} — underflow clamped",
+                        consumed,
+                        this->prefetch_q_in_flight[cq_id]);
                     this->prefetch_q_in_flight[cq_id] =
                         (consumed <= this->prefetch_q_in_flight[cq_id])
                             ? this->prefetch_q_in_flight[cq_id] - consumed
