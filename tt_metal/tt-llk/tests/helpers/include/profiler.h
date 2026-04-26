@@ -155,11 +155,24 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
+} // namespace llk_profiler
+
 #ifdef PERF_COUNTERS_COMPILED
-// Counter hooks — defined in counters.h. Gated so NC TRISC builds emit zero counter code.
-__attribute__((noinline)) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out);
-__attribute__((noinline)) void _profiler_counter_stop(std::uint32_t zone, bool active);
+// Forward declarations for inlined hook bodies. Definitions in counters.h.
+namespace llk_perf
+{
+namespace detail
+{
+extern std::uint32_t profiler_zone_counter;
+}
+
+__attribute__((always_inline)) inline void start_perf_counters(std::uint32_t zone);
+__attribute__((always_inline)) inline void stop_perf_counters(std::uint32_t zone);
+} // namespace llk_perf
 #endif
+
+namespace llk_profiler
+{
 
 template <std::uint16_t id16>
 class zone_scoped
@@ -180,7 +193,19 @@ public:
     inline __attribute__((always_inline)) zone_scoped()
     {
 #ifdef PERF_COUNTERS_COMPILED
-        _profiler_counter_start(m_counter_zone, m_counter_active);
+        // Inlined counter-start hook (was _profiler_counter_start in counters.h)
+        std::uint32_t pz = llk_perf::detail::profiler_zone_counter++;
+        if (pz == 0)
+        {
+            m_counter_zone   = 0;
+            m_counter_active = false;
+        }
+        else
+        {
+            m_counter_zone   = pz - 1;
+            m_counter_active = true;
+            llk_perf::start_perf_counters(m_counter_zone);
+        }
 #endif
         if (!is_buffer_full())
         {
@@ -198,7 +223,11 @@ public:
             --open_zone_cnt;
         }
 #ifdef PERF_COUNTERS_COMPILED
-        _profiler_counter_stop(m_counter_zone, m_counter_active);
+        // Inlined counter-stop hook (was _profiler_counter_stop in counters.h)
+        if (m_counter_active)
+        {
+            llk_perf::stop_perf_counters(m_counter_zone);
+        }
 #endif
     }
 };

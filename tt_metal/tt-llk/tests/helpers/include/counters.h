@@ -77,7 +77,8 @@ __attribute__((always_inline)) inline void stop_perf_counters(std::uint32_t zone
 } // namespace llk_perf
 
 // ============================================================================
-// Profiler hooks — only compiled in WC. NC TRISC ELF emits zero counter code.
+// Profiler hook state — only compiled in WC. The hook logic itself is now
+// inlined into zone_scoped ctor/dtor in profiler.h (no function call overhead).
 // ============================================================================
 
 #ifdef PERF_COUNTERS_COMPILED
@@ -86,35 +87,9 @@ namespace llk_perf
 {
 namespace detail
 {
-__attribute__((section(".bss.perf_counters"))) static std::uint32_t profiler_zone_counter;
+__attribute__((used, section(".bss.perf_counters"))) inline std::uint32_t profiler_zone_counter;
 }
 } // namespace llk_perf
-
-namespace llk_profiler
-{
-__attribute__((noinline, section(".text.zzz_profiler_hooks"))) void _profiler_counter_start(std::uint32_t& zone_out, bool& active_out)
-{
-    std::uint32_t profiler_zone = llk_perf::detail::profiler_zone_counter++;
-    if (profiler_zone == 0)
-    {
-        // KERNEL zone — skip counter measurement
-        zone_out   = 0;
-        active_out = false;
-        return;
-    }
-    zone_out   = profiler_zone - 1;
-    active_out = true;
-    llk_perf::start_perf_counters(zone_out);
-}
-
-__attribute__((noinline, section(".text.zzz_profiler_hooks"))) void _profiler_counter_stop(std::uint32_t zone, bool active)
-{
-    if (active)
-    {
-        llk_perf::stop_perf_counters(zone);
-    }
-}
-} // namespace llk_profiler
 
 #endif // PERF_COUNTERS_COMPILED
 
