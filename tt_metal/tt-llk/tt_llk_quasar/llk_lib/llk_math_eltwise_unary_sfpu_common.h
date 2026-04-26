@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include <utility>
 
 #include "cmath_common.h"
 #include "llk_defs.h"
@@ -88,7 +89,7 @@ inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, std::uint32_t ds
 
     for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
-        sfpu_func(static_cast<ARGS&&>(args)...);
+        sfpu_func(std::forward<ARGS>(args)...);
 
         // Move to the next face
         _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();

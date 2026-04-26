@@ -94,6 +94,13 @@ enum class SfpuType : std::uint32_t
     where
 };
 
+enum class BinaryOp : std::uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
+};
+
 enum class DstSync : std::uint8_t
 {
     SyncHalf,

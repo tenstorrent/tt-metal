@@ -80,35 +80,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_binary_sfpu_init_();
 
-    constexpr int tile_stride = 64; // 4 faces * 16 rows per tile
+    constexpr int tile_stride = NUM_FACES * FACE_R_DIM; // 4 faces * 16 rows per tile
     const int in0_offset      = params.SRC0_TILE_IDX * tile_stride;
     const int in1_offset      = params.SRC1_TILE_IDX * tile_stride;
     const int out_offset      = params.DST_TILE_IDX * tile_stride;
 
     _llk_math_eltwise_binary_sfpu_start_(0);
 
-    const bool is_int = (src_format == DataFormat::Int32 || src_format == DataFormat::Int16);
-
     for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
-        if (is_int)
-        {
-            _calculate_add_<true>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-        }
-        else
-        {
-            _calculate_add_<false>(num_sfpu_iterations, in0_offset, in1_offset, out_offset);
-        }
+        _calculate_add_(src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
         _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_();
     }
 
     _llk_math_eltwise_binary_sfpu_done_();
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
-
-    wait_sfpu_idle();
-    wait_fpu_idle();
-    wait_mop_idle();
 }
 
 #endif
@@ -130,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = params.buffer_Res[0] / 16;
+    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
     bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
