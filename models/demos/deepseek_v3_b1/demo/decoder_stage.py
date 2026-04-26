@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import yarn_get_mscale
 from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.demo.stage import (
     ACTIVATION_PAGE_SIZE_BYTES,
     ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
@@ -613,10 +614,20 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
-    # Routed weight tensors differ between MoE (list) and dense (single tensor)
-    routed_gate = weights.routed_gate_proj[0] if is_moe else weights.routed_gate_proj
-    routed_up = weights.routed_up_proj[0] if is_moe else weights.routed_up_proj
-    routed_down = weights.routed_down_proj[0] if is_moe else weights.routed_down_proj
+    # Routed weight tensors differ between MoE (list) and dense (single tensor).
+    # CompressedTensor lists are passed through as a list so MoeOp dispatches to
+    # setup_matmul_expert_dram (compressed_tp8 path); legacy uniform-bfp4_b lists
+    # of ttnn.Tensor still take [0] for the merged-DRAM-bank single-tensor path.
+    def _routed_select(t):
+        if not is_moe:
+            return t
+        if isinstance(t, list) and len(t) > 0 and isinstance(t[0], CompressedTensor):
+            return t
+        return t[0]
+
+    routed_gate = _routed_select(weights.routed_gate_proj)
+    routed_up = _routed_select(weights.routed_up_proj)
+    routed_down = _routed_select(weights.routed_down_proj)
 
     result = {
         # Attention weights (from prepare_*_layer_weights)

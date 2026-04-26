@@ -626,12 +626,23 @@ class MoeRoutedExpertOp:
         # in1_backing_tensor we just allocated in L1 locally).
         in1_block_size_bytes = subblock_k * max_tile_size
         in1_total_size = num_in1_buffers * in1_block_size_bytes
+
+        # Subblock width for compute kernel — mirrors setup_dram_matmul (fp32_dest_acc_en=False for MoE).
+        max_subblock_w = 16 if per_core_n <= 16 else 8
+        subblock_w = max_subblock_w
+        while subblock_w > 1 and per_core_n % subblock_w != 0:
+            subblock_w -= 1
+        tile_r_dim = data0_tile.tile_shape[0]
+
         return {
             "per_core_n": per_core_n,
             "Kt": Kt,
             "num_tiles_k": Kt,
             "subblock_k": subblock_k,
             "subblock_n": subblock_n,
+            "subblock_w": subblock_w,
+            "tile_r_dim": tile_r_dim,
+            "fp32_dest_acc_en": 0,
             "num_subblocks_k": num_subblocks_k,
             "k_parallel_per_bank": k_parallel_per_bank,
             "num_subblocks_k_local": num_subblocks_k_local,
@@ -1168,9 +1179,12 @@ class MoeRoutedExpertOp:
         gate_proj_cb_fmt = cb_id_context.get_cb_id(data_format, TD_1x32)
         up_proj_cb_fmt = cb_id_context.get_cb_id(data_format, TD_1x32)
         down_proj_cb_fmt = cb_id_context.get_cb_id(data_format, TD_1x32)
-        # cb_out_silu: aliases gate_proj_cb_out's L1 region with tile shape
-        # [silu_tile_h, tile_w] so post-reduction silu runs as one tile copy/pack.
-        gate_proj_cb_out_silu = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # cb_out_silu was used by the kernel's inner_dim_reduction fast-path
+        # (k_parallel_per_bank > 1). With k_parallel_per_bank=1 hardcoded in
+        # setup_matmul_expert_dram, the fast-path is constexpr-eliminated, so
+        # no separate CB ID/descriptor is needed. Pass 0 as a sentinel (matches
+        # up_proj/down_proj which never use the fast-path).
+        gate_proj_cb_out_silu = 0
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1994,6 +2008,7 @@ class MoeRoutedExpertOp:
             # kernel's software write-pointer wrap aligns with the HW CB's physical
             # wrap boundary across sequential matmuls sharing cb_in1 (GP → UP).
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # up_proj MatmulExpertCompressedDRAM reader — shares weight CB with gate_proj
             ("up_proj_cb_in0", ctx.up_proj_cb_in0),
             ("up_proj_cb_in1", ctx.up_proj_cb_in1),
@@ -2119,6 +2134,7 @@ class MoeRoutedExpertOp:
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
             # Required for MatmulExpertCompressedDRAM ResetCBIn1 template param (referenced in moe_kernel.cpp outer scope)
             ("gate_proj_in1_buf_addr", ctx.gate_proj_params["in1_buf_addr"]),
+            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Expert scale mcast sender (routing only)
             ("expert_scale_mcast_sender_semaphore_addr", ctx.expert_scale_mcast_sender_semaphore_addr),
             ("expert_scale_mcast_receiver_semaphore_addr", ctx.expert_scale_mcast_receiver_semaphore_addr),
@@ -2207,6 +2223,9 @@ class MoeRoutedExpertOp:
             ("gate_proj_num_tiles_k", ctx.gate_proj_params["num_tiles_k"]),
             ("gate_proj_subblock_k", ctx.gate_proj_params["subblock_k"]),
             ("gate_proj_subblock_n", ctx.gate_proj_params["subblock_n"]),
+            ("gate_proj_subblock_w", ctx.gate_proj_params["subblock_w"]),
+            ("gate_proj_tile_r_dim", ctx.gate_proj_params["tile_r_dim"]),
+            ("gate_proj_fp32_dest_acc_en", ctx.gate_proj_params["fp32_dest_acc_en"]),
             ("gate_proj_num_subblocks_k", ctx.gate_proj_params["num_subblocks_k"]),
             ("gate_proj_per_core_n", ctx.gate_proj_params["per_core_n"]),
             ("gate_proj_num_active_experts", ctx.gate_proj_params["num_active_experts"]),
@@ -2236,6 +2255,9 @@ class MoeRoutedExpertOp:
             ("up_proj_num_tiles_k", ctx.up_proj_params["num_tiles_k"]),
             ("up_proj_subblock_k", ctx.up_proj_params["subblock_k"]),
             ("up_proj_subblock_n", ctx.up_proj_params["subblock_n"]),
+            ("up_proj_subblock_w", ctx.up_proj_params["subblock_w"]),
+            ("up_proj_tile_r_dim", ctx.up_proj_params["tile_r_dim"]),
+            ("up_proj_fp32_dest_acc_en", ctx.up_proj_params["fp32_dest_acc_en"]),
             ("up_proj_num_subblocks_k", ctx.up_proj_params["num_subblocks_k"]),
             ("up_proj_per_core_n", ctx.up_proj_params["per_core_n"]),
             ("up_proj_num_active_experts", ctx.up_proj_params["num_active_experts"]),
@@ -2270,6 +2292,9 @@ class MoeRoutedExpertOp:
             ("down_proj_num_tiles_k", ctx.down_proj_params["num_tiles_k"]),
             ("down_proj_subblock_k", ctx.down_proj_params["subblock_k"]),
             ("down_proj_subblock_n", ctx.down_proj_params["subblock_n"]),
+            ("down_proj_subblock_w", ctx.down_proj_params["subblock_w"]),
+            ("down_proj_tile_r_dim", ctx.down_proj_params["tile_r_dim"]),
+            ("down_proj_fp32_dest_acc_en", ctx.down_proj_params["fp32_dest_acc_en"]),
             ("down_proj_num_subblocks_k", ctx.down_proj_params["num_subblocks_k"]),
             ("down_proj_per_core_n", ctx.down_proj_params["per_core_n"]),
             ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
@@ -2288,6 +2313,8 @@ class MoeRoutedExpertOp:
             ("down_proj_fuse_silu", 0),
             ("down_proj_cb_out_silu", 0),
             ("down_proj_silu_tile_h", 0),
+            # Required by decoder_block_kernel.cpp's DRAMStreamingMatmul CBIn1ResetAddr template param
+            ("down_proj_in1_buf_addr", ctx.down_proj_params["in1_buf_addr"]),
             # Shared matmul-expert compute args (index_offset: 0 for TP8 all-device broadcast)
             ("gate_proj_index_offset", 0),
             ("up_proj_index_offset", 0),
@@ -2353,13 +2380,6 @@ class MoeRoutedExpertOp:
             # mul_cb_in0/in1 reuse gate_proj/up_proj out CBs (already listed above).
             ctx.mul_params["cb_out_descriptor"],
         ]
-        # cb_out_silu: alias on gate_proj_cb_out's L1 region for silu fast-path.
-        if (
-            "cb_out_silu_descriptor" in ctx.gate_proj_params
-            and ctx.gate_proj_params["cb_out_silu_descriptor"] is not None
-        ):
-            descriptors.append(ctx.gate_proj_params["cb_out_silu_descriptor"])
-
         if ctx.enable_routing:
             descriptors += [
                 ctx.mul_params["cb_scalar_src_descriptor"],
@@ -3247,17 +3267,23 @@ class MoeSharedExpertOp:
     @staticmethod
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
-        return [
+        gr_group1 = shared_ctx.gated_reduce_params["cb_group1_descriptor"]
+        gr_out = shared_ctx.gated_reduce_params["cb_out_descriptor"]
+        descs = [
             shared_ctx.gu_matmul_params["cb_out_descriptor"],
-            shared_ctx.gated_reduce_params["cb_group1_descriptor"],
+            gr_group1,
             shared_ctx.gated_reduce_params["cb_intermed_descriptor"],
-            shared_ctx.gated_reduce_params["cb_out_descriptor"],
+        ]
+        if gr_out is not gr_group1:
+            descs.append(gr_out)
+        descs += [
             shared_ctx.down_mcast_params["dst_cb_descriptor"],
             shared_ctx.down_matmul_params["weights_cb_descriptor"],
             shared_ctx.down_matmul_params["output_cb_descriptor"],
             shared_ctx.residual_add_params["cb_out_descriptor"],
             shared_ctx.output_gather_params["dst_cb_descriptor"],
         ]
+        return descs
 
     @staticmethod
     def _build_core_descriptors(shared_ctx, sender_core_grid):
@@ -3965,26 +3991,8 @@ class MoeOp:
         )
         cb11_desc.format_descriptors = [cb11_fmt]
         routed_ctx.gate_proj_params["cb_out_descriptor"] = cb11_desc
-        # cb_out_silu: aliased view of CB11 with a single tall tile
-        # [silu_tile_h, tile_w] so the post-reduction silu runs as one pack/copy.
-        silu_tile_h = routed_ctx.gate_proj_silu_tile_h
-        cb_out_silu_cb_id = routed_ctx.gate_proj_cb_out_silu
-        cb_out_silu_tile = ttnn.Tile([silu_tile_h, 32])
-        cb_out_silu_page_size = silu_tile_h * 32 * 2  # bf16
-        cb_out_silu_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb_out_silu_cb_id,
-            kv_buf,
-            address_offset=kv_offset,
-            total_size=cb11_total_size,
-        )
-        cb_out_silu_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb_out_silu_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=cb_out_silu_page_size,
-            tile=ttnn.TileDescriptor(cb_out_silu_tile),
-        )
-        cb_out_silu_desc.format_descriptors = [cb_out_silu_fmt]
-        routed_ctx.gate_proj_params["cb_out_silu_descriptor"] = cb_out_silu_desc
+        # cb_out_silu fast-path is constexpr-eliminated when k_parallel_per_bank=1
+        # (see allocation site for details), so no separate descriptor is built.
         kv_offset += cb11_total_size
 
         # CB 12: up_proj_mm_out (aliases CB 13) — hardcoded descriptor

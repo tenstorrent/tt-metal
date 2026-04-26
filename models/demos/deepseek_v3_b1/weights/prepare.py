@@ -1554,6 +1554,7 @@ def prepare_moe_layer_weights(
     bspm_dir: Path | None = None,
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
+    compressed_tp8: bool = False,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
@@ -1584,6 +1585,7 @@ def prepare_moe_layer_weights(
         bspm_dir=bspm_dir,
         bspm_variant=bspm_variant,
         bspm_budget=bspm_budget,
+        compressed_tp8=compressed_tp8,
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
