@@ -719,15 +719,23 @@ public:
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
-    // Set mock cluster descriptor from filename (prepends base path automatically)
+    // Set mock cluster descriptor from a filename.
+    // Searches the tt-metal custom mock cluster descriptors directory first
+    // (these take precedence when the same filename exists in both locations),
+    // then falls back to the UMD cluster_descriptor_examples directory.
     // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
-    // Path depends on UMD's cluster_descriptor_examples directory structure.
     void set_mock_cluster_desc(const std::string& filename) {
         if (filename.empty()) {
             return;
         }
-        mock_cluster_desc_path =
-            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        auto custom_path = std::filesystem::path(get_root_dir()) /
+                           "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors" / filename;
+        std::error_code ec;
+        mock_cluster_desc_path = std::filesystem::exists(custom_path, ec) && !ec
+                                     ? custom_path.string()
+                                     : (std::filesystem::path(get_root_dir()) /
+                                        "tt_metal/third_party/umd/tests/cluster_descriptor_examples" / filename)
+                                           .string();
         // Set target device to Mock if simulator is not enabled
         if (simulator_path.empty()) {
             runtime_target_device_ = tt::TargetDevice::Mock;

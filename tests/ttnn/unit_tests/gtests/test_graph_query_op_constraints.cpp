@@ -23,6 +23,10 @@
 #include "impl/context/metal_context.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include <ttnn/distributed/tensor_topology.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/experimental/mock_device.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -35,6 +39,15 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
+#include "ttnn/operations/ccl/all_reduce/all_reduce.hpp"
+#include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
+#include "ttnn/operations/ccl/broadcast/broadcast.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -954,6 +967,423 @@ TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
         EXPECT_EQ(query.output_tensor_specs.value().at(0).logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
         EXPECT_EQ(query.output_tensor_specs.value().at(1).logical_shape(), ttnn::Shape({batch_size, num_heads, K, M}));
         EXPECT_EQ(query.output_tensor_specs.value().at(2).logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
+    }
+}
+
+// ============================================================================
+// Distributed tensor tests (DistributedTensorSpec)
+// Parameterised over real device and mock device to verify identical results.
+// ============================================================================
+
+// Base: non-static device_ pointer set from the suite-level static holder.
+class DistributedTensorOpIfFixtureBase : public ::testing::Test {
+protected:
+    distributed::MeshDevice* device_ = nullptr;
+};
+
+// Real-device fixture.
+// The device is opened once per suite (SetUpTestSuite) and reused across all
+// tests; per-test SetUp/TearDown only update the raw pointer.
+class DistributedTensorOpIfRealFixture : public DistributedTensorOpIfFixtureBase {
+    static std::shared_ptr<distributed::MeshDevice> device_holder_;
+
+protected:
+    void SetUp() override {
+        if (!device_holder_) {
+            GTEST_SKIP() << "Requires at least 2 devices";
+        }
+        device_ = device_holder_.get();
+    }
+    void TearDown() override { device_ = nullptr; }
+
+    static void SetUpTestSuite() {
+        if (GetNumAvailableDevices() < 2) {
+            return;  // device_holder_ stays null → individual tests skip
+        }
+        // No need to call SetFabricConfig: device_manager auto-enables FABRIC_1D
+        // with STRICT mode when the fabric config is DISABLED (the default).
+        device_holder_ =
+            distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
+    }
+
+    static void TearDownTestSuite() {
+        if (device_holder_) {
+            device_holder_->close();
+            device_holder_.reset();
+        }
+    }
+};
+std::shared_ptr<distributed::MeshDevice> DistributedTensorOpIfRealFixture::device_holder_;
+
+// Mock-device fixture: uses a fixed topology loaded from a pre-defined mock
+// cluster descriptor.  Runs without real hardware on any machine.
+// (Rows, Cols) must map to an entry in configure_mock_mode's dispatch table:
+//   WORMHOLE_B0 + 2  chips → N300     1x2 linear
+//   WORMHOLE_B0 + 4  chips → 2xN300   2x2 grid
+//   WORMHOLE_B0 + 8  chips → T3K      1x8 linear
+//   WORMHOLE_B0 + 32 chips → Galaxy   4x8 grid
+template <uint32_t Rows, uint32_t Cols>
+class DistributedTensorOpIfMockFixture : public DistributedTensorOpIfFixtureBase {
+    static std::shared_ptr<distributed::MeshDevice> device_holder_;
+
+protected:
+    void SetUp() override {
+        if (!device_holder_) {
+            GTEST_SKIP() << "Mock device unavailable (descriptor missing or TT_METAL_HOME not set)";
+        }
+        device_ = device_holder_.get();
+    }
+    void TearDown() override { device_ = nullptr; }
+
+    static void SetUpTestSuite() {
+        try {
+            tt::tt_metal::experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, Rows * Cols);
+            device_holder_ =
+                distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
+        } catch (const std::exception& e) {
+            // Descriptor unavailable (e.g. TT_METAL_HOME not set for custom descriptors).
+            // Disable mock mode to avoid leaking global state into subsequent test suites.
+            tt::tt_metal::experimental::disable_mock_mode();
+            // device_holder_ stays null → per-test SetUp will GTEST_SKIP.
+            return;
+        }
+        // Mock devices skip the auto-enable path in device_manager, so fabric
+        // must be configured and routing tables populated manually.
+        // initialize_fabric_config() queries the mock YAML descriptor (not real
+        // hardware); RELAXED mode tolerates missing ETH links in that descriptor.
+        tt::tt_fabric::SetFabricConfig(
+            tt::tt_fabric::FabricConfig::FABRIC_1D,
+            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    }
+
+    static void TearDownTestSuite() {
+        if (device_holder_) {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+            device_holder_->close();
+            device_holder_.reset();
+            tt::tt_metal::experimental::disable_mock_mode();
+        }
+    }
+};
+template <uint32_t Rows, uint32_t Cols>
+std::shared_ptr<distributed::MeshDevice> DistributedTensorOpIfMockFixture<Rows, Cols>::device_holder_;
+
+template <typename T>
+class DistributedTensorOpIfTest : public T {};
+using DistributedTensorFixtures = ::testing::Types<
+    DistributedTensorOpIfRealFixture,
+    DistributedTensorOpIfMockFixture<1, 2>,  // N300:      2 chips, 1x2 linear
+    DistributedTensorOpIfMockFixture<2, 2>,  // 2xN300:    4 chips, 2x2 grid
+    DistributedTensorOpIfMockFixture<1, 8>,  // T3K:       8 chips, 1x8 linear
+    DistributedTensorOpIfMockFixture<4, 8>   // Galaxy 6U: 32 chips, 4x8 grid
+    >;
+TYPED_TEST_SUITE(DistributedTensorOpIfTest, DistributedTensorFixtures);
+
+TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        input_spec.tensor_layout().get_memory_config());
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0);
+    ASSERT_TRUE(query.output_tensor_specs.has_value());
+    EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, UnaryReluWithReplicatedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto replicated_topology = TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, replicated_topology};
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        input_spec.tensor_layout().get_memory_config());
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0);
+    ASSERT_TRUE(query.output_tensor_specs.has_value());
+    EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+    EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, BinaryAddWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input_a{input_spec, sharded_topology};
+    ttnn::graph::DistributedTensorSpec dist_input_b{input_spec, sharded_topology};
+
+    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input_a,
+        dist_input_b,
+        input_spec.data_type(),
+        input_spec.tensor_layout().get_memory_config(),
+        std::nullopt,
+        none,
+        none,
+        none,
+        false);
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
+    EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 0);
+    ASSERT_TRUE(query.output_tensor_specs.has_value());
+    EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, AllGatherWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
+
+    // cluster_axis=1 selects the column dimension of the mesh
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::all_gather(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        /*dim=*/3,
+        /*cluster_axis=*/std::optional<uint32_t>(1),
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*optional_output_tensor=*/std::optional<Tensor>{},
+        /*num_links=*/std::optional<uint32_t>(1),
+        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
+
+    if (query.status == ttnn::graph::ExecutionStatus::Error) {
+        GTEST_LOG_(INFO) << "all_gather query error: " << query.error_message.value_or("unknown");
+    }
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    if (query.status == ttnn::graph::ExecutionStatus::Success) {
+        GTEST_LOG_(INFO) << "all_gather resource_usage: cb_peak=" << query.resource_usage.cb_peak_size_per_core
+                         << " l1_buffers_peak=" << query.resource_usage.l1_buffers_peak_per_core
+                         << " peak_memory=" << query.resource_usage.peak_memory_usage_per_core
+                         << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
+    }
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, ReduceScatterWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
+
+    // cluster_axis=1 selects the column dimension of the mesh
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::reduce_scatter(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        /*dim=*/3,
+        /*cluster_axis=*/std::optional<uint32_t>(1),
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*intermediate_memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*optional_output_tensor=*/std::optional<Tensor>{},
+        /*num_links=*/std::optional<uint32_t>(1),
+        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
+
+    if (query.status == ttnn::graph::ExecutionStatus::Error) {
+        GTEST_LOG_(INFO) << "reduce_scatter query error: " << query.error_message.value_or("unknown");
+    }
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    if (query.status == ttnn::graph::ExecutionStatus::Success) {
+        GTEST_LOG_(INFO) << "reduce_scatter resource_usage: cb_peak=" << query.resource_usage.cb_peak_size_per_core
+                         << " l1_buffers_peak=" << query.resource_usage.l1_buffers_peak_per_core
+                         << " peak_memory=" << query.resource_usage.peak_memory_usage_per_core
+                         << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
+    }
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, AllReduceWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
+
+    // cluster_axis=1 selects the column dimension of the mesh
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::all_reduce(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        /*cluster_axis=*/std::optional<uint32_t>(1),
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*num_links=*/std::optional<uint32_t>(1),
+        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
+
+    if (query.status == ttnn::graph::ExecutionStatus::Error) {
+        GTEST_LOG_(INFO) << "all_reduce query error: " << query.error_message.value_or("unknown");
+    }
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    if (query.status == ttnn::graph::ExecutionStatus::Success) {
+        GTEST_LOG_(INFO) << "all_reduce resource_usage: cb_peak=" << query.resource_usage.cb_peak_size_per_core
+                         << " l1_buffers_peak=" << query.resource_usage.l1_buffers_peak_per_core
+                         << " peak_memory=" << query.resource_usage.peak_memory_usage_per_core
+                         << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
+    }
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, AllBroadcastWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
+
+    // cluster_axis=1 selects the column dimension of the mesh
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::all_broadcast(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        /*cluster_axis=*/std::optional<uint32_t>(1),
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*num_links=*/std::optional<uint32_t>(1),
+        /*topology=*/std::optional<tt::tt_fabric::Topology>(tt::tt_fabric::Topology::Linear));
+
+    if (query.status == ttnn::graph::ExecutionStatus::Error) {
+        GTEST_LOG_(INFO) << "all_broadcast query error: " << query.error_message.value_or("unknown");
+    }
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    if (query.status == ttnn::graph::ExecutionStatus::Success) {
+        GTEST_LOG_(INFO) << "all_broadcast resource_usage: cb_peak=" << query.resource_usage.cb_peak_size_per_core
+                         << " l1_buffers_peak=" << query.resource_usage.l1_buffers_peak_per_core
+                         << " peak_memory=" << query.resource_usage.peak_memory_usage_per_core
+                         << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
+    }
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
+    const auto& input_spec = g_interleave_4_2_160_244_tiled;
+    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(this->device_->shape(), /*shard_dim=*/0);
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, sharded_topology};
+
+    // Send from device at mesh coordinate {0, 0}, cluster_axis=1 selects the column dimension
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::broadcast(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,
+        /*sender_coord=*/tt::tt_metal::distributed::MeshCoordinate{0, 0},
+        /*num_links=*/std::optional<uint32_t>(1),
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{},
+        /*topology=*/tt::tt_fabric::Topology::Linear,
+        /*cluster_axis=*/std::optional<uint32_t>(1),
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{});
+
+    if (query.status == ttnn::graph::ExecutionStatus::Error) {
+        GTEST_LOG_(INFO) << "broadcast query error: " << query.error_message.value_or("unknown");
+    }
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    if (query.status == ttnn::graph::ExecutionStatus::Success) {
+        GTEST_LOG_(INFO) << "broadcast resource_usage: cb_peak=" << query.resource_usage.cb_peak_size_per_core
+                         << " l1_buffers_peak=" << query.resource_usage.l1_buffers_peak_per_core
+                         << " peak_memory=" << query.resource_usage.peak_memory_usage_per_core
+                         << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
+    }
+}
+
+TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
+    // fused_rms_minimal requirements (from validate_on_program_cache_miss):
+    //   - input shape (1,1,M,N): M<=32, N%32==0, TILE, WIDTH_SHARDED ROW_MAJOR
+    //   - block_w * tile_width(32) == shard_spec.shape[1]
+    //   - Kt(=N/32) / num_cores == block_w
+    //   - weight: ROW_MAJOR, padded_shape[-1]==32, volume == N
+    //   - stats: required by program factory unconditionally (must be TILE + WIDTH_SHARDED)
+    //   - output_mem_config: sharded ROW_MAJOR matching input
+    // 8 cores × 2 tiles each: N=512, Kt=16, block_w=2, Kt/cores=2
+    // Stats on 1 core: stats_cb_size = Kt*tile_size = bank_size (no overflow).
+    static constexpr uint32_t kNumCores = 8;
+    static constexpr uint32_t kTilesPerCore = 2;
+    static constexpr uint32_t kTileWidth = 32;
+    static constexpr uint32_t kTileHeight = 32;
+    static constexpr uint32_t kN = kNumCores * kTilesPerCore * kTileWidth;  // 512
+    static constexpr uint32_t kShardWidth = kTilesPerCore * kTileWidth;     // 64
+
+    const tt::tt_metal::ShardSpec shard_spec{
+        CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{kNumCores - 1, 0}}},
+        {kTileHeight, kShardWidth},
+        ShardOrientation::ROW_MAJOR};
+    const tt::tt_metal::MemoryConfig shard_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec};
+
+    const auto input_spec = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kTileHeight, kN}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), shard_mem_cfg));
+
+    // Replicated topology: each device runs RMS locally, all_gather collects stats.
+    auto replicated_topology = TensorTopology::create_fully_replicated_tensor_topology(this->device_->shape());
+    ttnn::graph::DistributedTensorSpec dist_input{input_spec, replicated_topology};
+
+    // Weight: ROW_MAJOR, padded_shape[-1]==32 (tile width), volume==N.
+    // Shape (1,1,N/32,32): padded[-1]=32, volume=N
+    const auto weight_spec = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kN / kTileWidth, kTileWidth}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            ttnn::L1_MEMORY_CONFIG));
+
+    // Stats: pre-allocated buffer for intermediate RMS stats gathered across devices.
+    // Must be TILE to avoid buffer->page_size() call in the program factory.
+    // Stats lives on 1 core (the aggregation point for multicast from all input cores).
+    // stats_cb_size = Kt * tile_size; bank_size = total_stats / 1 core = Kt * tile_size → equal
+    // If spread across kNumCores: bank_size = Kt*tile_size/kNumCores < stats_cb_size → FATAL.
+    const tt::tt_metal::ShardSpec stats_shard_spec{
+        CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}, {kTileHeight, kN}, ShardOrientation::ROW_MAJOR};
+    const tt::tt_metal::MemoryConfig stats_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec};
+    const auto stats_spec = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kTileHeight, kN}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), stats_mem_cfg));
+
+    const auto semaphore_cores = CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{kNumCores - 1, 0}}};
+    auto semaphore = ttnn::global_semaphore::create_global_semaphore(this->device_, semaphore_cores, 0);
+
+    const ttnn::prim::LayerNormShardedMultiCoreProgramConfig program_config{
+        .compute_with_storage_grid_size = CoreCoord{kNumCores, 1},
+        .subblock_w = 1,
+        .block_h = 1,
+        .block_w = kTilesPerCore,
+        .inplace = false};
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::fused_rms_minimal(std::forward<decltype(args)>(args)...); },
+        this->device_,
+        dist_input,      // → Tensor
+        program_config,  // copied as-is
+        /*cluster_axis=*/uint32_t(1),
+        *this->device_,  // → reference_wrapper<MeshDevice>
+        semaphore,       // → GlobalSemaphore copy
+        /*persistent_output_tensor=*/std::optional<Tensor>{},
+        /*num_preferred_links=*/std::optional<size_t>(1),
+        /*topology=*/tt::tt_fabric::Topology::Linear,
+        /*subdevice_id=*/std::optional<tt::tt_metal::SubDeviceId>{},
+        /*dtype=*/std::optional<DataType>{},
+        /*compute_kernel_config=*/std::optional<DeviceComputeKernelConfig>{},
+        /*memory_config=*/std::optional<MemoryConfig>(shard_mem_cfg),
+        /*residual_input_tensor=*/std::optional<Tensor>{},
+        /*epsilon=*/1e-5f,
+        weight_spec,  // → Tensor
+        stats_spec,   // → Tensor
+        /*use_noc1_only=*/false);
+
+    if (query.status == ttnn::graph::ExecutionStatus::Error) {
+        GTEST_LOG_(INFO) << "fused_rms_minimal query error: " << query.error_message.value_or("unknown");
+    }
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    if (query.status == ttnn::graph::ExecutionStatus::Success) {
+        GTEST_LOG_(INFO) << "fused_rms_minimal resource_usage: cb_peak=" << query.resource_usage.cb_peak_size_per_core
+                         << " l1_buffers_peak=" << query.resource_usage.l1_buffers_peak_per_core
+                         << " peak_memory=" << query.resource_usage.peak_memory_usage_per_core
+                         << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
     }
 }
 
