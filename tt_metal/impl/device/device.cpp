@@ -440,6 +440,10 @@ void Device::configure_fabric(
             this->id_);
     }
     fabric_relay_path_broken_ = false;
+    // FIX AM (#42429): Clear channels-not-ready flag — configure_fabric() relaunches fresh
+    // fabric firmware on all channels, so after this call all channels will go through the
+    // full handshake again in the next quiesce cycle.
+    fabric_channels_not_ready_for_traffic_ = false;
     // Clear accumulated soft-reset failures from the prior quiesce cycle.  A channel that was
     // force-reset and recovered should not be permanently excluded from Phase 5 health checks
     // in subsequent cycles — the set is repopulated by this configure_fabric() call below.
@@ -2234,6 +2238,10 @@ bool Device::phase5b_erisc_health_check(
                     this->id(),
                     truly_unhealthy.size(),
                     details);
+                // FIX AM (#42429): Record that ETH channels are not at READY_FOR_TRAFFIC so
+                // callers (e.g. tests) can distinguish this state from relay-path-broken and
+                // skip AllGather operations that require full fabric readiness.
+                fabric_channels_not_ready_for_traffic_ = true;
                 return true;  // early exit — caller should return
             }
             // Truly unexpected states (L1 corrupt, init postcodes, garbage) — throw.

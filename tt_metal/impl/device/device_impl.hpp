@@ -210,6 +210,7 @@ public:
 
     bool is_mmio_capable() const override;
     bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_.load(); }
+    bool is_fabric_channels_not_ready_for_traffic() const override { return fabric_channels_not_ready_for_traffic_.load(); }
     bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
     // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
     // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
@@ -360,6 +361,15 @@ private:
     // Must be std::atomic<bool>: read by fd_mesh_command_queue.cpp dispatch thread
     // (FIX Z fast-throw) while quiesce writes it from a different thread.
     std::atomic<bool> fabric_relay_path_broken_{false};
+
+    // FIX AM (#42429): Set by wait_for_fabric_workers_ready() Phase 5b FIX AK block when all
+    // truly-unhealthy channels are stuck at or below LOCAL_HANDSHAKE_COMPLETE (partial-mesh
+    // quiesce — peer devices not in the quiesce set never completed the EDM handshake).
+    // Unlike fabric_relay_path_broken_, the relay IS functional here; the fabric just isn't
+    // at READY_FOR_TRAFFIC.  Tests must check this flag (in addition to fabric_relay_path_broken_)
+    // before running AllGather operations that require full fabric readiness.
+    // Cleared unconditionally at the top of configure_fabric().
+    std::atomic<bool> fabric_channels_not_ready_for_traffic_{false};
 
     // FIX AE (#42429): State for deferred ETH ERISC launch during quiesce.
     // Set by quiesce_and_restart_fabric_workers(defer_eth_launch=true),

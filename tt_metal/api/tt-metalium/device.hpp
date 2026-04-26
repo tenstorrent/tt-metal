@@ -190,6 +190,7 @@ public:
 
     virtual bool is_mmio_capable() const = 0;
     virtual bool is_fabric_relay_path_broken() const { return false; }
+    virtual bool is_fabric_channels_not_ready_for_traffic() const { return false; }
     virtual bool is_fabric_teardown_timed_out() const { return false; }
     virtual void set_fabric_teardown_timed_out() {}
 
