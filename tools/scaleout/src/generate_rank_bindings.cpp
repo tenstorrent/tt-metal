@@ -21,8 +21,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -208,7 +208,7 @@ void print_physical_adjacency_map(
  * This function:
  * 1. Builds physical multi-mesh graph from PSD, PGD, and MGD
  * 2. Builds logical multi-mesh graph from MGD (via MeshGraph)
- * 3. Configures topology mapping with strict mode and disabled rank bindings
+ * 3. Configures topology mapping (strict mode, UBB galaxy + MGD pinnings when applicable, rank bindings on)
  * 4. Runs map_multi_mesh_to_physical
  * 5. Returns the mapping result
  */
@@ -243,7 +243,28 @@ TopologyMappingResult run_topology_mapping(
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 
-    // Extract pinnings from MGD and add to config (same as control plane)
+    const std::size_t world_size = static_cast<std::size_t>(
+        *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
+
+    // UBB Galaxy fixed corner pinnings (align with ControlPlane when building TopologyMappingConfig)
+    if (cluster.is_ubb_galaxy()) {
+        for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+            const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            const std::size_t mesh_chip_count = mesh_shape.mesh_size();
+            if (!is_1d && mesh_chip_count % 32 == 0) {
+                auto mesh_pinnings =
+                    get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                for (const auto& [fabric_node, positions] : mesh_pinnings) {
+                    for (const auto& pos : positions) {
+                        config.pinnings.emplace_back(pos, fabric_node);
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract pinnings from MGD and add to config (after galaxy pinnings, same order as control plane)
     const auto& pinnings = mgd.get_pinnings();
     for (const auto& [pos, fabric_node] : pinnings) {
         config.pinnings.emplace_back(pos, fabric_node);

@@ -1702,4 +1702,36 @@ TopologyMappingResult map_multi_mesh_to_physical(
     return result;
 }
 
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id, const tt::tt_metal::distributed::MeshShape& mesh_shape, bool hard_pin_node_0) {
+    using tt::tt_metal::ASICLocation;
+    using tt::tt_metal::TrayID;
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.emplace_back(AsicPosition{TrayID{1u}, ASICLocation{1u}});
+    corner_asic_positions.emplace_back(AsicPosition{TrayID{2u}, ASICLocation{1u}});
+    corner_asic_positions.emplace_back(AsicPosition{TrayID{3u}, ASICLocation{1u}});
+    corner_asic_positions.emplace_back(AsicPosition{TrayID{4u}, ASICLocation{1u}});
+
+    std::vector<FabricNodeId> corner_fabric_node_ids;
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
+
+    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
+    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0} && hard_pin_node_0) {
+            fixed_asic_position_pinnings.emplace_back(
+                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{TrayID{1u}, ASICLocation{1u}}});
+            continue;
+        }
+
+        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+    }
+
+    return fixed_asic_position_pinnings;
+}
+
 }  // namespace tt::tt_metal::experimental::tt_fabric

@@ -465,6 +465,19 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
+/**
+ * @brief Fixed ASIC position pinnings for UBB Galaxy meshes (corners; optional hard pin of logical node 0).
+ *
+ * Matches ControlPlane / TopologyMapper when `cluster.is_ubb_galaxy()`: for non-1D meshes whose device count is a
+ * multiple of 32, pins fabric corner nodes to tray/ASIC layout so QSFP links align. Used when building
+ * `TopologyMappingConfig::pinnings` (one (AsicPosition, FabricNodeId) per allowed physical position per corner).
+ *
+ * @param hard_pin_node_0 If true, pins NW corner to tray 1 / ASIC 1 only (e.g. single-process run); MGD pinnings for
+ *                        fabric node 0 can override if merged after.
+ */
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id, const ::tt::tt_metal::distributed::MeshShape& mesh_shape, bool hard_pin_node_0 = false);
+
 }  // namespace tt::tt_metal::experimental::tt_fabric
 
 // Formatter for LogicalExitNode to enable fmt::format debugging
