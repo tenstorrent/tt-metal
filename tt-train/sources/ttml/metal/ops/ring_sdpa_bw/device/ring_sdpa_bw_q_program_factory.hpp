@@ -31,12 +31,12 @@ struct RingSDPABwQProgramFactory {
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const tensor_args_t& tensor_args,
-        ttnn::Tensor& tensor_return_value);
+        tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        ttnn::Tensor& tensor_return_value);
+        tensor_return_value_t& tensor_return_value);
 };
 }  // namespace ttml::metal::ops::ring_sdpa_bw::q
