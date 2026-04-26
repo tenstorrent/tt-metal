@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_vision_rmsnorm import RMSNorm
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
@@ -18,9 +18,17 @@ from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -63,8 +71,9 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         weight_key="model.multi_modal_projector.mm_soft_emb_norm",
         weight_dtype=dtype,
         is_distributed=False,
-        sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        # Same as TtGemma3MultiModalProjector: interleaved path; no SHARDED_* model_config entries on ModelArgs.
+        sharded_program_config=None,
+        sharded_output_config=None,
     )
 
     # Wrap it in DistributedNorm
@@ -75,13 +84,22 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
 
     reference_output = reference_model(input)
 
+    if is_blackhole() and mesh_device.get_num_devices() > 1:
+        input_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    else:
+        input_mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape)
+        output_mesh_composer = ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
+        )
+
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(
         input,
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
+        mesh_mapper=input_mesh_mapper,
         memory_config=(
             tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         ),
@@ -90,12 +108,7 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
     tt_output = tt_model(tt_input, mode=mode)
 
     # DistributedNorm outputs are replicated across devices
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
-        ),
-    )[:1, :, :].squeeze(0)
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=output_mesh_composer)[:1, :, :].squeeze(0)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
@@ -114,9 +127,14 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )

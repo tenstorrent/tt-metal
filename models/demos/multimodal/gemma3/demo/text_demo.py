@@ -15,11 +15,21 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    ModelOptimizations,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+    determine_device_name,
+    parse_decoder_json,
+)
 
 
 def get_accuracy_thresholds(model_args, optimizations):
@@ -77,6 +87,7 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    dummy_weights: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.model import Transformer
@@ -84,12 +95,41 @@ def create_tt_model(
     tt_model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
+        dummy_weights=dummy_weights,
         max_batch_size=max_batch_size,
-        optimizations=optimizations,
         max_seq_len=max_seq_len,
+        optimizations=optimizations,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
+
+    if paged_attention_config and tt_model_args.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
+        # Paged decode tuning improves text generation quality without affecting non-paged multimodal vision demos.
+        tt_model_args.force_fixed_decode_k_chunk = True
+        if getattr(tt_model_args.optimizations, "__name__", None) == "performance":
+            gemma_text_perf = ModelOptimizations(
+                {
+                    "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                        TensorGroup.WQKV: PrecisionSetting.BF16,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                        TensorGroup.WO: PrecisionSetting.BF16,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                    },
+                }
+            )
+            gemma_text_perf.__name__ = "performance"
+            for decoder_id in range(tt_model_args.n_layers):
+                tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
+            tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
@@ -219,13 +259,17 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     page_table = None
 
     if paged_attention_config:
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
-        page_table = reverse_permutation.reshape(
-            global_batch_size, paged_attention_config.max_num_blocks // (global_batch_size // data_parallel)
-        )
+        n_blocks = paged_attention_config.max_num_blocks
+        cols = n_blocks // (global_batch_size // data_parallel)
+        # Use identity logical→physical mapping (slot i holds logical block i). Random
+        # permutation is valid for stress but can mask or trigger paged-KV path bugs.
+        # Set GEMMA3_SHUFFLE_PAGE_TABLE=1 to restore the previous randomized layout.
+        if os.environ.get("GEMMA3_SHUFFLE_PAGE_TABLE", "").lower() in ("1", "true", "yes"):
+            permutation = torch.randperm(n_blocks)
+            reverse_permutation = torch.argsort(permutation)
+        else:
+            reverse_permutation = torch.arange(n_blocks, dtype=torch.int64)
+        page_table = reverse_permutation.repeat(data_parallel).reshape(global_batch_size, cols)
     return page_table
 
 
@@ -239,6 +283,7 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    dummy_weights: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -267,6 +312,7 @@ def prepare_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            dummy_weights=dummy_weights,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -284,6 +330,18 @@ def prepare_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer
 
 
+def _gemma3_text_demo_device_params():
+    # Blackhole (e.g. P150) needs an extra CQ, L1 small, and a larger trace region than Wormhole.
+    if is_blackhole():
+        return {
+            "fabric_config": True,
+            "trace_region_size": 70000000,
+            "num_command_queues": 2,
+            "l1_small_size": 24576,
+        }
+    return {"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}
+
+
 # List of supported Parameters for demo.py
 #
 # input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
@@ -298,7 +356,7 @@ def prepare_generator_args(
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
 #
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
-# MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+# MESH_DEVICE (str): Logical mesh to open (e.g. N150, N300, T3K, TG, P150, P300, P150x4, P150x8). Example: `export MESH_DEVICE=P150` runs a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace",
     [
@@ -678,7 +736,9 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+    "device_params",
+    [_gemma3_text_demo_device_params()],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -744,7 +804,9 @@ def test_demo_text(
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
-    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    _paged = request.config.getoption("--paged_attention")
+    if _paged is not None:
+        paged_attention = _paged
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
@@ -752,13 +814,41 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
+    dummy_weights = request.config.getoption("--dummy_weights") or False
     # enable_trace = request.config.getoption("--enable_trace") or enable_trace
     assert not (
         enable_trace and token_accuracy
     ), "Cannot run token accuracy with tracing. Set either enable_trace or token_accuracy to False."
 
+    # Layer-by-layer decode stats: export TT_DECODE_MODULE_DIAG=1 then grep DECODE_DIAG in the log.
+    # Trace must be off during capture; we force that here so one env var is enough.
+    if os.environ.get("TT_DECODE_MODULE_DIAG", "").lower() in ("1", "true", "yes"):
+        if enable_trace:
+            logger.warning(
+                "[DECODE_DIAG] TT_DECODE_MODULE_DIAG=1 → forcing enable_trace=False "
+                "(device readbacks are not allowed during trace capture)."
+            )
+        enable_trace = False
+
+    # HF reference dumps (TT_DECODE_HF_REF=1) need the same no-trace rule as DECODE_DIAG.
+    if os.environ.get("TT_DECODE_HF_REF", "").lower() in ("1", "true", "yes"):
+        if enable_trace:
+            logger.warning(
+                "[HF_REF] TT_DECODE_HF_REF=1 → forcing enable_trace=False "
+                "(device readbacks are not allowed during trace capture)."
+            )
+        enable_trace = False
+
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
+
+    # Non-paged decode exhausts L1 on Wormhole; Blackhole has enough headroom so allow it there.
+    if not paged_attention and is_wormhole_b0():
+        pytest.skip(
+            "Gemma3 text_demo: non-paged KV decode is not supported on Wormhole (L1 limits in "
+            "scaled_dot_product_attention_decode). Use default paged_attention=True; do not pass "
+            "--paged_attention false. Parametrized rows long-context-16k / long-context-1k also skip here."
+        )
 
     if json_config_file:
         optimizations = parse_decoder_json(json_config_file)
@@ -829,6 +919,7 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        dummy_weights=dummy_weights,
     )
 
     if token_accuracy:
@@ -842,24 +933,38 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
-    # Warmup prefill and decode
-    # Note: Gemma3 on-device sampling disabled because vocab_size/num_devices > 64k
-    # https://github.com/tenstorrent/tt-metal/issues/32249
+    # Sample on device when the Transformer exposes a SamplingGenerator; token-accuracy mode keeps host logits.
+    model_supports_device_sampling = (
+        getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
+    )
+    can_sample_on_device = model_supports_device_sampling and not token_accuracy
+    if model_supports_device_sampling and token_accuracy:
+        logger.info("token_accuracy=True: using host logits / host sampling (device sampling disabled)")
+    non_greedy_decoding_on_device = can_sample_on_device and sampling_params.get("temperature", 0) > 0
+    logger.info(
+        f"Gemma3 decode sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
+    )
+
     logger.info("Warming up model...")
-    num_blocks = page_params["page_max_num_blocks_per_dp"] // (global_batch_size // data_parallel) if page_params else 0
+    # Must match paged_attention: non-paged KV uses a single logical block; decode warmup cannot use a 1024-wide page table.
+    num_blocks = (
+        page_params["page_max_num_blocks_per_dp"] // (global_batch_size // data_parallel)
+        if paged_attention and page_params
+        else 0
+    )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         max_batch_size=global_batch_size,
         num_blocks=num_blocks,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        can_sample_on_device=can_sample_on_device,
+        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
     )
     logger.info("Warmup complete")
 
@@ -910,38 +1015,43 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
+        if can_sample_on_device:
+            # Greedy path uses top_k=1/top_p=1 so it matches host argmax.
+            t = sampling_params.get("temperature", 0) or 0
+            if t <= 0:
+                device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+            else:
+                device_sampling_params = SamplingParams(temperature=t, top_k=32, top_p=sampling_params["top_p"])
+        else:
+            device_sampling_params = None
+
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
+        prefill_out = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
             warmup_prefill=False,
+            sampling_params=device_sampling_params,
         )
-        prefilled_token = torch.argmax(logits, dim=-1)
+        if device_sampling_params is not None:
+            prefill_tokens, _prefill_lp = prefill_out
+            prefilled_token = prefill_tokens.long()
+        else:
+            logits = prefill_out
+            prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
         # Keep track of generated outputs to print out every iteration
+        prefilled_flat = prefilled_token.view(global_batch_size, -1).squeeze(-1)
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
         for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
+            user_tok = int(prefilled_flat[user].item())
             all_outputs[user].append(user_tok)
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
-
-        # Gemma3 vocab size is 262144, sampling is supported only where vocab_size/num_devices<=64k
-        # https://github.com/tenstorrent/tt-metal/issues/32249
-        # => Hardcode sampling to host for now
-        sampling_on_device = False
-
-        if sampling_on_device:
-            device_sampling_params = SamplingParams(
-                temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
-            )
-        else:
-            device_sampling_params = None
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
@@ -950,7 +1060,8 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
 
-        out_tok = prefilled_token
+        # decode_forward expects batch-major token ids shaped [B, 1].
+        out_tok = prefilled_flat.reshape(global_batch_size, 1)
 
         logger.info(f"Starting decode loop...")
 
@@ -959,9 +1070,8 @@ def test_demo_text(
             profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
             # below the collect method also applies teacher forcing which is necessary for exact token matching
             if token_accuracy:
-                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+                out_tok[0, 0] = token_acc.collect_predicted_tokens(out_tok[0, 0].item()).squeeze()
 
-            # Run decode forward
             logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
@@ -971,18 +1081,22 @@ def test_demo_text(
                 sampling_params=device_sampling_params,
             )
 
-            # Get the next token
             if device_sampling_params is not None:
-                out_tok = logits.unsqueeze(1)
-
+                # Device decode can return [B] or [B, 1] token ids; normalize to [B, 1].
+                out_tok = logits.reshape(global_batch_size, 1) if logits.dim() == 1 else logits
+                if out_tok.shape != (global_batch_size, 1):
+                    out_tok = out_tok.reshape(global_batch_size, -1)[:, -1:]
             else:
-                # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
                     logits,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                if out_tok.dim() == 1:
+                    out_tok = out_tok.unsqueeze(-1)
+                elif out_tok.dim() == 2 and out_tok.shape[-1] != 1:
+                    out_tok = out_tok[:, :1]
 
             profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
             decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
@@ -995,9 +1109,10 @@ def test_demo_text(
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
                 current_pos += 1
+
             # Save output token to print out later
             for user in range(global_batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = int(out_tok[user, 0].item())
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers

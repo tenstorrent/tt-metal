@@ -1,30 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-from typing import List
-
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.multimodal.llama_vision_model import _stack_images
-
-
-def _stack_images(
-    images: List[List[torch.Tensor]],  # batch of samples, each with list of image embeddings
-) -> List[torch.Tensor]:
-    """
-    Concatenate image embeddings per sample into a single 2D tensor.
-
-    Args:
-        images: List of samples, each being a list of [num_patches, hidden_dim] tensors
-
-    Returns:
-        List of [total_patches, hidden_dim] tensors, one per sample
-    """
-    return [torch.cat(image_list, dim=0) for image_list in images]
 
 
 class TtGemmaModel(Transformer):
@@ -58,11 +41,38 @@ class TtGemmaModel(Transformer):
             weight_cache_path=weight_cache_path,
         )
 
+    def encode_vision_embeddings_from_pixels(self, pixel_values):
+        """
+        Run only the vision tower and return host patch embeddings for image token positions.
+        """
+        vision_output = self.compute_vision_token(pixel_values)
+        if is_blackhole():
+            # BH: vision hidden dim is tensor-parallel sharded; match embd readout (dim=-1) for multi-chip (e.g. P150x4).
+            comp_vision_output = ttnn.to_torch(
+                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            comp_vision_output = comp_vision_output[: int(vision_output.shape[0])]
+            if comp_vision_output.shape[-1] > self.args.dim:
+                comp_vision_output = comp_vision_output[..., : self.args.dim]
+        else:
+            comp_vision_output = ttnn.to_torch(
+                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            )[: vision_output.shape[0], :]
+        return comp_vision_output.squeeze(0)
+
+    def _fuse_vision_into_text_embeddings(self, pt_tokens, tokens_embd, image_features: torch.Tensor):
+        special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(tokens_embd)
+        image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+        return tokens_embd.masked_scatter(special_image_mask, image_features)
+
     def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
-        TODO: Debate whether this function is responsible for padding
+
+        For multimodal prompts, pass ``vision_embeddings`` (host tensor from
+        :meth:`encode_vision_embeddings_from_pixels`); ``pixel_values`` is not accepted here.
         """
 
         S = pt_tokens.shape[-1]
@@ -77,17 +87,18 @@ class TtGemmaModel(Transformer):
         tokens_embd = self.embd(tokens)
         tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
-        if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
-            vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
-            comp_vision_output = ttnn.to_torch(
-                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-            )[: vision_output.shape[0], :]
+        vision_embeddings = kwargs.pop("vision_embeddings", None)
+        pixel_values = kwargs.pop("pixel_values", None)
+        kwargs.pop("image_grid_thw", None)
 
-            image_features = comp_vision_output.squeeze(0)
-            special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
-            special_image_mask = special_image_mask.expand_as(tokens_embd)
-            image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-            tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+        if vision_embeddings is not None:
+            tokens_embd = self._fuse_vision_into_text_embeddings(pt_tokens, tokens_embd, vision_embeddings)
+        elif pixel_values is not None:
+            raise ValueError(
+                "prepare_inputs_prefill no longer accepts pixel_values; run vision separately via "
+                "encode_vision_embeddings_from_pixels(...) and pass vision_embeddings=... "
+                "(GemmaMultimodalGenerator does this before prefill)."
+            )
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,

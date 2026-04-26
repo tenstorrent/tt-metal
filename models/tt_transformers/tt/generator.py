@@ -207,15 +207,30 @@ class Generator(WarmupForwardMixin):
 
             logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
 
-            self.prefill_forward_text(
-                **prefill_forward_args,
-                kv_cache=kv_cache,
-                enable_trace=False,  # Vision encoder warmup doesn't support trace
-                model_id_warmup=model_id,
-                sampling_params=None,
-                pixel_values=warmup_pixel_values,
-                image_sizes=[(vision_chunk_size, vision_chunk_size)],
-            )
+            multimodal_prefill = getattr(self, "prefill_forward_multimodal", None)
+            if callable(multimodal_prefill):
+                multimodal_prefill(
+                    prefill_forward_args["tokens"],
+                    page_table=prefill_forward_args["page_table"],
+                    kv_cache=kv_cache,
+                    prompt_lens=prefill_forward_args["prompt_lens"],
+                    empty_slots=prefill_forward_args["empty_slots"],
+                    enable_trace=False,  # Vision encoder warmup doesn't support trace
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                    pixel_values=warmup_pixel_values,
+                    image_sizes=[(vision_chunk_size, vision_chunk_size)],
+                )
+            else:
+                self.prefill_forward_text(
+                    **prefill_forward_args,
+                    kv_cache=kv_cache,
+                    enable_trace=False,  # Vision encoder warmup doesn't support trace
+                    model_id_warmup=model_id,
+                    sampling_params=None,
+                    pixel_values=warmup_pixel_values,
+                    image_sizes=[(vision_chunk_size, vision_chunk_size)],
+                )
             logger.info("Vision encoder warmup completed")
 
     def _capture_trace_prefill(
@@ -674,7 +689,10 @@ class Generator(WarmupForwardMixin):
                 )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
-            # Check if 'pixel_values' exists and index it safely
+            # Per-user multimodal kwargs (Gemma3 uses vision_embeddings via GemmaMultimodalGenerator;
+            # other models typically omit these keys.)
+            if "vision_embeddings" in local_kwargs and local_kwargs["vision_embeddings"] is not None:
+                local_kwargs["vision_embeddings"] = local_kwargs["vision_embeddings"][idx]
             if local_kwargs.get("pixel_values", None) is not None:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:

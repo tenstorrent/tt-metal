@@ -2334,10 +2334,10 @@ class ModelArgs:
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
-                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150": 128, "P150x4": 128},
+                "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150": 128, "P150x4": 128},
+                "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150": 128, "P150x4": 128},
+                "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -2645,6 +2645,12 @@ class ModelArgs:
             )
         else:
             self.pad_logits_to_power_of_2 = False
+
+        # Gemma 3 LM-head shard is ~131k tokens/device on 2-chip meshes; default 64k cap leaves
+        # Transformer.sampling / tt_sampling unset and breaks callers that pass sampling_params on decode
+        # (e.g. vLLM sample_on_device_mode decode_only).
+        if self.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
+            self.device_sampling_max_per_device_vocab = 192 * 1024
 
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
