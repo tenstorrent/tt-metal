@@ -9,6 +9,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
@@ -339,6 +340,69 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 }
 
 // ----------------------------------------------------------------------------
+// InferWorkers: Populate spec.workers if not supplied by the user
+// ----------------------------------------------------------------------------
+//
+// If WorkerSpecs are not supplied by the user, infer them from the
+// ProgramSpec's kernel/DFB/semaphore target_nodes fields.
+std::vector<WorkerSpec> InferWorkers(const ProgramSpec& spec) {
+    // NodeContents: the kernels, DFBs, and semaphores on a given node are its "signature"
+    // Nodes with the same NodeContents can be grouped together into the same WorkerSpec
+    using NodeContents = std::tuple<std::set<KernelSpecName>, std::set<DFBSpecName>, std::set<SemaphoreSpecName>>;
+
+    std::map<NodeCoord, NodeContents> node_contents_map;
+
+    // Visit every node in a std::variant<NodeCoord, NodeRange, NodeRangeSet>
+    // TODO: Why the heck do we always deal with this silly variant? Why not just NodeRangeSet everywhere?
+    auto for_each_node = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes, auto&& fn) {
+        const NodeRangeSet range_set = to_node_range_set(target_nodes);
+        for (const NodeRange& range : range_set.ranges()) {
+            for (const NodeCoord& node : range) {
+                fn(node);
+            }
+        }
+    };
+
+    // Populate the NodeContents for every node (mentioned somewhere in the ProgramSpec)
+    for (const KernelSpec& kernel : spec.kernels) {
+        for_each_node(kernel.target_nodes, [&](const NodeCoord& n) {
+            std::get<0>(node_contents_map[n]).insert(kernel.unique_id);
+        });
+    }
+    for (const DataflowBufferSpec& dfb : spec.dataflow_buffers) {
+        for_each_node(
+            dfb.target_nodes, [&](const NodeCoord& n) { std::get<1>(node_contents_map[n]).insert(dfb.unique_id); });
+    }
+    for (const SemaphoreSpec& sem : spec.semaphores) {
+        for_each_node(
+            sem.target_nodes, [&](const NodeCoord& n) { std::get<2>(node_contents_map[n]).insert(sem.unique_id); });
+    }
+
+    // Group nodes by NodeContents signature
+    std::map<NodeContents, std::vector<NodeCoord>> sig_to_nodes;
+    for (const auto& [node, sig] : node_contents_map) {
+        sig_to_nodes[sig].push_back(node);
+    }
+
+    // Build one WorkerSpec per NodeContents signature.
+    // Inferred unique_ids have the form "inferred_worker@<node_range_set>"
+    // (this makes the auto-inference obvious in error messaging).
+    std::vector<WorkerSpec> workers;
+    workers.reserve(sig_to_nodes.size());
+    for (const auto& [sig, nodes] : sig_to_nodes) {
+        NodeRangeSet nrs = NodeRangeSet(ttsl::Span<const NodeCoord>(nodes)).merge_ranges();
+        workers.push_back(WorkerSpec{
+            .unique_id = fmt::format("inferred_worker@{}", nrs),
+            .kernels = std::vector<KernelSpecName>(std::get<0>(sig).begin(), std::get<0>(sig).end()),
+            .dataflow_buffers = std::vector<DFBSpecName>(std::get<1>(sig).begin(), std::get<1>(sig).end()),
+            .semaphores = std::vector<SemaphoreSpecName>(std::get<2>(sig).begin(), std::get<2>(sig).end()),
+            .target_nodes = nrs,
+        });
+    }
+    return workers;
+}
+
+// ----------------------------------------------------------------------------
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
@@ -666,11 +730,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate WorkerSpecs
     //////////////////////////////
 
-    // WorkerSpecs are now required for all architectures.
-    // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
-    //       If it's hated, we can make it optional, and derive the WorkerSpec if absent.
-    //       (Only on WH/BH though, I definitely want to require it on Quasar.)
-    TT_FATAL(spec.workers.has_value(), "Workers are required");
+    // spec.workers is ALWAYS populated at this point.
+    // Either the user provided it, or runtime inferred it in a previous step.
+    //
+    // TODO: This isn't a user-facing error! A user-facing error is actionable to the user,
+    // it says "hey, your input was malformed, fix it". This is a developer-facing, active
+    // documentation of the code's assumptions.
+    // We REALLY shouldn't be using TT_FATAL for both flavors.
+    TT_FATAL(spec.workers.has_value(), "Interal Error: spec.workers must be populated.");
     const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
 
@@ -1367,13 +1434,31 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // Public Entry Point
 // ============================================================================
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
-    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
+Program MakeProgramFromSpec(const ProgramSpec& user_spec, bool skip_validation) {
+    log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", user_spec.program_id);
 
-    // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
+    // Step 1a: Infer missing fields (required, but "opt in" for the user)
+    //    - WorkerSpecs
+    //   - Gen1 DM kernel configs (TODO - upcoming PR)
+
+    // For now, just make a full copy of the ProgramSpec if inference is required.
+    // This is simple, but wasteful -- specs can be large, and inference will
+    // only fill in a few spare fields.
+    // TODO: Optimize this. We can maintain a separate "inference results" struct,
+    // and plumb that through the rest of the code alongside the user's spec.
+
+    std::optional<ProgramSpec> inferred_spec;
+    // If we need to infer some fields, for now just suck it up and copy everything.
+    if (!user_spec.workers.has_value()) {
+        inferred_spec = user_spec;
+        inferred_spec->workers = InferWorkers(*inferred_spec);
+    }
+    const ProgramSpec& spec = inferred_spec.has_value() ? *inferred_spec : user_spec;
+
+    // Step 1b: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
