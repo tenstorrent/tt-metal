@@ -119,7 +119,7 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 void D2HSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& data_info,
-    const PinnedBufferInfo& bytes_sent_info) {
+    const PinnedBufferInfo& bytes_sent_info) const {
     const SocketSenderSize sender_size;
     const uint32_t total_config_bytes =
         sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;

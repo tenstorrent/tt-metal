@@ -281,7 +281,7 @@ private:
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
-        const PinnedBufferInfo& bytes_sent_info);
+        const PinnedBufferInfo& bytes_sent_info) const;
     void init_sender_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
