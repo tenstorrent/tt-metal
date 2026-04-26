@@ -570,7 +570,6 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
-
                     cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
                     if (dram_idx == 0) {
@@ -673,7 +672,6 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
-
                     UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
@@ -826,7 +824,6 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
-
                     UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(

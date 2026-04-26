@@ -4,12 +4,20 @@ Integrates the `matmul_expert` (hybrid SRAM + DRAM, compressed weights) kernels
 into the fused MoE kernel (`moe_kernel.cpp`). Requires a TP8 Megatron refactor
 of the routed-expert path.
 
-## 0. Status (2026-04-22)
+## 0. Status (2026-04-25)
 
 **Phase 1A — TP8 plumbing: ✅ COMPLETE**
 **Phase 1B — matmul_expert DRAM swap: ✅ COMPLETE (all 8 experts, DRAM-only)**
-**Phase 1C — rebase on pr42896 (new DRAM API): 🔧 IN PROGRESS (PCC regression being debugged on `bliu/hot-cold-on-pr42896`)**
-**Phase 2 — SRAM hot path + new index encoding: 📋 PLANNED (see §9)**
+**Phase 1C — rebase on pr42896 (new DRAM API): ✅ COMPLETE (anchor at PCC 0.9915)**
+**Phase 2A — op.py hot-expert infrastructure: 🔧 IN PROGRESS (stashed — see `stash@{1}`)**
+**Phase 2B — kernel SRAM dispatch wiring: 🔧 IN PROGRESS (stashed — see `stash@{0}`)**
+**Phase 2C — full SRAM pipeline integration (gather/reduce/mcast/down/add): 📋 PLANNED (see §9)**
+
+Anchor variant `test_moe_fused_with_reduce[sram_expert_1]` reaches XFAIL
+("`mul_num_experts hardcoded to 8`") rather than hanging — the
+`cb_index` mcast race in DRAM `matmul_expert` is fixed (NCRISC `cb_wait_front` +
+TRISC mailbox forwarding for MATH/PACK; commit `9887b23dc28` rebased onto
+`origin/bliu/deepseek` as `da074120040`).
 
 Anchor-test results on `test_moe_fused_with_reduce[blackhole-True-
 NOC_MODE.DM_DYNAMIC_NOC-True-fabric_2d]` (100 iterations, 8 devices):
@@ -76,7 +84,42 @@ Key properties:
 - **Outer-N slicing** is already supported via `per_core_n`.
 - SRAM path has **no SiLU fusion**. DRAM path has `dram_fuse_silu`.
 
-### 1.3 Why today's MoE and matmul_expert don't compose directly
+### 1.3 Target pipeline after Phase 2C (hot + cold paths interleaved)
+
+```
+ 1.   RMSNorm
+ 2.   gate matmul + sigmoid (64 cores)
+ 3.   gate gather
+ 4.   TopK (sender)
+ 5.   mcast index + expert scale to streamer cores
+ 5b.  (existing internal step)
+ 5c.  gated_reduce (shared expert)
+ 6a.  SRAM gate_proj      — 64 sram-gate cores, hot experts (NEW)
+ 6b.  DRAM gate_proj+SiLU — 8 streamer cores, cold experts (was step 6)
+ 7a.  SRAM up_proj        — 64 sram-up cores, hot experts (NEW)
+ 7b.  DRAM up_proj        — 8 streamer cores, cold experts (was step 7)
+ 6c.  SRAM gate gather    — multi-expert; 64 sram-gate cores → reduce/sender (NEW)
+ 7c.  SRAM up gather      — multi-expert; 64 sram-up   cores → reduce/sender (NEW)
+ 8.   Mul (cold path: gate × up × scalar over cold experts) — unchanged
+ 9.   down_proj gather (cold gate_proj cores → sender) — unchanged
+10a.  SRAM GatedReduce — multi-expert: Σ_hot SiLU(gate_e)·up_e·scalar_e (NEW)
+10b.  SRAM down_proj mcast — sender → SRAM down cores (NEW)
+11a.  DRAM down_proj gather  — (label needs confirmation; see §10) (was step 10's role)
+11b.  DRAM down_proj mcast   — sender → DRAM down cores
+12a.  SRAM down_proj — accum over hot experts (NEW)
+12b.  DRAM down_proj — accum over cold experts (was step 11)
+13a.  Eltwise add: DRAM down_proj + shared (was step 12)
+13b.  Eltwise add: + SRAM down_proj — can fuse into one 3-input add (NEW)
+14.   ReduceToOne (cross-device, ROOT1) — Phase 1A
+```
+
+Hot and cold paths run on **disjoint core sets** (64 sram-gate / 64 sram-up
+vs 8 streamer cores). Within a step, hot and cold matmuls are independent —
+the only synchronization is at the gather → reduce → mcast → down stages
+where hot and cold contributions converge before the final eltwise add and
+cross-device reduce.
+
+### 1.4 Why today's MoE and matmul_expert don't compose directly
 - Today's routed path is **EP (expert-parallel) over 8 cores on one device**:
   each of 8 DRAM cores handles one of the 8 selected experts in full.
   `per_core_n = 2048`, `per_core_k = 7168`.
@@ -462,6 +505,11 @@ hard-coded subset of experts becomes L1-resident ("hot") and the rest keep
 streaming from DRAM ("cold"). Phase 2 is staged so a PCC-preserving smoke
 test lands before any real hot expert is allocated.
 
+> **Commit-message convention**: every Phase 2 commit uses the prefix
+> `Phase 2:` (e.g., `Phase 2: apply stash@{1} hot-skip on DRAM cold path`,
+> `Phase 2: SRAM gate+up matmul + multi-expert gather (chunk 1)`). Makes
+> rebase / cherry-pick / rollback granular if a chunk regresses.
+
 #### Reference: canonical hybrid kernel
 
 `micro_ops/matmul_expert/kernels/matmul_expert_kernel.cpp` is the reference
@@ -610,103 +658,273 @@ all three projs. Exercise the SRAM path with `num_hot_experts=0` and
 `sram_active=1, num_hot_experts=0`. Confirms call sites + CB wiring
 are correct; the SRAM path is simply skipped.
 
-#### Phase 2C — SRAM SiLU fusion (gate_proj only)
+#### Phase 2C — Full SRAM pipeline integration into moe_kernel.cpp
 
-Goal: add SiLU fusion to the SRAM op so hot gate_proj experts don't
-skip the activation.
+Goal: wire the SRAM hot-expert path **end-to-end** through the fused MoE
+kernel — matmul → gather → reduce → down_proj mcast → SRAM down_proj →
+eltwise add — alongside the existing DRAM cold path. Anchor test must
+pass with `hot_expert_ids != None` and PCC match a per-device golden
+where hot weights are computed via the SRAM path (not zeroed).
 
-1. Add `fuse_silu` compile-time bool to `MatmulExpertCompressedSRAM::ComputeCTArgs` (default 0).
-2. After the non-accum pack loop, when `fuse_silu=1`, apply SiLU SFPU
-   to each packed tile. Mirror the DRAM path's approach:
-   `llk_math_eltwise_unary_sfpu_silu(...)` applied to dst regs before
-   pack (or after pack via copy-tile → sfpu → repack — pick whichever
-   matches the `compressed_custom_mm_block` output locality).
-3. Unit-test in the canonical `test_matmul_expert.py` harness: run a
-   uniform-SRAM gate/up matmul with `fuse_silu=1`, compare against
-   manual SiLU after a non-fused run. Add to Phase 2C test matrix.
-4. Accum path is not needed for gate_proj (gate/up are non-accum), so
-   `fuse_silu` on the accum branch can stay unwired (assert 0 if set).
+##### 2C.0 — Two stashes feed in
 
-**Exit criteria 2C**: canonical SRAM-only matmul_expert test passes
-with `fuse_silu=1`; bit-exact match against post-op SiLU reference.
+Prior in-progress work is stashed; both must be applied during 2C:
 
-#### Phase 2D — Upstream index encoding + hot-expert rigging
+- **`stash@{1}` — DRAM cold path learns to skip hot expert IDs**
+  (`moe_kernel.cpp`, `op.py`, `test_moe_mlp.py`,
+  `matmul_expert_compressed_dram.hpp`):
+  - New CTArgs `num_hot_experts` + `hot_expert_0..3` on all three projs'
+    DRAM `ReaderCTArgs` / `ComputeCTArgs`. Skip site is the index walk:
+    `if (raw_idx == CTArgs::hot_expert_N) continue;`.
+  - `mul_num_experts = 8 - num_hot` (kills the XFAIL
+    `mul_num_experts hardcoded to 8`).
+  - `down_proj_gather_num_experts = num_active_experts - num_hot_for_gather`.
+  - DRAM accum bookkeeping: `cb_wait_front`/`cb_pop_front` use
+    `num_dram_experts` not `num_active_experts`;
+    `dram_act_tile_offset[num_dram_experts] = num_dram_experts * num_tiles_k`
+    (was `exp_i * num_tiles_k`).
+  - `MoeOp.execute → setup → MoeRoutedExpertOp` plumb `hot_expert_ids`
+    through; both `_build_compile_time_args` arg lists carry it.
+  - Test parametrize: `hot_expert_ids ∈ [None, [1]]`; golden zeros hot
+    weights so the cold-only output is the expected partial.
+- **`stash@{0}` — SRAM compute cores + scaffold gathers**
+  (`moe_kernel.cpp` only):
+  - Two new core types: `is_sram_gate_compute_core`,
+    `is_sram_up_compute_core` (64 cores each, **disjoint** from the 8
+    `gate_proj_core`s — SRAM and DRAM matmuls run in parallel on
+    different cores, NOT the canonical `sram_mm(); dram_mm();` on one
+    core).
+  - `SRAMGateProjCTArgs` / `SRAMUpProjCTArgs` (Reader, Compute; Writer
+    empty) for `MatmulExpertCompressedSRAM`.
+  - `MoeGather::{Sender,Receiver,Compute}` args `sram_ag_args` (gate)
+    and `sram_bg_args` (up), both targeting `is_shared_gated_reduce_core`.
+  - NCRISC `setup_sharded_buffer(sram_*_proj_cb_in1, 1)` per SRAM core.
+  - **Placeholder**: receiver currently DRAINS gather output via
+    `cb_wait_front + cb_pop_front`. Phase 2C extends this into the
+    real reduce → mcast → SRAM down → add path.
 
-Goal: produce the real `is_sram | slot` index encoding upstream of
-`cb_index` and run the anchor test with ≥2 hot experts.
+##### 2C.1 — Required new / extended ops
 
-1. **Encoding producer**: add a thin op between TopK and the mcast
-   that rewrites each selected `eid` into `(is_hot[eid] ? (1<<15) |
-   slot_for[eid] : eid)`. Two pieces of state per device:
-   - `is_hot[256]` bool LUT.
-   - `slot_for[256]` uint16 LUT (valid only when is_hot).
-   Both can live in L1 as uint32 arrays; preferred implementation:
-   small BRISC pass that reads TopK output, writes the encoded output
-   into the mcast source CB. (Defer the "inside TopK" variant — it
-   couples two responsibilities and the mcast_index path already
-   exists as the natural injection point.)
-2. **Hot-expert selection**: for initial validation, hard-code hot
-   experts as the first `num_hot_experts` entries of each device's
-   per-device packed expert table. Rig `rig_moe_gate_for_expected_experts`
-   to include some of them in the top-8.
-3. **Golden reference**: `test_moe_fused_with_reduce`'s per-device
-   golden is unaffected — it's input/weight-identical regardless of
-   SRAM/DRAM path. PCC must match Phase 1B baseline (0.9915).
+Five ops need new or extended capability before the pipeline closes
+end-to-end. Land each behind a green anchor test before moving on.
 
-**Exit criteria 2D**: anchor test passes with `num_hot_experts=2` on
-at least one proj (gate or up — down needs 2C to not matter but also
-works), PCC ≥ 0.9915. Expand to hot gate+up+down simultaneously; PCC
-holds.
+1. **MoeGather multi-expert mode for SRAM gather (steps 6c, 7c)**
+   - `MoeGather` already supports a sender-side `num_experts` with
+     `src_page_size` and `expert_dst_stride` (used today by DRAM
+     down_proj gather). Wire those onto the SRAM gather senders so
+     each sram-gate / sram-up core writes one page per active hot
+     expert; receiver lays out
+     `[num_hot_active, intermediate_dim_per_device_per_expert]`
+     contiguously in `cb`.
+   - Receiver `dst_num_pages` becomes
+     `num_hot_active * num_sram_gate_cores` (not just
+     `num_sram_gate_cores`).
 
-#### Phase 2E — Production-ish hot coverage (stretch)
+2. **Multi-expert routed GatedReduce (step 10a)**
+   - Today's shared-expert `gated_reduce` is single-expert:
+     `SiLU(sum(gate)) * sum(up)`. Hot routed needs the per-expert
+     formula `SiLU(gate_e) * up_e * scalar_e`, summed over the active
+     hot experts — same math as cold-path step 8 mul, but fused with
+     the gather's per-expert reduction.
+   - Two implementation options:
+     - (a) Extend `gated_reduce` with a `num_experts` loop that applies
+       per-expert scalars and accumulates results (mirrors the
+       `EltwiseMul` num_experts loop in §5).
+     - (b) Introduce a sibling `routed_gated_reduce` op.
+   - Decision: (a) preferred, to reuse the shared-expert reduce core's
+     existing CB topology. `num_experts=1` preserves shared-expert
+     semantics.
 
-Goal: stress-test the accum cap and hot/cold mix at realistic splits.
-Push `num_hot_experts` up until PCC degrades, L1 budget exceeds, or
-a kernel bug surfaces.
+3. **SRAM down_proj mcast (step 10b)**
+   - Mcast the post-reduce SRAM intermediate (one tile-set per device)
+     to the SRAM down_proj cores. Modeled on the existing cold-path
+     down_proj mcast (step 11b) but to a different destination grid
+     (the SRAM down cores). May reuse the existing mcast op with new
+     destination CTArgs.
 
-- `num_hot_experts ∈ {4, 8, 16}` per proj.
-- Mix of routed experts (some top-8 are hot, some cold).
-- DRAM accum cap: the kernel already reconfigures L1_ACC per expert
-  (§6.2 decision RESOLVED), so no 2-expert cap — just verify.
-- Track per-proj memory use vs per-core L1 cap to choose a feasible
-  operating point.
+4. **SRAM down_proj op (step 12a)**
+   - `MatmulExpertCompressedSRAM` accum_experts variant for down_proj.
+   - Reads SRAM hot-expert weights (K-row-parallel slice) from L1;
+     produces one `[1, hidden_dim_per_device]` partial.
+   - Open: same SRAM core grid as 6a/7a (reused), or a dedicated SRAM
+     down-grid? Depends on L1 budget for the K-major slice (~129 KB
+     per hot expert per core for down vs ~8 KB for gate/up). Decide
+     during 2C bring-up; current memory budget (§Phase 2A) suggests
+     down dominates, so a separate / smaller SRAM-down grid is
+     plausible.
 
-**Exit criteria 2E**: anchor test green across the tested points. Per-
-core L1 budget documented. Add a regtest variant
-(`test_moe_fused_with_reduce[num_hot_experts=N]`) if parametric.
+5. **Three-way EltwiseAdd (steps 13a/13b)**
+   - Either: two sequential `EltwiseAdd` ops (DRAM_down + shared, then
+     + SRAM_down), OR one extended `EltwiseAdd` taking three inputs
+     (`cb_in0 + cb_in1 + cb_in2`).
+   - Preferred: extend `eltwise_add.hpp` with an optional `cb_in2`
+     guarded by a compile-time `add_third_input` bool, default 0. Cuts
+     one tile-regs round trip and a synchronization step. Falls back
+     to the chained variant if the SFPU/FPU constraints push back.
 
-#### Summary: what Phase 2 changes in moe_kernel.cpp
+##### 2C.2 — Pop-flag / sharing invariants
 
-Minimal kernel delta between Phase 1B and Phase 2 (steady state):
+- SRAM gate/up matmuls run on **disjoint cores** from the DRAM ones,
+  so unlike the canonical `sram_mm(); dram_mm();` on one core, pop
+  flags are independent — SRAM Op pops cb_in0/cb_in1/cb_index freely
+  on its own cores; DRAM Op does the same on its own CB set on the
+  streamer cores.
+- DRAM gate_proj still uses `pop_in0=false, pop_index=false` to share
+  inputs with DRAM up_proj on the streamer cores. SRAM gate_proj pops
+  its own copies.
+- SRAM `cb_in0` (activations) is sharded across all 64 SRAM cores per
+  proj; source is the existing rmsnorm mcast destination (extend the
+  mcast destination grid to include the SRAM cores).
+- SRAM `cb_index` reuses the encoded selection (top-8 with hot-expert
+  IDs marked via `stash@{1}`'s mechanism — bit15 / hot ID match).
+
+##### 2C.3 — Staged sub-steps
+
+Land in this order; each sub-step has a green anchor test before the
+next one merges:
+
+| # | What | Validation |
+|---|------|------------|
+| 2C.0 | Apply `stash@{1}` (DRAM cold-side hot-skip + cold count plumbing) | XFAIL `sram_expert_1` resolves to PASS at PCC ≥ baseline (hot weights zeroed in golden) |
+| 2C.1 | Apply `stash@{0}` (SRAM compute cores + scaffold gathers, drained) | Anchor PCC unchanged with `num_hot=0`; with `num_hot≥1` SRAM cores compile + run, output drained at receiver |
+| 2C.2 | MoeGather multi-expert wiring on 6c / 7c | Hot-expert outputs reach reduce-core in contiguous `[num_hot, dim/dev/expert]` layout; verify via DPRINT |
+| 2C.3 | Multi-expert GatedReduce (10a) | Reduced intermediate matches cold-path mul formula for hot subset (per-device golden) |
+| 2C.4 | SRAM down_proj mcast (10b) + SRAM down_proj op (12a) | SRAM partial output produced at SRAM down cores, drained or compared against golden |
+| 2C.5 | Three-way EltwiseAdd (13a fused or 13a→13b chain) | Anchor PCC matches the golden where hot weights are NOT zeroed — i.e. real SRAM hot path is end-to-end |
+
+##### 2C.4 — Incremental implementation gates (DO NOT one-shot)
+
+The §2C.3 sub-steps roll up into **four implementation chunks** keyed to the
+§1.3 pipeline step numbers. Implement and merge **one chunk at a time**.
+Between chunks, both gates below must pass — only then move to the next chunk.
+
+| Chunk | §1.3 steps | §2C.3 sub-steps | Scope |
+|-------|------------|------------------|-------|
+| 1 | 6a/6b/7a/7b + 6c/7c | 2C.0 → 2C.2 | `stash@{1}` cold-side hot-skip + `stash@{0}` SRAM gate/up scaffold + MoeGather multi-expert |
+| 2 | 10a + 10b | 2C.3 | Multi-expert GatedReduce (routed) + SRAM down_proj mcast |
+| 3 | 11a/11b + 12a/12b | 2C.4 | DRAM down gather/mcast updates for cold-only count + SRAM `MatmulExpertCompressedSRAM` accum down_proj |
+| 4 | 13a + 13b | 2C.5 | Three-way EltwiseAdd (DRAM_down + shared + SRAM_down) — fused or chained |
+
+**Two gates per chunk — both must pass before the next chunk merges:**
+
+1. **Hang gate**: anchor test (`test_moe_fused_with_reduce[sram_expert_1]`)
+   completes — no kernel hang. Run via `/run-test` so DPRINT KERNEL
+   START / KERNEL END are auto-instrumented; verify both fire on every
+   active core type for the chunk (SRAM gate / SRAM up / SRAM reduce /
+   SRAM down / etc.).
+2. **CB-value gate**: DPRINT the **output CB tile values** for the new
+   ops introduced in this chunk and inspect them visually — they must be
+   *reasonable*, defined as:
+   - Magnitudes are sane (no NaN, no fp explosion, no garbage like
+     `0xFFFF` patterns).
+   - Expected zeros where the path is intentionally inactive
+     (e.g., SRAM cores in chunk 1 with `num_hot_experts=0` should write
+     zeros / no-op padding into shared `cb_out`).
+   - When `num_hot_experts ≥ 1`, the SRAM path's contribution is in the
+     same order of magnitude as the cold-path contribution for the same
+     expert (sanity-check via golden side-by-side print).
+
+PCC is the *eventual* gate, but several early chunks can't reach a
+PASSING anchor PCC alone (e.g., chunk 1 just produces a drained gather
+output) — the CB-value gate is what catches "kernel ran without
+crashing but is producing junk." Don't skip it.
+
+If a gate fails: stop, debug, fix in place. Do **not** layer chunk N+1
+on top of a broken chunk N — by §2C.5 there's no isolating where the
+PCC regression came from.
+
+##### 2C.5 — Exit criteria
+
+- `test_moe_fused_with_reduce[hot_expert_ids=[1]]` PASSES with
+  reduce-output PCC ≥ 0.9915 (Phase 1B baseline) using the **real**
+  SRAM hot path — no zeroed hot weights in golden.
+- Multi-hot variants (`hot_expert_ids=[1, 5]` and similar) PASS at
+  the same bar.
+- L1 budget verified: per-core L1 stays under cap with hot expert
+  weights resident — gate ~8 KB/expert, up ~8 KB/expert, down
+  ~129 KB/expert (limits to ≤4 hot experts per down core during
+  bring-up unless K is sliced finer).
+- Optional: `num_hot_experts` parametrize variant added to the regtest
+  matrix; `[None, [1], [1,5]]` minimum.
+
+#### Summary: what Phase 2C changes in moe_kernel.cpp
+
+Kernel delta from Phase 1B to end-of-2C (cumulative across `stash@{1}`,
+`stash@{0}`, and the new ops in §2C.1):
 
 - 1 new include (`matmul_expert_compressed_sram.hpp`).
-- 3 new CTArgs bundles (`GateProj{SRAM,}CTArgs`, `UpProj{SRAM,}CTArgs`,
-  `DownProj{SRAM,}CTArgs` — Reader + Compute per proj).
-- 3 new `sram_mm(); dram_mm();` call blocks (replace single DRAM ops).
-- 1 new `setup_sharded_buffer(cb_in1_sram, 1)` per proj in NCRISC.
-- No change to residual / mcast / shared-expert / reduce pipeline.
+- 2 new core types (`is_sram_gate_compute_core`, `is_sram_up_compute_core`,
+  64 cores each).
+- New CTArgs bundles for SRAM gate / SRAM up proj
+  (Reader + Compute; Writer empty); existing DRAM CTArgs gain hot-expert
+  skip fields (`num_hot_experts`, `hot_expert_0..3`).
+- New `MoeGather` sender + receiver instances for SRAM gate / SRAM up
+  with multi-expert layout.
+- New (or extended) `gated_reduce` with `num_experts` loop for routed
+  hot path.
+- New `down_proj` mcast destination targeting SRAM down cores.
+- New `MatmulExpertCompressedSRAM` accum call for SRAM down_proj.
+- Extended `eltwise_add` (three-input variant) OR a second
+  `EltwiseAdd` call.
+- Per-NCRISC `setup_sharded_buffer` for SRAM weight CBs (one per proj
+  per SRAM core type).
+- Cold-path step counts (`mul_num_experts`,
+  `down_proj_gather_num_experts`, DRAM accum bookkeeping) reduced by
+  `num_hot_active`.
 
 ## 10. Open questions
-- Which upstream op produces the `is_sram | position` encoding? TopK
-  followup, or a dedicated flag-insert op? (Probably the former for
-  perf; the latter for modularity.) **Phase 2D plans for the "thin op
-  between TopK and mcast" variant.**
-- DRAM-accum-2 policy is resolved as a kernel constraint (Phase 1B);
-  remains open as a perf knob — hot coverage chosen so most tokens see
-  ≤2 cold experts on down_proj keeps the accum path at its efficient
-  L1_ACC-slot count.
-- For cross-device ReduceToOne: `reduce_to_one_b1` shipped in Phase 1B
+
+**Open (Phase 2C blockers)**
+- **Step 11a label**: §1.3 lists 11a as "DRAM down_proj gather (previously
+  step 10's role)" but the original step 10 was the down_proj **mcast**,
+  not gather. Original step 9 was gather. The user's directive ordered
+  11a before 11b mcast which suggests the gather meaning, but the
+  "previously 10" parenthetical could alternatively mean the gather is
+  being re-platformed via the same op that did mcast. Resolve in
+  chunk 3 (§2C.4) by reading the existing 9/10 wiring: if 11a is
+  **gather** then chunk 3 is a relabel-only on the cold path; if it's
+  **mcast** then 11b becomes a no-op duplicate. Update §1.3 and
+  §2C.3 once confirmed.
+- **GatedReduce vs new sibling op for routed (10a)**: extend the
+  existing `gated_reduce` with a `num_experts` loop (option a, §2C.1)
+  vs introducing `routed_gated_reduce` (option b). Decision tilts toward
+  (a) for CB topology reuse but the per-expert scalar feed needs
+  validation that it doesn't conflict with the shared-expert single-
+  expert default. Verify in chunk 2.
+- **SRAM down_proj core grid (12a)**: same 64-core grid as 6a/7a (reuse,
+  but each core needs ~129 KB for one hot down expert vs ~8 KB for
+  gate/up — only 1-2 hot experts fit alongside gate/up weights), or a
+  dedicated SRAM-down grid? Decide in chunk 3 once chunk 1's L1
+  measurement is in.
+- **3-input EltwiseAdd vs chained adds (13a/13b)**: extend
+  `eltwise_add.hpp` with `add_third_input` compile-time flag (preferred
+  for tile-regs efficiency) vs two sequential `EltwiseAdd` ops
+  (simpler, no SFPU/FPU constraint surprise). Decide in chunk 4.
+
+**Closed / resolved**
+- ✅ Cross-device ReduceToOne: `reduce_to_one_b1` shipped in Phase 1A
   and validates at PCC 0.9915. Closed unless topology changes.
-- **cb_out interleaving in mixed SRAM+DRAM non-accum** (Phase 2B risk):
-  SRAM pads cb_out to `num_active_experts * out_w`; DRAM writes per-
-  expert slots. Unknown if DRAM's push pattern coexists with SRAM's
-  padding when both paths are active. Must be resolved by reading
-  `matmul_expert_compressed_dram.hpp` non-accum path before 2B lands;
-  fallback is a separate `cb_out_sram` + explicit merge.
-- **Hot-expert selection policy**: for Phase 2D, hard-code the first
-  `num_hot_experts` per-device slots. For production, a profile-based
-  or pretraining-output-based policy is needed; out of scope for this
-  integration.
+- ✅ DRAM-accum-2 cap as a kernel constraint: resolved in Phase 1B
+  (per-iter L1_ACC reconfig). Remains as a perf knob — hot coverage
+  chosen so most tokens see ≤2 cold experts on down_proj keeps the
+  accum path at its efficient L1_ACC-slot count, but is no longer a
+  correctness requirement.
+- ✅ cb_out interleaving in mixed SRAM+DRAM non-accum (was Phase 2B
+  risk): now moot — Phase 2C runs SRAM gate/up on **disjoint cores**
+  from DRAM (64 sram-gate + 64 sram-up vs 8 streamer cores), so
+  SRAM and DRAM never share a `cb_out`. The original concern only
+  applied to the canonical same-core `sram_mm(); dram_mm();` pattern.
+- ✅ Index encoding upstream producer: deferred to a later phase; the
+  `stash@{1}` mechanism uses `hot_expert_0..3` CTArgs to skip hot IDs
+  on the DRAM path without needing the bit-15 encoding from upstream.
+  Bit-15 path is still planned long-term but not blocking 2C.
+
+**Out of scope for Phase 2**
+- **Hot-expert selection policy**: chunks 1-4 hard-code `hot_expert_ids`
+  via test parametrize. A profile-based or pretraining-output-based
+  policy is a follow-up.
+- **`table_idx_arr` simplification**: lower-15-bit-is-already-position
+  cleanup is post-2C.
 
 ## 11. Bugs hit & fixes landed during Phase 1A/1B
 

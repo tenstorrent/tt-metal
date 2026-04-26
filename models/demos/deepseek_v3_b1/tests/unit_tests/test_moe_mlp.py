@@ -889,9 +889,22 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 )
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize(
+    "sram_expert_ids",
+    [
+        pytest.param(frozenset(), id="no_sram"),
+        pytest.param(
+            frozenset([1]),
+            id="sram_expert_1",
+            marks=pytest.mark.xfail(reason="SRAM fused expert path is still under integration", strict=False),
+        ),
+    ],
+)
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, sram_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -945,6 +958,30 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
     )
+
+    if sram_expert_ids:
+        # Mark SRAM experts in gate_indices tensor by setting bit 15 (0x8000).
+        # The tensor is (16, 16) uint16 where element [k % 16, k // 16] normally stores
+        # k (global expert id). SRAM entries store compact slots, matching encode_expert_indices().
+        # The gate kernel reads from this tensor and writes the matching value to gate_output_indices,
+        # so the SRAM flag propagates to the index used by the DRAM matmul reader.
+        indices = torch.arange(256, dtype=torch.int32).reshape(16, 16)
+        gate_indices_torch = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
+        for slot, expert_id in enumerate(sorted(sram_expert_ids)):
+            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | slot
+        r = r._replace(
+            ttnn_gate_indices=ttnn.from_torch(
+                gate_indices_torch,
+                dtype=ttnn.uint16,
+                layout=ttnn.TILE_LAYOUT,
+                device=submesh,
+                memory_config=r.ttnn_gate_indices.memory_config(),
+                tile=ttnn.Tile([16, 16]),
+                mesh_mapper=mesh_mapper,
+            )
+        )
+        logger.info(f"Marked experts {sorted(sram_expert_ids)} as SRAM in gate_indices tensor")
+
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
     s = create_shared_expert_tensors(
@@ -1099,6 +1136,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        sram_expert_ids=sorted(sram_expert_ids),
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1108,7 +1146,12 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     _ = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
-    tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)
+    sram_slot_to_expert = {slot: expert_id for slot, expert_id in enumerate(sorted(sram_expert_ids))}
+    tt_top8_raw = device_gate_indices[0].flatten()[:8].to(torch.int64)
+    tt_top8 = torch.tensor(
+        [sram_slot_to_expert[int(raw & 0x7FFF)] if int(raw) & 0x8000 else int(raw) for raw in tt_top8_raw],
+        dtype=torch.int64,
+    )
     tt_top8_sorted = torch.sort(tt_top8).values
     expected_top8_sorted = torch.sort(torch.tensor(expected_expert_ids, dtype=torch.int64)).values
     assert torch.equal(tt_top8_sorted, expected_top8_sorted), (

@@ -68,6 +68,10 @@ struct EltwiseAdd {
     // cb_in1_wait_tiles: number of tiles to wait for on cb_in1 (before offset update)
     // sender_index: per-core index (0-7) to compute offset into fused_add
     // slice_size_bytes: size of slice (896 * 2 = 1792 bytes for bfloat16)
+    // cb_in2 / cb_in2_wait / cb_in2_wait_tiles: optional third input (SRAM down output).
+    //   Only consulted when Op<..., Has3Inputs=true>. cb_in2 is the 32x32 view aliased
+    //   to sram_down_proj_cb_out's L1 region; cb_in2_wait is the 1x32 producer CB
+    //   (sram_down_proj_cb_out itself); cb_in2_wait_tiles is the producer page count.
     template <
         uint32_t cb_in0_,
         uint32_t cb_in1_,
@@ -77,7 +81,10 @@ struct EltwiseAdd {
         uint32_t cb_in0_wait_tiles_,
         uint32_t cb_in1_wait_tiles_,
         uint32_t sender_index_,
-        uint32_t slice_size_bytes_>
+        uint32_t slice_size_bytes_,
+        uint32_t cb_in2_ = 0xFFFFFFFF,
+        uint32_t cb_in2_wait_ = 0xFFFFFFFF,
+        uint32_t cb_in2_wait_tiles_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -88,14 +95,24 @@ struct EltwiseAdd {
         static constexpr uint32_t cb_in1_wait_tiles = cb_in1_wait_tiles_;
         static constexpr uint32_t sender_index = sender_index_;
         static constexpr uint32_t slice_size_bytes = slice_size_bytes_;
+        static constexpr uint32_t cb_in2 = cb_in2_;
+        static constexpr uint32_t cb_in2_wait = cb_in2_wait_;
+        static constexpr uint32_t cb_in2_wait_tiles = cb_in2_wait_tiles_;
     };
 
     // ========================================================================
     // Op - the actual operation, templated on CTArgs and IsActiveCore
     // PopInputs: If true (default), pops input CBs after compute.
     // PopOutput: If true, pops output CB after push (for looping).
+    // Has3Inputs: If true, computes cb_in0 + cb_in1 + cb_in2 (SRAM down output).
+    //             Requires cb_in2 / cb_in2_wait / cb_in2_wait_tiles in CTArgs.
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool PopInputs = true, bool PopOutput = false>
+    template <
+        typename CTArgs,
+        bool IsActiveCore,
+        bool PopInputs = true,
+        bool PopOutput = false,
+        bool Has3Inputs = false>
     class Op {
     public:
         void operator()() {
@@ -119,18 +136,24 @@ struct EltwiseAdd {
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC: Element-wise addition with indexed fused_add
+            //   2-way: out = cb_in0 + cb_in1[indexed]
+            //   3-way: out = cb_in0 + cb_in1[indexed] + cb_in2  (SRAM down output)
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
             reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            add_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
             // Wait for cb_in0 (down_proj output)
             cb_wait_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
 
             // Wait for cb_in1 (all tiles must be ready before we update read pointer)
             cb_wait_front(CTArgs::cb_in1, CTArgs::cb_in1_wait_tiles);
+
+            // Wait for cb_in2 (SRAM down output) when running the 3-way variant.
+            if constexpr (Has3Inputs) {
+                cb_wait_front(CTArgs::cb_in2_wait, CTArgs::cb_in2_wait_tiles);
+            }
 
             // Update cb_in1 read pointer to indexed offset (must be in UNPACK context)
             // CB read pointer is in L1_ALIGNMENT (16 byte) units
@@ -145,10 +168,25 @@ struct EltwiseAdd {
             // Reserve output space
             cb_reserve_back(CTArgs::cb_out, num_tiles);
 
-            // Process tiles - element-wise add
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < num_tiles; i++) {
-                add_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
+            // Process tiles
+            if constexpr (Has3Inputs) {
+                // 3-way add: load cb_in2 → dst, then accumulate cb_in0 + cb_in1 into dst.
+                copy_tile_to_dst_init_short(CTArgs::cb_in2);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < num_tiles; i++) {
+                    copy_tile(CTArgs::cb_in2, i, i);
+                }
+                add_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1, true /* acc_to_dest */);
+                for (uint32_t i = 0; i < num_tiles; i++) {
+                    add_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
+                }
+            } else {
+                // 2-way add (existing path).
+                add_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < num_tiles; i++) {
+                    add_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -164,6 +202,9 @@ struct EltwiseAdd {
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
                 cb_pop_front(CTArgs::cb_in1, CTArgs::cb_in1_wait_tiles);
+                if constexpr (Has3Inputs) {
+                    cb_pop_front(CTArgs::cb_in2_wait, CTArgs::cb_in2_wait_tiles);
+                }
             }
             if constexpr (PopOutput) {
                 cb_pop_front(CTArgs::cb_out, num_tiles);
