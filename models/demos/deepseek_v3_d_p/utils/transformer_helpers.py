@@ -344,6 +344,7 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+    from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
     if gate_fallback_mode is None:
@@ -542,6 +543,7 @@ def load_and_compute_layer_by_layer(
     if compute_reference:
         norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
         hf_model.load_state_dict(norm_with_prefix, strict=False)
+        logger.debug(f"[norm] h_ref {h_ref.dtype=}, norm_weight dtype={norm_dequant['weight'].dtype}")
         with torch.no_grad():
             h_ref = hf_model.norm(h_ref)
         ref_snapshots.append(h_ref)
@@ -561,6 +563,35 @@ def load_and_compute_layer_by_layer(
         lazy_sd.evict(k)
     del norm_sd, norm_dequant
     gc.collect()
+
+    # --- Process LM Head ---
+    logger.info("Processing lm_head...")
+    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
+
+    if compute_reference:
+        # Apply lm_head projection: logits = h_ref @ lm_head_weight.T
+        logger.debug(f"[lm_head] h_ref {h_ref.dtype=}, lm_head_weight.dtype={lm_head_dequant['weight'].dtype}")
+        lm_head_weight = lm_head_dequant["weight"].to(torch.bfloat16)
+        with torch.no_grad():
+            h_ref_lm = torch.nn.functional.linear(h_ref.to(torch.bfloat16), lm_head_weight)
+        ref_snapshots.append(h_ref_lm)
+        del lm_head_weight
+
+    if build_ttnn_cache:
+        TtLMHead.build_ttnn_cache(
+            torch_weight=lm_head_dequant["weight"],
+            vocab_size=config.vocab_size,
+            emb_dim=config.hidden_size,
+            mesh_device=mesh_device,
+            cache_path=weight_cache_path,
+        )
+
+    for k in lm_head_sd.keys():
+        lazy_sd.evict(k)
+    del lm_head_sd, lm_head_dequant
+    gc.collect()
+    _log_memory("After lm_head processed and cleared")
 
     # Cleanup
     lazy_sd.close()
