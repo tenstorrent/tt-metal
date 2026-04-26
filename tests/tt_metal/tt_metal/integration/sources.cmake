@@ -11,5 +11,10 @@ set(UNIT_TESTS_INTEGRATION_SRC
     matmul/test_matmul_multi_core_X_dram.cpp
     matmul/test_matmul_single_core.cpp
     matmul/test_matmul_X_tile.cpp
+    matmul/test_matmul_block_helper.cpp
+    matmul/test_matmul_reduce_inplace.cpp
+    matmul/test_transpose_pre_k_block.cpp
+    matmul/test_reblock_and_untilize.cpp
+    matmul/test_add_bias_bcast_rows.cpp
     vecadd/test_vecadd_multi_core.cpp
 )

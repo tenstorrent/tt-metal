@@ -143,7 +143,8 @@ void py_module(nb::module_& mod) {
            std::size_t per_core_N,
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
-           bool fuse_batch) {
+           bool fuse_batch,
+           bool row_major_output) {
             // Set out_block_h and out_block_w to defaults if they are not provided
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -159,7 +160,8 @@ void py_module(nb::module_& mod) {
                 per_core_N,
                 transpose_mcast,
                 std::move(fused_activation),
-                fuse_batch);
+                fuse_batch,
+                row_major_output);
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -172,7 +174,8 @@ void py_module(nb::module_& mod) {
         nb::arg("per_core_N").noconvert(),
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
-        nb::arg("fuse_batch").noconvert() = true);
+        nb::arg("fuse_batch").noconvert() = true,
+        nb::arg("row_major_output").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -275,12 +278,25 @@ void py_module(nb::module_& mod) {
 
         Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
     )doc");
+
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "row_major_output", &MatmulMultiCoreReuseMultiCastProgramConfig::row_major_output, R"doc(
+        Whether the compute kernel packs output tiles in row-major order.
+
+        When true, the factory emits ROW_MAJOR_OUTPUT=1 to the compute + writer kernels so
+        that the pack LLK writes tiles at absolute CB offsets row-first across all N-subblocks,
+        and the writer reads per-M-row-group. This decouples subblock shape from writer tile
+        order and unlocks multi-row subblocks (out_subblock_h > 1 with out_subblock_w < per_core_N).
+
+        Defaults to false; the legacy subblock-major pack path is used unless the caller opts in.
+    )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
-                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={})",
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, row_major_output={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -291,7 +307,8 @@ void py_module(nb::module_& mod) {
                 config.per_core_N,
                 config.transpose_mcast,
                 config.fused_activation,
-                config.fuse_batch);
+                config.fuse_batch,
+                config.row_major_output);
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
@@ -320,7 +337,8 @@ void py_module(nb::module_& mod) {
                bool gather_in0,
                CoreRangeSet hop_cores,
                std::size_t num_global_cb_receivers,
-               bool untilize_out) {
+               bool untilize_out,
+               bool row_major_output) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -340,7 +358,8 @@ void py_module(nb::module_& mod) {
                     gather_in0,
                     std::move(hop_cores),
                     num_global_cb_receivers,
-                    untilize_out);
+                    untilize_out,
+                    row_major_output);
             },
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -357,7 +376,8 @@ void py_module(nb::module_& mod) {
             nb::arg("gather_in0").noconvert() = false,
             nb::arg("hop_cores").noconvert() = nb::cast(CoreRangeSet()),
             nb::arg("num_global_cb_receivers").noconvert() = 1,
-            nb::arg("untilize_out").noconvert() = false)
+            nb::arg("untilize_out").noconvert() = false,
+            nb::arg("row_major_output").noconvert() = false)
         .def_rw(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size,
@@ -460,12 +480,22 @@ void py_module(nb::module_& mod) {
             the operation. This can be useful when the subsequent operation expects row-major
             data and can eliminate a separate untilization pass. Defaults to false.
         )doc")
+        .def_rw("row_major_output", &MatmulMultiCoreReuseMultiCast1DProgramConfig::row_major_output, R"doc(
+            Whether the compute kernel packs output tiles in row-major order.
+
+            When true, the factory emits ROW_MAJOR_OUTPUT=1 to the compute + writer kernels so
+            that the pack LLK writes tiles at absolute CB offsets row-first across all N-subblocks,
+            and the writer reads per-M-row-group. This decouples subblock shape from writer tile
+            order and unlocks multi-row subblocks (out_subblock_h > 1 with out_subblock_w < per_core_N).
+
+            Defaults to false; the legacy subblock-major pack path is used unless the caller opts in.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_block_h={}, out_block_w={}, out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, "
                 "fuse_batch={}, fused_activation={}, mcast_in0={}, gather_in0={}, hop_cores={}, "
-                "num_global_cb_receivers={}, untilize_out={})",
+                "num_global_cb_receivers={}, untilize_out={}, row_major_output={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_block_h,
@@ -480,7 +510,8 @@ void py_module(nb::module_& mod) {
                 config.gather_in0,
                 config.hop_cores,
                 config.num_global_cb_receivers,
-                config.untilize_out);
+                config.untilize_out,
+                config.row_major_output);
         });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =

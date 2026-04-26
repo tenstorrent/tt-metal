@@ -38,38 +38,36 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_out(cb_id_out0);
 
-    bool one_time_profile = true;
+    // Tiles arrive from compute in row-major order per row-group
+    // (one M-subblock's rows × full output width).
+    const uint32_t out_row_width = out_subblock_w * out_num_subblocks_w;
+    const uint32_t row_group_tiles = out_subblock_h * out_row_width;
+
     for (uint32_t b = 0; b < batch; b++) {
-        uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
+        uint32_t out_tensor_row_group_start = out_tensor_start_tile_id;
         for (uint32_t sbh = 0; sbh < out_num_subblocks_h; sbh++) {
-            uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
-            for (uint32_t sbw = 0; sbw < out_num_subblocks_w; sbw++) {
-                uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
+            cb_out.wait_front(row_group_tiles);
+            uint32_t out_read_offset = 0;
 
-                cb_out.wait_front(out_subblock_tile_count);
-                uint32_t out_read_offset = 0;
-
-                for (uint32_t h = 0; h < out_subblock_h; h++) {
-                    uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
-                    for (uint32_t w = 0; w < out_subblock_w; w++) {
-                        noc.async_write(
-                            experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
-                            s,
-                            single_tile_size_bytes,
-                            {.offset_bytes = out_read_offset},
-                            {.page_id = out_tensor_tile_id});
-                        out_read_offset += single_tile_size_bytes;
-
-                        out_tensor_tile_id += out_tensor_stride_w;
-                    }
-                    out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
+            uint32_t out_tensor_row_start = out_tensor_row_group_start;
+            for (uint32_t h = 0; h < out_subblock_h; h++) {
+                uint32_t out_tensor_tile_id = out_tensor_row_start;
+                for (uint32_t w = 0; w < out_row_width; w++) {
+                    noc.async_write(
+                        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                        s,
+                        single_tile_size_bytes,
+                        {.offset_bytes = out_read_offset},
+                        {.page_id = out_tensor_tile_id});
+                    out_read_offset += single_tile_size_bytes;
+                    out_tensor_tile_id += out_tensor_stride_w;
                 }
-
-                noc.async_write_barrier();
-                cb_out.pop_front(out_subblock_tile_count);
-                out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
+                out_tensor_row_start += out_tensor_stride_h;
             }
-            out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
+
+            noc.async_write_barrier();
+            cb_out.pop_front(row_group_tiles);
+            out_tensor_row_group_start += out_tensor_next_subblock_stride_h;
         }
         out_tensor_start_tile_id += MtNt;
     }
