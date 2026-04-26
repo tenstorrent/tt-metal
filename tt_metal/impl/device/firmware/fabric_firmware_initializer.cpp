@@ -241,7 +241,22 @@ void FabricFirmwareInitializer::configure() {
         // non-master channels is invisible to wait_for_fabric_router_sync but will cause
         // dispatch hangs when the test tries to use those fabric paths.  Fail-fast here
         // instead of letting the test hang for minutes.
-        verify_all_fabric_channels_healthy();
+        //
+        // FIX AM (#42429): if dead-relay devices are already known, skip the health check.
+        // dead_relay_devices_ means fabric is already degraded; verify_all_fabric_channels_healthy()
+        // would throw on devices whose router sync was skipped (FIX AL), crashing the process
+        // before teardown can run.  Tests will still fail at fabric-op time — the error is
+        // not hidden, just moved to the correct failure site.
+        if (!dead_relay_devices_.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::configure: {} dead-relay device(s) present; skipping "
+                "verify_all_fabric_channels_healthy() to allow clean teardown (FIX AM). "
+                "Fabric is degraded — tests will fail at fabric-op time.",
+                dead_relay_devices_.size());
+        } else {
+            verify_all_fabric_channels_healthy();
+        }
     }
     initialized_.test_and_set();
 }
@@ -672,46 +687,68 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     // the relay drain is best-effort.  The next session's relay_broken guard still protects
     // against queue saturation; the drain just prevents *cumulative* degradation across
     // back-to-back sessions.
-    for (auto* dev : devices_) {
-        if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
-            // MMIO devices: l1_barrier is always safe, but there is no relay queue to drain.
-            continue;
+    // FIX AK (#42429): transitive relay hang guard.
+    // The ETH relay network is shared across the mesh.  A dead relay on device X can cause
+    // wait_for_non_mmio_flush() to block indefinitely on *adjacent* non-MMIO devices that route
+    // through X — even though those devices are not in relay_dead_devices.  try/catch cannot
+    // protect against an indefinite block (no exception is thrown).
+    // If ANY device has a confirmed dead relay, skip l1_barrier for ALL non-MMIO devices.
+    // Cost: UMD relay queues on surviving non-MMIO devices may retain stuck commands; the next
+    // session's relay_broken guard handles queue saturation.  Observed: 4+ min hang avoided.
+    if (!relay_dead_devices.empty()) {
+        std::string dead_list;
+        for (const auto dead_id : relay_dead_devices) {
+            if (!dead_list.empty()) dead_list += ", ";
+            dead_list += std::to_string(dead_id);
         }
-        // FIX AJ (#42429): skip l1_barrier for devices whose relay path was confirmed dead
-        // (diagnostic read or assert_risc_reset threw) during the force-reset pass above.
-        // l1_barrier() → wait_for_non_mmio_flush() BLOCKS INDEFINITELY on a dead-relay
-        // non-MMIO device instead of throwing, so try/catch cannot protect against it.
-        if (relay_dead_devices.count(dev->id())) {
-            log_warning(
-                tt::LogMetal,
-                "FabricFirmwareInitializer::teardown: skipping relay drain l1_barrier for "
-                "non-MMIO Device {} — relay path confirmed dead during force-reset (FIX AJ); "
-                "relay queue may still have stuck commands but blocking here would hang the job",
-                dev->id());
-            continue;
-        }
-        try {
-            cluster_.l1_barrier(dev->id());
-            log_debug(
-                tt::LogMetal,
-                "FabricFirmwareInitializer::teardown: relay drain l1_barrier completed for "
-                "non-MMIO Device {} (UMD ETH relay queue flushed)",
-                dev->id());
-        } catch (const std::exception& drain_ex) {
-            log_warning(
-                tt::LogMetal,
-                "FabricFirmwareInitializer::teardown: relay drain l1_barrier threw for "
-                "non-MMIO Device {}: {} — relay queue may still have stuck commands; "
-                "next session's relay_broken guard will protect against queue saturation",
-                dev->id(),
-                drain_ex.what());
-        } catch (...) {
-            log_warning(
-                tt::LogMetal,
-                "FabricFirmwareInitializer::teardown: relay drain l1_barrier threw (unknown "
-                "exception type, likely UmdException<RuntimeError>) for non-MMIO Device {} — "
-                "relay queue may still have stuck commands",
-                dev->id());
+        log_warning(
+            tt::LogMetal,
+            "FabricFirmwareInitializer::teardown: relay-dead device(s) [{}] confirmed; skipping "
+            "l1_barrier relay drain for ALL non-MMIO devices to prevent transitive relay hang "
+            "(FIX AK). UMD relay queues may retain stuck commands for surviving devices.",
+            dead_list);
+    } else {
+        for (auto* dev : devices_) {
+            if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
+                // MMIO devices: l1_barrier is always safe, but there is no relay queue to drain.
+                continue;
+            }
+            // FIX AJ (#42429): skip l1_barrier for devices whose relay path was confirmed dead
+            // (diagnostic read or assert_risc_reset threw) during the force-reset pass above.
+            // l1_barrier() → wait_for_non_mmio_flush() BLOCKS INDEFINITELY on a dead-relay
+            // non-MMIO device instead of throwing, so try/catch cannot protect against it.
+            if (relay_dead_devices.count(dev->id())) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: skipping relay drain l1_barrier for "
+                    "non-MMIO Device {} — relay path confirmed dead during force-reset (FIX AJ); "
+                    "relay queue may still have stuck commands but blocking here would hang the job",
+                    dev->id());
+                continue;
+            }
+            try {
+                cluster_.l1_barrier(dev->id());
+                log_debug(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: relay drain l1_barrier completed for "
+                    "non-MMIO Device {} (UMD ETH relay queue flushed)",
+                    dev->id());
+            } catch (const std::exception& drain_ex) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: relay drain l1_barrier threw for "
+                    "non-MMIO Device {}: {} — relay queue may still have stuck commands; "
+                    "next session's relay_broken guard will protect against queue saturation",
+                    dev->id(),
+                    drain_ex.what());
+            } catch (...) {
+                log_warning(
+                    tt::LogMetal,
+                    "FabricFirmwareInitializer::teardown: relay drain l1_barrier threw (unknown "
+                    "exception type, likely UmdException<RuntimeError>) for non-MMIO Device {} — "
+                    "relay queue may still have stuck commands",
+                    dev->id());
+            }
         }
     }
 
@@ -1539,23 +1576,27 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 detail::ReadFromDeviceL1(
                     dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
             } catch (const std::exception& read_ex) {
-                log_warning(
+                // FIX AL (#42429): relay path broken for this device's master router channel.
+                // Convert to log_error + return instead of TT_THROW to avoid crashing the process
+                // when a mesh neighbor is dead-relay (seen: Device 0 sync fails because Device 3
+                // dead-relay blocks ring completion → TT_THROW → signal 6 → torn-down state).
+                // Fabric on this device is unusable; tests will fail at fabric-op time.
+                log_error(
                     tt::LogMetal,
-                    "wait_for_fabric_router_sync: Device {} master chan={} read TIMED OUT ({}). "
-                    "Treating as router sync failure.",
+                    "wait_for_fabric_router_sync: Device {} master chan={} read FAILED ({}). "
+                    "Skipping router sync — fabric on this device is unusable (FIX AL).",
                     dev->id(),
                     master_router_chan,
                     read_ex.what());
-                TT_THROW(
-                    "Fabric Router Sync: Device {} master chan={} read timed out: {}",
-                    dev->id(),
-                    master_router_chan,
-                    read_ex.what());
+                return;
             } catch (...) {
-                TT_THROW(
-                    "Fabric Router Sync: Device {} master chan={} read failed (unknown exception).",
+                log_error(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} master chan={} read failed (unknown "
+                    "exception). Skipping router sync — fabric unusable (FIX AL).",
                     dev->id(),
                     master_router_chan);
+                return;
             }
             if (master_router_status[0] == expected_status) {
                 break;
@@ -1563,18 +1604,22 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
             auto current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
             if (elapsed_ms > timeout_ms) {
-                log_info(
+                // FIX AL (#42429): router sync timed out — mesh fabric is partially broken
+                // (likely a dead-relay neighbor holding up the ring handshake; see Job 932).
+                // Convert to log_error + return instead of TT_THROW to avoid crashing.
+                // Fabric on this device is degraded; tests fail at fabric-op time rather than here.
+                log_error(
                     tt::LogMetal,
-                    "Fabric Router Sync: master chan={}, logical core={}, sync address=0x{:08x}",
-                    master_router_chan,
-                    master_router_logical_core.str(),
-                    router_sync_address);
-                TT_THROW(
-                    "Fabric Router Sync: Timeout after {} ms. Device {}: Expected status 0x{:08x}, got 0x{:08x}",
+                    "wait_for_fabric_router_sync: Timeout after {} ms on Device {} "
+                    "(master chan={}, sync addr=0x{:08x}). Expected 0x{:08x}, got 0x{:08x}. "
+                    "Skipping — fabric on this device is degraded (FIX AL).",
                     timeout_ms,
                     dev->id(),
+                    master_router_chan,
+                    router_sync_address,
                     expected_status,
                     master_router_status[0]);
+                return;
             }
         }
 

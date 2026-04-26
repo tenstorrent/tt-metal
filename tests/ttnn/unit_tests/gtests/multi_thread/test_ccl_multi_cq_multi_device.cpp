@@ -161,10 +161,26 @@ protected:
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(chip_id);
             const auto active_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
             for (const auto& [chan_id, _direction] : active_eth_channels) {
+                // Resolve LOGICAL coordinate for this channel.  Some high-numbered channel IDs
+                // (e.g. 14, 15 on Wormhole devices 1/3) have no LOGICAL mapping in the SoC
+                // descriptor — get_eth_core_for_channel throws "No core type found for system
+                // TRANSLATED".  This is expected and benign; skip silently.
+                CoreCoord eth_logical_core;
+                try {
+                    eth_logical_core =
+                        cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+                } catch (const std::exception&) {
+                    log_debug(
+                        tt::LogMetal,
+                        "[fabric_eth_health:{}] Device {} chan {} skipped: no LOGICAL coordinate "
+                        "(expected for some high-numbered ETH channels)",
+                        label,
+                        chip_id,
+                        chan_id);
+                    continue;
+                }
                 uint32_t status_word = 0;
                 try {
-                    const auto eth_logical_core =
-                        cluster.get_soc_desc(chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
                     const auto status =
                         cluster.read_core<uint32_t>(chip_id, eth_logical_core, edm_status_address, sizeof(uint32_t));
                     status_word = status.empty() ? 0u : status[0];
