@@ -469,6 +469,47 @@ def test_cpu_traceable_decode_subpath_can_report_dynamic_rope_position_probe(tmp
     )
 
 
+def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=3,
+        seq_len=4,
+        max_bytes=24 * 1024,
+        routed_topk_prefix=1,
+        decode_steps=2,
+        cpu_only=True,
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+        rope_position_api=TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+    )
+
+    assert result["passed"] is True
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    assert result["cache_update"]["dynamic_update_index_in_trace"] is True
+    assert result["rope_position_dynamic"] is True
+    assert result["cache_read_window_dynamic"] is True
+    assert result["dynamic_cache_read_current_position"] is True
+    assert result["position_dependent_decode_inventory"]["dynamic_cache_read_current_position"]["status"] == "used"
+    assert result["multi_position_replay"]["current_position_dynamic"] is True
+    assert result["traceability_flags"]["dynamic_cache_read_current_position_in_trace"] is True
+    assert result["attention_path"]["softmax"]["paged_sdpa_decode_in_trace"] is True
+    assert result["attention_path"]["softmax"]["fixed_window_softmax_in_trace"] is False
+    assert result["attention_path"]["qk_scores"]["inside_paged_sdpa_kernel"] is True
+    assert result["attention_path_by_step"][0]["cache_window"]["rows"] == [0, 5]
+    assert result["attention_path_by_step"][1]["cache_window"]["rows"] == [0, 6]
+    assert result["decode_steps_detail"][1]["cache_rows_read"]["count"] == 6
+    assert result["decode_steps_detail"][1]["cache_pages_read"]["logical_pages"] == [0]
+    assert result["reference"]["paged_k_cache"]["shape"] == [8, 1, 32, 8]
+    assert result["reference"]["paged_v_cache"]["shape"] == [8, 1, 32, 8]
+    assert result["reference"]["cur_pos_tensor"]["shape"] == [4]
+    assert (
+        "ttnn.transformer.paged_scaled_dot_product_attention_decode(q,k_cache,v_cache,page_table,cur_pos_tensor)"
+        in result["traceable_decode_scope"]["inside_trace"]
+    )
+
+
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
     snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
 
@@ -758,6 +799,56 @@ def test_traceable_decode_subpath_gated_galaxy_dynamic_rope_position_single_capt
     for step in result["accuracy_by_step"]:
         assert step["accuracy"]["rope_cos"]["passed"] is True
         assert step["accuracy"]["rope_sin"]["passed"] is True
+        assert step["accuracy"]["attention_output"]["passed"] is True
+        assert step["accuracy"]["combined_ffn_output"]["passed"] is True
+        assert step["accuracy"]["residual_output"]["passed"] is True
+
+
+def test_traceable_decode_subpath_gated_galaxy_paged_sdpa_read_single_capture_replay() -> None:
+    if os.environ.get("DSV4_FLASH_TRACEABLE_DECODE", "0") != "1":
+        pytest.skip("Set DSV4_FLASH_TRACEABLE_DECODE=1 to run the Galaxy paged SDPA read replay smoke")
+
+    snapshot = Path(os.environ.get("DSV4_FLASH_REAL_SNAPSHOT_DIR", str(REAL_SNAPSHOT_DIR)))
+    if not snapshot.is_dir():
+        pytest.fail(f"Real DeepSeek V4 Flash snapshot is missing: {snapshot}")
+
+    decode_steps = int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_STEPS", "2"))
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_LAYER", "3")),
+        seq_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_SEQ_LEN", "32")),
+        cache_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_CACHE_LEN", str(96))),
+        decode_steps=decode_steps,
+        device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
+        trace_region_size=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_TRACE_REGION_SIZE", str(64 * 1024 * 1024))),
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
+        rope_position_api=TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+    )
+
+    assert result["passed"], json.dumps(result["accuracy_by_step"], indent=2, sort_keys=True)
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    assert result["one_trace_capture_replayed_across_positions"] is (decode_steps > 1)
+    assert result["trace_capture"]["capture_count"] == 1
+    assert result["trace_capture"]["cache_update_index_dynamic"] is True
+    assert result["trace_capture"]["rope_position_dynamic"] is True
+    assert result["trace_capture"]["dynamic_cache_read_current_position"] is True
+    assert result["trace_capture"]["cur_pos_tensor_dynamic"] is True
+    assert result["cache_read_window_dynamic"] is True
+    assert result["dynamic_cache_read_current_position"] is True
+    assert result["position_dependent_decode_inventory"]["dynamic_cache_read_current_position"]["status"] == "used"
+    assert "paged_sdpa_cur_pos_host_to_device" in result["host_boundaries_outside_trace"]
+    assert "ttnn.slice(kv_cache_fixed_window)" not in result["trace_capture"]["traced_operations"]
+    assert (
+        "ttnn.transformer.paged_scaled_dot_product_attention_decode(q,k_cache,v_cache,page_table,cur_pos_tensor)"
+        in result["trace_capture"]["traced_operations"]
+    )
+    assert len(result["cache_rows_pages_read_per_step"]) == decode_steps
+    assert result["cache_rows_pages_read_per_step"][0]["rows"]["count"] == result["positions_used"][0] + 1
+    assert len(result["accuracy_by_step"]) == decode_steps
+    for step in result["accuracy_by_step"]:
+        assert step["accuracy"]["paged_k_cache"]["passed"] is True
+        assert step["accuracy"]["paged_v_cache"]["passed"] is True
         assert step["accuracy"]["attention_output"]["passed"] is True
         assert step["accuracy"]["combined_ffn_output"]["passed"] is True
         assert step["accuracy"]["residual_output"]["passed"] is True
