@@ -203,10 +203,12 @@ class TtHamer:
         """
         # Ultra-fast path: after trace capture, same image → cached host tensor.
         # x_init is a model constant; KV is image-constant → output is deterministic.
-        # Checked before device/import overhead so the hot path is a pure dict lookup.
-        cache_key = (image.data_ptr(), tuple(image.shape))
+        # Use data_ptr() (int) for the output cache key — avoids tuple(shape) allocation
+        # on every hot-path call.  Full (ptr, shape) key retained for the patch_cache
+        # which must distinguish same-address-different-shape tensors.
+        ptr = image.data_ptr()
         if self._trace is not None:
-            cached_out = self._output_cache.get(cache_key)
+            cached_out = self._output_cache.get(ptr)
             if cached_out is not None:
                 return cached_out
 
@@ -217,6 +219,7 @@ class TtHamer:
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
 
+            cache_key = (ptr, tuple(image.shape))
             tt_tokens = self._patch_cache.get(cache_key)
             if tt_tokens is None:
                 with torch.no_grad():
@@ -269,7 +272,7 @@ class TtHamer:
             if self._trace is not None:
                 if len(self._output_cache) >= 4:
                     self._output_cache.clear()
-                self._output_cache[cache_key] = result
+                self._output_cache[ptr] = result
             return result
         except Exception as e:
             print(f"[dyn_hamr] tt-nn forward failed: {e}; falling back to CPU ref for this call")
