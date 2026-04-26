@@ -77,4 +77,11 @@ constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DE
 constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
 static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
+enum class BinaryOp : std::uint8_t
+{
+    ADD = 0,
+    SUB = 1,
+    MUL = 2,
+};
+
 } // namespace ckernel
