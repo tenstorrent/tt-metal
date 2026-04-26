@@ -107,8 +107,13 @@ public:
 
     void notify_kernel_start() { next_stall_detection_timestamp = get_timestamp() + cycles_for_stall_detection; }
 
-    void execute_stall_detection() {
-        if (enabled && get_timestamp() >= next_stall_detection_timestamp) {
+    void execute() {
+        if (!enabled) {
+            return;
+        }
+
+        // Execute stall detection if needed
+        if (get_timestamp() >= next_stall_detection_timestamp) {
             read_rw_pointers();
             find_noc_locations_to_process<true>();
             process_noc_locations();
@@ -116,9 +121,8 @@ public:
             // Update timestamp for next stall detection
             next_stall_detection_timestamp = get_timestamp() + cycles_for_stall_detection;
         }
-    }
 
-    void execute_full_dispatch() {
+        // Execute full dispatch if needed
         uint64_t current_timestamp = get_timestamp();
         if (enabled && current_timestamp >= next_full_dispatch_timestamp) {
             // Check if we should execute fetch read/write pointers or we can reuse what stall detection read recently.
