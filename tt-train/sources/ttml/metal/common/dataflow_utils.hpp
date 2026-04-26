@@ -112,6 +112,18 @@ void generate_bcast_scalar_bfloat16(const uint32_t cb_id, const uint32_t packed_
     cb_push_back(cb_id, onetile);
 }
 
+// Zero-fill a tile in L1 using async NOC reads from the hardware zero-memory region.
+inline void fill_tile_zeros(uint32_t write_addr, uint32_t tile_bytes) {
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t bytes_left = tile_bytes;
+    while (bytes_left > 0) {
+        uint32_t read_size = (bytes_left > MEM_ZEROS_SIZE) ? MEM_ZEROS_SIZE : bytes_left;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes_left -= read_size;
+    }
+}
+
 // Zero-fills already-reserved tile slots in a CB (e.g. tail padding so compute always sees block_size tiles).
 inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, uint32_t num_slots, uint32_t tile_size) {
     if (num_slots == 0) {
