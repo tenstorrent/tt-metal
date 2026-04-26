@@ -68,6 +68,7 @@ SEQ_LEN_25K = 25 * 1024
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
+@pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -145,6 +146,7 @@ def test_prefill_transformer(
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
+    tokenizer,
     request,
 ):
     torch.manual_seed(42)
@@ -189,8 +191,7 @@ def test_prefill_transformer(
     orig_num_routed_experts = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     DeepSeekV3Config.NUM_ROUTED_EXPERTS = n_routed_experts
 
-    # Extract padding_side from tokenizer (single source of truth from conftest fixture)
-    padding_side = request.getfixturevalue("tokenizer").padding_side
+    padding_side = tokenizer.padding_side
 
     # --- Cache-aware loading strategy ---
     profiler.start("cache_check")
@@ -239,7 +240,7 @@ def test_prefill_transformer(
         attention_mask = torch.ones(1, isl_total, dtype=torch.int64)
     else:
         profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
+        tok = tokenizer
         if input_source == "json_prompts":
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
@@ -557,10 +558,7 @@ def test_prefill_transformer(
         logger.info(f"{'='*50}")
 
         # Log first token info (returned value is for first temperature in list)
-        try:
-            tok = request.getfixturevalue("tokenizer")
-        except Exception:
-            tok = None
+        tok = tokenizer
 
         # Decode token to string
         token_text = tok.decode([first_token_id]) if tok else "N/A"
