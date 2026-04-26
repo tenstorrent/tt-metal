@@ -84,8 +84,11 @@ void kernel_main() {
     constexpr uint32_t expert_region_offsets_page_size = get_compile_time_arg_val(36);
     constexpr uint32_t aligned_expert_region_offsets_page_size = get_compile_time_arg_val(37);
 
-    // TensorAccessorArgs for all 5 tensors (starting at index 38)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<38>();
+    // Index 38 (max_dispatch_buffer_token_size) is consumed by reader_combine only;
+    // writer_combine skips over it and continues with TensorAccessorArgs at index 39.
+
+    // TensorAccessorArgs for all 5 tensors (starting at index 39)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<39>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =

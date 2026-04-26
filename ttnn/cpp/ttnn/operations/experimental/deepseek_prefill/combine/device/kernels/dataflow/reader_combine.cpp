@@ -85,8 +85,11 @@ void kernel_main() {
     constexpr uint32_t expert_region_offsets_page_size = get_compile_time_arg_val(36);
     constexpr uint32_t aligned_expert_region_offsets_page_size = get_compile_time_arg_val(37);
 
-    // TensorAccessorArgs for all 5 tensors (starting at index 38)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<38>();
+    // Dispatch buffer total per-chip capacity (index 38) — used as overflow guard.
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(38);
+
+    // TensorAccessorArgs for all 5 tensors (starting at index 39)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<39>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -297,6 +300,14 @@ void kernel_main() {
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
         uint32_t start_page = expert_region_offsets_l1[local_expert];
         uint32_t expert_tokens = experts_tok_counter_l1[local_expert];
+        // Clamp to the dispatch buffer capacity to mirror reader_dispatch's overflow guard:
+        // dispatch silently drops tokens beyond max_dispatch_buffer_token_size, so reading
+        // past it would pull stale/zero-init data and risk out-of-bounds DRAM access.
+        if (start_page >= max_dispatch_buffer_token_size) {
+            expert_tokens = 0;
+        } else if (start_page + expert_tokens > max_dispatch_buffer_token_size) {
+            expert_tokens = max_dispatch_buffer_token_size - start_page;
+        }
         uint32_t end_page = start_page + expert_tokens;
         uint32_t num_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
