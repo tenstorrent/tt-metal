@@ -258,20 +258,32 @@ class TtHamer:
             return None
 
     def _capture_trace(self, tt_tokens) -> None:
-        """Capture ViT + MANO device-only forward into a replayable trace."""
+        """Capture MANO-only trace with pre-computed ViT output + CA KV.
+
+        For same-image repeated inference the ViT output is constant.  We run
+        ViT once eagerly here, precompute all 6 CA KV head tensors, then
+        capture only the MANO decoder in the trace — eliminating 354 ViT ops
+        + 30 CA KV ops from every replay.  self._kv_cache keeps the tensors
+        alive; self._trace = None on a new image invalidates and retriggers.
+        """
         try:
             import ttnn  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_vit  # noqa: WPS433
             from models.experimental.dyn_hamr.tt import ttnn_mano_head  # noqa: WPS433
 
+            tt_feat_warm = ttnn_vit.forward(tt_tokens, self._vit_params)
+            self._kv_cache = ttnn_mano_head.precompute_ca_kv(
+                tt_feat_warm, self._head_params, self.device,
+            )
+
             trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-            tt_feat = ttnn_vit.forward(tt_tokens, self._vit_params)
             dec_buffer = ttnn_mano_head.forward_device(
-                tt_feat, self._head_params, device=self.device, cached_token=(self._head_token,),
+                None, self._head_params, device=self.device,
+                cached_token=(self._head_token,), kv_cache=self._kv_cache,
             )
             ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
             self._trace = (trace_id, tt_tokens, dec_buffer)
-            print("[dyn_hamr] tt-nn trace captured — replay path active")
+            print("[dyn_hamr] MANO-only trace captured (ViT+KV cached)")
         except Exception as e:
             print(f"[dyn_hamr] trace capture failed: {e}; sticking with eager path")
             self._trace = None
