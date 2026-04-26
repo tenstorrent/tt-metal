@@ -31,7 +31,15 @@ void kernel_main() {
     bool first = true;
     cb_reserve_back(cb_id_working, 1);
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
+        for (uint32_t offset = 0; offset < Tile_size_bytes; offset += MEM_ZEROS_SIZE) {
+            uint32_t size = (offset + MEM_ZEROS_SIZE <= Tile_size_bytes) ? MEM_ZEROS_SIZE : (Tile_size_bytes - offset);
+            noc_async_read(zeros_noc_addr, working_write_addr + offset, size);
+        }
+
+        noc_async_read_barrier();
+
         cb_wait_front(cb_id_mapping, 1);
         const uint32_t map_addr = get_read_ptr(cb_id_mapping);
         auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_addr);
