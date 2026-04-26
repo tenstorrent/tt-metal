@@ -2036,7 +2036,8 @@ TEST(FabricFirmwareInitializer, EdmStatusEnumCountMatchesSwitchCoverage) {
     };
     constexpr size_t kExpectedCount = 15;
     static_assert(std::size(kAllStatuses) == kExpectedCount,
-        "Update kAllStatuses here AND is_known_edm_status() in fabric_firmware_initializer.cpp");
+        "Update kAllStatuses here, is_known_edm_status() in fabric_firmware_initializer.cpp, "
+        "AND edm_status_str() in device.cpp");
 
     // All values must be distinct and non-zero.
     std::set<uint32_t> seen;

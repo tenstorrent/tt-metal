@@ -45,6 +45,7 @@ namespace {
 //
 // UPDATE THIS FUNCTION WHEN ADDING NEW EDMStatus VALUES in
 // tt_metal/fabric/fabric_edm_packet_header.hpp (currently 15 enumerators).
+// ALSO UPDATE: edm_status_str() in device.cpp (parallel switch for log messages).
 static const char* edm_status_name(tt::tt_fabric::EDMStatus s) {
     switch (s) {
         case tt::tt_fabric::EDMStatus::STARTED:                     return "STARTED";

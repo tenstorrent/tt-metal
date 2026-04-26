@@ -384,6 +384,12 @@ void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_qu
 // Defined once here and shared by configure_fabric(), quiesce_and_restart_fabric_workers(),
 // phase5b_erisc_health_check(), and wait_for_fabric_workers_ready() to avoid duplication.
 namespace {
+// Maps a raw edm_status uint32_t to a human-readable name for log messages.
+// MAINTENANCE: keep this switch in sync with edm_status_name() in
+// fabric_firmware_initializer.cpp.  The compile-time test
+// FabricFirmwareInitializer.EdmStatusEnumCountMatchesSwitchCoverage
+// (test_async_teardown_race.cpp) catches new EDMStatus enumerators but cannot
+// reach this file-scope static.  If you add a case here, add it there too.
 static const char* edm_status_str(uint32_t v) {
     switch (static_cast<tt::tt_fabric::EDMStatus>(v)) {
         case tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED:        return "INITIALIZATION_STARTED";
@@ -1698,7 +1704,7 @@ void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
     // Skip for MMIO devices (their ETH channels are directly PCIe-accessible and
     // always fast; no ordering concern with non-MMIO peers in Pass 1c).
     // Skip for non-MMIO devices with a broken relay path (launch was skipped too).
-    if (this->is_mmio_capable() || (fabric_relay_path_broken_ && !this->is_mmio_capable())) {
+    if (this->is_mmio_capable() || fabric_relay_path_broken_.load()) {
         log_info(
             tt::LogMetal,
             "wait_for_eth_cores_launched: Device {} — skipping (mmio={}, relay_broken={}).",
