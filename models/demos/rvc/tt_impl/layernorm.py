@@ -70,8 +70,6 @@ class LayerNorm:
         )
 
     def __call__(self, input: ttnn.Tensor) -> ttnn.Tensor:
-        self.weight = ttnn.to_memory_config(self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
         output = ttnn.layer_norm(
             input,
             epsilon=self.eps,

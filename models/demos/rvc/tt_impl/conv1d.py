@@ -5,10 +5,8 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from .utils import ConvConfiguration, _normalize_conv2d_activation, get_shard_strategy_for_conv, resolve_padding_1d
 
@@ -222,35 +220,7 @@ class Conv1d:
             slice_config=slice_config,
         )
         output = ttnn.reshape(output, (batch_size, output_height, output_width, self.configuration.out_channels))
-        # if output.shape[2] > output_length_from_input_length(input_length, self.configuration):
-        #     output = output[:, :, : output_length_from_input_length(input_length, self.configuration), :]
         return ttnn.squeeze(output, dim=1)
-
-    def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
-        # Compare TT Conv1d output against torch.nn.functional.conv1d reference.
-        torch_input = ttnn.to_torch(ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)).to(torch.float32)
-        if not hasattr(self, "torch_weight"):
-            raise ValueError("Conv1d torch reference weight is not initialized. Call load_state_dict first.")
-        torch_weight = self.torch_weight
-        torch_bias = self.torch_bias
-
-        # TT interface uses NLC, while torch conv1d expects NCL.
-        torch_input_ncl = torch_input.permute(0, 2, 1).contiguous()
-        pad_left, pad_right = self.configuration.padding
-        if pad_left != 0 or pad_right != 0:
-            torch_input_ncl = F.pad(torch_input_ncl, (pad_left, pad_right))
-        torch_ref = F.conv1d(
-            torch_input_ncl,
-            torch_weight,
-            bias=torch_bias,
-            stride=self.configuration.stride,
-            padding=0,
-            dilation=self.configuration.dilation,
-            groups=self.configuration.groups,
-        )
-        torch_ref_nlc = torch_ref.permute(0, 2, 1).contiguous()
-        tt_output_torch = ttnn.to_torch(ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)).to(torch.float32)
-        assert_with_pcc(torch_ref_nlc, tt_output_torch, pcc=0.99)
 
     def deallocate(self) -> None:
         if self.weight is not None:
