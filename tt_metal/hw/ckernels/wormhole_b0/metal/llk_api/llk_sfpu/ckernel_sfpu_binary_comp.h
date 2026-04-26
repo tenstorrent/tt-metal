@@ -247,8 +247,8 @@ inline void calculate_binary_comp_uint16(
         // Extract sign bit: logical right shift by 31 -> 1 if negative (A < B), 0 otherwise
         TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
         // Store the result in the destination register
-        TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_3, dst_index_out * dst_tile_size);
-        sfpi::dst_reg++;
+        TT_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_2, dst_index_out * dst_tile_size);
+        // sfpi::dst_reg++;
     }
 }
 }  //  namespace ckernel::sfpu
