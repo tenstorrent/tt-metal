@@ -497,15 +497,50 @@ def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path:
     assert result["attention_path"]["softmax"]["paged_sdpa_decode_in_trace"] is True
     assert result["attention_path"]["softmax"]["fixed_window_softmax_in_trace"] is False
     assert result["attention_path"]["qk_scores"]["inside_paged_sdpa_kernel"] is True
+    assert result["attention_path"]["kv_source"]["key_source"] == "paged_deepseek_v4_cache_ready_kv_projection_cache"
+    assert result["attention_path"]["kv_source"]["v_channel_kind"] == "fused_cache_ready_kv_reuse"
+    assert result["attention_path"]["kv_source"]["true_separate_v_channel_in_trace"] is False
+    assert result["attention_path"]["rope"]["kv_cache_ready_rope_rotation_before_cache_write"] is True
+    assert result["attention_path"]["rope"]["attention_output_inverse_rope_in_trace"] is True
+    assert result["traceability_flags"]["kv_cache_ready_rope_in_trace"] is True
+    assert result["traceability_flags"]["attention_output_inverse_rope_in_trace"] is True
+    assert result["traceability_flags"]["compressed_kv_cache_in_trace"] is False
+    assert result["traceability_flags"]["sparse_indexer_in_trace"] is False
+    assert result["traceability_flags"]["attention_sink_in_trace"] is False
+    assert (
+        result["deepseek_attention_reference_inventory"]["v_channel_layout"][
+            "true_separate_v_projection_in_hf_reference"
+        ]
+        is False
+    )
+    assert result["deepseek_attention_reference_inventory"]["v_channel_layout"]["post_attention_inverse_rope"] is True
+    assert result["deepseek_attention_reference_inventory"]["compressed_kv_layout"]["trace_status"] == "not_integrated"
+    assert result["deepseek_attention_reference_inventory"]["attention_sink_layout"]["trace_status"] == "not_integrated"
     assert result["attention_path_by_step"][0]["cache_window"]["rows"] == [0, 5]
     assert result["attention_path_by_step"][1]["cache_window"]["rows"] == [0, 6]
     assert result["decode_steps_detail"][1]["cache_rows_read"]["count"] == 6
     assert result["decode_steps_detail"][1]["cache_pages_read"]["logical_pages"] == [0]
+    assert result["decode_steps_detail"][1]["kv_source"] == (
+        "paged_cache_ready_fused_kv_projection_reused_for_explicit_k_and_v"
+    )
+    assert result["decode_steps_detail"][1]["true_separate_v_channel"] is False
+    assert result["reference"]["kv_cache_ready"]["shape"] == [1, 1, 4, 8]
+    assert result["reference"]["k_cache_unpaged"]["shape"] == [4, 1, 64, 8]
+    assert result["reference"]["v_cache_unpaged"]["shape"] == [4, 1, 64, 8]
     assert result["reference"]["paged_k_cache"]["shape"] == [8, 1, 32, 8]
     assert result["reference"]["paged_v_cache"]["shape"] == [8, 1, 32, 8]
+    assert result["reference"]["paged_attention_output_heads_rotary"]["shape"] == [1, 4, 4, 8]
+    assert result["reference"]["attention_output_rope_unrotated"]["shape"] == [1, 4, 4, 4]
     assert result["reference"]["cur_pos_tensor"]["shape"] == [4]
     assert (
         "ttnn.transformer.paged_scaled_dot_product_attention_decode(q,k_cache,v_cache,page_table,cur_pos_tensor)"
+        in result["traceable_decode_scope"]["inside_trace"]
+    )
+    assert (
+        "ttnn.experimental.rotary_embedding_llama(kv_update_rope)" in result["traceable_decode_scope"]["inside_trace"]
+    )
+    assert (
+        "ttnn.experimental.rotary_embedding_llama(paged_sdpa_output_rope,inverse)"
         in result["traceable_decode_scope"]["inside_trace"]
     )
 
@@ -837,6 +872,12 @@ def test_traceable_decode_subpath_gated_galaxy_paged_sdpa_read_single_capture_re
     assert result["cache_read_window_dynamic"] is True
     assert result["dynamic_cache_read_current_position"] is True
     assert result["position_dependent_decode_inventory"]["dynamic_cache_read_current_position"]["status"] == "used"
+    assert result["attention_path"]["kv_source"]["v_channel_kind"] == "fused_cache_ready_kv_reuse"
+    assert result["attention_path"]["kv_source"]["true_separate_v_channel_in_trace"] is False
+    assert result["attention_path"]["rope"]["kv_cache_ready_rope_rotation_before_cache_write"] is True
+    assert result["attention_path"]["rope"]["attention_output_inverse_rope_in_trace"] is True
+    assert result["traceability_flags"]["kv_cache_ready_rope_in_trace"] is True
+    assert result["traceability_flags"]["attention_output_inverse_rope_in_trace"] is True
     assert "paged_sdpa_cur_pos_host_to_device" in result["host_boundaries_outside_trace"]
     assert "ttnn.slice(kv_cache_fixed_window)" not in result["trace_capture"]["traced_operations"]
     assert (
