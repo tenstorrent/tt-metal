@@ -1038,14 +1038,23 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 detail::ReadFromDeviceL1(this, eth_logical_core, router_sync_addr, 4, status_buf, CoreType::ETH);
             } catch (const std::exception& e) {
                 // Non-MMIO relay read failed (e.g. UMD relay ERISC not running relay firmware
-                // after Phase 3 loaded fabric firmware on the MMIO device's channels).  We cannot
-                // safely send TERMINATE because WriteToDeviceL1 via the relay can hang
-                // indefinitely with no write timeout.  Skip this channel — configure_fabric_cores()
-                // in Phase 3 overwrites L1 regardless of ERISC state.
+                // after Phase 3 loaded fabric firmware on the MMIO device's channels, OR the
+                // relay ETH channel was force-reset in Phase 2.5 because it was stuck in handshake).
+                // We cannot safely send TERMINATE because WriteToDeviceL1 via the relay can hang
+                // indefinitely with no write timeout.  Skip this channel.
+                //
+                // FIX AN (#42429): Set fabric_relay_path_broken_ = true so that Phase 3's FIX Q
+                // guard skips configure_fabric_cores() / WriteRuntimeArgsToDevice / l1_barrier /
+                // write_launch_msg_to_core — all of which also go through the relay and would throw.
+                // Without this, Phase 3 throws in TearDown() → GoogleTest marks the (SKIPPED) test
+                // as FAILED.  The underlying scenario: Phase 2.5 force-reset Device N chan 0 (the
+                // relay ETH channel to the MMIO device), which broke the relay mid-quiesce.
+                fabric_relay_path_broken_ = true;
                 log_warning(
                     tt::LogMetal,
                     "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                    "L1 read failed (relay not ready?) — skipping TERMINATE: {}",
+                    "L1 read failed (relay not ready?) — skipping TERMINATE, setting "
+                    "fabric_relay_path_broken_=true to abort Phase 3/5 relay writes (FIX AN #42429): {}",
                     this->id(),
                     eth_chan_id,
                     e.what());
