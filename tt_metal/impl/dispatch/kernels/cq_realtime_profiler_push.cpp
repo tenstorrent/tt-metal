@@ -16,7 +16,8 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "api/debug/dprint.h"
 
-// Real-time profiler page size - must match host-side kRealtimeProfilerPageSize
+// Real-time profiler page size - must match host-side
+// RealtimeProfilerRuntimeSizes::page_size (which is also RT_PROFILER_ENTRY_SIZE).
 constexpr uint32_t realtime_profiler_page_size = RT_PROFILER_ENTRY_SIZE;  // 64 bytes
 
 // Compile-time defines set by host:

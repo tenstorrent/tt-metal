@@ -95,11 +95,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
 
 void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
     const SocketSenderSize sender_size;
-    uint32_t base_config_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
-
-    // Reserve space for optional L1 data buffer info (address + size), always present for uniform layout
-    uint32_t l1_info_size = tt::align(2 * sizeof(uint32_t), sender_size.l1_alignment);
-    uint32_t config_buffer_size = base_config_size + l1_info_size;
+    uint32_t config_buffer_size = sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
     auto shard_params = ShardSpecBuffer(
         CoreRangeSet(CoreRange(sender_core_.core_coord)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -117,29 +113,7 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     };
 
     config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
-}
-
-void D2HSocket::init_l1_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t requested_size) {
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    l1_data_buffer_size_ = tt::align(requested_size, l1_alignment);
-
-    auto shard_params = ShardSpecBuffer(
-        CoreRangeSet(CoreRange(sender_core_.core_coord)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    DeviceLocalBufferConfig l1_buffer_specs = {
-        .page_size = l1_data_buffer_size_,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = std::nullopt,
-        .sub_device_id = std::nullopt,
-    };
-
-    MeshBufferConfig l1_mesh_buffer_specs = ReplicatedBufferConfig{
-        .size = l1_data_buffer_size_,
-    };
-
-    l1_data_buffer_ = MeshBuffer::create(l1_mesh_buffer_specs, l1_buffer_specs, mesh_device.get());
-    l1_data_buffer_address_ = l1_data_buffer_->address();
+    config_buffer_address_ = config_buffer_->address();
 }
 
 void D2HSocket::write_socket_metadata(
@@ -147,8 +121,10 @@ void D2HSocket::write_socket_metadata(
     const PinnedBufferInfo& data_info,
     const PinnedBufferInfo& bytes_sent_info) {
     const SocketSenderSize sender_size;
+    const uint32_t total_config_bytes =
+        sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 
-    std::vector<uint32_t> config_data(config_buffer_->size() / sizeof(uint32_t), 0);
+    std::vector<uint32_t> config_data(total_config_bytes / sizeof(uint32_t), 0);
     config_data[0] = 0;                        // bytes_sent
     config_data[1] = 1;                        // num_downstreams
     config_data[2] = 0;                        // write_ptr (offset from downstream_fifo_addr)
@@ -162,15 +138,9 @@ void D2HSocket::write_socket_metadata(
     config_data[host_addr_offset + 1] = data_info.addr_hi;
     config_data[host_addr_offset + 2] = data_info.pcie_xy_enc;
 
-    // L1 data buffer info follows the downstream encoding (always present, 0 if unused)
-    uint32_t l1_info_offset =
-        (sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes) / sizeof(uint32_t);
-    config_data[l1_info_offset] = l1_data_buffer_address_;
-    config_data[l1_info_offset + 1] = l1_data_buffer_size_;
-
     IDevice* device = mesh_device->get_device(sender_core_.device_coord);
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, sender_core_.core_coord, config_buffer_->address(), config_data, CoreType::WORKER);
+        device, sender_core_.core_coord, config_buffer_address_, config_data, CoreType::WORKER);
 }
 
 void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id) {
@@ -207,15 +177,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 }
 
-D2HSocket::D2HSocket(
-    const std::shared_ptr<MeshDevice>& mesh_device,
-    const MeshCoreCoord& sender_core,
-    uint32_t fifo_size,
-    uint32_t l1_data_buffer_size) :
-    sender_core_(sender_core),
-    fifo_size_(fifo_size),
-    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
-    mesh_device_(mesh_device.get()) {
+void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
@@ -250,17 +212,46 @@ D2HSocket::D2HSocket(
         bytes_sent_info.addr_hi = 0;
     }
 
-    if (l1_data_buffer_size > 0) {
-        init_l1_data_buffer(mesh_device, l1_data_buffer_size);
-    }
-
-    init_config_buffer(mesh_device);
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
     init_sender_tlb(mesh_device);
 
-    config_buffer_address_ = config_buffer_->address();
     const SocketSenderSize sender_size;
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
+}
+
+D2HSocket::D2HSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
+    sender_core_(sender_core),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    mesh_device_(mesh_device.get()) {
+    init_config_buffer(mesh_device);
+    init_common(mesh_device);
+}
+
+D2HSocket::D2HSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& sender_core,
+    uint32_t fifo_size,
+    ExternalConfigBuffer external_config) :
+    sender_core_(sender_core),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    mesh_device_(mesh_device.get()) {
+    TT_FATAL(external_config.address != 0, "External config buffer address must be non-zero.");
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    TT_FATAL(
+        external_config.address % l1_alignment == 0,
+        "External config buffer address 0x{:x} must be L1-aligned ({} B).",
+        external_config.address,
+        l1_alignment);
+    config_buffer_address_ = external_config.address;
+    init_common(mesh_device);
+}
+
+uint32_t D2HSocket::required_config_buffer_size() {
+    const SocketSenderSize sender_size;
+    return sender_size.md_size_bytes + sender_size.ack_size_bytes + sender_size.enc_size_bytes;
 }
 
 D2HSocket::~D2HSocket() noexcept {

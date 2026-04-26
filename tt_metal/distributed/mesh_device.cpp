@@ -61,6 +61,7 @@
 
 #include "allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
@@ -160,13 +161,26 @@ MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
     TT_THROW("Failed to find offset for mesh device view");
 }
 
-// Real-time profiler ring buffer sizing. Must match RT_PROFILER_RING_CAPACITY /
-// RT_PROFILER_ENTRY_SIZE in tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp.
-// The ring lives in the user-allocatable L1 of the reserved profiler tensix core, so it has to
-// fit inside one L1 bank — `evaluate_realtime_profiler_eligibility` enforces that precondition.
-constexpr uint32_t kRingBufferCapacity = 4096;
-constexpr uint32_t kRingBufferEntrySize = 64;
-constexpr uint32_t kRingBufferSize = 64 + kRingBufferCapacity * kRingBufferEntrySize;  // 64 B header + entries
+// Real-time profiler runtime constants. Sizes that govern the on-device L1 layout
+// live in tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
+// (RealtimeProfilerCoreL1, RT_PROFILER_RING_CAPACITY, RT_PROFILER_ENTRY_SIZE) and
+// are reused here directly so the host and device agree on a single source of truth.
+struct RealtimeProfilerRuntimeSizes {
+    static constexpr uint32_t fifo_size = 4096;                    // 4KB pinned-host FIFO for D2H socket
+    static constexpr uint32_t page_size = RT_PROFILER_ENTRY_SIZE;  // host page size == ring entry size
+    static constexpr uint32_t core_l1_size = sizeof(RealtimeProfilerCoreL1);
+};
+
+// Compute the L1 carve-out addresses on the reserved RT-profiler tensix core for a given
+// RealtimeProfilerCoreL1 base. Anchors at dispatch_mem_map's UNRESERVED so we sit cleanly
+// after every dispatch carve-out, avoiding the user-space allocator entirely.
+inline RealtimeProfilerCoreL1Addrs compute_rt_profiler_core_l1_addrs(uint32_t base) {
+    return {
+        .base = base,
+        .ring_buffer = base + static_cast<uint32_t>(offsetof(RealtimeProfilerCoreL1, ring)),
+        .socket_config = base + static_cast<uint32_t>(offsetof(RealtimeProfilerCoreL1, socket_config)),
+    };
+}
 
 // Result of evaluating whether the real-time profiler can be brought up on a given device.
 struct RealtimeProfilerEligibility {
@@ -309,19 +323,22 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
-    // 7. L1 bank on the reserved profiler core must have room for the ring buffer.
-    //    The ring is allocated as a single-bank L1 buffer in init_realtime_profiler_socket;
-    //    when worker_l1_size has been shrunk below the ring size we'd OOM at allocation
-    //    time. Skip cleanly (with the size figures in the message) so the user knows
-    //    exactly how much L1 they need to free up to re-enable the profiler.
+    // 7. L1 bank on the reserved profiler core must have room for the full RT-profiler
+    //    L1 layout (ring buffer + D2H socket sender config). The layout is carved out
+    //    of dispatch L1 starting at the post-UNRESERVED boundary; the L1 bank size is a
+    //    conservative proxy for "user-addressable L1 past the dispatch carve-outs", so a
+    //    bank that doesn't fit the layout means the carve-out will run past L1 too.
+    //    Fixtures that intentionally shrink worker_l1_size to stress the kernel-config
+    //    region (e.g. the dispatch KernelSizeTestBigBuffer suite, which sets it to
+    //    64 KB) leave too little user-allocatable L1 for the layout; skip cleanly.
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const uint32_t ring_buffer_size_aligned = tt::align(kRingBufferSize, l1_alignment);
+    const uint32_t core_l1_size_aligned = tt::align(RealtimeProfilerRuntimeSizes::core_l1_size, l1_alignment);
     const DeviceAddr l1_bank_size = device->allocator()->get_bank_size(BufferType::L1);
-    if (l1_bank_size < ring_buffer_size_aligned) {
+    if (l1_bank_size < core_l1_size_aligned) {
         log_warning(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: not enough user-allocatable L1 on the "
-            "reserved profiler core ({}, {}) for the BRISC<->NCRISC ring buffer "
+            "reserved profiler core ({}, {}) for the RT-profiler L1 layout "
             "(need {} B, L1 bank size is {} B). This typically means worker_l1_size was set "
             "well below the default (e.g. a stress test pinning it at 64 KB to maximize the "
             "kernel-config region). Increase worker_l1_size by at least {} B (or leave it at "
@@ -329,9 +346,9 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
             device_id,
             core.x,
             core.y,
-            ring_buffer_size_aligned,
+            core_l1_size_aligned,
             l1_bank_size,
-            ring_buffer_size_aligned - l1_bank_size);
+            core_l1_size_aligned - l1_bank_size);
         return {};
     }
 
@@ -1108,15 +1125,14 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // buffer and exit.  Write the terminate flag again as a safety net,
     // then give the push kernel time to deliver the final PCIe page.
     for (auto& dev_state : realtime_profiler_devices_) {
-        if (dev_state.ring_buffer && dev_state.device) {
-            uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
-            constexpr uint32_t kTerminateOffsetBytes = 2 * sizeof(uint32_t);
+        if (dev_state.core_l1.ring_buffer != 0 && dev_state.device) {
+            const uint32_t terminate_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, terminate);
             std::vector<uint32_t> terminate_flag = {1};
             try {
                 tt::tt_metal::detail::WriteToDeviceL1(
                     dev_state.device,
                     dev_state.realtime_profiler_core,
-                    ring_buffer_addr + kTerminateOffsetBytes,
+                    terminate_addr,
                     terminate_flag,
                     CoreType::WORKER);
             } catch (const std::exception& e) {
@@ -1984,11 +2000,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         return;
     }
 
-    // Configuration for real-time profiler socket
-    // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
-    constexpr uint32_t kRealtimeProfilerFifoSize = 4096;  // 4KB FIFO for real-time profiler data
-    constexpr uint32_t kRealtimeProfilerPageSize = 64;    // 64 bytes per page
-
     // HAL offsets are the same for all devices (same arch)
     const auto& hal = MetalContext::instance().hal();
     const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
@@ -1996,9 +2007,28 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG; it is only reachable on the dispatch
     // cores and the reserved RT-profiler tensix core. Per-field offsets are still computed off
     // realtime_profiler_msg_t itself.
+    const auto& dispatch_mem_map = MetalContext::instance().dispatch_mem_map();
     const uint32_t realtime_profiler_base_addr =
-        MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+    // RealtimeProfilerCoreL1 (ring buffer + D2H socket sender config) lives directly past the
+    // dispatch carve-outs on the reserved profiler tensix. The user-space allocator never lands
+    // here because that core is excluded from the L1 bank table; sizing fits inside one L1 bank
+    // is enforced by evaluate_realtime_profiler_eligibility.
+    const uint32_t rt_profiler_core_l1_base =
+        dispatch_mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    const auto rt_profiler_core_l1_addrs = compute_rt_profiler_core_l1_addrs(rt_profiler_core_l1_base);
+
+    // The socket sender config region inside RealtimeProfilerCoreL1 must be at least as
+    // large as the D2HSocket implementation actually needs. RT_PROFILER_SOCKET_CONFIG_SIZE
+    // includes headroom (128 B vs. ~64 B today), but if SocketSenderSize ever grows past
+    // it we want a deterministic startup failure rather than a silent L1 overrun.
+    TT_FATAL(
+        RT_PROFILER_SOCKET_CONFIG_SIZE >= D2HSocket::required_config_buffer_size(),
+        "RT_PROFILER_SOCKET_CONFIG_SIZE ({} B) is smaller than D2HSocket's required config "
+        "buffer size ({} B). Bump RT_PROFILER_SOCKET_CONFIG_SIZE in "
+        "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp and rebuild.",
+        RT_PROFILER_SOCKET_CONFIG_SIZE,
+        D2HSocket::required_config_buffer_size());
     uint32_t config_buffer_addr_offset = factory.offset_of<dev_msgs::realtime_profiler_msg_t>(
         dev_msgs::realtime_profiler_msg_t::Field::config_buffer_addr);
     uint32_t sync_request_offset =
@@ -2011,10 +2041,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     const std::string realtime_profiler_kernel_path = "tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp";
     const std::string realtime_profiler_push_kernel_path =
         "tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp";
-
-    // Ring buffer constants (kRingBufferCapacity, kRingBufferEntrySize, kRingBufferSize)
-    // live at file scope so evaluate_realtime_profiler_eligibility can use the same values
-    // when checking whether the L1 bank has room for the ring.
 
     // Set up real-time profiler for each local device in the mesh
     for (const auto& coord : MeshCoordinateRange(view_->shape())) {
@@ -2047,6 +2073,11 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         dev_state.chip_id = device_id;
         dev_state.mesh_coord = coord;
         dev_state.realtime_profiler_core = realtime_profiler_core;
+        // RT-profiler L1 carve-out (ring + socket config) on this core. All sub-addresses
+        // are derived from a single base anchored at dispatch_mem_map's UNRESERVED, so the
+        // kernels and the D2H socket sender config see a deterministic layout that's not
+        // routed through the user-space allocator.
+        dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
         // Create D2H socket for this device
         auto sender_core = MeshCoreCoord{coord, realtime_profiler_core};
@@ -2068,9 +2099,16 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         // the next device — no activation is notified for this chip, so the
         // rest of the stack will simply see "RT profiler not active" for it.
         try {
+            // Provide the socket sender config L1 address from the dispatch carve-out so
+            // D2HSocket does NOT allocate L1 through MeshBuffer::create on a reserved
+            // dispatch core (which would otherwise be tracked by ttnn graph capture and
+            // crash get_buffer_pages on dispatch cores not in the L1 bank table).
             dev_state.socket = std::make_unique<D2HSocket>(
-                mesh_device, sender_core, kRealtimeProfilerFifoSize, kRealtimeProfilerPageSize);
-            dev_state.socket->set_page_size(kRealtimeProfilerPageSize);
+                mesh_device,
+                sender_core,
+                RealtimeProfilerRuntimeSizes::fifo_size,
+                D2HSocket::ExternalConfigBuffer{.address = dev_state.core_l1.socket_config});
+            dev_state.socket->set_page_size(RealtimeProfilerRuntimeSizes::page_size);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal,
@@ -2134,23 +2172,12 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 dispatch_s_core.y);
         }
 
-        // Allocate L1 ring buffer for BRISC→NCRISC handoff on the profiler core.
-        // Use per-device Buffer::create (not MeshBuffer) so the allocation is
-        // scoped to this device only, avoiding cross-device L1 bank exhaustion.
-        {
-            const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-            uint32_t ring_buffer_size_aligned = tt::align(kRingBufferSize, l1_alignment);
-
-            auto ring_shard_params = ShardSpecBuffer(
-                CoreRangeSet(CoreRange(realtime_profiler_core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-            dev_state.ring_buffer = Buffer::create(
-                device,
-                ring_buffer_size_aligned,
-                ring_buffer_size_aligned,
-                BufferType::L1,
-                BufferShardingArgs(ring_shard_params, TensorMemoryLayout::HEIGHT_SHARDED));
-        }
-        uint32_t ring_buffer_addr = dev_state.ring_buffer->address();
+        // Ring buffer (BRISC->NCRISC handoff) lives at a fixed offset inside the
+        // RT-profiler L1 carve-out. It is *not* created via Buffer::create / MeshBuffer
+        // because the profiler core is reserved out of the user-space allocator's L1 bank
+        // table; allocating here would either fail with "No L1 bank exists" or — worse —
+        // get tracked by ttnn graph capture and crash get_buffer_pages later.
+        const uint32_t ring_buffer_addr = dev_state.core_l1.ring_buffer;
 
         // Get PCIe core NOC-0 coordinates for WH (NCRISC kernel translates to NOC 1)
         uint32_t pcie_noc_x = 0;
@@ -2169,11 +2196,14 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 need_pcie_noc_defines = true;
             }
         }
-        // Zero the ring buffer header (write_idx, read_idx, terminate, _pad[13])
+        // Zero the ring buffer header (write_index, read_index, terminate, _pad[13])
         // to clear stale state from a previous run (e.g. terminate=1 from teardown).
+        // The header is everything before RtProfilerRingBuffer::data, so use offsetof
+        // to track the header size automatically if the struct grows.
         {
-            constexpr uint32_t kRingHeaderWords = 16;
-            std::vector<uint32_t> zero_header(kRingHeaderWords, 0);
+            constexpr uint32_t kRingHeaderBytes = offsetof(RtProfilerRingBuffer, data);
+            static_assert(kRingHeaderBytes % sizeof(uint32_t) == 0, "Ring header must be uint32-aligned");
+            std::vector<uint32_t> zero_header(kRingHeaderBytes / sizeof(uint32_t), 0);
             tt::tt_metal::detail::WriteToDeviceL1(
                 device, realtime_profiler_core, ring_buffer_addr, zero_header, CoreType::WORKER);
         }
@@ -2383,7 +2413,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             CoreType::WORKER);
 
         if (sc_got_response) {
-            std::vector<uint32_t> sync_page(kRealtimeProfilerPageSize / sizeof(uint32_t));
+            std::vector<uint32_t> sync_page(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
             dev_state.socket->read(sync_page.data(), 1);
             uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
 
@@ -2419,7 +2449,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
         // Helper lambda: process one page from a device socket.
         // Returns true if a page was consumed, false if nothing was available.
-        std::vector<uint32_t> page_buf(kRealtimeProfilerPageSize / sizeof(uint32_t));
+        std::vector<uint32_t> page_buf(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
         auto process_one_page = [&](RealtimeProfilerDeviceState& dev_state) -> bool {
             uint32_t available = dev_state.socket->pages_available();
             if (available == 0) {

@@ -70,17 +70,48 @@ public:
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
-     * @param l1_data_buffer_size If non-zero, allocates an L1 staging buffer on the sender core
-     *        and writes its address into the socket config so the device kernel can use it.
-     *        The address is retrievable via get_l1_data_buffer_address(). Default: 0 (disabled).
      *
      * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
+     */
+    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+
+    /**
+     * @brief Identifies an L1 region on the sender core that the caller has already
+     *        reserved for the socket's configuration buffer.
+     *
+     * Used by callers that own their sender core's L1 layout (e.g. the real-time
+     * profiler, which carves its config out of dispatch L1 on the reserved
+     * profiler tensix). The region must be at least
+     * D2HSocket::required_config_buffer_size() bytes, L1-aligned, and live for
+     * the lifetime of the socket.
+     */
+    struct ExternalConfigBuffer {
+        uint32_t address;  // L1 address on the sender core
+    };
+
+    /**
+     * @brief Minimum size in bytes that an ExternalConfigBuffer region must have.
+     *
+     * Equals sender_socket_md + bytes_acked + sender_downstream_encoding, each
+     * rounded up to L1_ALIGNMENT. Callers carving their own L1 region for the
+     * socket's configuration buffer should use this to size that region (or
+     * static_assert their own constant against it).
+     */
+    static uint32_t required_config_buffer_size();
+
+    /**
+     * @brief Constructs a D2HSocket using a caller-provided config buffer address.
+     *
+     * Skips the user-space MeshBuffer allocation that the standard constructor
+     * performs and writes the socket metadata directly to `external_config.address`
+     * on the sender core. Intended for callers that need their sender-core L1 to
+     * be off-allocator (e.g. cores not present in the L1 bank table).
      */
     D2HSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& sender_core,
         uint32_t fifo_size,
-        uint32_t l1_data_buffer_size = 0);
+        ExternalConfigBuffer external_config);
 
     /**
      * @brief Connects to an existing D2HSocket from another process.
@@ -137,25 +168,6 @@ public:
      * @return The L1 address of the configuration buffer.
      */
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
-
-    /**
-     * @brief Returns the L1 address of the optional sender-side staging buffer.
-     *
-     * Non-zero only when the socket was constructed with a non-zero
-     * `l1_data_buffer_size`. Intended to be passed to the sender kernel as a
-     * compile-time argument so it can stage data in L1 before pushing into the
-     * socket FIFO.
-     *
-     * @return The L1 address of the staging buffer, or 0 if not allocated.
-     */
-    uint32_t get_l1_data_buffer_address() const { return l1_data_buffer_address_; }
-
-    /**
-     * @brief Returns the size of the optional sender-side L1 staging buffer.
-     *
-     * @return The staging buffer size in bytes, or 0 if not allocated.
-     */
-    uint32_t get_l1_data_buffer_size() const { return l1_data_buffer_size_; }
 
     /**
      * @brief Sets the page size for subsequent read operations.
@@ -266,7 +278,6 @@ private:
         const std::string& shm_name);
     PinnedBufferInfo init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
-    void init_l1_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t requested_size);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
@@ -278,8 +289,15 @@ private:
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
 
+    // Common host-side init shared by both constructors. Brings up pinned host
+    // memory (or hugepage fallback), writes socket metadata to `config_buffer_address_`,
+    // and configures the sender-side TLB. The caller must populate
+    // `config_buffer_address_` (and own the L1 reservation behind it) before calling.
+    void init_common(const std::shared_ptr<MeshDevice>& mesh_device);
+
+    // Owned only by the standard ctor. The external-config ctor leaves this null
+    // and points `config_buffer_address_` at caller-owned L1.
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
-    std::shared_ptr<MeshBuffer> l1_data_buffer_ = nullptr;
     MeshCoreCoord sender_core_;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
@@ -290,8 +308,6 @@ private:
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
-    uint32_t l1_data_buffer_address_ = 0;
-    uint32_t l1_data_buffer_size_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
