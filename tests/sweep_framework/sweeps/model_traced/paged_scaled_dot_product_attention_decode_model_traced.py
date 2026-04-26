@@ -19,7 +19,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 
 TIMEOUT = 300
 
@@ -115,12 +115,53 @@ def run(
         shape_d = input_a_shape.get("input_d")
         shape_e = input_a_shape.get("input_e")
     else:
-        # Fallback for sample configurations
+        # V2 generic loader: input_a_shape is just Q's shape tuple.
+        # Other input shapes are in kwargs as input_b_shape, input_c_shape,
+        # input_d_shape (page_table from positional arg3), and
+        # cur_pos_tensor_shape (from named kwarg).
         if isinstance(input_a_shape, (tuple, list)):
-            shape = tuple(input_a_shape)
+            shape_a = tuple(input_a_shape)
         else:
-            shape = input_a_shape
-        shape_a = shape_b = shape_c = shape_d = shape_e = shape
+            shape_a = input_a_shape
+
+        shape_b = kwargs.get("input_b_shape", shape_a)
+        shape_c = kwargs.get("input_c_shape", shape_a)
+
+        # page_table: from positional arg3 (input_d) or named kwarg
+        shape_d = kwargs.get("input_d_shape")
+        if shape_d is None:
+            pt_info = extract_named_tensor_kwargs(kwargs, "page_table_tensor")
+            if pt_info and pt_info["shape"]:
+                shape_d = pt_info["shape"]
+                if input_d_dtype is None:
+                    input_d_dtype = pt_info.get("dtype")
+                if input_d_memory_config is None:
+                    input_d_memory_config = pt_info.get("memory_config")
+
+        # cur_pos: from input_e or named kwarg cur_pos_tensor
+        shape_e = kwargs.get("input_e_shape")
+        if shape_e is None:
+            cp_info = extract_named_tensor_kwargs(kwargs, "cur_pos_tensor")
+            if cp_info and cp_info["shape"]:
+                shape_e = cp_info["shape"]
+                if input_e_dtype is None:
+                    input_e_dtype = cp_info.get("dtype")
+                if input_e_memory_config is None:
+                    input_e_memory_config = cp_info.get("memory_config")
+
+        # Fallback shapes if still None
+        if shape_b is None:
+            shape_b = shape_a
+        if shape_c is None:
+            shape_c = shape_a
+        if shape_d is None:
+            # page_table default: [B, 1024] where B = Q's batch dim (dim 1)
+            B = shape_a[1] if len(shape_a) > 1 else 1
+            shape_d = (B, 1024)
+        if shape_e is None:
+            # cur_pos default: [B] matching page_table's first dim
+            B = shape_d[0] if shape_d else 1
+            shape_e = (B,)
 
     # Use provided params directly - these are optional (None is fine if not in V2 JSON)
     dtype_a = input_a_dtype
@@ -221,12 +262,16 @@ def run(
     # paged_scaled_dot_product_attention_decode signature:
     # (input_tensor_q, input_tensor_k, input_tensor_v, page_table_tensor, *, is_causal=True, attn_mask=None, cur_pos_tensor=None, ...)
     # So tensor_a=Q, tensor_b=K, tensor_c=V, tensor_d=page_table, tensor_e=cur_pos
+    #
+    # Extract is_causal from op_kwargs to avoid duplicate keyword argument error
+    # (the generic loader may include it as a named kwarg from the master trace).
+    is_causal = op_kwargs.pop("is_causal", True)
     output_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tensor_a,  # Q
         tensor_b,  # K
         tensor_c,  # V
         tensor_d,  # page_table (required positional)
-        is_causal=True,
+        is_causal=is_causal,
         cur_pos_tensor=tensor_e,
         **op_kwargs,
     )
