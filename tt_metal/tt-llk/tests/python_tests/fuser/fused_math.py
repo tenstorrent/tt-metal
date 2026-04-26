@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .fuser_config import GlobalConfig
 
 from helpers.chip_architecture import ChipArchitecture
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import GoldenType, PerfRunType
 
 from .block_data import BlockData
 from .compute_node import ComputeNode
@@ -125,10 +125,6 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        buffer_A_address = operation.src_a.l1_address
-        buffer_B_address = operation.src_b.l1_address
-        buffer_A_tile_size = operation.buffer_A_tile_size
-        buffer_B_tile_size = operation.buffer_B_tile_size
         unpack_a_src = operation.unpack_a_in
         unpack_a_dst = operation.unpack_a_out
         unpack_b_src = operation.unpack_b_in
@@ -136,26 +132,27 @@ class ComputePipeline:
 
         code = (
             f"    // Operation {stage}: Fused Unpack\n"
-            f"    UNUSED const Operand buffer_A{stage}({hex(buffer_A_address)}, {buffer_A_tile_size});\n"
-            f"    UNUSED const Operand buffer_B{stage}({hex(buffer_B_address)}, {buffer_B_tile_size});\n"
-            f"    UNUSED const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
-            f"    UNUSED const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
-            f"    UNUSED const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
-            f"    UNUSED const std::uint32_t unpack_b_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_dst.name});\n"
+            f"    [[maybe_unused]] const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
+            f"    [[maybe_unused]] const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
+            f"    [[maybe_unused]] const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
+            f"    [[maybe_unused]] const std::uint32_t unpack_b_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_dst.name});\n"
         )
         return code
 
     def unpack_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        compute_unit: "ComputeNode",
     ) -> str:
         stage = operation.stage_id
-        unpa_tile_size = operation.tile_size_unpack_a
-        unpb_tile_size = operation.tile_size_unpack_b
+        unpa_tile_size = compute_unit.src_a.tile_size
+        unpb_tile_size = compute_unit.src_b.tile_size
         dest_acc = config.dest_acc.cpp_enum_value
-        unpa_face_r_dim = operation.face_r_dim
-        unpb_face_r_dim = operation.face_r_dim
-        unpa_num_faces = operation.num_faces_A
-        unpb_num_faces = operation.num_faces_B
+        unpa_face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        unpb_face_r_dim = compute_unit.src_b.tile_shape.face_r_dim
+        unpa_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
+        unpb_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
 
         if stage == 1:
             code = (
@@ -195,7 +192,7 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.unpack_hw_configure(operation, config)
+        code += self.unpack_hw_configure(operation, config, self.operations[0])
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -345,14 +342,11 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        buffer_Res_tile_size = operation.buffer_Res_tile_size
         pack_src = operation.pack_in
         pack_dst = operation.pack_out
-        result_buffer_address = operation.output.l1_address
 
         return (
             f"// Operation {stage}: Packer\n"
-            f"const Operand buffer_Res{stage}({hex(result_buffer_address)}, {buffer_Res_tile_size});\n"
             f"const std::uint32_t pack_src_format{stage} = ckernel::to_underlying(DataFormat::{pack_src.name});\n"
             f"const std::uint32_t pack_dst_format{stage} = ckernel::to_underlying(DataFormat::{pack_dst.name});\n"
         )
@@ -363,9 +357,9 @@ class ComputePipeline:
         stage = operation.stage_id
         bh_tilize = operation.bh_tilize.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
-        pack_size = operation.tile_size_pack
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
+        pack_size = operation.output.tile_size
+        face_r_dim = operation.output.tile_shape.face_r_dim
+        num_faces = operation.output.tile_shape.total_num_faces()
 
         if stage == 1:
             if config.architecture == ChipArchitecture.BLACKHOLE:
@@ -463,15 +457,30 @@ class ComputePipeline:
 
     def golden(
         self,
-        input_tensor_a: torch.Tensor,
-        input_tensor_b: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
+        golden_type: GoldenType,
     ) -> torch.Tensor:
-        tensor_a = torch.zeros(operation.src_a.dimensions)
-        tensor_b = torch.zeros(operation.src_b.dimensions)
+        tensor_a = torch.zeros(operation.math.operations[0].src_a.dimensions)
+        tensor_b = torch.zeros(operation.math.operations[0].src_b.dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
+            if op.src_a is not None:
+                input_tensor_a = (
+                    op.src_a.raw_data
+                    if golden_type == GoldenType.L1_GOLDEN
+                    else op.src_a.master_golden
+                )
+            else:
+                input_tensor_a = None
+            if op.src_b is not None:
+                input_tensor_b = (
+                    op.src_b.raw_data
+                    if golden_type == GoldenType.L1_GOLDEN
+                    else op.src_b.master_golden
+                )
+            else:
+                input_tensor_b = None
             tensor_a, tensor_b, tensor_dst = op.golden(
                 input_tensor_a,
                 input_tensor_b,

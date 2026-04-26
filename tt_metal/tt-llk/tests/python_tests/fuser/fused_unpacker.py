@@ -52,7 +52,7 @@ class Unpacker:
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
-        num_faces = operation.num_faces
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         return f"_perf_unpack_loop_set_valid<true, true>({num_faces});\n"
 
     def perf_clear_valid(
@@ -62,7 +62,7 @@ class Unpacker:
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
-        num_faces = operation.num_faces
+        num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         return f"_perf_math_loop_clear_valid<true, true>({num_faces});\n"
 
     def get_headers(self) -> List[str]:

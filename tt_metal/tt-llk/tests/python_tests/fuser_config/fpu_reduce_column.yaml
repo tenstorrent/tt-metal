@@ -1,19 +1,28 @@
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+    const_value: 1.0
+  - name: "reduce_col_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
 operations:
-  - src_a: "input_A"
-    src_b: "input_B"
-    output: "reduce_col_out"
-    src_a_dims: [256, 256]
-    src_b_dims: [256, 256]
-    output_dims: [256, 256]
-    src_b_const_value: 1.0
-    input_format: "Float16_b"
-    output_format: "Float16_b"
+  - output: "reduce_col_out"
     math:
       - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
         operation: "Reduce"
         reduce_dim: "REDUCE_COL"
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
+        enforce_fp32_accumulation: true
     packer: "Packer"
-    block_size: [64, 128]
+    block_size: [32, 128]

@@ -31,7 +31,8 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        kt_dim = operation.kt_dim
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
@@ -43,7 +44,8 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        kt_dim = operation.kt_dim
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
@@ -61,19 +63,19 @@ class MatmulUnpacker(Unpacker):
         if compute_unit.unpack_transpose_faces == Transpose.Yes:
             tensor_b = t_matrix.transpose_faces_multi_tile(
                 tensor_b,
-                operation.src_b.data_format,
-                operation.src_b.tile_count,
+                compute_unit.src_b.data_format,
+                compute_unit.src_b.tile_count,
                 tilize=True,
-                input_dimensions=operation.src_b.dimensions,
+                input_dimensions=compute_unit.src_b.dimensions,
             )
 
         if compute_unit.unpack_transpose_within_face == Transpose.Yes:
             tensor_b = t_matrix.transpose_within_faces_multi_tile(
                 tensor_b,
-                operation.src_b.data_format,
-                operation.src_b.tile_count,
+                compute_unit.src_b.data_format,
+                compute_unit.src_b.tile_count,
                 untilize=True,
-                input_dimensions=operation.src_b.dimensions,
+                input_dimensions=compute_unit.src_b.dimensions,
             )
 
         return tensor_a, tensor_b
@@ -85,10 +87,11 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = operation.face_r_dim
+        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
-        kt_dim = operation.kt_dim
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
 
         return f"_llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
@@ -100,14 +103,18 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
-        kt_dim = operation.kt_dim
-        unpack_tile_size_a = operation.tile_size_unpack_a
-        unpack_tile_size_b = operation.tile_size_unpack_b
-        full_ct_dim = operation.src_b.dimensions[1] // 32
-        output_ct_dim = operation.output.tile_count_x
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        unpack_tile_size_a = compute_unit.src_a.tile_size
+        unpack_tile_size_b = compute_unit.src_b.tile_size
+        full_ct_dim = compute_unit.src_b.dimensions[1] // 32
+        output_ct_dim = compute_unit.src_a.tile_count_x
+        src_a_partial_face = compute_unit.src_a.partial_face.cpp_enum_value
+        src_b_partial_face = compute_unit.src_b.partial_face.cpp_enum_value
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
 
         return (
             f"    {{\n"
@@ -117,9 +124,11 @@ class MatmulUnpacker(Unpacker):
             f"            std::uint32_t srca_tile_idx = row * {kt_dim} + kt;\n"
             f"            std::uint32_t srcb_tile_idx = kt * {full_ct_dim} + col;\n"
             f"            _llk_unpack_AB_matmul_<>(\n"
-            f"                L1_ADDRESS(buffer_A{stage}[0]), L1_ADDRESS(buffer_B{stage}[0]),\n"
+            f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
             f"                srca_tile_idx, srcb_tile_idx,\n"
-            f"                {unpack_tile_size_a}, {unpack_tile_size_b}, false, false, {ct_dim}, {rt_dim}, {kt_dim}\n"
+            f"                {unpack_tile_size_a}, {unpack_tile_size_b},\n"
+            f"                {src_a_partial_face}, {src_b_partial_face},\n"
+            f"                {ct_dim}, {rt_dim}, {kt_dim}\n"
             f"            );\n"
             f"        }}\n"
             f"    }}\n"

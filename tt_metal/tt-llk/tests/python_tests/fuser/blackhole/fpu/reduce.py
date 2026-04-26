@@ -39,7 +39,7 @@ class ReduceFpu(Fpu):
         output_format = operation.output.data_format
         dimensions = operation.max_output_dimensions
         tile_cnt = (dimensions[0] * dimensions[1]) // 1024
-        num_faces = operation.num_faces
+        num_faces = operation.output.tile_shape.total_num_faces()
 
         reduce_dim = compute_unit.reduce_dim
         pool_type = compute_unit.reduce_pool
@@ -98,10 +98,13 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = compute_unit.reduce_pool.cpp_enum_value
         reduce_dim_cpp = compute_unit.reduce_dim.cpp_enum_value
+        enforce_fp32_accumulation = (
+            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        )
 
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false>();\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {enforce_fp32_accumulation}>();\n"
         )
 
     def calculate(
@@ -115,15 +118,31 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = compute_unit.reduce_pool.cpp_enum_value
         reduce_dim_cpp = compute_unit.reduce_dim.cpp_enum_value
+        enforce_fp32_accumulation = (
+            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        )
+        is_int_fpu_en = "false"
 
         # Create a temporary TensorShape object with Src_A tile dimensions
-        tile_shape = operation.src_a.tile_shape
+        tile_shape = compute_unit.src_a.tile_shape
         tensor_shape_instantiation: str = (
             f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
         )
 
         return (
-            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, false, false>(\n"
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"
             f"    {block.tile_id_block}, {tensor_shape_instantiation}\n"
             f");\n"
         )
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        enforce_fp32_accumulation = (
+            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        )
+        return f"_llk_math_reduce_uninit_<{enforce_fp32_accumulation}>();\n"

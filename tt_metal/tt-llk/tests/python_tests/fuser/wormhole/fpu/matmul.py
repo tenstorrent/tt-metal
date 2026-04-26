@@ -41,11 +41,11 @@ class MatmulFpu(Fpu):
             tensor_b,
             output_format,
             math_fidelity,
-            input_A_dimensions=operation.src_a.dimensions,
-            input_B_dimensions=operation.src_b.dimensions,
+            input_A_dimensions=compute_unit.src_a.dimensions,
+            input_B_dimensions=compute_unit.src_b.dimensions,
             tilize=False,
-            input_A_format=operation.src_a.data_format,
-            input_B_format=operation.src_b.data_format,
+            input_A_format=compute_unit.src_a.data_format,
+            input_B_format=compute_unit.src_b.data_format,
         )
 
         return (tensor_a, tensor_b, golden)
@@ -63,10 +63,16 @@ class MatmulFpu(Fpu):
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
 
+        partial_face = compute_unit.src_a.partial_face.cpp_enum_value
+        tile_r_dim_a = compute_unit.src_a.tile_shape.total_row_dim()
+        tile_c_dim_a = compute_unit.src_a.tile_shape.total_col_dim()
+        tile_r_dim_b = compute_unit.src_b.tile_shape.total_row_dim()
+        tile_c_dim_b = compute_unit.src_b.tile_shape.total_col_dim()
+
         return (
             f"// Operation {stage}: Matmul FPU\n"
             f"_llk_math_matmul_init_<{math_fidelity}>(\n"
-            f"    TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false, {transpose}, {ct_dim}, {rt_dim}\n"
+            f"    {tile_r_dim_a}, {tile_c_dim_a}, {tile_r_dim_b}, {tile_c_dim_b}, {partial_face}, {transpose}, {ct_dim}, {rt_dim}\n"
             f");\n"
         )
 
@@ -79,7 +85,8 @@ class MatmulFpu(Fpu):
     ) -> str:
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
-        kt_dim = operation.kt_dim
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
 
         return (
