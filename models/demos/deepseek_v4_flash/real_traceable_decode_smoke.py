@@ -488,8 +488,10 @@ class TtTraceableDecodeSubpath:
         self.indexer_kv_cache = indexer_kv_cache
         self.indexer_kv_cache_rows = int(indexer_kv_cache_rows)
         self.indexer_topk_width = int(indexer_topk_width)
+        self.indexer_score_valid_rows = 0
         self.indexer_wq_b = None
         self.indexer_weights_proj = None
+        self.indexer_score_mask = None
         self.indexer_compressor_kv_state = None
         self.indexer_compressor_score_state = None
         self.indexer_compressor_kv_overlap_state = None
@@ -524,6 +526,15 @@ class TtTraceableDecodeSubpath:
                 raise ValueError(f"{self.sparse_indexer_mode!r} requires at least one indexer KV cache row")
             if self.indexer_topk_width <= 0:
                 raise ValueError(f"{self.sparse_indexer_mode!r} requires a positive indexer_topk_width")
+            compressed_rows_visible = (int(self.cache_update_index) + 1) // int(config.compress_ratios[self.layer])
+            self.indexer_score_valid_rows = int(compressed_rows_visible)
+            if self.indexer_score_valid_rows <= 0:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires at least one visible compressed row")
+            if self.indexer_score_valid_rows > self.indexer_kv_cache_rows:
+                raise ValueError(
+                    f"{self.sparse_indexer_mode!r} needs {self.indexer_score_valid_rows} visible indexer rows "
+                    f"for position {self.cache_update_index}, but cache has {self.indexer_kv_cache_rows} rows"
+                )
             self.indexer_wq_b = _to_tt_linear_weight(
                 weights.indexer.wq_b,
                 device=device,
@@ -532,6 +543,13 @@ class TtTraceableDecodeSubpath:
             )
             self.indexer_weights_proj = _to_tt_linear_weight(
                 weights.indexer.weights_proj,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+            self.indexer_score_mask = _to_tt_sparse_indexer_score_mask(
+                valid_rows=self.indexer_score_valid_rows,
+                padded_rows=_round_up_to_tile(self.indexer_kv_cache_rows),
                 device=device,
                 dtype=dtype,
                 memory_config=memory_config,
@@ -578,7 +596,10 @@ class TtTraceableDecodeSubpath:
                     compress_ratio=compress_ratio,
                 )
                 self.indexer_compressor_update_index = int(self.cache_update_index) // compress_ratio
-                if self.indexer_compressor_update_index >= self.indexer_kv_cache_rows:
+                if (
+                    self.indexer_compressor_boundary_write
+                    and self.indexer_compressor_update_index >= self.indexer_kv_cache_rows
+                ):
                     raise ValueError(
                         f"{self.indexer_compressor_mode!r} needs indexer_kv_cache row "
                         f"{self.indexer_compressor_update_index}, but cache has {self.indexer_kv_cache_rows} rows"
@@ -1463,7 +1484,9 @@ class TtTraceableDecodeSubpath:
                 indexer_kv_cache=self.indexer_kv_cache,
                 indexer_wq_b=self.indexer_wq_b,
                 indexer_weights_proj=self.indexer_weights_proj,
+                indexer_score_mask=self.indexer_score_mask,
                 indexer_topk_width=self.indexer_topk_width,
+                indexer_score_valid_rows=self.indexer_score_valid_rows,
                 config=self.config,
                 query_rope_cos=rope_cos,
                 query_rope_sin=rope_sin,
@@ -1773,10 +1796,15 @@ def run_traceable_decode_subpath_smoke(
             f"{compressor_mode!r} requires a compress_ratio=4 layer; "
             f"layer {layer} has compress_ratio={config.compress_ratios[int(layer)]}"
         )
-    if uses_stateful_compressor and int(decode_steps) != 1:
+    if (
+        uses_stateful_compressor
+        and int(decode_steps) != 1
+        and cache_update_api != TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
+    ):
         raise ValueError(
-            f"{compressor_mode!r} currently supports one decode step; dynamic multi-step compressor boundary replay "
-            "needs a trace-time predicate for boundary-only compressed writes"
+            f"{compressor_mode!r} multi-step replay requires "
+            f"cache_update_api={TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR!r}; this proof uses one static "
+            "boundary or non-boundary trace body per position and carries the device compressor state across replay"
         )
     if sparse_indexer_trace_enabled and int(config.compress_ratios[int(layer)]) != 4:
         raise ValueError(
@@ -1792,10 +1820,16 @@ def run_traceable_decode_subpath_smoke(
             f"{indexer_compressor_mode!r} requires a compress_ratio=4 layer; "
             f"layer {layer} has compress_ratio={config.compress_ratios[int(layer)]}"
         )
-    if uses_stateful_indexer_compressor and int(decode_steps) != 1:
+    if (
+        uses_stateful_indexer_compressor
+        and int(decode_steps) != 1
+        and cache_update_api != TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR
+    ):
         raise ValueError(
-            f"{indexer_compressor_mode!r} currently supports one decode step; dynamic multi-step indexer boundary "
-            "replay needs a trace-time predicate for boundary-only compressed writes"
+            f"{indexer_compressor_mode!r} multi-step replay requires "
+            f"cache_update_api={TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR!r}; this proof uses one static "
+            "boundary or non-boundary trace body per position and carries the device indexer-compressor state "
+            "across replay"
         )
     if (
         sparse_indexer_mode == TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION
@@ -1844,6 +1878,8 @@ def run_traceable_decode_subpath_smoke(
             positions=cache_update_indices,
             weights=weights,
             activations=activations,
+            attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
             indexer_compressor_mode=indexer_compressor_mode,
         )
         if _uses_selected_rows_attention(attention_read_api)
@@ -2107,6 +2143,15 @@ def run_traceable_decode_subpath_smoke(
         max_bytes=max_bytes,
         trace_region_size=trace_region_size,
     )
+    _annotate_boundary_trace_variants(
+        result,
+        config=config,
+        layer=layer,
+        positions=cache_update_indices,
+        compressor_mode=compressor_mode,
+        indexer_compressor_mode=indexer_compressor_mode,
+    )
+    result["remaining_limitations"] = list(result["traceable_decode_scope"]["excluded_from_trace"])
 
     if cpu_only:
         result["mode"] = "cpu-reference"
@@ -2131,6 +2176,7 @@ def run_traceable_decode_subpath_smoke(
         ]
         for step_detail in result["decode_steps_detail"]:
             step_detail["accuracy"] = result["accuracy_by_step"][step_detail["step"]]["accuracy"]
+        result["per_step_accuracy_summary"] = _per_step_trace_accuracy_summary(result["accuracy_by_step"])
         result["passed"] = True
         return result
 
@@ -2211,6 +2257,10 @@ def run_traceable_decode_subpath_smoke(
     result["mode"] = "ttnn-trace"
     result["device_id"] = int(device_id)
     result["trace_capture"].update(trace_info)
+    if trace_info.get("per_step_trace_variants"):
+        result["per_step_trace_variants"] = trace_info["per_step_trace_variants"]
+        result["per_step_boundary_status"] = trace_info["per_step_trace_variants"]
+        result["multi_position_replay"]["per_step_trace_variants"] = trace_info["per_step_trace_variants"]
     result["one_trace_capture_replayed_across_positions"] = bool(trace_info["single_capture_replayed_across_positions"])
     result["cache_update"]["single_capture_replay_across_positions"] = bool(
         trace_info["single_capture_replayed_across_positions"]
@@ -2349,6 +2399,7 @@ def run_traceable_decode_subpath_smoke(
             }
         )
         result["decode_steps_detail"][step]["accuracy"] = step_accuracy
+    result["per_step_accuracy_summary"] = _per_step_trace_accuracy_summary(result["accuracy_by_step"])
     result["accuracy"] = result["accuracy_by_step"][0]["accuracy"]
     if "router_decode_topk_indices" in result["accuracy"]:
         result["router_trace"]["device_topk_indices_match_torch_reference"] = bool(
@@ -3050,6 +3101,10 @@ def _device_selected_cache_rows_by_step_from_outputs(
         except KeyError as exc:
             raise KeyError("trace_topk_attention output did not include sparse_indexer_topk_indices_uint32") from exc
 
+        compressed_topk_width = len(tuple(selected_cache_rows_by_step.get(step, ()))) - len(static_window_rows)
+        if compressed_topk_width <= 0:
+            raise ValueError(f"selected rows for step {step} do not include compressed rows")
+        topk_indices = topk_indices[..., :compressed_topk_width]
         compressed_indices = [int(value) for value in topk_indices.reshape(-1).to(torch.long).tolist()]
         invalid = [value for value in compressed_indices if value < 0 or value >= int(compressed_kv_cache_rows)]
         if invalid:
@@ -3372,16 +3427,22 @@ def build_traceable_indexer_kv_cache_seed(
         compress_ratio=compress_ratio,
     )
     if int(index_compressed_kv.shape[1]) < required_rows:
-        stateful_can_materialize_next_row = (
-            _uses_stateful_indexer_compressor_mode(indexer_compressor_mode)
-            and int(index_compressed_kv.shape[1]) + 1 == required_rows
-            and any(
-                _compressor_boundary_write(int(position), compress_ratio=compress_ratio)
+        materialized_rows = int(index_compressed_kv.shape[1])
+        stateful_boundary_rows = sorted(
+            {
+                (int(position) + 1) // compress_ratio
                 for position in positions
-                if (int(position) + 1) // compress_ratio == required_rows
-            )
+                if _compressor_boundary_write(int(position), compress_ratio=compress_ratio)
+                and (int(position) + 1) // compress_ratio > materialized_rows
+            }
         )
-        if not stateful_can_materialize_next_row:
+        stateful_can_materialize_missing_rows = (
+            _uses_stateful_indexer_compressor_mode(indexer_compressor_mode)
+            and len(stateful_boundary_rows) >= required_rows - materialized_rows
+            and stateful_boundary_rows[: required_rows - materialized_rows]
+            == list(range(materialized_rows + 1, required_rows + 1))
+        )
+        if not stateful_can_materialize_missing_rows:
             raise ValueError(
                 "trace-resident sparse indexer KV seed does not cover decode positions: "
                 f"materialized {int(index_compressed_kv.shape[1])} rows, required {required_rows}"
@@ -3492,7 +3553,9 @@ def _torch_update_indexer_kv_cache_for_decode(
             f"stateful indexer compressor probe expects projected dim {2 * index_head_dim}, got {projected_dim}"
         )
     update_index = int(position) // compress_ratio
-    if update_index >= int(indexer_kv_cache.shape[-2]):
+    if _compressor_boundary_write(position, compress_ratio=compress_ratio) and update_index >= int(
+        indexer_kv_cache.shape[-2]
+    ):
         raise ValueError(
             f"stateful indexer compressor update row {update_index} is outside indexer_kv_cache "
             f"rows={int(indexer_kv_cache.shape[-2])}"
@@ -4029,6 +4092,14 @@ def main() -> None:
             "row inside the protected trace before learned top-k."
         ),
     )
+    parser.add_argument(
+        "--carried-cache-proof",
+        action="store_true",
+        help=(
+            "Convenience mode for the carried-cache selected-row proof: stateful ratio-4 compressor/indexer, "
+            "trace_topk_attention, positions 32..39 by default, and a large enough static trace envelope."
+        ),
+    )
     parser.add_argument("--cpu-only", action="store_true")
     parser.add_argument("--pcc", type=float, default=0.99)
     parser.add_argument("--rtol", type=float, default=8e-2)
@@ -4039,6 +4110,22 @@ def main() -> None:
     if not args.verbose_logs:
         os.environ.setdefault("TT_LOGGER_LEVEL", "FATAL")
         os.environ.setdefault("LOGGER_LEVEL", "Warning")
+
+    if args.carried_cache_proof:
+        if args.attention_read_api == DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API:
+            args.attention_read_api = TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
+        if args.sparse_indexer_mode == DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE:
+            args.sparse_indexer_mode = TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION
+        if args.compressor_mode == DEFAULT_TRACEABLE_DECODE_COMPRESSOR_MODE:
+            args.compressor_mode = TRACEABLE_DECODE_COMPRESSOR_STATEFUL_RATIO4_PROBE
+        if args.indexer_compressor_mode == DEFAULT_TRACEABLE_DECODE_INDEXER_COMPRESSOR_MODE:
+            args.indexer_compressor_mode = TRACEABLE_DECODE_INDEXER_COMPRESSOR_STATEFUL_RATIO4_PROBE
+        if args.cache_update_index is None:
+            args.cache_update_index = 32
+        if args.decode_steps == DEFAULT_TRACEABLE_DECODE_STEPS:
+            args.decode_steps = 8
+        if args.cache_len == DEFAULT_TRACEABLE_DECODE_CACHE_LEN:
+            args.cache_len = 96
 
     result = run_traceable_decode_subpath_smoke(
         args.snapshot_dir,
@@ -4250,6 +4337,9 @@ def _run_ttnn_traceable_decode_subpath(
         )
         outputs_by_step: list[dict[str, torch.Tensor]] = []
         guarded_labels: list[str] = []
+        capture_then_replay_sequence = len(route_plans) > 1 and (
+            uses_stateful_compressor or uses_stateful_indexer_compressor
+        )
         if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR:
             update_idxs_tensor = _to_tt_cache_update_idxs_tensor(
                 int(cache_update_indices[0]),
@@ -4548,6 +4638,13 @@ def _run_ttnn_traceable_decode_subpath(
                 if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
                 else "static_single_capture_initial_position",
                 "rope_positions_used": [int(value) for value in rope_position_indices],
+                "per_step_trace_variants": _per_step_trace_variant_report(
+                    config=config,
+                    layer=layer,
+                    positions=cache_update_indices,
+                    compressor_mode=compressor_mode,
+                    indexer_compressor_mode=indexer_compressor_mode,
+                ),
             }
             return outputs_by_step, trace_info
 
@@ -4653,6 +4750,11 @@ def _run_ttnn_traceable_decode_subpath(
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            device_state_backup = (
+                _clone_traceable_decode_device_state_refs(_traceable_decode_module_state_refs(module))
+                if capture_then_replay_sequence
+                else None
+            )
             _copy_activation_to_device(activation, tt_input)
             if rope_position_idxs_tensor is not None:
                 _copy_rope_position_idxs_to_device(
@@ -4662,15 +4764,24 @@ def _run_ttnn_traceable_decode_subpath(
                 )
             module(tt_input)
             ttnn.synchronize_device(device)
-            kv_cache = module.kv_cache
-            if uses_compressed_selected_rows:
-                sparse_kv_cache = module.sparse_kv_cache
-            if uses_stateful_compressor:
-                compressor_kv_state = module.compressor_kv_state
-                compressor_score_state = module.compressor_score_state
-            if uses_stateful_indexer_compressor:
-                indexer_compressor_kv_state = module.indexer_compressor_kv_state
-                indexer_compressor_score_state = module.indexer_compressor_score_state
+            if capture_then_replay_sequence:
+                _restore_traceable_decode_device_state_refs(
+                    device_state_backup,
+                    _traceable_decode_module_state_refs(module),
+                )
+                ttnn.synchronize_device(device)
+                pre_capture_state_refs = _traceable_decode_module_state_refs(module)
+            else:
+                pre_capture_state_refs = {}
+                kv_cache = module.kv_cache
+                if uses_compressed_selected_rows:
+                    sparse_kv_cache = module.sparse_kv_cache
+                if uses_stateful_compressor:
+                    compressor_kv_state = module.compressor_kv_state
+                    compressor_score_state = module.compressor_score_state
+                if uses_stateful_indexer_compressor:
+                    indexer_compressor_kv_state = module.indexer_compressor_kv_state
+                    indexer_compressor_score_state = module.indexer_compressor_score_state
 
             with TraceableDecodeHostGuard() as guard:
                 trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -4679,16 +4790,52 @@ def _run_ttnn_traceable_decode_subpath(
             trace_ids.append(trace_id)
             allocated_trace_count += 1
             guarded_labels = guard.guarded_labels
-            kv_cache = module.kv_cache
-            if uses_compressed_selected_rows:
-                sparse_kv_cache = module.sparse_kv_cache
-            if uses_stateful_compressor:
-                compressor_kv_state = module.compressor_kv_state
-                compressor_score_state = module.compressor_score_state
-            if uses_stateful_indexer_compressor:
-                indexer_compressor_kv_state = module.indexer_compressor_kv_state
-                indexer_compressor_score_state = module.indexer_compressor_score_state
+            if capture_then_replay_sequence:
+                _restore_traceable_decode_device_state_refs(device_state_backup, pre_capture_state_refs)
+            else:
+                kv_cache = module.kv_cache
+                if uses_compressed_selected_rows:
+                    sparse_kv_cache = module.sparse_kv_cache
+                if uses_stateful_compressor:
+                    compressor_kv_state = module.compressor_kv_state
+                    compressor_score_state = module.compressor_score_state
+                if uses_stateful_indexer_compressor:
+                    indexer_compressor_kv_state = module.indexer_compressor_kv_state
+                    indexer_compressor_score_state = module.indexer_compressor_score_state
             ttnn.synchronize_device(device)
+
+            if capture_then_replay_sequence:
+                _copy_activation_to_device(replay_activation, tt_input)
+                if rope_position_idxs_tensor is not None:
+                    _copy_rope_position_idxs_to_device(
+                        int(rope_position_index),
+                        seq_len=int(replay_activation.shape[-2]),
+                        tt_rope_position_idxs=rope_position_idxs_tensor,
+                    )
+                ttnn.synchronize_device(device)
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+                ttnn.synchronize_device(device)
+                outputs_by_step.append(
+                    _collect_traceable_decode_outputs(
+                        output_tensors,
+                        attention_read_api=attention_read_api,
+                        batch=paged_sdpa_batch,
+                        cache_len=cache_len,
+                    )
+                )
+                ttnn.release_trace(device, trace_id)
+                trace_ids.remove(trace_id)
+                _release_traceable_decode_device_state_refs(device_state_backup)
+                kv_cache = module.kv_cache
+                if uses_compressed_selected_rows:
+                    sparse_kv_cache = module.sparse_kv_cache
+                if uses_stateful_compressor:
+                    compressor_kv_state = module.compressor_kv_state
+                    compressor_score_state = module.compressor_score_state
+                if uses_stateful_indexer_compressor:
+                    indexer_compressor_kv_state = module.indexer_compressor_kv_state
+                    indexer_compressor_score_state = module.indexer_compressor_score_state
+                continue
 
             _copy_activation_to_device(replay_activation, tt_input)
             if rope_position_idxs_tensor is not None:
@@ -4731,6 +4878,93 @@ def _run_ttnn_traceable_decode_subpath(
             if uses_stateful_indexer_compressor:
                 indexer_compressor_kv_state = module.indexer_compressor_kv_state
                 indexer_compressor_score_state = module.indexer_compressor_score_state
+
+        if capture_then_replay_sequence:
+            trace_info = {
+                "attempted": True,
+                "capture_passed": True,
+                "execute_replay_attempted": True,
+                "execute_replay_passed": True,
+                "trace_id_allocated": True,
+                "trace_ids_allocated": allocated_trace_count,
+                "guard_enabled": True,
+                "guarded_symbols": guarded_labels,
+                "ttnn_to_torch_guarded": "ttnn.to_torch" in guarded_labels,
+                "host_boundaries_inside_trace": [],
+                "decode_step_count": len(route_plans),
+                "capture_count": allocated_trace_count,
+                "positions_used": [int(value) for value in cache_update_indices],
+                "one_trace_capture_replayed_across_positions": False,
+                "single_capture_replayed_across_positions": False,
+                "recaptured_per_position": len(route_plans) > 1,
+                "carried_device_kv_cache_state": True,
+                "carried_device_sparse_kv_cache_state": bool(uses_compressed_selected_rows),
+                "carried_device_compressor_state": bool(uses_stateful_compressor),
+                "carried_device_indexer_compressor_state": bool(uses_stateful_indexer_compressor),
+                "state_rebuilt_on_host_between_replay_steps": False,
+                "protected_step_cpu_fallback": False,
+                "capture_warmup_state_reset_before_replay": True,
+                "capture_warmup_state_restore_source": "device_clone_backup",
+                "captured_and_replayed_immediately_per_position": True,
+                "cache_update_api": cache_update_api,
+                "rope_position_api": rope_position_api,
+                "update_index_source": "host_scalar",
+                "cache_update_index_dynamic": False,
+                "cache_update_index_kind": "static_host_argument_per_trace_capture",
+                "cache_read_window_dynamic": False,
+                "dynamic_cache_read_current_position": False,
+                "cache_read_window_status": "static_selected_row_ids_device_tensor"
+                if uses_selected_rows_read and not sparse_indexer_drives_attention
+                else "device_indexer_topk_compressed_rows_plus_static_sliding_window_rows"
+                if sparse_indexer_drives_attention
+                else "static_per_trace_capture",
+                "attention_read_api": attention_read_api,
+                **_compressor_report_fields(
+                    compressor_mode,
+                    layer=layer,
+                    config=config,
+                    position=int(cache_update_indices[0]),
+                ),
+                **_indexer_compressor_report_fields(
+                    indexer_compressor_mode,
+                    layer=layer,
+                    config=config,
+                    position=int(cache_update_indices[0]),
+                ),
+                "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+                    sparse_indexer_mode,
+                    attention_read_api=attention_read_api,
+                ),
+                "selected_row_ids_static_host_preflight": uses_selected_rows_read
+                and not sparse_indexer_drives_attention,
+                "static_sliding_window_row_ids_host_preflight": sparse_indexer_drives_attention,
+                "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
+                "selected_row_compaction_in_trace": uses_selected_rows_read,
+                "selected_rows_consumed_by_attention": uses_selected_rows_read,
+                "sparse_indexer_trace": _sparse_indexer_trace_runtime_summary(
+                    sparse_indexer_mode,
+                    attention_read_api=attention_read_api,
+                    indexer_compressor_mode=indexer_compressor_mode,
+                    indexer_kv_cache_initial=indexer_kv_cache_initial,
+                    indexer_topk_width=indexer_topk_width,
+                ),
+                "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
+                "rope_position_kind": "replay_mutable_device_tensor"
+                if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
+                else "static_host_materialized_tables",
+                "rope_position_status": "replay_mutable_device_tensor_embedding_per_trace_capture"
+                if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
+                else "static_per_trace_capture",
+                "rope_positions_used": [int(value) for value in rope_position_indices],
+                "per_step_trace_variants": _per_step_trace_variant_report(
+                    config=config,
+                    layer=layer,
+                    positions=cache_update_indices,
+                    compressor_mode=compressor_mode,
+                    indexer_compressor_mode=indexer_compressor_mode,
+                ),
+            }
+            return outputs_by_step, trace_info
 
         trace_info = {
             "attempted": True,
@@ -4799,6 +5033,13 @@ def _run_ttnn_traceable_decode_subpath(
             if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
             else "static_per_trace_capture",
             "rope_positions_used": [int(value) for value in rope_position_indices],
+            "per_step_trace_variants": _per_step_trace_variant_report(
+                config=config,
+                layer=layer,
+                positions=cache_update_indices,
+                compressor_mode=compressor_mode,
+                indexer_compressor_mode=indexer_compressor_mode,
+            ),
         }
         return outputs_by_step, trace_info
     finally:
@@ -4814,6 +5055,50 @@ def _copy_activation_to_device(activation: torch.Tensor, tt_input) -> None:
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.copy_host_to_device_tensor(host_tensor, tt_input)
+
+
+def _traceable_decode_module_state_refs(module: TtTraceableDecodeSubpath) -> dict[str, object]:
+    return {
+        "kv_cache": module.kv_cache,
+        "sparse_kv_cache": module.sparse_kv_cache,
+        "compressor_kv_overlap_state": module.compressor_kv_overlap_state,
+        "compressor_kv_current_overlap_state": module.compressor_kv_current_overlap_state,
+        "compressor_kv_current_state": module.compressor_kv_current_state,
+        "compressor_score_overlap_state": module.compressor_score_overlap_state,
+        "compressor_score_current_overlap_state": module.compressor_score_current_overlap_state,
+        "compressor_score_current_state": module.compressor_score_current_state,
+        "indexer_kv_cache": module.indexer_kv_cache,
+        "indexer_compressor_kv_overlap_state": module.indexer_compressor_kv_overlap_state,
+        "indexer_compressor_kv_current_overlap_state": module.indexer_compressor_kv_current_overlap_state,
+        "indexer_compressor_kv_current_state": module.indexer_compressor_kv_current_state,
+        "indexer_compressor_score_overlap_state": module.indexer_compressor_score_overlap_state,
+        "indexer_compressor_score_current_overlap_state": module.indexer_compressor_score_current_overlap_state,
+        "indexer_compressor_score_current_state": module.indexer_compressor_score_current_state,
+    }
+
+
+def _clone_traceable_decode_device_state_refs(state_refs: Mapping[str, object]) -> dict[str, object]:
+    return {name: ttnn.clone(tensor) for name, tensor in state_refs.items() if tensor is not None}
+
+
+def _restore_traceable_decode_device_state_refs(
+    backup_refs: Mapping[str, object] | None,
+    target_refs: Mapping[str, object],
+) -> None:
+    if not backup_refs:
+        return
+    for name, backup in backup_refs.items():
+        target = target_refs.get(name)
+        if target is None:
+            continue
+        ttnn.copy(backup, target)
+
+
+def _release_traceable_decode_device_state_refs(state_refs: Mapping[str, object] | None) -> None:
+    if not state_refs:
+        return
+    for tensor in state_refs.values():
+        ttnn.deallocate(tensor)
 
 
 def _collect_traceable_decode_outputs(
@@ -6460,8 +6745,44 @@ def _to_tt_indexer_kv_cache(
             f"indexer_kv_cache width must be index_head_dim={config.index_head_dim}, "
             f"got {indexer_kv_cache.shape[-1]}"
         )
+    padded_rows = _round_up_to_tile(int(indexer_kv_cache.shape[-2]))
+    if padded_rows != int(indexer_kv_cache.shape[-2]):
+        padded = torch.zeros(
+            (1, 1, padded_rows, int(config.index_head_dim)),
+            dtype=torch.bfloat16,
+        )
+        padded[:, :, : int(indexer_kv_cache.shape[-2]), :] = indexer_kv_cache.to(torch.bfloat16)
+        indexer_kv_cache = padded
     return ttnn.from_torch(
         indexer_kv_cache.contiguous().to(torch.bfloat16),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _round_up_to_tile(value: int) -> int:
+    return ((int(value) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def _to_tt_sparse_indexer_score_mask(
+    *,
+    valid_rows: int,
+    padded_rows: int,
+    device,
+    dtype,
+    memory_config,
+):
+    if int(valid_rows) <= 0:
+        raise ValueError(f"valid_rows must be positive, got {valid_rows}")
+    if int(padded_rows) < int(valid_rows):
+        raise ValueError(f"padded_rows {padded_rows} must be >= valid_rows {valid_rows}")
+    mask = torch.zeros((1, 1, 1, int(padded_rows)), dtype=torch.bfloat16)
+    if int(padded_rows) > int(valid_rows):
+        mask[..., int(valid_rows) :] = TRACEABLE_DECODE_COMPRESSOR_MASK_VALUE
+    return ttnn.from_torch(
+        mask,
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -6966,7 +7287,9 @@ def _ttnn_sparse_indexer_trace(
     indexer_kv_cache,
     indexer_wq_b,
     indexer_weights_proj,
+    indexer_score_mask,
     indexer_topk_width: int,
+    indexer_score_valid_rows: int,
     config: DeepSeekV4FlashConfig,
     query_rope_cos,
     query_rope_sin,
@@ -6979,6 +7302,12 @@ def _ttnn_sparse_indexer_trace(
     nope_dim = index_head_dim - rope_dim
     if nope_dim < 0:
         raise ValueError(f"index_head_dim {index_head_dim} must be >= qk_rope_head_dim {rope_dim}")
+    if int(indexer_score_valid_rows) <= 0:
+        raise ValueError(f"indexer_score_valid_rows must be positive, got {indexer_score_valid_rows}")
+    if int(indexer_topk_width) > int(indexer_score_valid_rows):
+        raise ValueError(
+            f"indexer_topk_width {indexer_topk_width} cannot exceed visible rows {indexer_score_valid_rows}"
+        )
     q_rank_decode = ttnn.slice(
         q_rank_norm,
         (0, 0, 0, 0),
@@ -7041,8 +7370,20 @@ def _ttnn_sparse_indexer_trace(
         keepdim=True,
         memory_config=memory_config,
     )
-    sparse_indexer_topk_scores, sparse_indexer_topk_indices = ttnn.topk(
+    if indexer_score_mask is not None:
+        sparse_indexer_scores = ttnn.add(
+            sparse_indexer_scores,
+            indexer_score_mask,
+            memory_config=memory_config,
+        )
+    sparse_indexer_scores_for_topk = ttnn.slice(
         sparse_indexer_scores,
+        (0, 0, 0, 0),
+        (1, 1, 1, int(indexer_score_valid_rows)),
+        memory_config=memory_config,
+    )
+    sparse_indexer_topk_scores, sparse_indexer_topk_indices = ttnn.topk(
+        sparse_indexer_scores_for_topk,
         k=int(indexer_topk_width),
         dim=-1,
         largest=True,
@@ -7067,7 +7408,8 @@ def _ttnn_sparse_indexer_trace(
         "sparse_indexer_head_scores_relu": sparse_indexer_head_scores_relu,
         "sparse_indexer_head_weights": sparse_indexer_head_weights,
         "sparse_indexer_weighted_head_scores": sparse_indexer_weighted_head_scores,
-        "sparse_indexer_scores": sparse_indexer_scores,
+        "sparse_indexer_scores_padded": sparse_indexer_scores,
+        "sparse_indexer_scores": sparse_indexer_scores_for_topk,
         "sparse_indexer_topk_scores": sparse_indexer_topk_scores,
         "sparse_indexer_topk_indices": sparse_indexer_topk_indices,
         "sparse_indexer_topk_indices_uint32": sparse_indexer_topk_indices_uint32,
@@ -8187,6 +8529,94 @@ def _indexer_compressor_report_fields(
             position=position,
         ),
     }
+
+
+def _per_step_trace_variant_report(
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    compressor_mode: str,
+    indexer_compressor_mode: str,
+) -> list[dict[str, Any]]:
+    compressor_mode = _validate_compressor_mode(compressor_mode)
+    indexer_compressor_mode = _validate_indexer_compressor_mode(indexer_compressor_mode)
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    uses_stateful_compressor = _uses_stateful_compressor_mode(compressor_mode)
+    uses_stateful_indexer = _uses_stateful_indexer_compressor_mode(indexer_compressor_mode)
+    uses_boundary_variants = uses_stateful_compressor or uses_stateful_indexer
+    report = []
+    for step, position in enumerate(positions):
+        boundary = bool(compress_ratio > 0 and _compressor_boundary_write(int(position), compress_ratio=compress_ratio))
+        trace_variant = (
+            "boundary_trace"
+            if uses_boundary_variants and boundary
+            else "non_boundary_trace"
+            if uses_boundary_variants
+            else "static_position_trace"
+        )
+        report.append(
+            {
+                "step": int(step),
+                "position": int(position),
+                "compress_ratio": compress_ratio,
+                "is_compression_boundary": boundary,
+                "trace_variant_executed": trace_variant,
+                "host_selected_trace_variant_between_steps": uses_boundary_variants,
+                "compressor_boundary_write": bool(uses_stateful_compressor and boundary),
+                "indexer_compressor_boundary_write": bool(uses_stateful_indexer and boundary),
+                "compressor_phase": _compressor_phase(int(position), compress_ratio=compress_ratio)
+                if compress_ratio > 0
+                else None,
+                "compressed_kv_update_row": _compressed_kv_update_cache_row(
+                    config,
+                    layer=layer,
+                    position=int(position),
+                )
+                if uses_stateful_compressor and boundary
+                else None,
+                "indexer_kv_update_row": int(position) // compress_ratio
+                if uses_stateful_indexer and boundary and compress_ratio > 0
+                else None,
+            }
+        )
+    return report
+
+
+def _annotate_boundary_trace_variants(
+    result: dict[str, Any],
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    compressor_mode: str,
+    indexer_compressor_mode: str,
+) -> None:
+    report = _per_step_trace_variant_report(
+        config=config,
+        layer=layer,
+        positions=positions,
+        compressor_mode=compressor_mode,
+        indexer_compressor_mode=indexer_compressor_mode,
+    )
+    result["per_step_trace_variants"] = report
+    result["per_step_boundary_status"] = report
+    result.setdefault("multi_position_replay", {})["per_step_trace_variants"] = report
+    result["multi_position_replay"]["cache_state_carried_on_device"] = True
+    result["multi_position_replay"]["state_rebuilt_on_host_between_steps"] = False
+    result["multi_position_replay"]["protected_step_cpu_fallback"] = False
+    result["multi_position_replay"]["carried_device_sparse_kv_cache_state"] = _uses_compressed_kv_selected_rows(
+        result["attention_read_api"]
+    )
+    result["multi_position_replay"]["carried_device_compressor_state"] = _uses_stateful_compressor_mode(compressor_mode)
+    result["multi_position_replay"]["carried_device_indexer_compressor_state"] = _uses_stateful_indexer_compressor_mode(
+        indexer_compressor_mode
+    )
+    by_step = {int(item["step"]): item for item in report}
+    for step_detail in result.get("decode_steps_detail", []):
+        trace_detail = by_step.get(int(step_detail.get("step", -1)))
+        if trace_detail is not None:
+            step_detail.update(trace_detail)
 
 
 def _sparse_indexer_uses_trace(sparse_indexer_mode: str) -> bool:
@@ -9872,9 +10302,17 @@ def _preflight_selected_cache_rows_by_step(
     positions: Sequence[int],
     weights: TraceableDecodeWeights,
     activations: Sequence[torch.Tensor],
+    attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
     indexer_compressor_mode: str = DEFAULT_TRACEABLE_DECODE_INDEXER_COMPRESSOR_MODE,
 ) -> dict[int, tuple[int, ...]]:
+    attention_read_api = _validate_attention_read_api(attention_read_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     indexer_compressor_mode = _validate_indexer_compressor_mode(indexer_compressor_mode)
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
     real_indexer_rows = _real_indexer_selected_rows_by_step(
         snapshot_dir=snapshot_dir,
         config=config,
@@ -9896,6 +10334,13 @@ def _preflight_selected_cache_rows_by_step(
             uses_selected_rows_read=True,
         )
         runtime_rows = row_detail["runtime_rows"]
+        if runtime_rows is None and sparse_indexer_drives_attention:
+            runtime_rows = _placeholder_trace_topk_attention_rows(
+                config=config,
+                layer=layer,
+                position=int(position),
+                window_rows=row_detail["window_rows"],
+            )
         if runtime_rows is None:
             reason = row_detail["compressed_rows_source"]
             raise RuntimeError(
@@ -9904,6 +10349,22 @@ def _preflight_selected_cache_rows_by_step(
             )
         selected_rows_by_step[step] = tuple(int(value) for value in runtime_rows)
     return selected_rows_by_step
+
+
+def _placeholder_trace_topk_attention_rows(
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    position: int,
+    window_rows: Sequence[int],
+) -> list[int]:
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    compressed_cache_length = (int(position) + 1) // compress_ratio if compress_ratio > 0 else 0
+    topk_width = min(int(config.index_topk), compressed_cache_length)
+    return [
+        *[int(row) for row in window_rows],
+        *[int(config.sliding_window) + index for index in range(topk_width)],
+    ]
 
 
 def _sparse_selected_cache_rows_for_position(
@@ -10872,10 +11333,61 @@ def _traceable_accuracy_required_for_pass(name: str) -> bool:
         "router_decode_topk_indices",
         "sparse_indexer_topk_indices",
         "sparse_indexer_topk_indices_uint32",
+        "sparse_indexer_head_scores",
+        "sparse_indexer_head_scores_relu",
+        "sparse_indexer_weighted_head_scores",
+        "sparse_indexer_scores",
+        "sparse_indexer_topk_scores",
         "indexer_kv_cache",
         "indexer_compressed_kv_update",
     }
     return name not in router_dispatch_diagnostics
+
+
+def _per_step_trace_accuracy_summary(accuracy_by_step: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    def _passed(accuracy: Mapping[str, Any], keys: Sequence[str]) -> bool | None:
+        present = [accuracy[key] for key in keys if key in accuracy]
+        if not present:
+            return None
+        return all(bool(item.get("passed", False)) for item in present)
+
+    def _pcc(accuracy: Mapping[str, Any], key: str) -> float | None:
+        item = accuracy.get(key)
+        if not isinstance(item, Mapping):
+            return None
+        value = item.get("pcc")
+        return None if value is None else float(value)
+
+    summary = []
+    for step in accuracy_by_step:
+        accuracy = step.get("accuracy", {})
+        summary.append(
+            {
+                "step": int(step.get("step", len(summary))),
+                "position": int(step["position"]) if "position" in step else None,
+                "attention_passed": _passed(
+                    accuracy,
+                    ("selected_attention_cache_window", "attention_output", "attention_projected"),
+                )
+                if "selected_attention_cache_window" in accuracy
+                else _passed(accuracy, ("attention_output", "attention_projected")),
+                "attention_output_pcc": _pcc(accuracy, "attention_output"),
+                "router_passed": _passed(accuracy, ("router_decode_route_weights",)),
+                "router_route_weights_pcc": _pcc(accuracy, "router_decode_route_weights"),
+                "router_topk_indices_required_for_pass": bool(
+                    accuracy.get("router_decode_topk_indices", {}).get("required_for_pass", False)
+                )
+                if isinstance(accuracy.get("router_decode_topk_indices"), Mapping)
+                else None,
+                "ffn_passed": _passed(
+                    accuracy,
+                    ("shared_output", "routed_output", "combined_ffn_output", "residual_output"),
+                ),
+                "combined_ffn_output_pcc": _pcc(accuracy, "combined_ffn_output"),
+                "residual_output_pcc": _pcc(accuracy, "residual_output"),
+            }
+        )
+    return summary
 
 
 def _traceable_accuracy_summary(

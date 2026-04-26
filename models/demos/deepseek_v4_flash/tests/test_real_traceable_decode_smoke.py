@@ -763,6 +763,59 @@ def test_cpu_traceable_decode_boundary_materializes_indexer_compressor_row(tmp_p
     assert "ttnn.update_cache(indexer_kv_cache_boundary_row)" in result["traceable_decode_scope"]["inside_trace"]
 
 
+def test_cpu_traceable_decode_carried_cache_multistep_boundary_variants(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=5, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=4,
+        seq_len=32,
+        cache_len=96,
+        cache_update_index=32,
+        decode_steps=8,
+        max_bytes=192 * 1024,
+        routed_topk_prefix=1,
+        cpu_only=True,
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV,
+        sparse_indexer_mode=TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
+        compressor_mode=TRACEABLE_DECODE_COMPRESSOR_STATEFUL_RATIO4_PROBE,
+        indexer_compressor_mode=TRACEABLE_DECODE_INDEXER_COMPRESSOR_STATEFUL_RATIO4_PROBE,
+    )
+
+    assert result["passed"] is True
+    assert result["decode_step_count"] == 8
+    assert result["positions"] == list(range(32, 40))
+    assert result["multi_position_replay"]["cache_state_carried_on_device"] is True
+    assert result["multi_position_replay"]["carried_device_sparse_kv_cache_state"] is True
+    assert result["multi_position_replay"]["carried_device_compressor_state"] is True
+    assert result["multi_position_replay"]["carried_device_indexer_compressor_state"] is True
+    assert result["multi_position_replay"]["state_rebuilt_on_host_between_steps"] is False
+    assert result["host_boundaries_inside_trace"] == []
+    assert [item["is_compression_boundary"] for item in result["per_step_boundary_status"]] == [
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert [item["trace_variant_executed"] for item in result["per_step_trace_variants"]] == [
+        "non_boundary_trace",
+        "non_boundary_trace",
+        "non_boundary_trace",
+        "boundary_trace",
+        "non_boundary_trace",
+        "non_boundary_trace",
+        "non_boundary_trace",
+        "boundary_trace",
+    ]
+    assert result["decode_steps_detail"][3]["compressor_boundary_write"] is True
+    assert result["decode_steps_detail"][7]["indexer_compressor_boundary_write"] is True
+    assert "dynamic sparse-indexer boundary predicate across arbitrary positions" in result["remaining_limitations"]
+
+
 def test_trace_topk_attention_reference_rows_follow_device_topk_order(tmp_path: Path) -> None:
     snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
 
