@@ -510,7 +510,7 @@ inline void reconfig_packer_data_format(
     // Number of reads per face used for resetting tile position generator for edge masks
     pack_counters_u pack_counters;
     pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;
+    pack_counters.f.pack_reads_per_xy_plane = 1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
 
@@ -570,12 +570,12 @@ inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t tile_c_dim          = TILE_C_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config         = 0)
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim                 = TILE_C_DIM,
+    const std::uint32_t num_faces                  = 4,
+    const bool partial_face                        = false,
+    [[maybe_unused]] const bool narrow_tile        = false,
+    const std::uint32_t relu_config                = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
@@ -614,8 +614,7 @@ inline void configure_pack(
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
     pack_counters_u pack_counters;
     pack_counters.val                       = 0;
-    pack_counters.f.pack_reads_per_xy_plane = face_r_dim; // Number of reads per face
-                                                          // Used for resetting tile position generator for edge masks
+    pack_counters.f.pack_reads_per_xy_plane = 1; // Default 1 — makes non-reduce operations agnostic to this counter; reduce sets it via _llk_pack_reduce_mask_config_
     for (std::uint32_t i = 0; i < NUM_PACKERS; i++)
     {
         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
