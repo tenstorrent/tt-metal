@@ -34,6 +34,10 @@ bool can_use_sharded_optimized_factories(
     }
 
     if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            return false;
+        }
         if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
             return false;
         }
@@ -77,6 +81,9 @@ bool can_use_sharded_optimized_factories(
             grid_size.x,
             grid_size.y);
         return false;
+    }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
     }
     return true;
 }
@@ -138,7 +145,9 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
             "factory is being used");
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
             input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
                                                          // factory, the output has the same shard spec as the input.
         return {TensorSpec(
@@ -153,7 +162,6 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
     auto output_layout = TensorLayout(
         operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
-
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
