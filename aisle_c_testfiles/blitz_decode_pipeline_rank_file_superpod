@@ -62,4 +62,5 @@ rank 60=bh-glx-c10u08 slot=0-31
 rank 61=bh-glx-c10u08 slot=0-31
 rank 62=bh-glx-c10u08 slot=0-31
 rank 63=bh-glx-c10u08 slot=0-31
+# Any Galaxy host not already used for decode ranks works for prefill (rank 64).
 rank 64=bh-glx-c05u02 slot=0-31
