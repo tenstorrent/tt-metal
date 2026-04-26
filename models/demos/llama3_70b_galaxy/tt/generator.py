@@ -557,6 +557,8 @@ class Generator(WarmupForwardMixin):
             padded_batch = 32
 
             # Use batched list for batched prefill, persistent buffer for non-batched
+            if not use_batched_prefill:
+                ttnn.synchronize_device(self.mesh_device)
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
 
             # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
@@ -581,9 +583,7 @@ class Generator(WarmupForwardMixin):
             # if prompt_tokens is not None:  # Guard for warmup
             sampling_module.reset_prompt_tokens(prefill_ids)
             sampling_module.reset_output_state()
-            sampling_module.seed_manager.reset_seed(
-                [sampling_params.seed[slot] for slot in empty_slots], empty_slots
-            )
+            sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
             sampling_module.seed_manager.get_new_values(empty_slots)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,

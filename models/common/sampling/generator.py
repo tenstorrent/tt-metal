@@ -160,8 +160,6 @@ class SamplingGenerator:
         seed = getattr(sampling_params, "seed", None)
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
-        if isinstance(seed, list) and empty_slots and len(seed) > max(empty_slots):
-            seed = [seed[slot] for slot in empty_slots]
         self.seed_manager.reset_seed(seed, empty_slots)
         self.seed_manager.get_new_values(empty_slots, replicate_seeds=replicate_seeds)
         if prompt_tokens is not None:
