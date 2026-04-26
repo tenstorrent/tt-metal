@@ -543,6 +543,7 @@ def load_and_compute_layer_by_layer(
     if compute_reference:
         norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
         hf_model.load_state_dict(norm_with_prefix, strict=False)
+        logger.debug(f"[norm] h_ref {h_ref.dtype=}, norm_weight dtype={norm_dequant['weight'].dtype}")
         with torch.no_grad():
             h_ref = hf_model.norm(h_ref)
         ref_snapshots.append(h_ref)
@@ -570,9 +571,10 @@ def load_and_compute_layer_by_layer(
 
     if compute_reference:
         # Apply lm_head projection: logits = h_ref @ lm_head_weight.T
+        logger.debug(f"[lm_head] h_ref {h_ref.dtype=}, lm_head_weight.dtype={lm_head_dequant['weight'].dtype}")
         lm_head_weight = lm_head_dequant["weight"].to(torch.bfloat16)
         with torch.no_grad():
-            h_ref_lm = torch.nn.functional.linear(h_ref, lm_head_weight)
+            h_ref_lm = torch.nn.functional.linear(h_ref.to(torch.bfloat16), lm_head_weight)
         ref_snapshots.append(h_ref_lm)
         del lm_head_weight
 
