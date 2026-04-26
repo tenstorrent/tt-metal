@@ -33,8 +33,13 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/vector_aligned.hpp>
@@ -235,14 +240,27 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
-        tt_metal::CreateKernel(
-            program,
-            kernel_name,
-            logical_target_core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
+
+        // Create kernel - branch by architecture
+        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+            // Quasar path: Use experimental API
+            tt_metal::experimental::quasar::CreateKernel(
+                program,
+                kernel_name,
+                logical_target_core,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
+        } else {
+            // WH/BH path: Use legacy API
+            tt_metal::CreateKernel(
+                program,
+                kernel_name,
+                logical_target_core,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
+        }
 
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -314,14 +332,27 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
-    CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
-        logical_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
+    // Create kernel - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
+            logical_core,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
+    } else {
+        // WH/BH path: Use legacy API
+        CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
+            logical_core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
+    }
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -342,6 +373,8 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 // 2. `invalidate_cache` is false: hang because periodic HW cache flush is default disabled
 // 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
+    using namespace tt::tt_metal::experimental::metal2_host_api;
+
     CoreCoord core{0, 0};
     const auto& mesh_device = devices_.at(0);
     auto* const device = mesh_device->get_devices()[0];
@@ -353,33 +386,53 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     uint32_t value_to_write = 39;
     bool invalidate_cache =
         true;  // To make sure this test passes on CI set this to true but can be modified for local debug
+
+    // Create program using Metal 2.0 API - no architecture branching needed
+    ProgramSpec spec{
+        .program_id = "l1_data_cache_test",
+        .kernels = {
+            KernelSpec{
+                .unique_id = "poll_l1_kernel",
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
+                .target_nodes = NodeCoord{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)},
+                .num_threads = 1,
+                .config_spec =
+                    DataMovementConfiguration{
+                        .gen1_data_movement_config =
+                            DataMovementConfiguration::Gen1DataMovementConfig{
+                                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                .noc = tt_metal::NOC::NOC_0,
+                                .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC},
+                        .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{}}},
+            KernelSpec{
+                .unique_id = "write_to_break_poll_kernel",
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
+                .target_nodes = NodeCoord{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)},
+                .num_threads = 1,
+                .config_spec = DataMovementConfiguration{
+                    .gen1_data_movement_config =
+                        DataMovementConfiguration::Gen1DataMovementConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = tt_metal::NOC::NOC_1,
+                            .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC},
+                    .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{}}}}};
+
+    tt_metal::Program program = MakeProgramFromSpec(spec);
+
+    // Create semaphore (still use old API for now)
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core, 0);
+
+    // Set runtime args using old API (Metal 2.0 runtime args need kernel handles)
+    // Note: We'd need to get kernel handles from the program to use new API
+    // For now, use SetRuntimeArgs with kernel ID 0 and 1
+    tt_metal::SetRuntimeArgs(
+        program, 0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
+    tt_metal::SetRuntimeArgs(program, 1, core, {l1_unreserved_base, value_to_write, sem0_id});
+
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-
-    uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core, 0);
-
-    tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
-
-    tt_metal::SetRuntimeArgs(
-        program_, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
-
-    tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
-
-    tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
@@ -417,25 +470,53 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     uint32_t read_size = sizeof(uint32_t) * (logical_grid_size.x + logical_grid_size.y);
 
     auto kernel0_l1_address = l1_unreserved_base;
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
-        logical_core_range,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::NOC_0,
-            .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    // Create kernel0 - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+            logical_core_range,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+    } else {
+        // WH/BH path: Use legacy API
+        tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+            logical_core_range,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+    }
 
     auto kernel1_l1_address = l1_unreserved_base + (tt::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
                               (tt::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
-        logical_core_range,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::NOC_1,
-            .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    // Create kernel1 - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+            logical_core_range,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+    } else {
+        // WH/BH path: Use legacy API
+        tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+            logical_core_range,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_1,
+                .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+    }
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
@@ -534,14 +615,27 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
     uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
 
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_wwrite.cpp",
-        logical_core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {base_l1_src_address, dst_lo, dst_hi, num_16b_writes, pcie_xy_enc}});
+    // Create kernel - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_wwrite.cpp",
+            logical_core,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1,
+                .compile_args = {base_l1_src_address, dst_lo, dst_hi, num_16b_writes, pcie_xy_enc}});
+    } else {
+        // WH/BH path: Use legacy API
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_wwrite.cpp",
+            logical_core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {base_l1_src_address, dst_lo, dst_hi, num_16b_writes, pcie_xy_enc}});
+    }
 
     // Create mesh workload and add program
     MeshWorkload mesh_workload;

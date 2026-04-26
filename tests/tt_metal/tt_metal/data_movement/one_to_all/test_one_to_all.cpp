@@ -8,6 +8,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -186,13 +187,26 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
     }
     sender_kernel_path += ".cpp";
 
-    DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
-    auto sender_kernel = CreateKernel(
-        program,
-        sender_kernel_path,
-        mst_logical_core_set,
-        DataMovementConfig{
-            .processor = data_movement_processor, .noc = test_config.noc_id, .compile_args = sender_compile_args});
+    // Create sender kernel - branch by architecture
+    KernelHandle sender_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        sender_kernel = experimental::quasar::CreateKernel(
+            program,
+            sender_kernel_path,
+            mst_logical_core_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
+    } else {
+        // WH/BH path: Use legacy API
+        DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
+        sender_kernel = CreateKernel(
+            program,
+            sender_kernel_path,
+            mst_logical_core_set,
+            DataMovementConfig{
+                .processor = data_movement_processor, .noc = test_config.noc_id, .compile_args = sender_compile_args});
+    }
 
     if (test_config.use_semaphore) {
         vector<uint32_t> receiver_compile_args = {
@@ -205,14 +219,27 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
             (uint32_t)mst_core_coord_packed,
         };
         string receiver_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/receiver_sem.cpp";
-        auto receiver_kernel = CreateKernel(
-            program,
-            receiver_kernel_path,
-            sub_logical_core_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = test_config.noc_id == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0,
-                .compile_args = receiver_compile_args});
+        // Create receiver kernel - branch by architecture
+        KernelHandle receiver_kernel;
+        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+            // Quasar path: Use experimental API
+            receiver_kernel = experimental::quasar::CreateKernel(
+                program,
+                receiver_kernel_path,
+                sub_logical_core_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = receiver_compile_args});
+        } else {
+            // WH/BH path: Use legacy API
+            receiver_kernel = CreateKernel(
+                program,
+                receiver_kernel_path,
+                sub_logical_core_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = test_config.noc_id == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0,
+                    .compile_args = receiver_compile_args});
+        }
         SetRuntimeArgs(program, receiver_kernel, sub_logical_core_set, {});
     }
 

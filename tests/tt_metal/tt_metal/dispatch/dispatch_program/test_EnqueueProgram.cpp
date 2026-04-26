@@ -48,6 +48,8 @@
 #include "env_lib.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
+#include <tt-metalium/experimental/host_api.hpp>
+#include <umd/device/types/arch.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -106,15 +108,26 @@ KernelHandle create_kernel(
         case HalProgrammableCoreType::TENSIX:
             switch (processor_class) {
                 case HalProcessorClassType::DM:
-                    return CreateKernel(
-                        program,
-                        kernel_path,
-                        cr_set,
-                        DataMovementConfig{
-                            .processor = static_cast<DataMovementProcessor>(processor_id),
-                            .noc = static_cast<NOC>(processor_id),
-                            .compile_args = compile_args,
-                        });
+                    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+                        return experimental::quasar::CreateKernel(
+                            program,
+                            kernel_path,
+                            cr_set,
+                            experimental::quasar::QuasarDataMovementConfig{
+                                .num_threads_per_cluster = 1,
+                                .compile_args = compile_args,
+                            });
+                    } else {
+                        return CreateKernel(
+                            program,
+                            kernel_path,
+                            cr_set,
+                            DataMovementConfig{
+                                .processor = static_cast<DataMovementProcessor>(processor_id),
+                                .noc = static_cast<NOC>(processor_id),
+                                .compile_args = compile_args,
+                            });
+                    }
                     break;
                 case HalProcessorClassType::COMPUTE:
                     return CreateKernel(
@@ -146,17 +159,31 @@ KernelHandle create_kernel(
 }
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
-    CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/blank.cpp",
-        cr_set,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+        experimental::quasar::CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            cr_set,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
 
-    CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/blank.cpp",
-        cr_set,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        experimental::quasar::CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            cr_set,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    } else {
+        CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            cr_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+        CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            cr_set,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    }
 
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
@@ -438,19 +465,34 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_compute)},
         {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
 
-    auto dm_kernel0 = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
+    KernelHandle dm_kernel0, dm_kernel1;
+    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+        dm_kernel0 = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .defines = dm_defines0});
 
-    auto dm_kernel1 = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
+        dm_kernel1 = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .defines = dm_defines1});
+    } else {
+        dm_kernel0 = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
+
+        dm_kernel1 = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
+    }
 
     auto compute_kernel = CreateKernel(
         program,
@@ -557,19 +599,34 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
 
-    auto dummy_kernel0 = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
+    KernelHandle dummy_kernel0, dummy_kernel1;
+    if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+        dummy_kernel0 = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .defines = dm_defines0});
 
-    auto dummy_kernel1 = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-        cr_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
+        dummy_kernel1 = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .defines = dm_defines1});
+    } else {
+        dummy_kernel0 = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = dm_defines0});
+
+        dummy_kernel1 = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = dm_defines1});
+    }
 
     auto dummy_compute_kernel = CreateKernel(
         program,
@@ -1113,11 +1170,19 @@ TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
-            cr_set,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+            experimental::quasar::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
+                cr_set,
+                experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+        } else {
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
+                cr_set,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        }
 
         workload.add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
@@ -1270,11 +1335,19 @@ TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatch
         CoreRangeSet cr_set({cr});
         // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
         // added separately
-        CreateKernel(
-            program_,
-            "tt_metal/kernels/dataflow/blank.cpp",
-            cr_set,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        if (MetalContext::instance().get_cluster().arch() == tt::ARCH::QUASAR) {
+            experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/blank.cpp",
+                cr_set,
+                experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+        } else {
+            CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/blank.cpp",
+                cr_set,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        }
 
         distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
         Finish(device->mesh_command_queue());

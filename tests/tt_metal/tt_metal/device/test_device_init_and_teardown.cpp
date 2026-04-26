@@ -20,6 +20,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -46,19 +47,37 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
 
     CoreCoord compute_grid_size = mesh_device->compute_with_storage_grid_size();
     CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
-    CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/blank.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
 
-    CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/blank.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+    // Create DataMovement kernels - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            all_cores,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+
+        experimental::quasar::CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            all_cores,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    } else {
+        // WH/BH path: Use legacy API
+        CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            all_cores,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
+
+        CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/blank.cpp",
+            all_cores,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+    }
 
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
