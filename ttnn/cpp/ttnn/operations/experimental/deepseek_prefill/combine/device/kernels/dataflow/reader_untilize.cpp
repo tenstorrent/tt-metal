@@ -49,10 +49,10 @@ void kernel_main() {
     //   7: read_batch_size                       - number of rows per untilize batch (e.g. 32)
     //   8: cb_signal_id                          - CB for reader->compute signalling (one page per batch)
     //   9: aligned_dispatched_buffer_page_size   - aligned page size of dispatched_buffer tensor
-    //  10: max_dispatched_tokens_per_expert      - max tokens per expert
-    //  11: cb_factor                             - CB size reduction factor (1 for Blackhole, 4 for Wormhole)
-    //  12: tile_height                            - tile height in rows (e.g. 32)
-    //  13: tile_width                             - tile width in columns (e.g. 32)
+    //  10: cb_factor                             - CB size reduction factor (1 for Blackhole, 4 for Wormhole)
+    //  11: tile_height                            - tile height in rows (e.g. 32)
+    //  12: tile_width                             - tile width in columns (e.g. 32)
+    //  13: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
     //  14: core_id                               - local index within the owning sender's idle group (0-based)
     //  15: num_idle_cores                        - size of the owning sender's idle group (k_s)
     //  16: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
@@ -68,10 +68,10 @@ void kernel_main() {
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(7);
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(8);
     constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(9);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_factor = get_compile_time_arg_val(11);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(12);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_factor = get_compile_time_arg_val(10);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(11);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(12);
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(13);
     constexpr uint32_t core_id = get_compile_time_arg_val(14);
     constexpr uint32_t num_idle_cores = get_compile_time_arg_val(15);
     constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(16);
@@ -79,8 +79,6 @@ void kernel_main() {
     constexpr auto dispatched_buffer_args = TensorAccessorArgs<18>();
 
     constexpr uint32_t tiles_per_batch = hidden_size / tile_width;
-    constexpr uint32_t expert_stride_tile =
-        ((max_dispatched_tokens_per_expert + tile_height - 1) / tile_height) * (hidden_size / tile_width);
 
     // ===== Runtime args =====
     //   0: counter_ready_semaphore_id  - idle core waits for this before reading token counts
@@ -126,15 +124,26 @@ void kernel_main() {
         TensorAccessor(dispatched_buffer_args, dispatched_buffer_addr, aligned_dispatched_buffer_page_size);
     uint32_t buffer_base = get_write_ptr(cb_dispatched_buffer_id);
 
+    // Dynamic dispatch buffer: experts are packed contiguously, each occupying
+    // ceil(local_expert_counts[e] / tile_height) tile rows. Compute the per-expert
+    // tile-row offset as a running prefix sum over the local counts.
+    uint32_t start_page_tiled = 0;
+    for (uint32_t e = 0; e < expert_start_idx; e++) {
+        start_page_tiled += ((local_expert_counts[e] + tile_height - 1) / tile_height) * tiles_per_batch;
+    }
+
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
         uint32_t expert_tokens = local_expert_counts[local_expert];
-        if (expert_tokens > max_dispatched_tokens_per_expert) {
-            expert_tokens = max_dispatched_tokens_per_expert;
+        // Clamp to the dispatch buffer capacity to mirror reader_dispatch's overflow guard.
+        // start_page_tiled is in tiles; convert via tile_height to compare with the row-count cap.
+        uint32_t start_token = (start_page_tiled / tiles_per_batch) * tile_height;
+        if (start_token >= max_dispatch_buffer_token_size) {
+            expert_tokens = 0;
+        } else if (start_token + expert_tokens > max_dispatch_buffer_token_size) {
+            expert_tokens = max_dispatch_buffer_token_size - start_token;
         }
-        DPRINT_COMBINE << "Expert " << local_expert << ": tokens=" << expert_tokens
-                       << ", max_dispatched_tokens_per_expert=" << max_dispatched_tokens_per_expert << ENDL();
+        DPRINT_COMBINE << "Expert " << local_expert << ": tokens=" << expert_tokens << ENDL();
 
-        uint32_t start_page_tiled = local_expert * expert_stride_tile;
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
         // Round-robin batch assignment across the idle cores in this sender's group.
@@ -171,6 +180,8 @@ void kernel_main() {
             // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
             // sender, signal sender, pop untilize CB) now run on zero_init_writer.
         }
+        // Advance to the next expert's region in the packed dispatch buffer.
+        start_page_tiled += ((expert_tokens + tile_height - 1) / tile_height) * tiles_per_batch;
     }
 
     // Send sentinel to compute to break out of its loop

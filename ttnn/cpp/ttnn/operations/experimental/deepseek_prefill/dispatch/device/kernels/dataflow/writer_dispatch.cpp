@@ -89,9 +89,10 @@ void kernel_main() {
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(47);
 
     // Batch configuration (index 48) — read_batch_size not used by writer
+    // Index 49 — max_dispatch_buffer_token_size (used by reader only)
 
-    // TensorAccessorArgs for all 7 tensors (starting at index 49)
-    constexpr auto input_args = TensorAccessorArgs<49>();
+    // TensorAccessorArgs for all 7 tensors (starting at index 50)
+    constexpr auto input_args = TensorAccessorArgs<50>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();

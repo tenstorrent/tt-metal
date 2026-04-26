@@ -58,6 +58,7 @@ struct CombineInputs {
     ttnn::Tensor dispatched_buffer;
     ttnn::Tensor dispatched_metadata;
     ttnn::Tensor expert_token_counts;
+    ttnn::Tensor expert_region_offsets;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

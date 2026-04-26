@@ -19,10 +19,12 @@ void bind_extract(nb::module_& mod) {
         R"doc(
             Extract operation for DeepSeek prefill MoE.
 
-            Each device independently reads start[global_expert_id] and counts[global_expert_id]
-            from its own DRAM and copies
-            global_tensor[start : start + ceil_tile(counts), :]
-            into the first rows/tokens of the output tensor.
+            Each device independently looks up its global expert id via
+            global_expert_id = global_expert_idx_table[local_expert_id]
+            (all device-resident; no host round-trip), reads start[global_expert_id] and
+            counts[global_expert_id] from its own DRAM, and copies
+            global_tensor[start : start + ceil_tile(counts), :] into the first rows/tokens
+            of the output tensor.
 
             The output has shape [max_dispatched_tokens_per_expert, hidden_dim]; rows/tokens beyond
             ceil_tile(counts[global_expert_id]) are left uninitialized.
@@ -33,7 +35,9 @@ void bind_extract(nb::module_& mod) {
                     DRAM interleaved, giving the per-expert starting row/token offsets.
                 counts (ttnn.Tensor): 1D tensor (or 2D with first dim == 1) of UINT32,
                     DRAM interleaved, giving the per-expert row/token counts.
-                global_expert_id (int): UINT32 scalar selecting which expert's slice to extract.
+                global_expert_idx_table (ttnn.Tensor): 1D tensor (or 2D with first dim == 1) of
+                    UINT32, DRAM interleaved, mapping local_expert_id -> global_expert_id.
+                local_expert_id (int): UINT32 scalar index into global_expert_idx_table.
                 max_dispatched_tokens_per_expert (int): Host-known upper bound on the number of
                     rows/tokens that can be extracted per expert. Must be a multiple of TILE_HEIGHT (32).
                     Defines the output tensor's row/token dimension.
@@ -46,8 +50,9 @@ void bind_extract(nb::module_& mod) {
         nb::arg("global_tensor").noconvert(),
         nb::arg("start").noconvert(),
         nb::arg("counts").noconvert(),
+        nb::arg("global_expert_idx_table").noconvert(),
         nb::kw_only(),
-        nb::arg("global_expert_id"),
+        nb::arg("local_expert_id"),
         nb::arg("max_dispatched_tokens_per_expert"));
 }
 

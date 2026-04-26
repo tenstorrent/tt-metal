@@ -25,6 +25,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.expert_token_counts.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Experts token counter must be ROW_MAJOR layout");
+    TT_FATAL(
+        tensor_args.expert_region_offsets.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "Expert region offsets must be ROW_MAJOR layout");
 
     // Validate dtypes
     TT_FATAL(
@@ -40,6 +43,17 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
             tensor_args.expert_token_counts.dtype() == DataType::UINT32,
         "Experts token counter must be INT32 or UINT32, got {}",
         tensor_args.expert_token_counts.dtype());
+    TT_FATAL(
+        tensor_args.expert_region_offsets.dtype() == DataType::INT32 ||
+            tensor_args.expert_region_offsets.dtype() == DataType::UINT32,
+        "Expert region offsets must be INT32 or UINT32, got {}",
+        tensor_args.expert_region_offsets.dtype());
+    TT_FATAL(
+        tensor_args.expert_region_offsets.tensor_spec().logical_shape() ==
+            tensor_args.expert_token_counts.tensor_spec().logical_shape(),
+        "expert_region_offsets shape {} must match expert_token_counts shape {}",
+        tensor_args.expert_region_offsets.tensor_spec().logical_shape(),
+        tensor_args.expert_token_counts.tensor_spec().logical_shape());
 
     // Validate output memory config
     TT_FATAL(
@@ -47,7 +61,7 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         "Output memory config must be interleaved (L1 or DRAM), not sharded");
 
     // Validate tensor shapes are compatible
-    // Dispatch outputs are 5D: (per_device_batch, 1, experts_per_chip, max_dispatched_tokens, hidden_dim/metadata_len)
+    // Dispatch outputs are 4D: (per_device_batch, 1, max_dispatch_buffer_token_size, hidden_dim/metadata_len)
     // Counter is 3D: (num_dispatch_groups, per_device_batch, num_routed_experts)
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
     auto metadata_shape = tensor_args.dispatched_metadata.tensor_spec().logical_shape();
@@ -58,7 +72,7 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         "First dimension (per_device_batch) must match across all input tensors");
     TT_FATAL(
         dispatched_shape[2] == metadata_shape[2],
-        "experts_per_chip must match: dispatched[2]={} vs metadata[2]={}",
+        "Flat buffer dim must match: dispatched[2]={} vs metadata[2]={}",
         dispatched_shape[2],
         metadata_shape[2]);
     TT_FATAL(
@@ -108,6 +122,7 @@ ttnn::Tensor prefill_combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
     uint32_t num_experts_per_tok,
@@ -136,6 +151,7 @@ ttnn::Tensor prefill_combine(
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,
-            .expert_token_counts = expert_token_counts});
+            .expert_token_counts = expert_token_counts,
+            .expert_region_offsets = expert_region_offsets});
 }
 }  // namespace ttnn::prim
