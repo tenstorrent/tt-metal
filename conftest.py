@@ -1200,12 +1200,23 @@ def ttnn_graph_report(request):
             logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
         else:
             report_path.mkdir(parents=True, exist_ok=True)
-            json_path = report_path / "graph_capture.json"
+            if ttnn.distributed_context_is_initialized():
+                rank = int(ttnn.distributed_context_get_rank())
+                world_size = int(ttnn.distributed_context_get_size())
+            else:
+                rank, world_size = 0, 1
+            json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
             ttnn.graph.end_graph_capture_to_file(str(json_path))
-            if json_path.exists():
+            if ttnn.distributed_context_is_initialized():
+                ttnn.distributed_context_barrier()
+            if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
                 from ttnn.graph_report import import_report
 
-                import_report(json_path, report_path)
+                import_report(report_path, report_path)
+                for p in sorted(report_path.glob("graph_capture_*.json")):
+                    p.unlink(missing_ok=True)
+            if ttnn.distributed_context_is_initialized():
+                ttnn.distributed_context_barrier()
 
             config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)

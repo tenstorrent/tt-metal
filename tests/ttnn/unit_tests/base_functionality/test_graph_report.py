@@ -46,7 +46,9 @@ def _make_report(
     metadata=None,
 ):
     """Build a complete JSON report dict matching C++ output format."""
-    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": metadata or {}}
+    md = dict(metadata) if metadata is not None else {}
+    md.setdefault("rank", 0)
+    report = {"version": 1, "graph": graph, "devices": devices or [], "metadata": md}
     if per_operation_buffers is not None:
         report["per_operation_buffers"] = per_operation_buffers
     if python_io is not None:
@@ -62,6 +64,102 @@ def _import_to_db(report_dict, tmp_path):
     db_path = graph_report.import_report(report_path, tmp_path / "output")
     conn = sqlite3.connect(db_path)
     return conn, conn.cursor()
+
+
+_SQLITE_TABLES_WITH_RANK = (
+    "devices",
+    "operations",
+    "operation_arguments",
+    "tensors",
+    "device_tensors",
+    "buffers",
+    "captured_graph",
+    "nodes",
+    "edges",
+    "errors",
+    "stack_traces",
+    "input_tensors",
+    "output_tensors",
+    "buffer_pages",
+)
+
+
+def _assert_nonempty_tables_rank_equals(cursor, expected_rank: int) -> None:
+    """For every table that has a rank column, rows must all equal ``expected_rank``."""
+    for table in _SQLITE_TABLES_WITH_RANK:
+        cursor.execute(f"SELECT COUNT(*), COALESCE(MIN(rank), -1), COALESCE(MAX(rank), -1) FROM {table}")
+        cnt, rmin, rmax = cursor.fetchone()
+        if cnt:
+            assert (
+                rmin == rmax == expected_rank
+            ), f"table {table}: expected rank {expected_rank} on all {cnt} row(s), got min={rmin} max={rmax}"
+
+
+class TestImportReportMultiFileOperationIds:
+    """import_report over multiple JSON files: UNIQUE(operation_id, rank) and per-rank file stride."""
+
+    @staticmethod
+    def _minimal_single_op_graph(op_name="ttnn.relu"):
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": op_name},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_end",
+                "params": {"name": op_name},
+                "connections": [],
+                "duration_ns": 100,
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    def _import_report_dir(self, reports, tmp_path):
+        """Write JSON reports into a directory and run import_report on that directory."""
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        for filename, report_dict in reports:
+            with open(report_dir / filename, "w") as f:
+                json.dump(report_dict, f)
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        return conn, conn.cursor()
+
+    def test_same_numeric_operation_id_for_different_ranks(self, tmp_path):
+        """Two captures with different ranks may both assign operation_id 1 (disambiguated by rank)."""
+        r0 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 0})
+        r1 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("first.json", r0), ("second.json", r1)], tmp_path)
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
+        assert cursor.fetchall() == [(1, 0), (1, 1)]
+        conn.close()
+
+    def test_second_json_same_rank_shifts_operation_ids(self, tmp_path):
+        """Two JSON files for the same rank: second file uses base_operation_id = stride (10000)."""
+        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
+        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
+        conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b)], tmp_path)
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY operation_id")
+        rows = cursor.fetchall()
+        assert rows == [(1, 0), (stride + 1, 0)]
+        conn.close()
+
+    def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
+        """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
+        r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
+        r0b = _make_report(self._minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
+        r1 = _make_report(self._minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("a.json", r0a), ("b.json", r0b), ("c.json", r1)], tmp_path)
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+        cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
+        assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+        conn.close()
 
 
 class TestImportGraphUnit:
@@ -760,6 +858,138 @@ class TestImportGraphUnit:
 
         conn.close()
 
+    def test_imported_sql_rows_rank_matches_report_metadata(self, tmp_path):
+        """Every populated table with a ``rank`` column stores ``metadata.rank`` from the JSON report."""
+        expected_rank = 6
+        devices = [{"device_id": 0, "num_dram_channels": 12, "l1_num_banks": 64}]
+
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 7]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::relu", "inputs": "1"},
+                "connections": [3, 4],
+                "input_tensors": [1],
+                "arguments": ["x"],
+            },
+            {
+                "counter": 3,
+                "node_type": "buffer_allocate",
+                "params": {
+                    "device_id": "0",
+                    "address": "12345",
+                    "size": "4096",
+                    "page_size": "2048",
+                    "type": "L1",
+                    "layout": "INTERLEAVED",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "101",
+                    "shape": "[1,1,32,32]",
+                    "dtype": "DataType.BFLOAT16",
+                    "layout": "Layout.TILE",
+                    "device_id": 0,
+                    "address": 9999,
+                    "buffer_type": "0",
+                    "device_tensors": json.dumps([{"device_id": 0, "address": 9999}]),
+                },
+                "connections": [],
+            },
+            {
+                "counter": 5,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::relu"},
+                "connections": [4],
+                "duration_ns": 1000,
+            },
+            {"counter": 7, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn::relu",
+                "arguments": {"x": "t42"},
+                "input_tensor_ids": [42],
+                "output_tensor_ids": [101],
+                "python_stack_trace": ['  File "model.py", line 10, in forward\n    ttnn.relu(x)'],
+            }
+        ]
+        report = _make_report(
+            graph,
+            devices=devices,
+            python_io=python_io,
+            metadata={
+                "rank": expected_rank,
+                "world_size": 4,
+                "capture_timestamp_ns": 0,
+            },
+        )
+        report["buffer_pages"] = [
+            {
+                "device_id": 0,
+                "address": 1,
+                "core_y": 0,
+                "core_x": 0,
+                "bank_id": 0,
+                "page_index": 0,
+                "page_address": 0,
+                "page_size": 2048,
+                "buffer_type": 0,
+            }
+        ]
+
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT value FROM report_metadata WHERE key = 'rank'")
+        assert cursor.fetchone()[0] == str(expected_rank)
+
+        _assert_nonempty_tables_rank_equals(cursor, expected_rank)
+        conn.close()
+
+    def test_errors_table_rank_matches_metadata(self, tmp_path):
+        """Error rows from ``node_type == 'error'`` carry the same rank as the rest of the import."""
+        expected_rank = 2
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::bad_op", "inputs": "1"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "error",
+                "params": {
+                    "error_type": "exception",
+                    "error_message": "fail",
+                    "error_operation": "ttnn::bad_op",
+                },
+                "connections": [],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        report = _make_report(mock_graph, metadata={"rank": expected_rank, "world_size": 3})
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT COUNT(*), MIN(rank), MAX(rank) FROM errors")
+        cnt, rmin, rmax = cursor.fetchone()
+        assert cnt == 1
+        assert rmin == rmax == expected_rank
+        conn.close()
+
     def test_cluster_mesh_descriptors_saved(self, tmp_path):
         """Test that cluster and mesh descriptors are saved during import."""
         graph = [
@@ -1051,14 +1281,14 @@ class TestImportValidation:
         conn.commit()
 
         # Manually insert a dangling reference (simulating the old bug)
-        cursor.execute("INSERT INTO input_tensors VALUES (0, 0, 999)")
+        cursor.execute("INSERT INTO input_tensors VALUES (0, 0, 999, 0)")
         conn.commit()
 
         # Run validation directly
         warnings = graph_report._validate_graph_integrity(
-            operations_batch=[(0, "ttnn::relu", 0.0)],
+            operations_batch=[(0, "ttnn::relu", 0.0, 0)],
             tensors_batch=[],
-            input_tensors_batch=[(0, 0, 999)],
+            input_tensors_batch=[(0, 0, 999, 0)],
             output_tensors_batch=[],
             operation_arguments_batch=[],
             device_tensors_batch=[],
