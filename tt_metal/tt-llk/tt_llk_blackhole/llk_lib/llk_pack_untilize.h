@@ -14,6 +14,7 @@
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "llk_pack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -155,6 +156,12 @@ inline void _llk_pack_untilize_init_(
         static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
     }
 
+    llk::san::pack_operand_check(
+        llk::san::IGNORE, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_init<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row);
+    // sstanisic todo: implement
+    // llk_san_extended_state_mask(llk_san_cfg::Addrmod, llk_san_cfg::Mop, llk_san_cfg::CH0Strides, llk_san_cfg::AdcXX); // GPRs are not tracked here for now
+
     _llk_pack_untilize_configure_addrmod_();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
@@ -211,6 +218,10 @@ inline void _llk_pack_untilize_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
 
+    llk::san::pack_operand_check(
+        llk::san::IGNORE, llk::san::IGNORE, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, llk::san::IGNORE, llk::san::IGNORE);
+    llk::san::operation_check<llk::san::Operation::PackUntilize>(block_ct_dim, full_ct_dim, narrow_row);
+
     /*
     full_ct_dim represents the number of input tiles.
     For input widths greater than 8 tiles, input is split into blocks of equal sizes,
@@ -244,6 +255,12 @@ inline void _llk_pack_untilize_(
 
 inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
 {
+    llk::san::pack_operand_check(
+        llk::san::IGNORE, pack_src_format, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE, llk::san::IGNORE);
+    // sstanisic todo: implement
+    // llk::san::uninit<llk::san::Operation::PackUntilize>();
+    // llk_san_extended_state_mask<true>(llk_san_cfg::CH0Strides);
+
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);

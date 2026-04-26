@@ -15,6 +15,7 @@
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "sanitizer/api.h"
 #include "sfpi.h"
 
 using namespace ckernel;
@@ -169,6 +170,23 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // 16x16 inputs not supported - no dedicated math path; falls to 32x32 default which is incorrect for < 4 faces
     LLK_ASSERT(!(unpA_num_faces == 1 && unpB_num_faces == 1), "16x16 by 16x16 matmul is not supported");
+
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces);
+    llk::san::operation_init<llk::san::Operation::UnpackABMatmul>(
+        kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
+
+    // sstanisic todo: implement
+    // llk_san_extended_state_mask(llk_san_cfg::Transpose, llk_san_cfg::AdcXX, llk_san_cfg::Mop); // ADCZW counters and GPRS not tracked here for now
+
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -227,6 +245,9 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t rt_dim   = 1,
     const std::uint32_t kt_dim   = 1)
 {
+    llk::san::operation_check<llk::san::Operation::UnpackABMatmul>(
+        kernel_broadcast_a, kernel_broadcast_b, ct_dim, rt_dim, kt_dim, unpA_partial_face, unpB_partial_face);
+
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 

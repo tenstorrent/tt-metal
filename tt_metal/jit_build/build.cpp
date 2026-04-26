@@ -258,6 +258,34 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT_ONLY ";
     }
 
+    const auto& san = rtoptions.get_sanitizer_settings();
+
+    // sanitizer and checkpoint can't both be enabled because they overlap.
+    TT_ASSERT(!san.enabled || !rtoptions.get_checkpoint_enabled());
+
+    if (san.enabled) {
+        this->defines_ += "-DLLK_SAN_ENABLE ";
+
+        if (san.method == tt::llrt::SanitizerReportMethod::Assert) {
+            this->defines_ += "-DLLK_SAN_SETTING_ASSERT ";
+        } else if (san.method == tt::llrt::SanitizerReportMethod::Print) {
+            this->defines_ += "-DLLK_SAN_SETTING_PRINT ";
+        }
+
+        auto add_sanitizer_toggle = [&](const std::optional<bool>& opt, std::string_view name) {
+            if (opt.has_value()) {
+                this->defines_ += "-DLLK_SAN_SETTING_" + std::string(name) + "=" + std::to_string(*opt) + " ";
+            }
+        };
+
+        add_sanitizer_toggle(san.pedantic, "PEDANTIC");
+        add_sanitizer_toggle(san.warn, "WARN");
+        add_sanitizer_toggle(san.error, "ERROR");
+        add_sanitizer_toggle(san.info, "INFO");
+        add_sanitizer_toggle(san.fault, "FAULT");
+        add_sanitizer_toggle(san.internal, "INTERNAL");
+    }
+
     if (rtoptions.get_disable_sfploadmacro()) {
         this->defines_ += "-DDISABLE_SFPLOADMACRO ";
     }

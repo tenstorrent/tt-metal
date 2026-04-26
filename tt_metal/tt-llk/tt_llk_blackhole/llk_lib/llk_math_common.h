@@ -10,6 +10,7 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel::math;
 
@@ -36,6 +37,9 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    // LLK sanitizer hooks
+    llk::san::math_operand_configure(srca_data_format, srcb_data_format);
+
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
@@ -153,6 +157,8 @@ inline void _llk_math_debug_dump_seek_(std::uint8_t offset)
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
+    llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
@@ -166,6 +172,8 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
@@ -179,6 +187,8 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");

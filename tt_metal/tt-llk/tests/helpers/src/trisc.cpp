@@ -14,6 +14,7 @@
 #endif
 #include "boot.h"
 #include "profiler.h"
+#include "sanitizer/api.h"
 
 #ifdef LLK_PROFILER
 
@@ -26,6 +27,13 @@ std::uint32_t open_zone_cnt = 0;
 
 } // namespace llk_profiler
 
+#endif
+
+#if defined(LLK_SAN_ENABLE)
+namespace llk::san
+{
+extern SanitizerState* const sanitizer = reinterpret_cast<SanitizerState*>(0x80000);
+} // namespace llk::san
 #endif
 
 // Mailbox addresses
@@ -81,6 +89,8 @@ int main(void)
     ckernel::reset_cfg_state_id();
     ckernel::reset_dest_offset_id();
 #endif
+
+    llk::san::thread_init();
 
 #if defined(LLK_PROFILER)
     llk_profiler::reset();
