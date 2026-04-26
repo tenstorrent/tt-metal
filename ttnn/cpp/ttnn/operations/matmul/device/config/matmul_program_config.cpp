@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mutex>
+#include <unordered_map>
+#include <optional>
+
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
@@ -199,6 +203,127 @@ bool can_cbs_fit_in_l1(
         utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype),
         bias_single_tile_size);
     return size < max_l1_space;
+}
+
+/**
+ * @brief Key structure for the Matmul Fallback Cache.
+ */
+struct MatmulCacheKey {
+    uint32_t M, K, N;
+    uint32_t grid_x, grid_y;
+    ttnn::Layout layout;
+    bool transpose_a, transpose_b;
+
+    bool operator==(const MatmulCacheKey& other) const {
+        return M == other.M && K == other.K && N == other.N && grid_x == other.grid_x && grid_y == other.grid_y &&
+               layout == other.layout && transpose_a == other.transpose_a && transpose_b == other.transpose_b;
+    }
+};
+
+/**
+ * @brief Custom hash function for MatmulCacheKey.
+ */
+struct MatmulCacheHash {
+    std::size_t operator()(const MatmulCacheKey& k) const {
+        std::size_t h = 0;
+        auto hash_combine = [&](auto val) { h ^= std::hash<decltype(val)>{}(val) + 0x9e3779b9 + (h << 6) + (h >> 2); };
+        hash_combine(k.M);
+        hash_combine(k.K);
+        hash_combine(k.N);
+        hash_combine(k.grid_x);
+        hash_combine(k.grid_y);
+        hash_combine(static_cast<int>(k.layout));
+        hash_combine(k.transpose_a);
+        hash_combine(k.transpose_b);
+        return h;
+    }
+};
+
+/**
+ * @brief Thread-safe singleton cache for Matmul program configurations.
+ */
+class MatmulFallbackCache {
+public:
+    static MatmulFallbackCache& get_instance() {
+        static MatmulFallbackCache instance;
+        return instance;
+    }
+
+    std::optional<MatmulProgramConfig> query(const MatmulCacheKey& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = cache_.find(key);
+        return (it != cache_.end()) ? std::make_optional(it->second) : std::nullopt;
+    }
+
+    void insert(const MatmulCacheKey& key, const MatmulProgramConfig& config) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cache_[key] = config;
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_map<MatmulCacheKey, MatmulProgramConfig, MatmulCacheHash> cache_;
+};
+
+/**
+ * @brief Generates an optimized configuration based on hardware-specific heuristics.
+ */
+MatmulProgramConfig generate_optimized_heuristic(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::prim::MatmulParams& attributes) {
+    const auto& a_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
+    const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
+
+    const uint32_t m_tiles = a_shape[-2] / ttnn::TILE_SIZE;
+    const uint32_t k_tiles = a_shape[-1] / ttnn::TILE_SIZE;
+    const uint32_t n_tiles = b_shape[-1] / ttnn::TILE_SIZE;
+
+    uint32_t out_subblock_h = 1;
+    uint32_t out_subblock_w = 1;
+    uint32_t in0_block_w = 1;
+
+    // Rule 1 & 2: Performance Scaling
+    if (m_tiles >= 8 && n_tiles >= 8) {
+        out_subblock_h = 2;
+        out_subblock_w = 4;
+        in0_block_w = 2;
+    } else if (m_tiles >= 4 && n_tiles >= 4) {
+        out_subblock_h = 2;
+        out_subblock_w = 2;
+        in0_block_w = 2;
+    }
+
+    // Rule 3: Memory Safety (OOM Prevention)
+    if (k_tiles > 256) {
+        in0_block_w = 1;
+    }
+
+    auto device = input_tensor_a.device();
+    auto grid_size = device->compute_with_storage_grid_size();
+
+    // Work distribution across the compute grid
+    uint32_t per_core_M = tt::div_up(m_tiles, std::max(1u, (uint32_t)grid_size.y));
+    uint32_t per_core_N = tt::div_up(n_tiles, std::max(1u, (uint32_t)grid_size.x));
+
+    // Ensure per_core factors are divisible by subblock dimensions
+    per_core_M = tt::div_up(per_core_M, out_subblock_h) * out_subblock_h;
+    per_core_N = tt::div_up(per_core_N, out_subblock_w) * out_subblock_w;
+
+    return MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = grid_size,
+        .in0_block_w = (std::size_t)in0_block_w,
+        .out_subblock_h = (std::size_t)out_subblock_h,
+        .out_subblock_w = (std::size_t)out_subblock_w,
+        .out_block_h = (std::size_t)per_core_M,
+        .out_block_w = (std::size_t)per_core_N,
+        .per_core_M = (std::size_t)per_core_M,
+        .per_core_N = (std::size_t)per_core_N,
+        .transpose_mcast = false,
+        .fused_activation = attributes.user_fused_activation,
+        .fuse_batch = true};
 }
 
 /*********************************    FACTORIES    *****************************************************/
@@ -992,59 +1117,30 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
-    auto config = generate_matmul_program_config(
-        input_tensor_a,
-        input_tensor_b,
-        transpose_a,
-        transpose_b,
-        bias_single_tile_size,
-        attributes.output_mem_config,
-        attributes.compute_kernel_config,
-        attributes.user_core_coord,
-        attributes.user_fused_activation,
-        attributes.user_run_batched,
-        attributes.output_dtype.value_or(input_tensor_a.dtype()));
-    log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
-    // Sanity checks for matmul program configs
-    std::visit(
-        [input_tensor_a](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.x <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().x,
-                    "Number of columns in matmul compute grid exceeds maximum device "
-                    "compute grid size!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.y <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().y,
-                    "Number of rows in matmul compute grid exceeds maximum device "
-                    "compute grid size!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.x > 0,
-                    "Number of columns in matmul compute grid must be greater "
-                    "than 0!");
-                TT_FATAL(
-                    program_config.compute_with_storage_grid_size.y > 0,
-                    "Number of rows in matmul compute grid must be greater than 0!");
-                TT_FATAL(program_config.in0_block_w > 0, "in0_block_w must be greater than 0!");
-                TT_FATAL(program_config.out_subblock_h > 0, "out_subblock_h must be greater than 0!");
-                TT_FATAL(program_config.out_subblock_w > 0, "out_subblock_w must be greater than 0!");
-                TT_FATAL(program_config.per_core_M > 0, "per_core_M must be greater than 0!");
-                TT_FATAL(program_config.per_core_N > 0, "per_core_N must be greater than 0!");
-                TT_FATAL(
-                    program_config.per_core_M % program_config.out_subblock_h == 0,
-                    "per_core_M must be divisible by out_subblock_h!");
-                TT_FATAL(
-                    program_config.per_core_N % program_config.out_subblock_w == 0,
-                    "per_core_N must be divisible by out_subblock_w!");
-            }
-        },
-        config);
+    auto device = input_tensor_a.device();
+    auto grid = device->compute_with_storage_grid_size();
+
+    // Fast lookup in Fallback Cache
+    MatmulCacheKey key{
+        input_tensor_a.logical_shape()[-2],
+        input_tensor_a.logical_shape()[-1],
+        input_tensor_b.logical_shape()[-1],
+        (uint32_t)grid.x,
+        (uint32_t)grid.y,
+        input_tensor_a.layout(),
+        transpose_a,
+        transpose_b};
+
+    auto& cache = MatmulFallbackCache::get_instance();
+    if (auto cached = cache.query(key)) {
+        return *cached;
+    }
+
+    // Heuristic calculation for optimized performance and memory safety
+    auto config = generate_optimized_heuristic(input_tensor_a, input_tensor_b, transpose_a, transpose_b, attributes);
+
+    cache.insert(key, config);
     return config;
 }
 
