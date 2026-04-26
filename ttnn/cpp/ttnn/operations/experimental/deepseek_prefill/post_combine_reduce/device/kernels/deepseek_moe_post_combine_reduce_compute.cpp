@@ -7,7 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
-#include "api/compute/tilize.h"
+#include "ttnn/kernel_lib/tilize_helpers.hpp"
 
 constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;
 constexpr uint32_t cb_weights = tt::CBIndex::c_1;
@@ -44,12 +44,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < TOKENS_PER_CORE; ++i) {
         mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
 
-        // In the DeepSeek path, "first_local" tracks whether we've started the
-        // accumulator with a truly local expert; in the GPT-OSS path,
-        // "first_active" tracks whether we've picked a non-zero-weight expert.
-        // In both cases a single pass through num_experts is made, skipping
-        // inactive experts except when a per-token fallback is needed to
-        // initialise the accumulator.
+        // first_active tracks whether we've picked the accumulator-initializing
+        // expert yet: the DeepSeek path looks for a locally-mapped expert via
+        // the dispatch table; the GPT-OSS path looks for a non-zero routing
+        // weight. A single pass skips inactive experts; if none qualified,
+        // the last expert is forced through to initialise the accumulator.
         bool first_active = true;
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
             cb_wait_front(cb_combine_input, emb_dim_cb_tiles);
@@ -113,11 +112,5 @@ void kernel_main() {
     cb_push_back(cb_rowmajor, total_token_tiles);
 
     // Tilize all 32 tokens' row-major scratch into the output CB as one block.
-    ckernel::tilize_init(cb_rowmajor, total_token_tiles, cb_output);
-    cb_wait_front(cb_rowmajor, total_token_tiles);
-    cb_reserve_back(cb_output, total_token_tiles);
-    ckernel::tilize_block(cb_rowmajor, total_token_tiles, cb_output);
-    cb_pop_front(cb_rowmajor, total_token_tiles);
-    cb_push_back(cb_output, total_token_tiles);
-    ckernel::tilize_uninit(cb_rowmajor, cb_output);
+    compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output>(1);
 }
