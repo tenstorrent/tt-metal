@@ -460,6 +460,17 @@ void DispatchKernelInitializer::rescue_stuck_dispatch_cores(IDevice* device) con
 
 void DispatchKernelInitializer::process_termination_signals() const {
     for (auto* dev : devices_) {
+        // FIX AO (#42429): skip relay-broken non-MMIO devices — UMD ETH relay is dead after
+        // Phase 3 re-launches fabric firmware on MMIO relay ERISCs; WriteToDeviceL1 and
+        // l1_barrier would each hang for ~5s before timing out, wasting ~10s per device.
+        if (!dev->is_mmio_capable() && dev->is_fabric_relay_path_broken()) {
+            log_warning(
+                tt::LogMetal,
+                "process_termination_signals: Device {} relay path broken (non-MMIO) — "
+                "skipping termination writes and l1_barrier to avoid UMD relay hang (FIX AO #42429)",
+                dev->id());
+            continue;
+        }
         const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
