@@ -197,13 +197,14 @@ class TtHamer:
             self._vit_params = None
             self._head_params = None
 
-    def _forward_device(self, image: torch.Tensor, ptr: int = None) -> Optional[torch.Tensor]:
+    def _forward_device(self, image: torch.Tensor, img_id: int = None) -> Optional[torch.Tensor]:
         """NPU forward: ViT on device, MANO head on CPU (head port is still
         code-only).  Returns ``None`` if the device path isn't available.
-        ptr is pre-computed by __call__ when the inline cache check missed.
+        img_id is id(image) pre-computed by __call__; used for output cache key.
         """
-        if ptr is None:
-            ptr = image.data_ptr()
+        if img_id is None:
+            img_id = id(image)
+        ptr = image.data_ptr()  # still needed for patch_cache + tt-nn uploads
 
         if self.device is None or self._vit_params is None:
             return None
@@ -265,7 +266,7 @@ class TtHamer:
             if self._trace is not None:
                 if len(self._output_cache) >= 4:
                     self._output_cache.clear()
-                self._output_cache[ptr] = result
+                self._output_cache[img_id] = result
             return result
         except Exception as e:
             print(f"[dyn_hamr] tt-nn forward failed: {e}; falling back to CPU ref for this call")
@@ -304,13 +305,16 @@ class TtHamer:
             self._trace = None
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:
-        # Inline output cache check to avoid _forward_device call on hot path.
-        ptr = image.data_ptr()
+        # id(image) is the CPython object address — an integer, computed without
+        # any C++ dispatch.  Stable while the caller holds a reference.  Used
+        # only for the output cache; the patch_cache retains the full (ptr, shape)
+        # key so it correctly distinguishes views of different shapes.
+        img_id = id(image)
         if self._trace is not None:
-            cached_out = self._output_cache.get(ptr)
+            cached_out = self._output_cache.get(img_id)
             if cached_out is not None:
                 return cached_out
-        tt_out = self._forward_device(image, ptr)
+        tt_out = self._forward_device(image, img_id)
         if tt_out is not None:
             return tt_out
         with torch.no_grad():
