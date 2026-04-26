@@ -40,19 +40,31 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
 
     ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
-    uint32_t page_size_bytes = input_log_shape[3] * data_size;
-    TT_FATAL(
-        page_size_bytes == output_log_shape[3] * data_size,
-        "Data size of output does not match requirement for repeat last dim");
+
+    uint32_t page_size_bytes;
+    uint32_t number_of_higher_pages;
+    uint32_t number_of_lower_pages;
+    uint32_t number_of_rep_dim_pages;
+
+    if (operation_attributes.m_tile_page_size_bytes > 0) {
+        page_size_bytes = operation_attributes.m_tile_page_size_bytes;
+        number_of_higher_pages = operation_attributes.m_tile_higher_pages;
+        number_of_rep_dim_pages = operation_attributes.m_tile_rep_dim_pages;
+        number_of_lower_pages = operation_attributes.m_tile_lower_pages;
+    } else {
+        page_size_bytes = input_log_shape[3] * data_size;
+        TT_FATAL(
+            page_size_bytes == output_log_shape[3] * data_size,
+            "Data size of output does not match requirement for repeat higher dim");
+        number_of_higher_pages = input_log_shape[0];
+        number_of_rep_dim_pages = input_log_shape[1];
+        number_of_lower_pages = input_log_shape[2];
+    }
+
     uint32_t read_start_page = 0;
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
-    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
-    uint32_t number_of_higher_pages = input_log_shape[0];
-    uint32_t number_of_lower_pages = input_log_shape[2];
-    uint32_t number_of_rep_dim_pages = input_log_shape[1];
     uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + page_size_bytes;
     uint32_t src0_cb_index = 0;
     uint32_t src1_cb_index = 1;
