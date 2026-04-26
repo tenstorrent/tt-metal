@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
@@ -182,6 +182,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42610")
 @pytest.mark.parametrize(
     "shape",
     [

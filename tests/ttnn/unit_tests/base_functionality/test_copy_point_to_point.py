@@ -6,7 +6,10 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import skip_with_llk_assert
 
+
+@skip_with_llk_assert("Kernels too large with LLK_ASSERT. Issue #42596")
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 @pytest.mark.parametrize("shape", [(30, 60), (10, 10, 30, 60), (16, 64)])

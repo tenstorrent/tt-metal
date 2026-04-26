@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, torch_random, comp_allclose_and_pcc
+from models.common.utility_functions import is_blackhole, torch_random, comp_allclose_and_pcc, skip_with_llk_assert
 
 TEST_PADDING_VALUE = -42
 
@@ -330,6 +330,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42508")
 @pytest.mark.parametrize("dim1", [1])
 # This test picks the maximum dim2 that will pick the singlecore implementation.
 # TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores

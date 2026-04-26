@@ -9,6 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
+from models.common.utility_functions import skip_with_llk_assert
 
 UINT16_MAX = 65535
 TEST_PADDING_VALUE = -42
@@ -88,6 +89,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42508")
 @pytest.mark.parametrize(
     "dtype",
     (
@@ -150,6 +152,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42508")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
@@ -305,6 +308,7 @@ def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42508")
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k, sub_core_grids",
     [

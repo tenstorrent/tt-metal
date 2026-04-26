@@ -6,6 +6,8 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import skip_with_llk_assert
+
 
 def run_global_circular_buffer(device):
     sender_cores = [ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2)]
@@ -36,5 +38,6 @@ def test_global_circular_buffer(device):
     run_global_circular_buffer(device)
 
 
+@skip_with_llk_assert("Too large with LLK_ASSERT. Issue #42596")
 def test_global_circular_buffer_mesh(mesh_device):
     run_global_circular_buffer(mesh_device)

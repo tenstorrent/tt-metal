@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, skip_with_llk_assert
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
@@ -873,6 +873,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_with_llk_assert("PCC changes with LLK_ASSERT. Issue #42610")
 @pytest.mark.parametrize(
     "input_shapes",
     [

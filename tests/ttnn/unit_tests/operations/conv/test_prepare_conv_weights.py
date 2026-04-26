@@ -6,6 +6,7 @@ from loguru import logger
 
 import torch
 import pytest
+from models.common.utility_functions import skip_with_llk_assert
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 
@@ -150,6 +151,7 @@ def prepare_conv_weights_func(
     assert passing
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42597")
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w,  config_override, groups",
     (

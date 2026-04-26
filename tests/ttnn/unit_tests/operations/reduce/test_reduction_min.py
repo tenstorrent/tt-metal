@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, skip_with_llk_assert
 
 TEST_PADDING_VALUE = -142
 
@@ -100,6 +100,7 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT. Issue #42508")
 @pytest.mark.parametrize(
     "input_shape",
     [

@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <filesystem>
@@ -50,3 +51,10 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
 void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 
 }  // namespace tt::tt_fabric::fabric_router_tests
+
+#define SKIP_FOR_LLK_ASSERTS(reason)                                                \
+    do {                                                                            \
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_llk_asserts()) { \
+            GTEST_SKIP() << reason;                                                 \
+        }                                                                           \
+    } while (0)
