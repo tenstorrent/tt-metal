@@ -991,6 +991,12 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
     // Phase 3 already short-circuits for this same condition (see guard below), so TERMINATE
     // is redundant: configure_fabric_cores() in Phase 3 overwrites ERISC L1 regardless of
     // ERISC state.  Skipping Phase 2.5 relay reads here is safe and eliminates the hang.
+    // FIX AI-2 (#42429): Clear Phase 2.5 force-reset tracking from any prior quiesce cycle.
+    // Populated below when Phase 2.5 force-halts unresponsive ERISCs; consumed by Phase 3
+    // (inline) or launch_eth_cores_for_quiesce() (deferred) to deassert those RISCs after
+    // writing the launch message.
+    pending_phase25_force_reset_chans_.clear();
+
     if (fabric_relay_path_broken_ && !this->is_mmio_capable()) {
         log_warning(
             tt::LogMetal,
@@ -1146,10 +1152,12 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                     const auto eth_virtual_core = virtual_core_from_logical_core(eth_logical_core, CoreType::ETH);
                     env_impl.get_cluster().assert_risc_reset_at_core(
                         tt_cxy_pair(this->id(), eth_virtual_core), tt::umd::RiscType::ALL);
+                    pending_phase25_force_reset_chans_.insert(eth_chan_id);
                     log_warning(
                         tt::LogMetal,
                         "quiesce_and_restart_fabric_workers: Device {} eth_chan {} Phase 2.5: "
-                        "force-reset applied — ERISC halted before Phase 3 L1 overwrite",
+                        "force-reset applied — ERISC halted before Phase 3 L1 overwrite "
+                        "(tracked for Phase 3 deassert)",
                         this->id(),
                         eth_chan_id);
                 } catch (const std::exception& e) {
@@ -1487,6 +1495,41 @@ void Device::quiesce_and_restart_fabric_workers(bool defer_eth_launch) {
                 this->id(),
                 logical_core.x,
                 logical_core.y);
+
+            // FIX AI-2 (#42429): Deassert RISCs for channels that Phase 2.5 force-halted
+            // with assert_risc_reset(ALL).  Without this, the ERISC stays in hardware reset
+            // and never picks up the launch message written above.  Phase 5 would timeout
+            // waiting for READY_FOR_TRAFFIC on these channels.
+            if (!pending_phase25_force_reset_chans_.empty()) {
+                try {
+                    auto eth_chan_for_deassert = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (pending_phase25_force_reset_chans_.count(eth_chan_for_deassert)) {
+                        env_impl.get_cluster().deassert_risc_reset_at_core(
+                            tt_cxy_pair(this->id(), physical_core), tt::umd::RiscType::ALL);
+                        log_info(
+                            tt::LogMetal,
+                            "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
+                            "deassert_risc_reset(ALL) for Phase-2.5-halted ETH logical ({},{}) "
+                            "channel {} — ERISC can now pick up launch message",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan_for_deassert);
+                    }
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "quiesce_and_restart_fabric_workers: Device {} Phase 3: "
+                        "deassert_risc_reset failed for Phase-2.5-halted ETH logical ({},{}) — "
+                        "ERISC may remain halted: {}",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
+                }
+            }
         }
     }
 
@@ -1579,14 +1622,18 @@ void Device::launch_eth_cores_for_quiesce() {
     // Take a local copy of the dead channels set so we can clear the member early.
     const auto newly_dead = std::move(pending_quiesce_newly_dead_eth_chans_);
     pending_quiesce_newly_dead_eth_chans_.clear();
+    // FIX AI-2 (#42429): Take local copy of Phase 2.5 force-reset channels for deassert.
+    const auto p25_force_reset = std::move(pending_phase25_force_reset_chans_);
+    pending_phase25_force_reset_chans_.clear();
 
     log_info(
         tt::LogMetal,
         "launch_eth_cores_for_quiesce: Device {} — launching ETH ERISC cores "
-        "(mmio={}, newly_dead_count={}).",
+        "(mmio={}, newly_dead_count={}, p25_force_reset_count={}).",
         this->id(),
         this->is_mmio_capable(),
-        newly_dead.size());
+        newly_dead.size(),
+        p25_force_reset.size());
 
     for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
         CoreType core_type = hal.get_core_type(pct_idx);
@@ -1683,6 +1730,38 @@ void Device::launch_eth_cores_for_quiesce() {
                 this->id(),
                 logical_core.x,
                 logical_core.y);
+
+            // FIX AI-2 (#42429): Deassert RISCs for channels that Phase 2.5 force-halted.
+            if (!p25_force_reset.empty()) {
+                try {
+                    auto eth_chan_for_deassert = soc_desc_q.get_eth_channel_for_core(
+                        tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
+                        CoordSystem::LOGICAL);
+                    if (p25_force_reset.count(eth_chan_for_deassert)) {
+                        env_impl.get_cluster().deassert_risc_reset_at_core(
+                            tt_cxy_pair(this->id(), physical_core), tt::umd::RiscType::ALL);
+                        log_info(
+                            tt::LogMetal,
+                            "launch_eth_cores_for_quiesce: Device {} Phase 3: "
+                            "deassert_risc_reset(ALL) for Phase-2.5-halted ETH logical ({},{}) "
+                            "channel {} — ERISC can now pick up launch message",
+                            this->id(),
+                            logical_core.x,
+                            logical_core.y,
+                            eth_chan_for_deassert);
+                    }
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "launch_eth_cores_for_quiesce: Device {} Phase 3: "
+                        "deassert_risc_reset failed for Phase-2.5-halted ETH logical ({},{}) — "
+                        "ERISC may remain halted: {}",
+                        this->id(),
+                        logical_core.x,
+                        logical_core.y,
+                        e.what());
+                }
+            }
         }
     }
 

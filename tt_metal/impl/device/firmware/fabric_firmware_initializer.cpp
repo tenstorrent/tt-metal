@@ -582,25 +582,34 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 std::lock_guard<std::mutex> lock(force_reset_channels_mutex_);
                 force_reset_channels_.emplace(ch.dev->id(), ch.eth_chan_id);
             }
-            // Intentional asymmetry: terminate_stale_erisc_routers() and metal_env.cpp's
-            // teardown_fabric_config() both AVOID assert_risc_reset on WH because it tears
-            // down the ETH PHY link and corrupts partner ERISC L1 on adjacent chips.
-            // Here in session teardown, however, the benefit of preventing a zombie ERISC
-            // from racing with the next init's L1 clear outweighs the PHY link disruption.
-            // The partner chip's next init will handle the resulting corrupt L1 via
-            // terminate_stale_erisc_routers()'s CORRUPT path (send TERMINATE best-effort,
-            // skip poll). force_reset_channels_ is populated so verify_all_fabric_channels_healthy()
-            // classifies these as "DEGRADED" rather than "corrupt from prior crash".
+            // FIX AI (#42429): assert + deassert to restart the ERISC into base UMD firmware.
+            //
+            // Previously this only called assert_risc_reset_at_core(ALL) without deassert,
+            // leaving ALL RISCs (ERISC0/BRISC + subordinate ERISC/NCRISC) in hardware reset.
+            // The subsequent teardown_fabric_config() only deasserted ERISC0, leaving NCRISC
+            // (which maintains the ETH PHY link) permanently in reset.  On the next test's
+            // fabric init, terminate_stale_erisc_routers() probe reads would timeout because:
+            //   - Non-MMIO devices: relay path dead (MMIO ETH core NCRISC in reset = PHY down)
+            //   - MMIO devices: l1_barrier → wait_for_non_mmio_flush triggered by non-MMIO
+            //     device association could hang or timeout
+            // Result: corrupt=4 probe_dead=4 on all devices, all ETH channels dead.
+            //
+            // Fix: immediately deassert after assert (same pattern as FIX AC in
+            // risc_firmware_initializer.cpp and the clean path in teardown_fabric_config).
+            // This restarts the ERISC into base UMD relay firmware with all RISCs running,
+            // preserving the ETH PHY link for the next session's probe reads.
             try {
                 const auto virtual_eth_coord = cluster_.get_virtual_coordinate_from_logical_coordinates(
                     ch.dev->id(), ch.eth_logical_core, CoreType::ETH);
                 cluster_.assert_risc_reset_at_core(
                     tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
+                cluster_.deassert_risc_reset_at_core(
+                    tt_cxy_pair(ch.dev->id(), virtual_eth_coord), tt::umd::RiscType::ALL);
             } catch (const std::exception& e) {
                 log_error(
                     tt::LogMetal,
-                    "FabricFirmwareInitializer::teardown: assert_risc_reset_at_core failed on "
-                    "Device {} chan={}: {} — ERISC may still be running! "
+                    "FabricFirmwareInitializer::teardown: assert/deassert_risc_reset_at_core failed on "
+                    "Device {} chan={}: {} — ERISC may still be running or halted! "
                     "Next fabric init should expect corrupt state on this channel.",
                     ch.dev->id(),
                     ch.eth_chan_id,

@@ -378,14 +378,20 @@ void MetalEnvImpl::teardown_fabric_config() {
                         teardown_timed_out_chips_.insert(chip_id);
                         // After 5s timeout, the ERISC is uncooperative. Force-reset it so the next
                         // session starts with a clean UMD relay state rather than stale 0x49706550.
+                        // FIX AI (#42429): Use RiscType::ALL (not ERISC0) to ensure ALL RISCs
+                        // including NCRISC (subordinate ERISC that maintains ETH PHY) are restarted.
+                        // A prior assert_risc_reset(ALL) in FabricFirmwareInitializer::teardown may
+                        // have left non-ERISC0 RISCs in reset; deassert(ERISC0) alone would not
+                        // restore them, leaving the ETH PHY link down and breaking relay reads for
+                        // the next fabric init.
                         try {
                             auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, static_cast<int>(chan_id));
                             tt_cxy_pair core_loc(chip_id, virtual_core);
-                            cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
-                            cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ERISC0);
+                            cluster.assert_risc_reset_at_core(core_loc, tt::umd::RiscType::ALL);
+                            cluster.deassert_risc_reset_at_core(core_loc, tt::umd::RiscType::ALL);
                             log_info(
                                 tt::LogMetal,
-                                "[teardown_fabric_config] chip {} chan {}: force-reset after teardown timeout",
+                                "[teardown_fabric_config] chip {} chan {}: force-reset (ALL) after teardown timeout",
                                 chip_id,
                                 chan_id);
                         } catch (const std::exception& e) {

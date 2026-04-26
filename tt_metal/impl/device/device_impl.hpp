@@ -370,6 +370,9 @@ private:
     // ETH write_launch_msg is skipped for these to avoid relay hangs on dead cores.
     bool pending_eth_launch_ = false;
     std::unordered_set<uint32_t> pending_quiesce_newly_dead_eth_chans_;
+    // FIX AI-2 (#42429): ETH channels that Phase 2.5 force-halted with assert_risc_reset(ALL).
+    // Phase 3 / launch_eth_cores_for_quiesce() must deassert these after write_launch_msg.
+    std::unordered_set<uint32_t> pending_phase25_force_reset_chans_;
 
     // FIX AB extension: Set when teardown_fabric_config() times out waiting for TERMINATED
     // on any ETH channel belonging to this device.  Unlike fabric_relay_path_broken_ (which
