@@ -309,6 +309,14 @@ public:
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
+    // Allocate the next free semaphore ID on the given cores and insert the semaphore.
+    // Returns the allocated ID; TT_FATALs if no slot can be found.
+    uint32_t create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type);
+
+    // Insert a semaphore at the caller-specified ID. Used by:
+    //   - Construction paths where the ID is already decided upstream (ProgramDescriptor ctor path).
+    //   - create_semaphore above
+    // The ProgramDescriptor path is something of a hack; it will eventually be deprecated in favor of Metal 2.0.
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     // Validates that a semaphore ID is within bounds and not already in use on overlapping cores

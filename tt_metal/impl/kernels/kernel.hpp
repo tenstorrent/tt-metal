@@ -90,6 +90,8 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: local DFB accessor names -> logical DFB ids
 using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: local semaphore accessor names -> semaphore ids
+using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
 
 class Kernel : public JitBuildSettings {
 public:
@@ -149,6 +151,8 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+    void process_semaphore_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
     const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
     const std::vector<std::string>& get_named_common_runtime_args() const override {
         return named_common_runtime_args_;
@@ -214,6 +218,7 @@ protected:
         // boundary is obvious at a glance; the others are ignored when it is false.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {});
 
@@ -231,6 +236,7 @@ protected:
     // named_common_runtime_args_ determines byte-offset layout in the dispatch buffer.
     const bool is_metal2_kernel_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
+    const SemaphoreLocalAccessorHandleMap semaphore_local_accessor_handles_;
     const std::vector<std::string> named_runtime_args_;
     const std::vector<std::string> named_common_runtime_args_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
@@ -268,6 +274,7 @@ public:
         // Metal 2.0-only parameters below.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
@@ -280,6 +287,7 @@ public:
             config.named_compile_args,
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args),
         config_(config) {
@@ -398,6 +406,7 @@ public:
         // Metal 2.0-only parameters below.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
@@ -410,6 +419,7 @@ public:
             config.named_compile_args,
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args),
         config_(config) {
@@ -477,6 +487,7 @@ public:
         // Metal 2.0-only parameters below.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
@@ -489,6 +500,7 @@ public:
             config.named_compile_args,
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args),
         config_(config),
@@ -542,6 +554,7 @@ public:
         // Metal 2.0-only parameters below.
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
         const std::vector<std::string>& named_runtime_args = {},
         const std::vector<std::string>& named_common_runtime_args = {}) :
         Kernel(
@@ -554,6 +567,7 @@ public:
             config.named_compile_args,
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
             named_runtime_args,
             named_common_runtime_args),
         config_(config),

@@ -136,7 +136,10 @@ TEST_F(ProgramRunParamsTestQuasar, UnknownKernelNameFails) {
         .common_runtime_varargs = {},
     });
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'nonexistent_kernel' has no RTA schema registered")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
@@ -153,7 +156,10 @@ TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'dm_kernel' is setting runtime_varargs for node")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, WrongRuntimeArgsCountFails) {
@@ -164,7 +170,10 @@ TEST_F(ProgramRunParamsTestQuasar, WrongRuntimeArgsCountFails) {
     // Provide wrong count (2 instead of 3)
     auto params = MakeRunParamsForMinimalSpec(node, {1, 2}, {});
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 3 vararg runtime args, but 2 were provided")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
@@ -175,7 +184,10 @@ TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
     // Provide wrong common args count (3 instead of 2)
     auto params = MakeRunParamsForMinimalSpec(node, {}, {1, 2, 3});
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 vararg common runtime args, but 3 were provided")));
 }
 
 // TODO: Currently, we require that all kernels in a ProgramSpec have params specified.
@@ -190,7 +202,10 @@ TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
     params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));
     // Missing: compute_kernel params
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "Kernel 'compute_kernel' is registered in the Program but has no runtime parameters")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
@@ -204,7 +219,9 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
     params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));  // Duplicate!
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate kernel_spec_name 'dm_kernel'")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
@@ -221,7 +238,10 @@ TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'dm_kernel' is missing vararg runtime args for node")));
 }
 
 // TODO: Replace when feature is implemented
@@ -238,7 +258,10 @@ TEST_F(ProgramRunParamsTestQuasar, DFBSizeOverrideFails) {
         .entry_size = 2048,  // Override - not implemented!
     });
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB size overrides are not yet implemented")));
 }
 
 // TODO: Replace when feature is implemented
@@ -255,7 +278,10 @@ TEST_F(ProgramRunParamsTestQuasar, DFBNumEntriesOverrideFails) {
         .num_entries = 4,  // Override - not implemented!
     });
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB size overrides are not yet implemented")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, DuplicateDFBParamsFails) {
@@ -269,7 +295,9 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateDFBParamsFails) {
     params.dfb_run_params.push_back({.dfb_spec_name = "dfb_0"});
     params.dfb_run_params.push_back({.dfb_spec_name = "dfb_0"});  // Duplicate!
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate dfb_spec_name 'dfb_0'")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
@@ -286,7 +314,10 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("in runtime_varargs for kernel 'dm_kernel'")));
 }
 
 // ============================================================================
@@ -417,7 +448,10 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_ChangingCommonRTACountFails
 
     // Let's verify that passing wrong count still fails (schema validation)
     auto params2 = MakeRunParamsForMinimalSpec(node, {}, {10, 20, 30});  // 3 instead of 2
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params2));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params2); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 vararg common runtime args, but 3 were provided")));
 }
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsMultipleTimes_Succeeds) {
@@ -524,7 +558,10 @@ TEST_F(ProgramRunParamsTestQuasar, MultiNode_MissingOneNodeFails) {
         .common_runtime_varargs = {},
     });
 
-    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+    EXPECT_THAT(
+        [&] { SetProgramRunParameters(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'producer' is missing vararg runtime args for node")));
 }
 
 // ============================================================================

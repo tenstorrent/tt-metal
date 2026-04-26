@@ -107,6 +107,7 @@ Kernel::Kernel(
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     bool is_metal2_kernel,
     const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
+    const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
     const std::vector<std::string>& named_runtime_args,
     const std::vector<std::string>& named_common_runtime_args) :
     programmable_core_type_(programmable_core_type),
@@ -117,6 +118,7 @@ Kernel::Kernel(
     named_compile_time_args_(named_compile_args),
     is_metal2_kernel_(is_metal2_kernel),
     dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
+    semaphore_local_accessor_handles_(semaphore_local_accessor_handles),
     named_runtime_args_(named_runtime_args),
     named_common_runtime_args_(named_common_runtime_args),
 
@@ -281,6 +283,13 @@ void Kernel::process_dataflow_buffer_local_accessor_handles(
     const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
     for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_local_accessor_handles_) {
         callback(accessor_name, logical_dfb_id);
+    }
+}
+
+void Kernel::process_semaphore_local_accessor_handles(
+    const std::function<void(const std::string& accessor_name, uint16_t semaphore_id)> callback) const {
+    for (const auto& [accessor_name, semaphore_id] : this->semaphore_local_accessor_handles_) {
+        callback(accessor_name, semaphore_id);
     }
 }
 
@@ -453,6 +462,10 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(it->second));
     }
     for (const auto& it : sorted_iters(this->dataflow_buffer_local_accessor_handles_)) {
+        hasher.update(it->first);
+        hasher.update(static_cast<uint64_t>(it->second));
+    }
+    for (const auto& it : sorted_iters(this->semaphore_local_accessor_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
