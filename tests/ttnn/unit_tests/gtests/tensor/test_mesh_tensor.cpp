@@ -15,6 +15,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/mesh_tensor_error.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -32,10 +33,9 @@ namespace {
 using ::testing::Each;
 using ::testing::Eq;
 using ::testing::FloatEq;
-using ::testing::HasSubstr;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
-using ::testing::ThrowsMessage;
+using ::testing::Throws;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
 using MeshTensorTest1x2 = MeshDevice1x2Fixture;
@@ -64,7 +64,7 @@ TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
             };
             from_host_shards(shards, MeshShape(1, 2));
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must have the same tensor spec")));
+        Throws<ttnn::distributed::MeshTensorSpecMismatch>());
 }
 
 TEST_F(MeshTensorTest, FromHostShardsDeviceStorage) {
@@ -82,7 +82,7 @@ TEST_F(MeshTensorTest, FromHostShardsDeviceStorage) {
             };
             from_host_shards(shards, MeshShape(1, 2));
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must be on host")));
+        Throws<ttnn::distributed::MeshTensorShardsNotOnHost>());
 }
 
 TEST(MeshTensorHostTest, FromHostShardsMeshShapeMismatch) {
@@ -98,7 +98,7 @@ TEST(MeshTensorHostTest, FromHostShardsMeshShapeMismatch) {
             };
             from_host_shards(shards, MeshShape(1, 3));
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Number of tensor shards must match mesh size")));
+        Throws<ttnn::distributed::MeshTensorShardCountMismatch>());
 }
 
 TEST(MeshTensorHostTest, FromHostShards) {
@@ -273,7 +273,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
             std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors2[1]};
             combine_device_tensors(shards_to_aggregate);
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("tensor shards must be allocated on the same mesh buffer.")));
+        Throws<ttnn::distributed::MeshTensorBufferMismatch>());
 
     // Try to aggregate the same shard twice
     EXPECT_THAT(
@@ -281,7 +281,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
             std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors1[0]};
             combine_device_tensors(shards_to_aggregate);
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
+        Throws<ttnn::distributed::MeshTensorDuplicateCoordinate>());
 
     // Aggregate every second shard into a new mesh tensor.
     int shard_dim = 2;
