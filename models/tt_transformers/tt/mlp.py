@@ -94,10 +94,9 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
-        self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
+        self.w1 = as_sharded_tensor("w1_sharded", ff1_3_dtype, dims=w1_dims)
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+        # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU

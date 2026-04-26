@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 from tqdm import tqdm
 
@@ -62,68 +61,52 @@ class Transformer(LightweightModule):
             embd_cls = Embedding
         self.embd = embd_cls(**embd_kwargs)
 
+        rope_setup_kwargs = {
+            "device": mesh_device,
+            "batch_size": args.max_batch_size,
+            "head_dim": args.head_dim,
+            "max_seq_len": args.max_seq_len,
+            "rope_theta": args.rope_theta,
+            "rope_scaling": args.rope_scaling,
+            "use_qk_fused": args.use_qk_fused,
+            "prefetcher": prefetcher,
+            "rotary_dim": args.rotary_dim,
+        }
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
-        self.rope_setup = ActualRopeSetupClass(
-            device=mesh_device,
-            batch_size=args.max_batch_size,
-            head_dim=args.head_dim,
-            max_seq_len=args.max_seq_len,
-            rope_theta=args.rope_theta,
-            rope_scaling=args.rope_scaling,
-            use_qk_fused=args.use_qk_fused,
-            prefetcher=prefetcher,
-        )
+        self.rope_setup = ActualRopeSetupClass(**rope_setup_kwargs)
 
         if args.rope_theta_local:
-            self.rope_local_setup = DefaultRopeSetup(
-                mesh_device,
-                args.max_batch_size,
-                args.head_dim,
-                args.max_seq_len,
-                args.rope_theta_local,
-                use_qk_fused=args.use_qk_fused,
-                prefetcher=None,
-            )
+            local_rope_setup_kwargs = {
+                "device": mesh_device,
+                "batch_size": args.max_batch_size,
+                "head_dim": args.head_dim,
+                "max_seq_len": args.max_seq_len,
+                "rope_theta": args.rope_theta_local,
+                "use_qk_fused": args.use_qk_fused,
+                "prefetcher": None,
+                "rotary_dim": args.rotary_dim,
+            }
+            self.rope_local_setup = DefaultRopeSetup(**local_rope_setup_kwargs)
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
-
-        self.layers = [
-            TransformerBlock(
-                args=args,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                dtype=dtype,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=i,
-                transformation_mats=self.trans_mats_dict,
-                paged_attention_config=paged_attention_config,
-                use_paged_kv_cache=use_paged_kv_cache,
-                attention_class=attention_class,
-                prefetcher=prefetcher,
-            )
-            for i in tqdm(range(self.n_layers))
-        ]
-        self.norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", None),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="norm",
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
+        self.layers = self._build_layers(
+            args=args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            paged_attention_config=paged_attention_config,
+            use_paged_kv_cache=use_paged_kv_cache,
+            attention_class=attention_class,
             prefetcher=prefetcher,
-            TG=args.is_galaxy,
+        )
+        self.norm = self._build_norm(
+            args=args,
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            prefetcher=prefetcher,
         )
 
         self.lm_head = LMHead(
@@ -150,6 +133,62 @@ class Transformer(LightweightModule):
             )
         else:
             self.sampling = None
+
+    def _get_block_class(self):
+        return TransformerBlock
+
+    def _build_layers(
+        self,
+        args,
+        mesh_device,
+        dtype,
+        state_dict,
+        weight_cache_path,
+        paged_attention_config,
+        use_paged_kv_cache,
+        attention_class,
+        prefetcher,
+    ):
+        block_class = self._get_block_class()
+        return [
+            block_class(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                dtype=dtype,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=i,
+                transformation_mats=self.trans_mats_dict,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=attention_class,
+                prefetcher=prefetcher,
+            )
+            for i in tqdm(range(self.n_layers))
+        ]
+
+    def _build_norm(self, args, mesh_device, state_dict, weight_cache_path, prefetcher):
+        return DistributedNorm(
+            RMSNorm(
+                device=mesh_device,
+                dim=args.dim,
+                eps=args.norm_eps,
+                state_dict=state_dict,
+                state_dict_prefix=args.get_state_dict_prefix("", None),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="norm",
+                is_distributed=self.args.is_distributed_norm,
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
+                ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
+            ),
+            args,
+            tt_ccl=self.tt_ccl,
+            prefetcher=prefetcher,
+            TG=args.is_galaxy,
+        )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32

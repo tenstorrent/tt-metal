@@ -815,6 +815,7 @@ def create_tt_model(
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.phi_model import Phi1Transformer
     from models.tt_transformers.tt.prefetcher import Prefetcher
 
     num_tensors = 5 if use_prefetcher else 0
@@ -840,7 +841,9 @@ def create_tt_model(
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
-    model = Transformer(
+    transformer_class = Phi1Transformer if tt_model_args.is_phi_model else Transformer
+
+    model = transformer_class(
         args=tt_model_args,
         mesh_device=mesh_device,
         dtype=dtype,

@@ -65,8 +65,35 @@ class TransformerBlock(LightweightModule):
             prefetcher=prefetcher,
         )
 
+        self.feed_forward = self._create_feed_forward(
+            args=args,
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+            dtype=dtype,
+            prefetcher=prefetcher,
+        )
+        self._init_norms(
+            args=args,
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+        )
+
+    def _create_feed_forward(
+        self,
+        args,
+        mesh_device,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        prefetcher,
+    ):
         if getattr(self.args, "is_mixture_of_experts", False):
-            self.feed_forward = TtMoeLayer(
+            return TtMoeLayer(
                 mesh_device=mesh_device,
                 state_dict=state_dict,
                 experts=TtMixtralMLP(
@@ -85,19 +112,19 @@ class TransformerBlock(LightweightModule):
                 dtype=dtype,
                 tt_ccl=self.tt_ccl,
             )
-        else:
-            self.feed_forward = MLP(
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=layer_num,
-                dtype=dtype,
-                model_config=self.model_config,
-                prefetcher=prefetcher,
-            )
+        return MLP(
+            mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
+            args=args,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+            dtype=dtype,
+            model_config=self.model_config,
+            prefetcher=prefetcher,
+        )
 
+    def _init_norms(self, args, mesh_device, state_dict, weight_cache_path, layer_num):
         # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
         extra_rmsnorm_kwargs = {}
         if args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
