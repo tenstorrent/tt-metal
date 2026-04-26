@@ -721,6 +721,7 @@ class Generator(WarmupForwardMixin):
                     model_id=model_id,
                     num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
                     batch_size=padded_batch if use_batched_prefill else 1,
+                    return_hidden_states=return_hidden_states,
                     **local_kwargs,
                 )
             if use_batched_prefill:
@@ -797,15 +798,36 @@ class Generator(WarmupForwardMixin):
                         if log_probs_host is not None:
                             output_log_probs[slot] = log_probs_host[slot]
                 else:
-                    for local_idx, slot in enumerate(empty_slots):
-                        user_logits = logits[slot : slot + 1, :, :, :]
-                        _logits = self.model[model_id].process_logits_after_prefill_trace(
-                            user_logits, last_token_idx[slot]
-                        )
-                        _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        output_tensor[slot] = self.model[model_id].process_output_prefill(
-                            _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
-                        )
+                    if return_hidden_states:
+                        # Embedding / pooling: per-slot hidden states (norm, no LM head) — same as non-batched path
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_h = logits[slot : slot + 1, :, :, :]
+                            hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
+                                user_h, last_token_idx[slot]
+                            )
+                            hidden_states_host = hidden_states.cpu(blocking=False)
+                            ttnn.synchronize_device(self.model[model_id].mesh_device)
+                            if self.model_args[model_id].num_devices == 1:
+                                hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                                output_tensor[slot] = hidden_states_torch[
+                                    0, 0, (last_token_idx[slot] % 32), : self.model_args[model_id].dim
+                                ]
+                            else:
+                                output_tensor[slot] = self.model[model_id].process_output_prefill_hidden_states(
+                                    hidden_states_host, last_token_idx=(last_token_idx[slot] % 32)
+                                )
+                    else:
+                        for local_idx, slot in enumerate(empty_slots):
+                            user_logits = logits[slot : slot + 1, :, :, :]
+                            _logits = self.model[model_id].process_logits_after_prefill_trace(
+                                user_logits, last_token_idx[slot]
+                            )
+                            _logits = ttnn.to_layout(
+                                _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                            )
+                            output_tensor[slot] = self.model[model_id].process_output_prefill(
+                                _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
+                            )
                 break
 
             # Non-batched prefill path
@@ -814,20 +836,63 @@ class Generator(WarmupForwardMixin):
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
                     )
-                    prefill_results.append(
-                        {
-                            "idx": idx,
-                            "model_id": model_id,
-                            "last_token_idx": last_token_idx,
-                            "hidden_states": hidden_states.cpu(blocking=False),
-                        }
-                    )
+                    if batch_size == 1 and not use_batched_prefill:
+                        hidden_states_host = hidden_states.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
+                        last_token_idx_relative = last_token_idx - num_cached_tokens_local
+                        if self.model_args[model_id].num_devices == 1:
+                            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            output_tensor[idx] = hidden_states_torch[
+                                0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
+                            ]
+                        else:
+                            output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                                hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
+                            )
+                    else:
+                        prefill_results.append(
+                            {
+                                "idx": idx,
+                                "model_id": model_id,
+                                "last_token_idx": last_token_idx,
+                                "hidden_states": hidden_states.cpu(blocking=False),
+                            }
+                        )
                     continue
                 else:
                     logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
             else:
                 if return_hidden_states:
-                    raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
+                    # Same post-prefill path as trace: slice last tile, apply final norm (no LM head).
+                    # Non-trace still runs ttnn_prefill_forward on device; only trace capture is skipped.
+                    hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
+                        logits, last_token_idx
+                    )
+                    if batch_size == 1 and not use_batched_prefill:
+                        hidden_states_host = hidden_states.cpu(blocking=False)
+                        ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
+                        last_token_idx_relative = last_token_idx - num_cached_tokens_local
+                        if self.model_args[model_id].num_devices == 1:
+                            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            output_tensor[idx] = hidden_states_torch[
+                                0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
+                            ]
+                        else:
+                            output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                                hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
+                            )
+                    else:
+                        prefill_results.append(
+                            {
+                                "idx": idx,
+                                "model_id": model_id,
+                                "last_token_idx": last_token_idx,
+                                "hidden_states": hidden_states.cpu(blocking=False),
+                            }
+                        )
+                    continue
 
             if sampling_enabled:
                 tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
@@ -912,6 +977,7 @@ class Generator(WarmupForwardMixin):
         model_id=-1,
         num_cached_tokens: int = 0,
         batch_size=1,
+        return_hidden_states: bool = False,
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
@@ -994,6 +1060,10 @@ class Generator(WarmupForwardMixin):
                     chunk_page_table_tt,
                 ) = chunk_inputs
 
+                on_last_chunk = chunk_start_relative == last_chunk_start
+                chunk_get_last = (
+                    -1 if (return_hidden_states and on_last_chunk) else (last_token_idx_in_chunk // 32) * 32
+                )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats_global=chunk_rot_mats_global_prefill,
@@ -1002,7 +1072,7 @@ class Generator(WarmupForwardMixin):
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                    get_last_token=chunk_get_last,
                     kv_cache=kv_cache,
                     batch_size=batch_size,
                     **kwargs,
@@ -1022,13 +1092,20 @@ class Generator(WarmupForwardMixin):
             )
             prefill_input, rot_mats_global_prefill, rot_mats_local_prefill, page_table_tt, _ = inputs
 
+            # Embedding / pooling: need full pre-norm sequence so process_hidden_states_after_prefill_trace
+            # can slice to the last-token tile. With a tile-only get_last_token, forward returns 32 positions
+            # and slicing at (last_token_idx//32)*32 fails (see slice_device_operation shape mismatch).
+            if return_hidden_states:
+                get_last_token = -1
+            else:
+                get_last_token = -1 if batch_size > 1 else (last_token_idx // 32) * 32
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats_global=rot_mats_global_prefill,
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
+                get_last_token=get_last_token,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
