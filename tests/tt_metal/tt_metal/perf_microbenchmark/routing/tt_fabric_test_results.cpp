@@ -209,7 +209,12 @@ void ResultsManager<T, U>::generate_summary_upload_csv() {
     auto arch_name = tt::tt_metal::hal::get_arch_name();
     std::ostringstream upload_oss;
 
-    upload_oss << get_perf_metric_name() + "_summary_results_" << arch_name << "_upload.csv";
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::tm timestamp_now{};
+    localtime_r(&time_t_now, &timestamp_now);
+    upload_oss << get_perf_metric_name() + "_summary_results_" << arch_name << "_"
+               << std::put_time(&timestamp_now, "%Y%m%d_%H%M%S") << "_upload.csv";
 
     std::filesystem::path output_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /

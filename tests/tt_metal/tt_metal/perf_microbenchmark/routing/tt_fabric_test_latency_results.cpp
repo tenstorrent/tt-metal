@@ -381,8 +381,10 @@ void LatencyResultsManager::report_latency_results(
         sample_result.ftype = ftype_str;
         sample_result.ntype = ntype_str;
         sample_result.topology = topology_str;
-        sample_result.sender_device_id = sender_location.node_id.chip_id;
-        sample_result.responder_device_id = responder_location.node_id.chip_id;
+        auto sender_coords = sender_location.mesh_coord.coords();
+        sample_result.sender_device_coord = std::vector<uint32_t>(sender_coords.begin(), sender_coords.end());
+        auto responder_coords = responder_location.mesh_coord.coords();
+        sample_result.responder_device_coord = std::vector<uint32_t>(responder_coords.begin(), responder_coords.end());
         sample_result.sender_core_x = sender_location.core.x;
         sample_result.sender_core_y = sender_location.core.y;
         sample_result.responder_core_x = responder_location.core.x;
@@ -506,10 +508,12 @@ void LatencyResultsManager::report_latency_results(
     latency_summary.ftype = ftype_str;
     latency_summary.ntype = ntype_str;
     latency_summary.topology = topology_str;
-    latency_summary.sender_device_id = sender_location.node_id.chip_id;
+    auto sender_coords = sender_location.mesh_coord.coords();
+    latency_summary.sender_device_coord = std::vector<uint32_t>(sender_coords.begin(), sender_coords.end());
     latency_summary.sender_core_x = sender_location.core.x;
     latency_summary.sender_core_y = sender_location.core.y;
-    latency_summary.responder_device_id = responder_location.node_id.chip_id;
+    auto responder_coords = responder_location.mesh_coord.coords();
+    latency_summary.responder_device_coord = std::vector<uint32_t>(responder_coords.begin(), responder_coords.end());
     latency_summary.responder_core_x = responder_location.core.x;
     latency_summary.responder_core_y = responder_location.core.y;
     latency_summary.num_devices = num_devices;
@@ -568,8 +572,8 @@ void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ 
     }
 
     // Write header for detailed results (no tolerance_percent column)
-    csv_stream << "test_name,ftype,ntype,topology,sender_device,sender_core_x,sender_core_y,"
-                  "responder_device,responder_core_x,responder_core_y,num_devices,num_links,num_samples,payload_size,"
+    csv_stream << "test_name,ftype,ntype,topology,src_device,tx_core,dest_device,rx_core,"
+                  "num_devices,num_links,num_samples,payload_size,"
                   "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                   "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
@@ -591,8 +595,8 @@ void LatencyResultsManager::write_summary_csv_to_file(
     if (include_upload_columns) {
         csv_stream << "file_name,machine_type,test_ts,";
     }
-    csv_stream << "test_name,ftype,ntype,topology,sender_device,sender_core_x,sender_core_y,"
-                  "responder_device,responder_core_x,responder_core_y,num_devices,num_links,num_samples,payload_size,"
+    csv_stream << "test_name,ftype,ntype,topology,src_device,tx_core,dest_device,rx_core,"
+                  "num_devices,num_links,num_samples,payload_size,"
                   "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                   "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
@@ -606,9 +610,13 @@ void LatencyResultsManager::write_summary_csv_to_file(
                        << result.test_ts.value() << ",";
         }
 
+        std::string src_device_str = convert_num_devices_to_string(result.sender_device_coord);
+        std::string dest_device_str = convert_num_devices_to_string(result.responder_device_coord);
         csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
-                   << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
-                   << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
+                   << "\"" << src_device_str << "\","
+                   << "\"[" << result.sender_core_x << "," << result.sender_core_y << "]\","
+                   << "\"" << dest_device_str << "\","
+                   << "\"[" << result.responder_core_x << "," << result.responder_core_y << "]\","
                    << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                    << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                    << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
@@ -650,9 +658,13 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
         return;
     }
 
+    std::string src_device_str = convert_num_devices_to_string(result.sender_device_coord);
+    std::string dest_device_str = convert_num_devices_to_string(result.responder_device_coord);
     csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
-               << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
-               << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
+               << "\"" << src_device_str << "\","
+               << "\"[" << result.sender_core_x << "," << result.sender_core_y << "]\","
+               << "\"" << dest_device_str << "\","
+               << "\"[" << result.responder_core_x << "," << result.responder_core_y << "]\","
                << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
                << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
@@ -695,21 +707,37 @@ void LatencyResultsManager::load_golden_csv() {
         std::string token;
         std::vector<std::string> tokens;
 
-        // Parse CSV line
+        // Parse CSV line, handling quoted fields (e.g. "[0,0]" for array columns)
         while (std::getline(ss, token, ',')) {
-            tokens.push_back(token);
+            if (!token.empty() && token.front() == '"' && token.back() != '"') {
+                std::string quoted_token = token;
+                while (std::getline(ss, token, ',') && token.back() != '"') {
+                    quoted_token += "," + token;
+                }
+                quoted_token += "," + token;
+                // Remove quotes
+                quoted_token = quoted_token.substr(1, quoted_token.length() - 2);
+                tokens.push_back(quoted_token);
+            } else if (!token.empty() && token.front() == '"' && token.back() == '"') {
+                // Remove quotes from single quoted token
+                tokens.push_back(token.substr(1, token.length() - 2));
+            } else {
+                tokens.push_back(token);
+            }
         }
 
-        // Expected format: test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,
-        //                  net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,
-        //                  responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,
-        //                  raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,
-        //                  per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns[,tolerance_percent]
+        // Expected format:
+        // test_name,ftype,ntype,topology,src_device,tx_core,dest_device,rx_core,
+        // num_devices,num_links,num_samples,payload_size,
+        // net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,
+        // responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,
+        // raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,
+        // per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns[,tolerance_percent]
         // Note: per_hop fields and tolerance_percent are optional for backward compatibility
-        if (tokens.size() < 20) {
+        if (tokens.size() < 24) {
             log_error(
                 tt::LogTest,
-                "Invalid CSV format in golden latency file. Expected at least 20 fields, got {}",
+                "Invalid CSV format in golden latency file. Expected at least 24 fields, got {}",
                 tokens.size());
             continue;
         }
@@ -719,32 +747,36 @@ void LatencyResultsManager::load_golden_csv() {
         entry.ftype = tokens[1];
         entry.ntype = tokens[2];
         entry.topology = tokens[3];
-        entry.num_devices = std::stoul(tokens[4]);
-        entry.num_links = std::stoul(tokens[5]);
-        entry.num_samples = std::stoul(tokens[6]);
-        entry.payload_size = std::stoul(tokens[7]);
+        // tokens[4] = src_device (array, skipped for golden comparison)
+        // tokens[5] = tx_core (array, skipped for golden comparison)
+        // tokens[6] = dest_device (array, skipped for golden comparison)
+        // tokens[7] = rx_core (array, skipped for golden comparison)
+        entry.num_devices = std::stoul(tokens[8]);
+        entry.num_links = std::stoul(tokens[9]);
+        entry.num_samples = std::stoul(tokens[10]);
+        entry.payload_size = std::stoul(tokens[11]);
 
-        entry.net_min_ns = std::stod(tokens[8]);
-        entry.net_max_ns = std::stod(tokens[9]);
-        entry.net_avg_ns = std::stod(tokens[10]);
-        entry.net_p99_ns = std::stod(tokens[11]);
+        entry.net_min_ns = std::stod(tokens[12]);
+        entry.net_max_ns = std::stod(tokens[13]);
+        entry.net_avg_ns = std::stod(tokens[14]);
+        entry.net_p99_ns = std::stod(tokens[15]);
 
-        entry.responder_min_ns = std::stod(tokens[12]);
-        entry.responder_max_ns = std::stod(tokens[13]);
-        entry.responder_avg_ns = std::stod(tokens[14]);
-        entry.responder_p99_ns = std::stod(tokens[15]);
+        entry.responder_min_ns = std::stod(tokens[16]);
+        entry.responder_max_ns = std::stod(tokens[17]);
+        entry.responder_avg_ns = std::stod(tokens[18]);
+        entry.responder_p99_ns = std::stod(tokens[19]);
 
-        entry.raw_min_ns = std::stod(tokens[16]);
-        entry.raw_max_ns = std::stod(tokens[17]);
-        entry.raw_avg_ns = std::stod(tokens[18]);
-        entry.raw_p99_ns = std::stod(tokens[19]);
+        entry.raw_min_ns = std::stod(tokens[20]);
+        entry.raw_max_ns = std::stod(tokens[21]);
+        entry.raw_avg_ns = std::stod(tokens[22]);
+        entry.raw_p99_ns = std::stod(tokens[23]);
 
         // Per-hop fields are optional for backward compatibility
-        if (tokens.size() >= 24) {
-            entry.per_hop_min_ns = std::stod(tokens[20]);
-            entry.per_hop_max_ns = std::stod(tokens[21]);
-            entry.per_hop_avg_ns = std::stod(tokens[22]);
-            entry.per_hop_p99_ns = std::stod(tokens[23]);
+        if (tokens.size() >= 28) {
+            entry.per_hop_min_ns = std::stod(tokens[24]);
+            entry.per_hop_max_ns = std::stod(tokens[25]);
+            entry.per_hop_avg_ns = std::stod(tokens[26]);
+            entry.per_hop_p99_ns = std::stod(tokens[27]);
         } else {
             // If per-hop fields are missing, set to 0
             entry.per_hop_min_ns = 0.0;
@@ -754,11 +786,11 @@ void LatencyResultsManager::load_golden_csv() {
         }
 
         // Tolerance is optional for backward compatibility
-        if (tokens.size() >= 25) {
+        if (tokens.size() >= 29) {
+            entry.tolerance_percent = std::stod(tokens[28]);
+        } else if (tokens.size() >= 25 && tokens.size() < 28) {
+            // Old format: tolerance is at position 24
             entry.tolerance_percent = std::stod(tokens[24]);
-        } else if (tokens.size() >= 21 && tokens.size() < 24) {
-            // Old format: tolerance is at position 20
-            entry.tolerance_percent = std::stod(tokens[20]);
         } else {
             entry.tolerance_percent = 10.0;  // Default tolerance if not specified
         }
