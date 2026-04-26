@@ -38,7 +38,6 @@ def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_config, 
         cluster_axis=cluster_axis,
         memory_config=hidden_states.memory_config(),
         topology=ccl_manager.topology,
-        num_links=ccl_manager.num_links,
     )
     routing_weights_sharded = ttnn.reduce_scatter(
         routing_weights,
@@ -46,7 +45,6 @@ def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_config, 
         cluster_axis=cluster_axis,
         memory_config=routing_weights.memory_config(),
         topology=ccl_manager.topology,
-        num_links=ccl_manager.num_links,
     )
 
     hidden_states_sharded = ttnn.mul(hidden_states_sharded, scale, output_tensor=hidden_states_sharded)

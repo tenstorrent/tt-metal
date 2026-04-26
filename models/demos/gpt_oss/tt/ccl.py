@@ -5,10 +5,13 @@ import ttnn
 
 
 class CCLManager:
-    def __init__(self, mesh_device, num_links, topology=ttnn.Topology.Ring):
+    def __init__(self, mesh_device, topology=ttnn.Topology.Ring):
         self.mesh_device = mesh_device
-        self.num_links = num_links
         self.topology = topology
+        if mesh_device.shape[0] > 1:
+            self.num_links = 2 if "blackhole" in ttnn.get_arch_name() else 4
+        else:
+            self.num_links = 1
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
