@@ -556,9 +556,9 @@ class Generator(WarmupForwardMixin):
         if do_device_sampling:
             padded_batch = 32
 
-            # Use batched list for batched prefill, persistent buffer for non-batched
-            if not use_batched_prefill:
-                ttnn.synchronize_device(self.mesh_device)
+            # Finish the prefill/norm/lm-head chain before switching to decode
+            # and sampling from the produced logits.
+            ttnn.synchronize_device(self.mesh_device)
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
 
             # Concatenate along slot dimension -> [1, 1, 1[32], vocab_shard]
