@@ -282,7 +282,10 @@ void MetalContext::initialize(
 
     init_risc_fw_context_descriptor(num_hw_cqs_, worker_l1_size_);
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
-        risc_fw_context_descriptor_, std::bind(&MetalContext::get_control_plane, this), *dispatch_core_manager_);
+        risc_fw_context_descriptor_,
+        std::bind(&MetalContext::get_control_plane, this),
+        std::bind(&MetalContext::is_control_plane_initialized, this),
+        *dispatch_core_manager_);
 
     risc_firmware_initializer_->run_async_build_phase(device_ids);
 
@@ -558,6 +561,13 @@ const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     TT_ASSERT(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_control_plane();
+}
+
+bool MetalContext::is_control_plane_initialized() const {
+    if (env_ == nullptr) {
+        return false;
+    }
+    return MetalEnvAccessor(*env_).impl().is_control_plane_initialized();
 }
 
 void MetalContext::initialize_control_plane() {
