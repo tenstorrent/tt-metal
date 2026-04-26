@@ -2164,6 +2164,50 @@ def run_traceable_decode_subpath_smoke(
         selected_cache_rows_by_step=selected_cache_rows_by_step,
         indexer_kv_cache_initial=indexer_kv_cache_initial,
     )
+    device_selected_cache_rows_by_step = _device_selected_cache_rows_by_step_from_outputs(
+        ttnn_outputs_by_step,
+        selected_cache_rows_by_step=selected_cache_rows_by_step,
+        config=config,
+        attention_read_api=attention_read_api,
+        sparse_indexer_mode=sparse_indexer_mode,
+        compressed_kv_cache_rows=_compressed_kv_cache_rows_from_sparse_len(
+            config=config,
+            sparse_kv_cache_len=0 if sparse_kv_cache_initial is None else int(sparse_kv_cache_initial.shape[-2]),
+        ),
+    )
+    if device_selected_cache_rows_by_step:
+        replay_references = _build_traceable_decode_reference_sequence(
+            weights,
+            config=config,
+            layer=layer,
+            activations=replay_activations,
+            kv_cache_initial=kv_cache_initial,
+            sparse_kv_cache_initial=sparse_kv_cache_initial,
+            cache_len=cache_len,
+            cache_update_indices=cache_update_indices,
+            attention_window_indices=attention_window_indices,
+            rope_position_indices=rope_position_indices,
+            attention_mode=attention_mode,
+            attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
+            compressor_mode=compressor_mode,
+            indexer_compressor_mode=indexer_compressor_mode,
+            selected_cache_rows_by_step=device_selected_cache_rows_by_step,
+            indexer_kv_cache_initial=indexer_kv_cache_initial,
+            indexer_compressor_state_initial=indexer_compressor_state_initial,
+            compressor_state_initial=compressor_state_initial,
+            route_plans=route_plans,
+        )
+        _refresh_replay_reference_summaries(
+            result,
+            replay_references=replay_references,
+            cache_update_indices=cache_update_indices,
+        )
+        _record_device_selected_rows_in_trace_info(
+            trace_info,
+            device_selected_cache_rows_by_step,
+            config=config,
+        )
     result["mode"] = "ttnn-trace"
     result["device_id"] = int(device_id)
     result["trace_capture"].update(trace_info)
@@ -2243,6 +2287,12 @@ def run_traceable_decode_subpath_smoke(
         trace_info["sparse_indexer_trace"]["device_selected_row_ids_drive_attention"]
     )
     result["sparse_indexer_trace"].update(trace_info["sparse_indexer_trace"])
+    if device_selected_cache_rows_by_step:
+        _record_device_selected_rows_in_result(
+            result,
+            device_selected_cache_rows_by_step,
+            config=config,
+        )
     if trace_info.get("cache_rows_pages_read_per_step"):
         result["cache_rows_pages_read_per_step"] = trace_info["cache_rows_pages_read_per_step"]
     for step_detail in result["decode_steps_detail"]:
@@ -2901,6 +2951,228 @@ def _next_reference_indexer_compressor_state(
         kv_state=reference[kv_key].contiguous(),
         score_state=reference[score_key].contiguous(),
     )
+
+
+def _build_traceable_decode_reference_sequence(
+    weights: TraceableDecodeWeights,
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    activations: Sequence[torch.Tensor],
+    kv_cache_initial: torch.Tensor,
+    sparse_kv_cache_initial: torch.Tensor | None,
+    cache_len: int,
+    cache_update_indices: Sequence[int],
+    attention_window_indices: Sequence[int],
+    rope_position_indices: Sequence[int],
+    attention_mode: str,
+    attention_read_api: str,
+    sparse_indexer_mode: str,
+    compressor_mode: str,
+    indexer_compressor_mode: str,
+    selected_cache_rows_by_step: Mapping[int, Sequence[int]],
+    indexer_kv_cache_initial: torch.Tensor | None,
+    indexer_compressor_state_initial: TraceableCompressorState | None,
+    compressor_state_initial: TraceableCompressorState | None,
+    route_plans: Sequence[TraceableDecodeRoutePlan],
+) -> list[dict[str, torch.Tensor]]:
+    references: list[dict[str, torch.Tensor]] = []
+    reference_cache = kv_cache_initial
+    reference_sparse_cache = sparse_kv_cache_initial
+    reference_compressor_state = compressor_state_initial
+    reference_indexer_compressor_state = indexer_compressor_state_initial
+    for step, route_plan in enumerate(route_plans):
+        reference = build_torch_traceable_decode_subpath_reference(
+            weights,
+            config=config,
+            layer=layer,
+            activation=activations[step],
+            kv_cache_initial=reference_cache,
+            sparse_kv_cache_initial=reference_sparse_cache,
+            cache_len=cache_len,
+            cache_update_index=cache_update_indices[step],
+            attention_cache_window_index=attention_window_indices[step],
+            rope_position_index=rope_position_indices[step],
+            attention_mode=attention_mode,
+            attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
+            compressor_mode=compressor_mode,
+            indexer_compressor_mode=indexer_compressor_mode,
+            selected_cache_rows=selected_cache_rows_by_step.get(step),
+            indexer_kv_cache_initial=indexer_kv_cache_initial,
+            indexer_compressor_state_initial=reference_indexer_compressor_state,
+            compressor_state_initial=reference_compressor_state,
+            route_plan=route_plan,
+        )
+        references.append(reference)
+        reference_cache = _next_reference_cache(reference, attention_read_api=attention_read_api)
+        reference_sparse_cache = _next_reference_sparse_cache(
+            reference,
+            attention_read_api=attention_read_api,
+            previous_sparse_cache=reference_sparse_cache,
+        )
+        reference_compressor_state = _next_reference_compressor_state(
+            reference,
+            compressor_mode=compressor_mode,
+            previous_state=reference_compressor_state,
+        )
+        reference_indexer_compressor_state = _next_reference_indexer_compressor_state(
+            reference,
+            indexer_compressor_mode=indexer_compressor_mode,
+            previous_state=reference_indexer_compressor_state,
+        )
+    return references
+
+
+def _device_selected_cache_rows_by_step_from_outputs(
+    outputs_by_step: Sequence[Mapping[str, torch.Tensor]],
+    *,
+    selected_cache_rows_by_step: Mapping[int, Sequence[int]],
+    config: DeepSeekV4FlashConfig,
+    attention_read_api: str,
+    sparse_indexer_mode: str,
+    compressed_kv_cache_rows: int,
+) -> dict[int, tuple[int, ...]]:
+    if not _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api):
+        return {}
+    if not _uses_compressed_kv_selected_rows(attention_read_api):
+        return {}
+
+    rows_by_step: dict[int, tuple[int, ...]] = {}
+    sliding_window = int(config.sliding_window)
+    for step, outputs in enumerate(outputs_by_step):
+        static_window_rows = _static_window_rows_from_selected_rows(
+            selected_cache_rows_by_step.get(step),
+            config=config,
+        )
+        try:
+            topk_indices = outputs["sparse_indexer_topk_indices_uint32"]
+        except KeyError as exc:
+            raise KeyError("trace_topk_attention output did not include sparse_indexer_topk_indices_uint32") from exc
+
+        compressed_indices = [int(value) for value in topk_indices.reshape(-1).to(torch.long).tolist()]
+        invalid = [value for value in compressed_indices if value < 0 or value >= int(compressed_kv_cache_rows)]
+        if invalid:
+            raise ValueError(
+                "device sparse-indexer top-k rows are outside compressed KV cache rows "
+                f"{compressed_kv_cache_rows}: {invalid}"
+            )
+        device_compressed_rows = tuple(sliding_window + value for value in compressed_indices)
+        rows_by_step[int(step)] = (*static_window_rows, *device_compressed_rows)
+    return rows_by_step
+
+
+def _device_selected_rows_report(
+    device_selected_cache_rows_by_step: Mapping[int, Sequence[int]],
+    *,
+    config: DeepSeekV4FlashConfig,
+) -> list[dict[str, Any]]:
+    sliding_window = int(config.sliding_window)
+    return [
+        {
+            "step": int(step),
+            "rows": [int(value) for value in rows],
+            "static_window_rows": [int(value) for value in rows if int(value) < sliding_window],
+            "compressed_rows": [int(value) for value in rows if int(value) >= sliding_window],
+            "compressed_indices": [int(value) - sliding_window for value in rows if int(value) >= sliding_window],
+            "rows_source": "ttnn_trace_device_topk_readback",
+        }
+        for step, rows in sorted(device_selected_cache_rows_by_step.items())
+    ]
+
+
+def _refresh_replay_reference_summaries(
+    result: dict[str, Any],
+    *,
+    replay_references: Sequence[Mapping[str, torch.Tensor]],
+    cache_update_indices: Sequence[int],
+) -> None:
+    result["replay_reference"] = {name: _tensor_summary(value) for name, value in replay_references[0].items()}
+    result["replay_reference_by_step"] = [
+        {
+            "step": step,
+            "position": int(cache_update_indices[step]),
+            "tensors": {name: _tensor_summary(value) for name, value in step_reference.items()},
+        }
+        for step, step_reference in enumerate(replay_references)
+    ]
+
+
+def _record_device_selected_rows_in_trace_info(
+    trace_info: dict[str, Any],
+    device_selected_cache_rows_by_step: Mapping[int, Sequence[int]],
+    *,
+    config: DeepSeekV4FlashConfig,
+) -> None:
+    report = _device_selected_rows_report(device_selected_cache_rows_by_step, config=config)
+    first_rows = report[0] if report else None
+    trace_info["device_selected_cache_rows_by_step"] = report
+    trace_info["selected_row_reference_alignment"] = "replay_accuracy_reference_uses_ttnn_trace_device_topk_rows"
+    trace_info["sparse_indexer_trace"] = dict(trace_info["sparse_indexer_trace"])
+    trace_info["sparse_indexer_trace"]["device_selected_cache_rows_by_step"] = report
+    trace_info["sparse_indexer_trace"][
+        "selected_row_reference_alignment"
+    ] = "replay_accuracy_reference_uses_ttnn_trace_device_topk_rows"
+    if first_rows is not None:
+        trace_info["sparse_indexer_trace"]["selected_rows"] = list(first_rows["rows"])
+        trace_info["sparse_indexer_trace"]["device_selected_compressed_rows"] = list(first_rows["compressed_rows"])
+        trace_info["sparse_indexer_trace"]["device_selected_compressed_indices"] = list(
+            first_rows["compressed_indices"]
+        )
+
+
+def _record_device_selected_rows_in_result(
+    result: dict[str, Any],
+    device_selected_cache_rows_by_step: Mapping[int, Sequence[int]],
+    *,
+    config: DeepSeekV4FlashConfig,
+) -> None:
+    report = _device_selected_rows_report(device_selected_cache_rows_by_step, config=config)
+    if not report:
+        return
+    first_rows = report[0]
+    result["device_selected_cache_rows_by_step"] = report
+    result["selected_row_reference_alignment"] = "replay_accuracy_reference_uses_ttnn_trace_device_topk_rows"
+
+    attention_selected = result.get("attention_path", {}).get("selected_rows")
+    if isinstance(attention_selected, dict):
+        attention_selected["ids"] = list(first_rows["rows"])
+        attention_selected["device_runtime_rows"] = list(first_rows["rows"])
+        attention_selected["device_selected_compressed_rows"] = list(first_rows["compressed_rows"])
+        attention_selected["device_selected_compressed_indices"] = list(first_rows["compressed_indices"])
+        attention_selected["reference_alignment"] = "replay_accuracy_reference_uses_ttnn_trace_device_topk_rows"
+
+    sparse_selected = result.get("sparse_attention", {}).get("selected_cache_rows")
+    if isinstance(sparse_selected, dict):
+        sparse_selected["first_step_runtime_rows"] = list(first_rows["rows"])
+        sparse_selected["device_runtime_rows_by_step"] = report
+        sparse_selected["reference_alignment"] = "replay_accuracy_reference_uses_ttnn_trace_device_topk_rows"
+        for item in sparse_selected.get("per_step", []):
+            step = int(item.get("step", 0))
+            step_rows = next((entry for entry in report if int(entry["step"]) == step), None)
+            if step_rows is None:
+                continue
+            item["runtime_rows"] = list(step_rows["rows"])
+            item["compressed_rows"] = list(step_rows["compressed_rows"])
+            item["compressed_indices"] = list(step_rows["compressed_indices"])
+            item["compressed_rows_source"] = "ttnn_trace_device_topk_readback"
+            item["selected_row_ids_source"] = "static_sliding_window_rows_plus_device_indexer_compressed_rows"
+
+    compressed_summary = result.get("sparse_attention", {}).get("compressed_kv_cache")
+    if isinstance(compressed_summary, dict):
+        compressed_summary["selected_compressed_rows"] = list(first_rows["compressed_rows"])
+        compressed_summary["device_selected_compressed_indices"] = list(first_rows["compressed_indices"])
+
+    for step_detail in result.get("decode_steps_detail", []):
+        step = int(step_detail.get("step", 0))
+        step_rows = next((entry for entry in report if int(entry["step"]) == step), None)
+        if step_rows is None:
+            continue
+        step_detail["selected_cache_rows"] = list(step_rows["rows"])
+        step_detail["device_selected_cache_rows"] = list(step_rows["rows"])
+        step_detail["device_selected_compressed_rows"] = list(step_rows["compressed_rows"])
+        step_detail["device_selected_compressed_indices"] = list(step_rows["compressed_indices"])
+        step_detail["selected_row_reference_alignment"] = "replay_accuracy_reference_uses_ttnn_trace_device_topk_rows"
 
 
 def build_traceable_sparse_kv_cache_seed(

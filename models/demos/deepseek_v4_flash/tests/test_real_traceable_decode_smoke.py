@@ -15,6 +15,7 @@ import torch
 
 import models.demos.deepseek_v4_flash.ttnn_attention_projection as attention_projection
 import ttnn
+from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v4_flash.real_paged_sdpa_decode_trace_smoke import run_paged_sdpa_decode_trace_smoke
 from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_LEGACY_BLEND_MODE,
@@ -32,6 +33,7 @@ from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
     TraceableDecodeHostFallbackError,
     TraceableDecodeHostGuard,
+    _device_selected_cache_rows_by_step_from_outputs,
     run_traceable_decode_subpath_smoke,
 )
 from models.demos.deepseek_v4_flash.synthetic import generate_tiny_hf_checkpoint
@@ -759,6 +761,31 @@ def test_cpu_traceable_decode_boundary_materializes_indexer_compressor_row(tmp_p
         is True
     )
     assert "ttnn.update_cache(indexer_kv_cache_boundary_row)" in result["traceable_decode_scope"]["inside_trace"]
+
+
+def test_trace_topk_attention_reference_rows_follow_device_topk_order(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    config = DeepSeekV4FlashConfig.from_model_path(snapshot)
+    sliding_window = int(config.sliding_window)
+
+    rows = _device_selected_cache_rows_by_step_from_outputs(
+        [
+            {
+                "sparse_indexer_topk_indices_uint32": torch.tensor(
+                    [[[[2, 0, 1]]]],
+                    dtype=torch.uint32,
+                )
+            }
+        ],
+        selected_cache_rows_by_step={0: (0, 1, 2, sliding_window, sliding_window + 1, sliding_window + 2)},
+        config=config,
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV,
+        sparse_indexer_mode=TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
+        compressed_kv_cache_rows=3,
+    )
+
+    assert rows == {0: (0, 1, 2, sliding_window + 2, sliding_window, sliding_window + 1)}
 
 
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
