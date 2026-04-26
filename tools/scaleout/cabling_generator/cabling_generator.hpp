@@ -162,6 +162,12 @@ public:
     template <typename DeploymentArg>
     friend CablingGenerator build_from_directory(const std::string& dir_path, const DeploymentArg& deployment_arg);
 
+    // Overload taking a parsed deployment; slices it per cabling file before each per-file ctor
+    // so positional (host_id-indexed) access stays consistent across files.
+    friend CablingGenerator build_from_directory(
+        const std::string& dir_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
@@ -190,6 +196,11 @@ private:
         std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
             std::nullopt);
 
+    // Single-file init shared by the (path, path) and (path, DeploymentDescriptor) ctors.
+    void initialize_from_single_file(
+        const std::string& cluster_descriptor_path,
+        const deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
     // Merge another descriptor file into this CablingGenerator
     // Creates CablingGenerator internally and merges it
     // existing_sources: accumulated list of previously merged files (for error messages)
@@ -198,6 +209,21 @@ private:
     template <typename DeploymentArg>
     void merge(
         const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources);
+
+    // Ctor / merge overloads taking a parsed deployment; used by build_from_directory after
+    // slicing the full deployment per cabling file.
+    CablingGenerator(
+        const std::string& cluster_descriptor_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
+    void merge(
+        const std::string& new_file_path,
+        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+        const std::string& existing_sources);
+
+    // Post-construction merge logic shared by both merge() entry points.
+    void merge_other(
+        CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources);
 
     // Utility function for finding descriptor files in a directory
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
