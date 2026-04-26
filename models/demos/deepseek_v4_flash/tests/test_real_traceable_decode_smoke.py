@@ -25,8 +25,11 @@ from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
     TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
     TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
+    TRACEABLE_DECODE_COMPRESSOR_STATEFUL_RATIO4_PROBE,
+    TRACEABLE_DECODE_INDEXER_COMPRESSOR_STATEFUL_RATIO4_PROBE,
     TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
     TRACEABLE_DECODE_ROPE_POSITION_STATIC,
+    TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
     TraceableDecodeHostFallbackError,
     TraceableDecodeHostGuard,
     run_traceable_decode_subpath_smoke,
@@ -714,6 +717,48 @@ def test_cpu_traceable_decode_subpath_can_report_selected_rows_compressed_kv_att
     )
     assert "ttnn.embedding(selected_row_idxs,sparse_kv_cache_table)" in result["traceable_decode_scope"]["inside_trace"]
     assert "ttnn.update_cache(sparse_kv_cache_compressed_row)" in result["traceable_decode_scope"]["inside_trace"]
+
+
+def test_cpu_traceable_decode_boundary_materializes_indexer_compressor_row(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=3,
+        seq_len=8,
+        cache_update_index=11,
+        max_bytes=96 * 1024,
+        routed_topk_prefix=1,
+        cpu_only=True,
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV,
+        sparse_indexer_mode=TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
+        compressor_mode=TRACEABLE_DECODE_COMPRESSOR_STATEFUL_RATIO4_PROBE,
+        indexer_compressor_mode=TRACEABLE_DECODE_INDEXER_COMPRESSOR_STATEFUL_RATIO4_PROBE,
+    )
+
+    assert result["passed"] is True
+    assert result["indexer_compressor_mode"] == TRACEABLE_DECODE_INDEXER_COMPRESSOR_STATEFUL_RATIO4_PROBE
+    assert result["sparse_indexer_trace"]["indexer_kv_state_in_trace"] is True
+    assert result["sparse_indexer_trace"]["indexer_score_state_in_trace"] is True
+    assert result["sparse_indexer_trace"]["boundary_row_materialized_for_position"] is True
+    assert result["sparse_indexer_trace"]["boundary_row_consumed_by_attention"] is True
+    assert result["sparse_indexer_trace"]["indexer_boundary_write_status"] == (
+        "static_boundary_position_writes_one_indexer_compressed_row"
+    )
+    assert result["sparse_indexer_trace"]["indexer_kv_cache_shape"] == [1, 1, 3, 8]
+    assert result["attention_path"]["selected_rows"]["ids_source"] == (
+        "static_sliding_window_rows_plus_device_indexer_compressed_rows"
+    )
+    assert result["attention_path"]["selected_rows"]["device_selected_row_ids_drive_compaction"] is True
+    assert result["attention_path"]["selected_rows"]["consumed_by_attention"] is True
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_cache_length"] == 3
+    assert (
+        result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["real_indexer_selection"][
+            "indexer_boundary_row_materialized"
+        ]
+        is True
+    )
+    assert "ttnn.update_cache(indexer_kv_cache_boundary_row)" in result["traceable_decode_scope"]["inside_trace"]
 
 
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
