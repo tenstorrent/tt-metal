@@ -54,6 +54,7 @@ from models.demos.deepseek_v4_flash.real_kv_projection_smoke import (
 )
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
     _layer_attention_output_projection_keys,
+    _layer_prefill_indexer_keys,
     _rotate_compressed_prefill_kv,
     _rotate_indexer_q,
     decode_real_prefill_attention_projection_weights,
@@ -76,6 +77,7 @@ from models.demos.deepseek_v4_flash.ttnn_attention_projection import (
     grouped_output_projection_a,
 )
 from models.demos.deepseek_v4_flash.ttnn_prefill_compressor import PrefillCompressorWeights
+from models.demos.deepseek_v4_flash.ttnn_prefill_indexer import PrefillIndexerWeights
 from models.demos.deepseek_v4_flash.ttnn_routed_expert import TtRoutedExpertMLP
 from models.demos.deepseek_v4_flash.ttnn_shared_expert import TtSharedExpertMLP
 
@@ -88,11 +90,14 @@ DEFAULT_TRACEABLE_DECODE_ROUTED_TOPK_PREFIX: int | None = None
 DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK = 8
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS = 4
 DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES = 96 * 1024 * 1024
+DEFAULT_TRACEABLE_DECODE_INDEXER_MAX_TENSORS = 7
+DEFAULT_TRACEABLE_DECODE_INDEXER_MAX_BYTES = 32 * 1024 * 1024
 DEFAULT_TRACEABLE_DECODE_MAX_TENSORS = (
     DEFAULT_ATTENTION_PROJECTION_MAX_TENSORS
     + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_TENSORS
     + DEFAULT_KV_PROJECTION_MAX_TENSORS
     + 4
+    + DEFAULT_TRACEABLE_DECODE_INDEXER_MAX_TENSORS
     + DEFAULT_SHARED_EXPERT_MAX_TENSORS
     + 3
     + 6 * DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK
@@ -103,6 +108,7 @@ DEFAULT_TRACEABLE_DECODE_MAX_BYTES = (
     + DEFAULT_ATTENTION_OUTPUT_PROJECTION_MAX_BYTES
     + DEFAULT_KV_PROJECTION_MAX_BYTES
     + 32 * 1024 * 1024
+    + DEFAULT_TRACEABLE_DECODE_INDEXER_MAX_BYTES
     + DEFAULT_SHARED_EXPERT_MAX_BYTES
     + 64 * 1024 * 1024 * DEFAULT_TRACEABLE_DECODE_MAX_ROUTED_TOPK
     + 8192
@@ -144,6 +150,15 @@ TRACEABLE_DECODE_ROPE_POSITION_APIS = (
     TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
 )
 DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API = TRACEABLE_DECODE_ROPE_POSITION_STATIC
+TRACEABLE_DECODE_SPARSE_INDEXER_HOST_PREFLIGHT = "host_preflight"
+TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_SCORING_TOPK = "trace_scoring_topk"
+TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION = "trace_topk_attention"
+TRACEABLE_DECODE_SPARSE_INDEXER_MODES = (
+    TRACEABLE_DECODE_SPARSE_INDEXER_HOST_PREFLIGHT,
+    TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_SCORING_TOPK,
+    TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
+)
+DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE = TRACEABLE_DECODE_SPARSE_INDEXER_HOST_PREFLIGHT
 
 
 @dataclass(frozen=True)
@@ -151,6 +166,7 @@ class TraceableDecodeWeights:
     attention: AttentionProjectionWeights
     kv: KvProjectionWeights
     compressor: PrefillCompressorWeights | None
+    indexer: PrefillIndexerWeights | None
     attn_sink: torch.Tensor
     attn_norm: torch.Tensor
     ffn_norm: torch.Tensor
@@ -255,6 +271,12 @@ class TtTraceableDecodeSubpath:
         sparse_kv_cache=None,
         sparse_kv_cache_len: int | None = None,
         compressed_kv_cache_rows: int = 0,
+        sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
+        indexer_kv_cache=None,
+        indexer_kv_cache_rows: int = 0,
+        indexer_topk_width: int = 0,
+        static_window_row_idxs_tensor=None,
+        static_window_row_positions: Sequence[int] | None = None,
         attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -422,10 +444,48 @@ class TtTraceableDecodeSubpath:
         self.sparse_kv_cache = sparse_kv_cache
         self.sparse_kv_cache_len = 0 if sparse_kv_cache_len is None else int(sparse_kv_cache_len)
         self.compressed_kv_cache_rows = int(compressed_kv_cache_rows)
+        self.sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
+        self.sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(self.sparse_indexer_mode)
+        self.sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+            self.sparse_indexer_mode,
+            attention_read_api=self.attention_read_api,
+        )
+        self.indexer_kv_cache = indexer_kv_cache
+        self.indexer_kv_cache_rows = int(indexer_kv_cache_rows)
+        self.indexer_topk_width = int(indexer_topk_width)
         self.compressed_kv_update_index = _compressed_kv_update_cache_row(
             config, layer=self.layer, position=self.cache_update_index
         )
         self.sliding_kv_update_index = int(self.cache_update_index) % int(config.sliding_window)
+        if self.sparse_indexer_trace_enabled:
+            if int(config.compress_ratios[self.layer]) != 4:
+                raise ValueError(
+                    f"sparse indexer trace mode requires compress_ratio=4, "
+                    f"got {config.compress_ratios[self.layer]} for layer {self.layer}"
+                )
+            if weights.indexer is None:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires real indexer weights")
+            if self.indexer_kv_cache is None:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires indexer_kv_cache")
+            if self.indexer_kv_cache_rows <= 0:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires at least one indexer KV cache row")
+            if self.indexer_topk_width <= 0:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires a positive indexer_topk_width")
+            self.indexer_wq_b = _to_tt_linear_weight(
+                weights.indexer.wq_b,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+            self.indexer_weights_proj = _to_tt_linear_weight(
+                weights.indexer.weights_proj,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+        else:
+            self.indexer_wq_b = None
+            self.indexer_weights_proj = None
         if _uses_compressed_kv_selected_rows(self.attention_read_api):
             if weights.compressor is None:
                 raise ValueError(
@@ -466,6 +526,18 @@ class TtTraceableDecodeSubpath:
             self.compressor_wkv = None
             self.compressor_wgate = None
             self.compressor_norm = None
+        if self.sparse_indexer_drives_attention:
+            if static_window_row_idxs_tensor is None:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires static_window_row_idxs_tensor")
+            if static_window_row_positions is None:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires static_window_row_positions")
+            self.static_window_row_idxs_tensor = static_window_row_idxs_tensor
+            self.static_window_row_positions = tuple(int(value) for value in static_window_row_positions)
+            if not self.static_window_row_positions:
+                raise ValueError(f"{self.sparse_indexer_mode!r} requires at least one sliding-window row")
+        else:
+            self.static_window_row_idxs_tensor = None
+            self.static_window_row_positions = ()
         self.attn_norm = _to_tt_norm_weight(
             weights.attn_norm,
             device=device,
@@ -515,6 +587,32 @@ class TtTraceableDecodeSubpath:
         else:
             self.selected_key_rope_cos = None
             self.selected_key_rope_sin = None
+        if self.sparse_indexer_drives_attention:
+            self.static_window_key_rope_cos, self.static_window_key_rope_sin = _to_tt_rope_position_tensors(
+                config,
+                layer=self.layer,
+                positions=self.static_window_row_positions,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+            (
+                self.compressed_key_rope_cos_table,
+                self.compressed_key_rope_sin_table,
+            ) = _to_tt_compressed_rope_embedding_tables(
+                config,
+                layer=self.layer,
+                compressed_rows=self.compressed_kv_cache_rows,
+                compress_ratio=int(config.compress_ratios[self.layer]),
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+        else:
+            self.static_window_key_rope_cos = None
+            self.static_window_key_rope_sin = None
+            self.compressed_key_rope_cos_table = None
+            self.compressed_key_rope_sin_table = None
         if self.rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR:
             self.rope_cos_table, self.rope_sin_table, self.rope_trans_mat = _to_tt_rope_embedding_tables(
                 config,
@@ -722,6 +820,32 @@ class TtTraceableDecodeSubpath:
                 "sparse_kv_cache": self.sparse_kv_cache,
                 "compressed_kv_cache": compressed_kv_cache,
             }
+        if self.attention_read_api != TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
+            if self.rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR:
+                rope_cos, rope_sin = _ttnn_gather_rope_tensors(
+                    self.rope_position_idxs_tensor,
+                    self.rope_cos_table,
+                    self.rope_sin_table,
+                    memory_config=self.memory_config,
+                )
+            else:
+                rope_cos = self.rope_cos
+                rope_sin = self.rope_sin
+        sparse_indexer_intermediates = {}
+        if self.sparse_indexer_trace_enabled:
+            sparse_indexer_intermediates = _ttnn_sparse_indexer_trace(
+                q_rank_norm=q_rank_norm,
+                attn_norm_output=attn_norm_output,
+                indexer_kv_cache=self.indexer_kv_cache,
+                indexer_wq_b=self.indexer_wq_b,
+                indexer_weights_proj=self.indexer_weights_proj,
+                indexer_topk_width=self.indexer_topk_width,
+                config=self.config,
+                query_rope_cos=rope_cos,
+                query_rope_sin=rope_sin,
+                rope_trans_mat=self.rope_trans_mat,
+                memory_config=self.memory_config,
+            )
         if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE:
             attention_cache_window = ttnn.slice(
                 self.kv_cache,
@@ -740,24 +864,61 @@ class TtTraceableDecodeSubpath:
                 if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
                 else self.cache_len
             )
-            attention_cache_window = _ttnn_select_cache_rows(
-                selected_source_cache,
-                selected_row_idxs=self.selected_row_idxs_tensor,
-                cache_len=selected_source_cache_len,
-                head_dim=int(self.config.head_dim),
-                memory_config=self.memory_config,
-            )
-        if self.attention_read_api != TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
-            if self.rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR:
-                rope_cos, rope_sin = _ttnn_gather_rope_tensors(
-                    self.rope_position_idxs_tensor,
-                    self.rope_cos_table,
-                    self.rope_sin_table,
+            selected_key_rope_cos = self.selected_key_rope_cos
+            selected_key_rope_sin = self.selected_key_rope_sin
+            if self.sparse_indexer_drives_attention:
+                static_window_cache = _ttnn_select_cache_rows(
+                    self.sparse_kv_cache,
+                    selected_row_idxs=self.static_window_row_idxs_tensor,
+                    cache_len=self.sparse_kv_cache_len,
+                    head_dim=int(self.config.head_dim),
                     memory_config=self.memory_config,
                 )
+                compressed_dynamic_cache = _ttnn_select_cache_rows(
+                    compressed_kv_cache,
+                    selected_row_idxs=sparse_indexer_intermediates["sparse_indexer_topk_indices_uint32"],
+                    cache_len=self.compressed_kv_cache_rows,
+                    head_dim=int(self.config.head_dim),
+                    memory_config=self.memory_config,
+                )
+                attention_cache_window = ttnn.concat(
+                    [static_window_cache, compressed_dynamic_cache],
+                    dim=-2,
+                    memory_config=self.memory_config,
+                )
+                compressed_key_rope_cos, compressed_key_rope_sin = _ttnn_gather_rope_tensors(
+                    sparse_indexer_intermediates["sparse_indexer_topk_indices_uint32"],
+                    self.compressed_key_rope_cos_table,
+                    self.compressed_key_rope_sin_table,
+                    memory_config=self.memory_config,
+                )
+                selected_key_rope_cos = ttnn.concat(
+                    [self.static_window_key_rope_cos, compressed_key_rope_cos],
+                    dim=-2,
+                    memory_config=self.memory_config,
+                )
+                selected_key_rope_sin = ttnn.concat(
+                    [self.static_window_key_rope_sin, compressed_key_rope_sin],
+                    dim=-2,
+                    memory_config=self.memory_config,
+                )
+                sparse_indexer_intermediates = {
+                    **sparse_indexer_intermediates,
+                    "sparse_indexer_static_window_cache": static_window_cache,
+                    "sparse_indexer_compressed_dynamic_cache": compressed_dynamic_cache,
+                    "sparse_indexer_compressed_key_rope_cos": compressed_key_rope_cos,
+                    "sparse_indexer_compressed_key_rope_sin": compressed_key_rope_sin,
+                    "sparse_indexer_dynamic_key_rope_cos": selected_key_rope_cos,
+                    "sparse_indexer_dynamic_key_rope_sin": selected_key_rope_sin,
+                }
             else:
-                rope_cos = self.rope_cos
-                rope_sin = self.rope_sin
+                attention_cache_window = _ttnn_select_cache_rows(
+                    selected_source_cache,
+                    selected_row_idxs=self.selected_row_idxs_tensor,
+                    cache_len=selected_source_cache_len,
+                    head_dim=int(self.config.head_dim),
+                    memory_config=self.memory_config,
+                )
         if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
             attention_intermediates = _ttnn_paged_sdpa_decode_attention(
                 q_output=q_output,
@@ -784,8 +945,8 @@ class TtTraceableDecodeSubpath:
                 q_head_norm=self.q_head_norm,
                 query_rope_cos=rope_cos,
                 query_rope_sin=rope_sin,
-                key_rope_cos=self.selected_key_rope_cos,
-                key_rope_sin=self.selected_key_rope_sin,
+                key_rope_cos=selected_key_rope_cos,
+                key_rope_sin=selected_key_rope_sin,
                 rope_trans_mat=self.rope_trans_mat,
                 attention_sink_logits=self.dense_attention_sink,
                 memory_config=self.memory_config,
@@ -883,6 +1044,7 @@ class TtTraceableDecodeSubpath:
             "rope_cos": rope_cos,
             "rope_sin": rope_sin,
             **attention_intermediates,
+            **sparse_indexer_intermediates,
             "attention_projected": attention_projected,
             "post_attention_residual": post_attention_residual,
             "ffn_norm_output": ffn_norm_output,
@@ -929,6 +1091,7 @@ def run_traceable_decode_subpath_smoke(
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
     cache_update_api: str = DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
     rope_position_api: str = DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
     pcc: float = 0.99,
     rtol: float = 8e-2,
     atol: float = 8e-2,
@@ -956,6 +1119,7 @@ def run_traceable_decode_subpath_smoke(
     attention_read_api = _validate_attention_read_api(attention_read_api)
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     _validate_attention_read_api_combination(
         attention_read_api=attention_read_api,
         attention_mode=attention_mode,
@@ -965,10 +1129,25 @@ def run_traceable_decode_subpath_smoke(
     snapshot_dir = Path(snapshot_dir).expanduser().resolve()
     config = DeepSeekV4FlashConfig.from_model_path(snapshot_dir)
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+    sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    if sparse_indexer_trace_enabled and int(config.compress_ratios[int(layer)]) != 4:
+        raise ValueError(
+            f"{sparse_indexer_mode!r} requires a compress_ratio=4 layer; "
+            f"layer {layer} has compress_ratio={config.compress_ratios[int(layer)]}"
+        )
+    if (
+        sparse_indexer_mode == TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION
+        and attention_read_api != TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
+    ):
+        raise ValueError(
+            f"{TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION!r} requires "
+            f"{TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV!r}, got {attention_read_api!r}"
+        )
     tensors, metadata, keys = load_traceable_decode_subpath_slice(
         snapshot_dir,
         layer=layer,
         include_compressor=uses_compressed_selected_rows,
+        include_indexer=sparse_indexer_trace_enabled,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
     )
@@ -1020,6 +1199,17 @@ def run_traceable_decode_subpath_smoke(
         if uses_compressed_selected_rows
         else None
     )
+    indexer_kv_cache_initial = (
+        build_traceable_indexer_kv_cache_seed(
+            config=config,
+            layer=layer,
+            positions=cache_update_indices,
+            weights=weights,
+            activation=activations[0],
+        )
+        if sparse_indexer_trace_enabled
+        else None
+    )
 
     route_plans: list[TraceableDecodeRoutePlan] = []
     preliminary_cache = kv_cache_initial
@@ -1038,7 +1228,9 @@ def run_traceable_decode_subpath_smoke(
             rope_position_index=rope_position_indices[step],
             attention_mode=attention_mode,
             attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
             selected_cache_rows=selected_cache_rows_by_step.get(step),
+            indexer_kv_cache_initial=indexer_kv_cache_initial,
             route_plan=None,
         )
         route_plans.append(
@@ -1103,7 +1295,9 @@ def run_traceable_decode_subpath_smoke(
             rope_position_index=rope_position_indices[step],
             attention_mode=attention_mode,
             attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
             selected_cache_rows=selected_cache_rows_by_step.get(step),
+            indexer_kv_cache_initial=indexer_kv_cache_initial,
             route_plan=route_plan,
         )
         references.append(reference)
@@ -1126,7 +1320,9 @@ def run_traceable_decode_subpath_smoke(
             rope_position_index=rope_position_indices[step],
             attention_mode=attention_mode,
             attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
             selected_cache_rows=selected_cache_rows_by_step.get(step),
+            indexer_kv_cache_initial=indexer_kv_cache_initial,
             route_plan=route_plan,
         )
         replay_references.append(replay_reference)
@@ -1163,10 +1359,12 @@ def run_traceable_decode_subpath_smoke(
         attention_read_api=attention_read_api,
         cache_update_api=cache_update_api,
         rope_position_api=rope_position_api,
+        sparse_indexer_mode=sparse_indexer_mode,
         attention_window_indices=attention_window_indices,
         rope_position_indices=rope_position_indices,
         selected_cache_rows_by_step=selected_cache_rows_by_step,
         sparse_kv_cache_initial=sparse_kv_cache_initial,
+        indexer_kv_cache_initial=indexer_kv_cache_initial,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
         trace_region_size=trace_region_size,
@@ -1218,9 +1416,11 @@ def run_traceable_decode_subpath_smoke(
         attention_read_api=attention_read_api,
         cache_update_api=cache_update_api,
         rope_position_api=rope_position_api,
+        sparse_indexer_mode=sparse_indexer_mode,
         attention_window_index=static_attention_index,
         rope_position_indices=rope_position_indices,
         selected_cache_rows_by_step=selected_cache_rows_by_step,
+        indexer_kv_cache_initial=indexer_kv_cache_initial,
     )
     result["mode"] = "ttnn-trace"
     result["device_id"] = int(device_id)
@@ -1260,6 +1460,22 @@ def run_traceable_decode_subpath_smoke(
         trace_info["dynamic_cache_read_current_position"]
     )
     result["traceability_flags"]["attention_read_api"] = trace_info["attention_read_api"]
+    result["traceability_flags"]["sparse_indexer_scoring_in_trace"] = bool(
+        trace_info["sparse_indexer_trace"]["scoring_in_trace"]
+    )
+    result["traceability_flags"]["sparse_indexer_topk_in_trace"] = bool(
+        trace_info["sparse_indexer_trace"]["topk_in_trace"]
+    )
+    result["traceability_flags"]["selected_row_ids_source"] = trace_info["sparse_indexer_trace"][
+        "selected_row_ids_source"
+    ]
+    result["traceability_flags"]["device_selected_row_ids_drive_compaction"] = bool(
+        trace_info["sparse_indexer_trace"]["device_selected_row_ids_drive_compaction"]
+    )
+    result["traceability_flags"]["device_selected_row_ids_drive_attention"] = bool(
+        trace_info["sparse_indexer_trace"]["device_selected_row_ids_drive_attention"]
+    )
+    result["sparse_indexer_trace"].update(trace_info["sparse_indexer_trace"])
     if trace_info.get("cache_rows_pages_read_per_step"):
         result["cache_rows_pages_read_per_step"] = trace_info["cache_rows_pages_read_per_step"]
     for step_detail in result["decode_steps_detail"]:
@@ -1280,6 +1496,7 @@ def run_traceable_decode_subpath_smoke(
         route_plan=route_plans[0],
         rope_position_api=rope_position_api,
         attention_read_api=attention_read_api,
+        sparse_indexer_mode=sparse_indexer_mode,
     )
     result["trace_capture"]["traced_operations"] = list(result["ttnn_ops"])
     result["ttnn"] = {name: _tensor_summary(value) for name, value in ttnn_outputs_by_step[0].items()}
@@ -1345,6 +1562,7 @@ def load_traceable_decode_subpath_slice(
     layer: int,
     routed_experts: Sequence[int] = (),
     include_compressor: bool = False,
+    include_indexer: bool = False,
     max_tensors: int = DEFAULT_TRACEABLE_DECODE_MAX_TENSORS,
     max_bytes: int = DEFAULT_TRACEABLE_DECODE_MAX_BYTES,
 ) -> tuple[dict[str, torch.Tensor], list[TensorMetadata], dict[str, list[str]]]:
@@ -1363,6 +1581,11 @@ def load_traceable_decode_subpath_slice(
         ]
         for key in compressor_keys:
             index.location(key)
+    indexer_keys = []
+    if include_indexer:
+        indexer_keys = _layer_prefill_indexer_keys(index, layer=layer)
+        for key in indexer_keys:
+            index.location(key)
     attention_sink_keys = [f"layers.{layer}.attn.attn_sink"]
     for key in attention_sink_keys:
         index.location(key)
@@ -1379,6 +1602,7 @@ def load_traceable_decode_subpath_slice(
         "attention_output": attention_output_keys,
         "kv_projection": kv_keys,
         "compressor": compressor_keys,
+        "indexer": indexer_keys,
         "attention_sink": attention_sink_keys,
         "ffn_norm": ffn_norm_keys,
         "router_selector": router_keys,
@@ -1392,6 +1616,7 @@ def load_traceable_decode_subpath_slice(
                 *attention_output_keys,
                 *kv_keys,
                 *compressor_keys,
+                *indexer_keys,
                 *attention_sink_keys,
                 *ffn_norm_keys,
                 *router_keys,
@@ -1435,6 +1660,11 @@ def decode_traceable_decode_subpath_weights(
         if f"layers.{layer}.attn.compressor.wkv.weight" in tensors
         else None
     )
+    indexer = (
+        decode_real_prefill_indexer_weights(tensors, config=config, layer=layer)
+        if f"layers.{layer}.attn.indexer.weights_proj.weight" in tensors
+        else None
+    )
     _validate_traceable_decode_router_tensors(tensors, config=config, layer=layer)
     ffn_norm_key = f"layers.{layer}.ffn_norm.weight"
     if ffn_norm_key not in tensors:
@@ -1461,6 +1691,7 @@ def decode_traceable_decode_subpath_weights(
         attention=attention,
         kv=kv,
         compressor=compressor,
+        indexer=indexer,
         attn_sink=tensors[attn_sink_key].contiguous().to(torch.bfloat16),
         attn_norm=tensors[f"layers.{layer}.attn_norm.weight"].contiguous().to(torch.bfloat16),
         ffn_norm=tensors[ffn_norm_key].contiguous().to(torch.bfloat16),
@@ -1494,11 +1725,14 @@ def build_torch_traceable_decode_subpath_reference(
     rope_position_index: int | None = None,
     attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
     selected_cache_rows: Sequence[int] | None = None,
+    indexer_kv_cache_initial: torch.Tensor | None = None,
     route_plan: TraceableDecodeRoutePlan | None = None,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
     attention_read_api = _validate_attention_read_api(attention_read_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
         _validate_paged_or_single_kv_cache_initial(
             kv_cache_initial,
@@ -1642,6 +1876,19 @@ def build_torch_traceable_decode_subpath_reference(
         start_pos=rope_position_index,
         seq_len=int(activation.shape[-2]),
     )
+    sparse_indexer_intermediates = (
+        _torch_traceable_decode_sparse_indexer(
+            attn_norm_output=attn_norm_output,
+            q_rank_norm=q_rank_norm,
+            indexer_kv_cache_initial=indexer_kv_cache_initial,
+            weights=weights,
+            config=config,
+            layer=layer,
+            position=int(cache_update_index),
+        )
+        if _sparse_indexer_uses_trace(sparse_indexer_mode)
+        else {}
+    )
     attention_output = attention_intermediates["attention_output"]
 
     if weights.attention.wo_a is None or weights.attention.wo_b is None:
@@ -1714,6 +1961,7 @@ def build_torch_traceable_decode_subpath_reference(
         "rope_cos": rope_cos,
         "rope_sin": rope_sin,
         **attention_intermediates,
+        **sparse_indexer_intermediates,
         "attention_projected": attention_projected.to(torch.bfloat16),
         "post_attention_residual": post_attention_residual.to(torch.bfloat16),
         "ffn_norm_output": ffn_norm_output.to(torch.bfloat16),
@@ -1879,6 +2127,114 @@ def build_traceable_sparse_kv_cache_seed(
                 :, :compressed_rows
             ].unsqueeze(1)
     return sparse_cache.contiguous()
+
+
+def build_traceable_indexer_kv_cache_seed(
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    weights: TraceableDecodeWeights,
+    activation: torch.Tensor,
+) -> torch.Tensor:
+    if weights.indexer is None:
+        raise ValueError("trace-resident sparse indexer requires real indexer tensors")
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    if compress_ratio != 4:
+        raise ValueError(f"trace-resident sparse indexer requires compress_ratio=4, got {compress_ratio}")
+    if not positions:
+        raise ValueError("positions must contain at least one decode position")
+    required_rows = max((int(position) + 1) // compress_ratio for position in positions)
+    if required_rows <= 0:
+        raise ValueError("trace-resident sparse indexer requires at least one compressed cache row")
+    history_len = min(max(int(position) for position in positions), int(activation.shape[-2]))
+    if history_len < compress_ratio:
+        raise ValueError(
+            f"activation history length {history_len} is shorter than compress_ratio {compress_ratio}; "
+            "cannot seed trace-resident sparse indexer KV cache"
+        )
+    attn_input = rms_norm(
+        activation[:, 0, :history_len].contiguous(),
+        weights.attn_norm,
+        eps=float(config.rms_norm_eps),
+    ).to(torch.bfloat16)
+    index_compressed_kv = compressor_prefill(
+        attn_input,
+        weights.indexer.compressor.wkv,
+        weights.indexer.compressor.wgate,
+        weights.indexer.compressor.ape,
+        weights.indexer.compressor.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=int(config.index_head_dim),
+        norm_eps=float(config.rms_norm_eps),
+    ).to(torch.bfloat16)
+    index_compressed_kv = _rotate_compressed_prefill_kv(
+        index_compressed_kv,
+        config=config,
+        layer=layer,
+        seq_len=history_len,
+        start_pos=0,
+        compress_ratio=compress_ratio,
+    )
+    if int(index_compressed_kv.shape[1]) < required_rows:
+        raise ValueError(
+            "trace-resident sparse indexer KV seed does not cover decode positions: "
+            f"materialized {int(index_compressed_kv.shape[1])} rows, required {required_rows}"
+        )
+    return index_compressed_kv[:, :required_rows].unsqueeze(1).contiguous().to(torch.bfloat16)
+
+
+def _torch_traceable_decode_sparse_indexer(
+    *,
+    attn_norm_output: torch.Tensor,
+    q_rank_norm: torch.Tensor,
+    indexer_kv_cache_initial: torch.Tensor | None,
+    weights: TraceableDecodeWeights,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    position: int,
+) -> dict[str, torch.Tensor]:
+    if weights.indexer is None:
+        raise ValueError("trace-resident sparse indexer reference requires real indexer tensors")
+    if indexer_kv_cache_initial is None:
+        raise ValueError("trace-resident sparse indexer reference requires indexer_kv_cache_initial")
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    compressed_cache_length = (int(position) + 1) // compress_ratio
+    if compressed_cache_length <= 0:
+        raise ValueError("trace-resident sparse indexer reference requires a non-empty compressed cache")
+    indexer_kv_cache = indexer_kv_cache_initial[:, 0, :compressed_cache_length].contiguous()
+    current_q_rank = q_rank_norm[:, 0, :1].contiguous()
+    index_q_linear = F.linear(current_q_rank.float(), weights.indexer.wq_b.float()).to(torch.bfloat16)
+    index_q = index_q_linear.reshape(1, 1, int(config.index_n_heads), int(config.index_head_dim))
+    index_q = _rotate_indexer_q(index_q, config=config, layer=layer, start_pos=int(position))
+    index_weights = F.linear(
+        attn_norm_output[:, 0, :1].float(),
+        weights.indexer.weights_proj.float(),
+    ).to(torch.bfloat16)
+    index_weights = index_weights.float() * (int(config.index_head_dim) ** -0.5 * int(config.index_n_heads) ** -0.5)
+    sparse_indexer_head_scores = torch.einsum("bshd,btd->bsht", index_q.float(), indexer_kv_cache.float())
+    sparse_indexer_head_scores_relu = sparse_indexer_head_scores.relu()
+    sparse_indexer_weighted_head_scores = sparse_indexer_head_scores_relu * index_weights.unsqueeze(-1)
+    sparse_indexer_scores = sparse_indexer_weighted_head_scores.sum(dim=2)
+    topk_width = min(int(config.index_topk), compressed_cache_length)
+    sparse_indexer_topk_scores, sparse_indexer_topk_indices = sparse_indexer_scores.topk(topk_width, dim=-1)
+    return {
+        "sparse_indexer_q_rank_decode": current_q_rank.unsqueeze(1).to(torch.bfloat16),
+        "sparse_indexer_q_linear": index_q_linear.unsqueeze(1).to(torch.bfloat16),
+        "sparse_indexer_q_heads": index_q.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "sparse_indexer_head_scores": sparse_indexer_head_scores.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "sparse_indexer_head_scores_relu": sparse_indexer_head_scores_relu.transpose(1, 2)
+        .contiguous()
+        .to(torch.bfloat16),
+        "sparse_indexer_head_weights": index_weights.reshape(1, int(config.index_n_heads), 1, 1).to(torch.bfloat16),
+        "sparse_indexer_weighted_head_scores": sparse_indexer_weighted_head_scores.transpose(1, 2)
+        .contiguous()
+        .to(torch.bfloat16),
+        "sparse_indexer_scores": sparse_indexer_scores.unsqueeze(1).to(torch.bfloat16),
+        "sparse_indexer_topk_scores": sparse_indexer_topk_scores.unsqueeze(1).to(torch.bfloat16),
+        "sparse_indexer_topk_indices": sparse_indexer_topk_indices.unsqueeze(1).to(torch.uint16),
+        "sparse_indexer_topk_indices_uint32": sparse_indexer_topk_indices.unsqueeze(1).to(torch.uint32),
+    }
 
 
 def _torch_update_sparse_kv_cache_for_decode(
@@ -2194,6 +2550,16 @@ def main() -> None:
             "gather fixed-shape cos/sin rows from a mutable device position tensor during trace replay."
         ),
     )
+    parser.add_argument(
+        "--sparse-indexer-mode",
+        choices=TRACEABLE_DECODE_SPARSE_INDEXER_MODES,
+        default=DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
+        help=(
+            "Sparse row-id generation path. host_preflight keeps the existing static selected rows; "
+            "trace_scoring_topk computes indexer scores/top-k inside trace but keeps static compaction; "
+            "trace_topk_attention also feeds device-produced compressed row ids into selected-row compaction."
+        ),
+    )
     parser.add_argument("--cpu-only", action="store_true")
     parser.add_argument("--pcc", type=float, default=0.99)
     parser.add_argument("--rtol", type=float, default=8e-2)
@@ -2222,6 +2588,7 @@ def main() -> None:
         attention_read_api=args.attention_read_api,
         cache_update_api=args.cache_update_api,
         rope_position_api=args.rope_position_api,
+        sparse_indexer_mode=args.sparse_indexer_mode,
         pcc=args.pcc,
         rtol=args.rtol,
         atol=args.atol,
@@ -2249,9 +2616,11 @@ def _run_ttnn_traceable_decode_subpath(
     attention_read_api: str,
     cache_update_api: str,
     rope_position_api: str,
+    sparse_indexer_mode: str,
     attention_window_index: int,
     rope_position_indices: Sequence[int],
     selected_cache_rows_by_step: Mapping[int, Sequence[int]],
+    indexer_kv_cache_initial: torch.Tensor | None,
 ) -> tuple[list[dict[str, torch.Tensor]], dict[str, Any]]:
     if not route_plans:
         raise ValueError("at least one route plan is required")
@@ -2262,6 +2631,7 @@ def _run_ttnn_traceable_decode_subpath(
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
     attention_read_api = _validate_attention_read_api(attention_read_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     _validate_attention_read_api_combination(
         attention_read_api=attention_read_api,
         attention_mode=attention_mode,
@@ -2281,6 +2651,11 @@ def _run_ttnn_traceable_decode_subpath(
         uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
         uses_selected_rows_read = _uses_selected_rows_attention(attention_read_api)
         uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+        sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(sparse_indexer_mode)
+        sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+            sparse_indexer_mode,
+            attention_read_api=attention_read_api,
+        )
         paged_sdpa_batch = int(activations[0].shape[-2])
         page_table = (
             _identity_page_table(
@@ -2326,6 +2701,23 @@ def _run_ttnn_traceable_decode_subpath(
         compressed_kv_cache_rows = (
             _compressed_kv_cache_rows_from_sparse_len(config=config, sparse_kv_cache_len=sparse_kv_cache_len)
             if uses_compressed_selected_rows
+            else 0
+        )
+        indexer_kv_cache = (
+            _to_tt_indexer_kv_cache(
+                indexer_kv_cache_initial,
+                config=config,
+                device=device,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if sparse_indexer_trace_enabled
+            else None
+        )
+        indexer_kv_cache_rows = 0 if indexer_kv_cache_initial is None else int(indexer_kv_cache_initial.shape[-2])
+        indexer_topk_width = (
+            min(int(config.index_topk), (int(cache_update_indices[0]) + 1) // int(config.compress_ratios[int(layer)]))
+            if sparse_indexer_trace_enabled
             else 0
         )
         paged_k_cache = (
@@ -2392,8 +2784,37 @@ def _run_ttnn_traceable_decode_subpath(
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                if uses_selected_rows_read
+                if uses_selected_rows_read and not sparse_indexer_drives_attention
                 else None
+            )
+            static_window_rows = (
+                _static_window_rows_from_selected_rows(selected_rows, config=config)
+                if sparse_indexer_drives_attention
+                else ()
+            )
+            static_window_row_idxs_tensor = (
+                _to_tt_selected_row_idxs_tensor(
+                    static_window_rows,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if sparse_indexer_drives_attention
+                else None
+            )
+            module_selected_positions = (
+                static_window_rows
+                if sparse_indexer_drives_attention
+                else _selected_attention_key_positions(
+                    selected_rows,
+                    config=config,
+                    layer=layer,
+                    attention_read_api=attention_read_api,
+                )
+                if selected_rows is not None
+                else None
+            )
+            module_selected_row_idxs_tensor = (
+                static_window_row_idxs_tensor if sparse_indexer_drives_attention else selected_row_idxs_tensor
             )
             module = TtTraceableDecodeSubpath(
                 device=device,
@@ -2412,15 +2833,8 @@ def _run_ttnn_traceable_decode_subpath(
                 cur_pos_tensor=cur_pos_tensor,
                 paged_k_cache=paged_k_cache,
                 paged_v_cache=paged_v_cache,
-                selected_row_idxs_tensor=selected_row_idxs_tensor,
-                selected_row_positions=_selected_attention_key_positions(
-                    selected_rows,
-                    config=config,
-                    layer=layer,
-                    attention_read_api=attention_read_api,
-                )
-                if selected_rows is not None
-                else None,
+                selected_row_idxs_tensor=module_selected_row_idxs_tensor,
+                selected_row_positions=module_selected_positions,
                 paged_sdpa_block_size=TRACEABLE_DECODE_PAGED_SDPA_BLOCK_SIZE,
                 attention_cache_window_index=int(attention_window_index),
                 rope_position_index=int(rope_position_indices[0]),
@@ -2429,6 +2843,12 @@ def _run_ttnn_traceable_decode_subpath(
                 sparse_kv_cache=sparse_kv_cache,
                 sparse_kv_cache_len=sparse_kv_cache_len,
                 compressed_kv_cache_rows=compressed_kv_cache_rows,
+                sparse_indexer_mode=sparse_indexer_mode,
+                indexer_kv_cache=indexer_kv_cache,
+                indexer_kv_cache_rows=indexer_kv_cache_rows,
+                indexer_topk_width=indexer_topk_width,
+                static_window_row_idxs_tensor=static_window_row_idxs_tensor,
+                static_window_row_positions=static_window_rows,
                 attention_mode=attention_mode,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -2534,14 +2954,29 @@ def _run_ttnn_traceable_decode_subpath(
                 "dynamic_cache_read_current_position": uses_paged_sdpa_read,
                 "cache_read_window_status": "replay_mutable_device_cur_pos_tensor"
                 if uses_paged_sdpa_read
+                else "device_indexer_topk_compressed_rows_plus_static_sliding_window_rows"
+                if sparse_indexer_drives_attention
                 else "static_selected_row_ids_device_tensor"
                 if uses_selected_rows_read
                 else "static_single_capture_initial_position",
                 "attention_read_api": attention_read_api,
                 "cur_pos_tensor_dynamic": uses_paged_sdpa_read,
-                "selected_row_ids_static_host_preflight": uses_selected_rows_read,
+                "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+                    sparse_indexer_mode,
+                    attention_read_api=attention_read_api,
+                ),
+                "selected_row_ids_static_host_preflight": uses_selected_rows_read
+                and not sparse_indexer_drives_attention,
+                "static_sliding_window_row_ids_host_preflight": sparse_indexer_drives_attention,
+                "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
                 "selected_row_compaction_in_trace": uses_selected_rows_read,
                 "selected_rows_consumed_by_attention": uses_selected_rows_read,
+                "sparse_indexer_trace": _sparse_indexer_trace_runtime_summary(
+                    sparse_indexer_mode,
+                    attention_read_api=attention_read_api,
+                    indexer_kv_cache_initial=indexer_kv_cache_initial,
+                    indexer_topk_width=indexer_topk_width,
+                ),
                 "cache_rows_pages_read_per_step": [
                     {
                         "step": step,
@@ -2597,8 +3032,42 @@ def _run_ttnn_traceable_decode_subpath(
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                if uses_selected_rows_read
+                if uses_selected_rows_read and not sparse_indexer_drives_attention
                 else None
+            )
+            static_window_rows = (
+                _static_window_rows_from_selected_rows(selected_rows, config=config)
+                if sparse_indexer_drives_attention
+                else ()
+            )
+            static_window_row_idxs_tensor = (
+                _to_tt_selected_row_idxs_tensor(
+                    static_window_rows,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if sparse_indexer_drives_attention
+                else None
+            )
+            module_selected_positions = (
+                static_window_rows
+                if sparse_indexer_drives_attention
+                else _selected_attention_key_positions(
+                    selected_rows,
+                    config=config,
+                    layer=layer,
+                    attention_read_api=attention_read_api,
+                )
+                if selected_rows is not None
+                else None
+            )
+            module_selected_row_idxs_tensor = (
+                static_window_row_idxs_tensor if sparse_indexer_drives_attention else selected_row_idxs_tensor
+            )
+            step_indexer_topk_width = (
+                min(int(config.index_topk), (int(cache_update_index) + 1) // int(config.compress_ratios[int(layer)]))
+                if sparse_indexer_trace_enabled
+                else 0
             )
             module = TtTraceableDecodeSubpath(
                 device=device,
@@ -2612,15 +3081,8 @@ def _run_ttnn_traceable_decode_subpath(
                 rope_position_api=rope_position_api,
                 rope_position_idxs_tensor=rope_position_idxs_tensor,
                 attention_read_api=attention_read_api,
-                selected_row_idxs_tensor=selected_row_idxs_tensor,
-                selected_row_positions=_selected_attention_key_positions(
-                    selected_rows,
-                    config=config,
-                    layer=layer,
-                    attention_read_api=attention_read_api,
-                )
-                if selected_rows is not None
-                else None,
+                selected_row_idxs_tensor=module_selected_row_idxs_tensor,
+                selected_row_positions=module_selected_positions,
                 attention_cache_window_index=int(cache_update_index),
                 rope_position_index=int(rope_position_index),
                 initial_kv_cache=None,
@@ -2628,6 +3090,12 @@ def _run_ttnn_traceable_decode_subpath(
                 sparse_kv_cache=sparse_kv_cache,
                 sparse_kv_cache_len=sparse_kv_cache_len,
                 compressed_kv_cache_rows=compressed_kv_cache_rows,
+                sparse_indexer_mode=sparse_indexer_mode,
+                indexer_kv_cache=indexer_kv_cache,
+                indexer_kv_cache_rows=indexer_kv_cache_rows,
+                indexer_topk_width=step_indexer_topk_width,
+                static_window_row_idxs_tensor=static_window_row_idxs_tensor,
+                static_window_row_positions=static_window_rows,
                 attention_mode=attention_mode,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -2707,12 +3175,26 @@ def _run_ttnn_traceable_decode_subpath(
             "cache_read_window_dynamic": False,
             "dynamic_cache_read_current_position": False,
             "cache_read_window_status": "static_selected_row_ids_device_tensor"
-            if uses_selected_rows_read
+            if uses_selected_rows_read and not sparse_indexer_drives_attention
+            else "device_indexer_topk_compressed_rows_plus_static_sliding_window_rows"
+            if sparse_indexer_drives_attention
             else "static_per_trace_capture",
             "attention_read_api": attention_read_api,
-            "selected_row_ids_static_host_preflight": uses_selected_rows_read,
+            "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+                sparse_indexer_mode,
+                attention_read_api=attention_read_api,
+            ),
+            "selected_row_ids_static_host_preflight": uses_selected_rows_read and not sparse_indexer_drives_attention,
+            "static_sliding_window_row_ids_host_preflight": sparse_indexer_drives_attention,
+            "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
             "selected_row_compaction_in_trace": uses_selected_rows_read,
             "selected_rows_consumed_by_attention": uses_selected_rows_read,
+            "sparse_indexer_trace": _sparse_indexer_trace_runtime_summary(
+                sparse_indexer_mode,
+                attention_read_api=attention_read_api,
+                indexer_kv_cache_initial=indexer_kv_cache_initial,
+                indexer_topk_width=indexer_topk_width,
+            ),
             "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
             "rope_position_kind": "replay_mutable_device_tensor"
             if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
@@ -2980,10 +3462,12 @@ def _base_result(
     attention_read_api: str,
     cache_update_api: str,
     rope_position_api: str,
+    sparse_indexer_mode: str,
     attention_window_indices: Sequence[int],
     rope_position_indices: Sequence[int],
     selected_cache_rows_by_step: Mapping[int, Sequence[int]],
     sparse_kv_cache_initial: torch.Tensor | None,
+    indexer_kv_cache_initial: torch.Tensor | None,
     max_tensors: int,
     max_bytes: int,
     trace_region_size: int,
@@ -3001,6 +3485,7 @@ def _base_result(
     attention_read_api = _validate_attention_read_api(attention_read_api)
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     _validate_attention_read_api_combination(
         attention_read_api=attention_read_api,
         attention_mode=attention_mode,
@@ -3012,6 +3497,11 @@ def _base_result(
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
     uses_selected_rows_read = _uses_selected_rows_attention(attention_read_api)
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+    sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
     update_index_source = "device_tensor" if uses_device_update_index else "host_scalar"
     update_index_kind = (
         "replay_mutable_device_tensor" if uses_device_update_index else "static_host_argument_per_trace_capture"
@@ -3019,6 +3509,8 @@ def _base_result(
     cache_read_window_status = (
         "replay_mutable_device_cur_pos_tensor"
         if uses_paged_sdpa_read
+        else "device_indexer_topk_compressed_rows_plus_static_sliding_window_rows"
+        if sparse_indexer_drives_attention
         else "static_selected_row_ids_device_tensor"
         if uses_selected_rows_read
         else ("static_single_capture_initial_position" if uses_device_update_index else "static_per_trace_capture")
@@ -3047,6 +3539,7 @@ def _base_result(
         attention_read_api=attention_read_api,
         cache_update_api=cache_update_api,
         rope_position_api=rope_position_api,
+        sparse_indexer_mode=sparse_indexer_mode,
         uses_paged_sdpa_read=uses_paged_sdpa_read,
         uses_selected_rows_read=uses_selected_rows_read,
         selected_cache_rows_by_step=selected_cache_rows_by_step,
@@ -3057,7 +3550,12 @@ def _base_result(
         (
             "dynamic sparse indexer top-k inside trace; selected-row dense attention consumes a static "
             "host-preflight selected row list"
-            if uses_selected_rows_read
+            if uses_selected_rows_read and not sparse_indexer_trace_enabled
+            else "device sparse indexer top-k is diagnostic; selected-row dense attention still consumes a static "
+            "host-preflight selected row list"
+            if uses_selected_rows_read and sparse_indexer_trace_enabled and not sparse_indexer_drives_attention
+            else "full sparse-indexer compressed KV state update across decode positions"
+            if uses_selected_rows_read and sparse_indexer_drives_attention
             else "dynamic sparse indexer top-k and per-token cache gather"
         ),
         (
@@ -3096,6 +3594,15 @@ def _base_result(
         )
     first_step_selected_rows = sparse_attention_summary["selected_cache_rows"].get("first_step_runtime_rows")
     first_step_selected_count = None if first_step_selected_rows is None else len(first_step_selected_rows)
+    sparse_indexer_trace = _sparse_indexer_trace_report(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+        config=config,
+        layer=layer,
+        positions=cache_update_indices,
+        indexer_kv_cache_initial=indexer_kv_cache_initial,
+        selected_rows=first_step_selected_rows,
+    )
     return {
         "schema_version": REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION,
         "mode": "unexecuted",
@@ -3115,6 +3622,7 @@ def _base_result(
         "dynamic_cache_read_current_position": uses_paged_sdpa_read,
         "cache_read_window_status": cache_read_window_status,
         "attention_read_api": attention_read_api,
+        "sparse_indexer_mode": sparse_indexer_mode,
         "rope_position_dynamic": uses_device_rope_position,
         "rope_position_status": rope_position_status,
         "rope_position_kind": rope_position_kind,
@@ -3148,6 +3656,7 @@ def _base_result(
             "dynamic_cache_read_current_position": uses_paged_sdpa_read,
             "cache_read_window_status": cache_read_window_status,
             "attention_read_api": attention_read_api,
+            "sparse_indexer_trace": sparse_indexer_trace,
             "rope_position_dynamic": uses_device_rope_position,
             "rope_position_api": rope_position_api,
             "rope_position_kind": rope_position_kind,
@@ -3243,6 +3752,7 @@ def _base_result(
             cache_update_api=cache_update_api,
             rope_position_index=int(rope_position_indices[0]),
             rope_position_api=rope_position_api,
+            sparse_indexer_mode=sparse_indexer_mode,
             selected_rows=first_step_selected_rows,
             selected_rows_count=first_step_selected_count,
         ),
@@ -3258,6 +3768,7 @@ def _base_result(
                 cache_update_api=cache_update_api,
                 rope_position_index=int(rope_position_indices[step]),
                 rope_position_api=rope_position_api,
+                sparse_indexer_mode=sparse_indexer_mode,
                 selected_rows=sparse_attention_summary["selected_cache_rows"]["per_step"][step].get("runtime_rows"),
                 selected_rows_count=(
                     None
@@ -3273,6 +3784,7 @@ def _base_result(
             attention_read_api=attention_read_api,
         ),
         "sparse_attention": sparse_attention_summary,
+        "sparse_indexer_trace": sparse_indexer_trace,
         "sparse_indexer_status": sparse_attention_summary["sparse_indexer_status"],
         "selected_cache_rows_topk_shape": sparse_attention_summary["selected_cache_rows"]["first_step_topk_shape"],
         "attention_sink_status": sparse_attention_summary["attention_sink_status"],
@@ -3296,10 +3808,17 @@ def _base_result(
             "compressed_kv_cache_source": "real_compressor_seed_plus_decode_sized_trace_update"
             if uses_compressed_selected_rows
             else None,
-            "sparse_indexer_in_trace": False,
+            "sparse_indexer_in_trace": sparse_indexer_trace_enabled,
+            "sparse_indexer_scoring_in_trace": sparse_indexer_trace_enabled,
+            "sparse_indexer_topk_in_trace": sparse_indexer_trace_enabled,
             "selected_rows_consumed_by_attention": uses_selected_rows_read,
-            "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+            "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+                sparse_indexer_mode,
+                attention_read_api=attention_read_api,
+            ),
             "selected_row_compaction_in_trace": uses_selected_rows_read,
+            "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
+            "device_selected_row_ids_drive_attention": sparse_indexer_drives_attention,
             "attention_sink_in_trace": uses_paged_sdpa_read or uses_selected_rows_read,
             "rope_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "qk_scores_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
@@ -3357,6 +3876,7 @@ def _base_result(
                 route_plan=route_plan,
                 rope_position_api=rope_position_api,
                 attention_read_api=attention_read_api,
+                sparse_indexer_mode=sparse_indexer_mode,
             ),
             "path": (
                 "decode hidden state -> attn_norm/query projection plus K/V projection/cache append; "
@@ -3388,6 +3908,10 @@ def _base_result(
                 else "selected-row compressed-KV attention consumes static host-preflight row ids and gathers from a "
                 "combined sparse cache, but dynamic in-trace indexer generation, full ratio-window compressor state, "
                 "dynamic MoE dispatch, embeddings, and logits remain outside this slice"
+                if uses_compressed_selected_rows and not sparse_indexer_drives_attention
+                else "selected-row compressed-KV attention consumes device-produced learned indexer compressed-row ids "
+                "plus static sliding-window rows, but full ratio-window compressor state, dynamic MoE dispatch, "
+                "embeddings, and logits remain outside this slice"
                 if uses_compressed_selected_rows
                 else "selected-row dense attention consumes static host-preflight row ids and gathers from the "
                 "projected K/V cache, but dynamic in-trace indexer generation, compressed-KV sparse cache "
@@ -3424,6 +3948,7 @@ def _base_result(
             cache_update_api=cache_update_api,
             rope_position_api=rope_position_api,
             attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
             selected_rows_by_step=sparse_attention_summary["selected_cache_rows"]["per_step"],
         ),
         "selected_source_keys": [item.source_key for item in metadata],
@@ -3435,6 +3960,7 @@ def _base_result(
             "attention_output": loaded_groups["attention_output"]["payload_bytes"],
             "kv_projection": loaded_groups["kv_projection"]["payload_bytes"],
             "compressor": loaded_groups["compressor"]["payload_bytes"],
+            "indexer": loaded_groups["indexer"]["payload_bytes"],
             "attention_sink": loaded_groups["attention_sink"]["payload_bytes"],
             "ffn_norm": loaded_groups["ffn_norm"]["payload_bytes"],
             "router_selector": loaded_groups["router_selector"]["payload_bytes"],
@@ -3459,9 +3985,26 @@ def _base_result(
             "compressor_norm": _optional_tensor_summary(
                 None if weights.compressor is None else weights.compressor.norm_weight
             ),
+            "indexer_wq_b": _optional_tensor_summary(None if weights.indexer is None else weights.indexer.wq_b),
+            "indexer_weights_proj": _optional_tensor_summary(
+                None if weights.indexer is None else weights.indexer.weights_proj
+            ),
+            "indexer_compressor_wkv": _optional_tensor_summary(
+                None if weights.indexer is None else weights.indexer.compressor.wkv
+            ),
+            "indexer_compressor_wgate": _optional_tensor_summary(
+                None if weights.indexer is None else weights.indexer.compressor.wgate
+            ),
+            "indexer_compressor_ape": _optional_tensor_summary(
+                None if weights.indexer is None else weights.indexer.compressor.ape
+            ),
+            "indexer_compressor_norm": _optional_tensor_summary(
+                None if weights.indexer is None else weights.indexer.compressor.norm_weight
+            ),
             "attn_sink": _tensor_summary(weights.attn_sink),
             "kv_cache_initial": _tensor_summary(kv_cache_initial),
             "sparse_kv_cache_initial": _optional_tensor_summary(sparse_kv_cache_initial),
+            "indexer_kv_cache_initial": _optional_tensor_summary(indexer_kv_cache_initial),
             "ffn_norm": _tensor_summary(weights.ffn_norm),
             "router_gate": _tensor_summary(weights.router_gate),
             "router_bias": _optional_tensor_summary(weights.router_bias),
@@ -3576,6 +4119,21 @@ def _base_result(
                 if uses_compressed_selected_rows
                 else []
             ),
+            *(
+                [
+                    {
+                        "name": "indexer_kv_cache_seed_host_to_device",
+                        "location": "before trace capture",
+                        "description": (
+                            "the learned indexer compressed KV cache is seeded from the real indexer compressor on "
+                            "host and uploaded once; protected TTNN ops compute decode-token indexer scores/top-k "
+                            "against this device-resident cache"
+                        ),
+                    }
+                ]
+                if sparse_indexer_trace_enabled
+                else []
+            ),
             {
                 "name": "attention_sink_host_to_device",
                 "location": "before trace capture",
@@ -3591,9 +4149,12 @@ def _base_result(
                         "name": "selected_row_ids_host_to_device",
                         "location": "before trace capture",
                         "description": (
-                            "real learned-indexer selected row ids are materialized by host preflight and uploaded "
-                            "as a static device tensor; protected TTNN embedding ops use that tensor to compact "
-                            "K/V cache rows"
+                            "only the sliding-window row ids are uploaded as a static device tensor; compressed-row "
+                            "ids come from trace-resident indexer top-k and drive TTNN embedding compaction"
+                            if sparse_indexer_drives_attention
+                            else "real learned-indexer selected row ids are materialized by host preflight and "
+                            "uploaded as a static device tensor; protected TTNN embedding ops use that tensor to "
+                            "compact K/V cache rows"
                         ),
                     }
                 ]
@@ -3688,6 +4249,7 @@ def _base_result(
             "router_decode_row_mask_host_to_device",
             "kv_cache_seed_host_to_device",
             *(["sparse_kv_cache_seed_host_to_device"] if uses_compressed_selected_rows else []),
+            *(["indexer_kv_cache_seed_host_to_device"] if sparse_indexer_trace_enabled else []),
             "attention_sink_host_to_device",
             *(["selected_row_ids_host_to_device"] if uses_selected_rows_read else []),
             *(
@@ -3707,12 +4269,14 @@ def _base_result(
             weights=weights,
             route_plan=route_plan,
             attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
         ),
         "ttnn_ops": [],
         "inputs": {
             "capture_activation": _tensor_summary(activation),
             "kv_cache_initial": _tensor_summary(kv_cache_initial),
             "sparse_kv_cache_initial": _optional_tensor_summary(sparse_kv_cache_initial),
+            "indexer_kv_cache_initial": _optional_tensor_summary(indexer_kv_cache_initial),
             "replay_activation": _tensor_summary(replay_activation),
             "capture_activations_by_step": [_tensor_summary(value) for value in activations],
             "replay_activations_by_step": [_tensor_summary(value) for value in replay_activations],
@@ -3770,14 +4334,34 @@ def _decode_steps_detail(
     cache_update_api: str,
     rope_position_api: str,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
     selected_rows_by_step: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
     attention_read_api = _validate_attention_read_api(attention_read_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
     uses_selected_rows_read = _uses_selected_rows_attention(attention_read_api)
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+    sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
+    selected_row_ids_source = _sparse_indexer_selected_row_ids_source(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
+    sparse_indexer_status = (
+        "device_topk_compressed_rows_consumed_with_static_sliding_window_rows"
+        if sparse_indexer_drives_attention
+        else "device_topk_diagnostic_static_host_preflight_rows_consumed"
+        if sparse_indexer_trace_enabled
+        else "static_host_preflight_rows_consumed"
+        if uses_selected_rows_read
+        else "not_integrated"
+    )
     update_index_kind = (
         "replay_mutable_device_tensor"
         if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
@@ -3825,7 +4409,9 @@ def _decode_steps_detail(
                 "cache_window_rows": [window_start, window_start + int(seq_len)],
                 "selected_cache_rows": None if selected_row_detail is None else selected_row_detail.get("runtime_rows"),
                 "selected_rows_consumed_by_attention": uses_selected_rows_read,
-                "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+                "selected_row_ids_source": selected_row_ids_source,
+                "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
+                "device_selected_row_ids_drive_attention": sparse_indexer_drives_attention,
                 "compact_window_shape": None
                 if selected_row_detail is None
                 else selected_row_detail.get("compact_window_shape"),
@@ -3858,9 +4444,7 @@ def _decode_steps_detail(
                 else "selected_rows_use_projected_kv_cache_not_compressed_kv_cache"
                 if uses_selected_rows_read
                 else "projected_kv_cache_only",
-                "sparse_indexer_status": "static_host_preflight_rows_consumed"
-                if uses_selected_rows_read
-                else "not_integrated",
+                "sparse_indexer_status": sparse_indexer_status,
                 "attention_sink_status": "used_in_paged_sdpa_decode"
                 if uses_paged_sdpa_read
                 else "used_in_selected_rows_compressed_kv_attention"
@@ -4016,6 +4600,34 @@ def _to_tt_kv_cache(
         cache = initial_cache.contiguous().to(torch.bfloat16)
     return ttnn.from_torch(
         cache,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
+def _to_tt_indexer_kv_cache(
+    indexer_kv_cache: torch.Tensor,
+    *,
+    config: DeepSeekV4FlashConfig,
+    device,
+    dtype,
+    memory_config,
+):
+    expected_prefix = (1, 1)
+    if indexer_kv_cache.ndim != 4 or tuple(indexer_kv_cache.shape[:2]) != expected_prefix:
+        raise ValueError(
+            "indexer_kv_cache must have shape [1, 1, compressed_rows, index_head_dim], "
+            f"got {tuple(indexer_kv_cache.shape)}"
+        )
+    if int(indexer_kv_cache.shape[-1]) != int(config.index_head_dim):
+        raise ValueError(
+            f"indexer_kv_cache width must be index_head_dim={config.index_head_dim}, "
+            f"got {indexer_kv_cache.shape[-1]}"
+        )
+    return ttnn.from_torch(
+        indexer_kv_cache.contiguous().to(torch.bfloat16),
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -4479,6 +5091,153 @@ def _ttnn_gather_rope_tensors(position_idxs, cos_table, sin_table, *, memory_con
     cos = ttnn.embedding(position_idxs, cos_table, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
     sin = ttnn.embedding(position_idxs, sin_table, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
     return ttnn.unsqueeze_to_4D(cos), ttnn.unsqueeze_to_4D(sin)
+
+
+def _to_tt_compressed_rope_embedding_tables(
+    config: DeepSeekV4FlashConfig,
+    *,
+    layer: int,
+    compressed_rows: int,
+    compress_ratio: int,
+    device,
+    dtype,
+    memory_config,
+):
+    if int(compressed_rows) <= 0:
+        raise ValueError(f"compressed_rows must be positive, got {compressed_rows}")
+    positions = [int(row) * int(compress_ratio) for row in range(int(compressed_rows))]
+    cos, sin = _torch_rope_cos_sin_for_positions(config, layer=layer, positions=positions)
+    return (
+        ttnn.from_torch(
+            cos[0, 0],
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+        ttnn.from_torch(
+            sin[0, 0],
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+    )
+
+
+def _ttnn_sparse_indexer_trace(
+    *,
+    q_rank_norm,
+    attn_norm_output,
+    indexer_kv_cache,
+    indexer_wq_b,
+    indexer_weights_proj,
+    indexer_topk_width: int,
+    config: DeepSeekV4FlashConfig,
+    query_rope_cos,
+    query_rope_sin,
+    rope_trans_mat,
+    memory_config,
+) -> dict[str, object]:
+    index_n_heads = int(config.index_n_heads)
+    index_head_dim = int(config.index_head_dim)
+    rope_dim = int(config.qk_rope_head_dim)
+    nope_dim = index_head_dim - rope_dim
+    if nope_dim < 0:
+        raise ValueError(f"index_head_dim {index_head_dim} must be >= qk_rope_head_dim {rope_dim}")
+    q_rank_decode = ttnn.slice(
+        q_rank_norm,
+        (0, 0, 0, 0),
+        (1, 1, 1, int(config.q_lora_rank)),
+        memory_config=memory_config,
+    )
+    index_q_linear = ttnn.linear(q_rank_decode, indexer_wq_b, memory_config=memory_config)
+    index_q_token_major = ttnn.reshape(index_q_linear, (1, 1, index_n_heads, index_head_dim))
+    index_q_heads_pre_rope = ttnn.transpose(index_q_token_major, 1, 2, memory_config=memory_config)
+    index_q_nope = ttnn.slice(
+        index_q_heads_pre_rope,
+        (0, 0, 0, 0),
+        (1, index_n_heads, 1, nope_dim),
+        memory_config=memory_config,
+    )
+    index_q_rope = ttnn.slice(
+        index_q_heads_pre_rope,
+        (0, 0, 0, nope_dim),
+        (1, index_n_heads, 1, index_head_dim),
+        memory_config=memory_config,
+    )
+    index_q_rope_rotated = ttnn.experimental.rotary_embedding_llama(
+        index_q_rope,
+        query_rope_cos,
+        query_rope_sin,
+        rope_trans_mat,
+        is_decode_mode=False,
+        memory_config=memory_config,
+    )
+    index_q_heads = ttnn.concat([index_q_nope, index_q_rope_rotated], dim=-1, memory_config=memory_config)
+    indexer_key_heads = ttnn.repeat(indexer_kv_cache, ttnn.Shape([1, index_n_heads, 1, 1]))
+    indexer_key_heads_transposed = ttnn.transpose(indexer_key_heads, -2, -1, memory_config=memory_config)
+    sparse_indexer_head_scores = ttnn.matmul(index_q_heads, indexer_key_heads_transposed, memory_config=memory_config)
+    sparse_indexer_head_scores_relu = ttnn.relu(sparse_indexer_head_scores, memory_config=memory_config)
+    indexer_decode_input = ttnn.slice(
+        attn_norm_output,
+        (0, 0, 0, 0),
+        (1, 1, 1, int(config.hidden_size)),
+        memory_config=memory_config,
+    )
+    sparse_indexer_head_weights = ttnn.linear(
+        indexer_decode_input,
+        indexer_weights_proj,
+        memory_config=memory_config,
+    )
+    sparse_indexer_head_weights = ttnn.mul(
+        sparse_indexer_head_weights,
+        float(index_head_dim) ** -0.5 * float(index_n_heads) ** -0.5,
+        memory_config=memory_config,
+    )
+    sparse_indexer_head_weights = ttnn.reshape(sparse_indexer_head_weights, (1, index_n_heads, 1, 1))
+    sparse_indexer_weighted_head_scores = ttnn.mul(
+        sparse_indexer_head_scores_relu,
+        sparse_indexer_head_weights,
+        memory_config=memory_config,
+    )
+    sparse_indexer_scores = ttnn.sum(
+        sparse_indexer_weighted_head_scores,
+        dim=1,
+        keepdim=True,
+        memory_config=memory_config,
+    )
+    sparse_indexer_topk_scores, sparse_indexer_topk_indices = ttnn.topk(
+        sparse_indexer_scores,
+        k=int(indexer_topk_width),
+        dim=-1,
+        largest=True,
+        sorted=True,
+        memory_config=memory_config,
+    )
+    sparse_indexer_topk_indices_uint32 = ttnn.typecast(
+        sparse_indexer_topk_indices,
+        ttnn.uint32,
+        memory_config=memory_config,
+    )
+    return {
+        "sparse_indexer_q_rank_decode": q_rank_decode,
+        "sparse_indexer_q_linear": index_q_linear,
+        "sparse_indexer_q_heads_pre_rope": index_q_heads_pre_rope,
+        "sparse_indexer_q_nope": index_q_nope,
+        "sparse_indexer_q_rope": index_q_rope,
+        "sparse_indexer_q_rope_rotated": index_q_rope_rotated,
+        "sparse_indexer_q_heads": index_q_heads,
+        "sparse_indexer_key_heads": indexer_key_heads,
+        "sparse_indexer_head_scores": sparse_indexer_head_scores,
+        "sparse_indexer_head_scores_relu": sparse_indexer_head_scores_relu,
+        "sparse_indexer_head_weights": sparse_indexer_head_weights,
+        "sparse_indexer_weighted_head_scores": sparse_indexer_weighted_head_scores,
+        "sparse_indexer_scores": sparse_indexer_scores,
+        "sparse_indexer_topk_scores": sparse_indexer_topk_scores,
+        "sparse_indexer_topk_indices": sparse_indexer_topk_indices,
+        "sparse_indexer_topk_indices_uint32": sparse_indexer_topk_indices_uint32,
+    }
 
 
 def _rope_transformation_matrix() -> torch.Tensor:
@@ -5396,6 +6155,172 @@ def _uses_compressed_kv_selected_rows(attention_read_api: str) -> bool:
     )
 
 
+def _validate_sparse_indexer_mode(sparse_indexer_mode: str) -> str:
+    if sparse_indexer_mode not in TRACEABLE_DECODE_SPARSE_INDEXER_MODES:
+        raise ValueError(
+            f"sparse_indexer_mode must be one of {TRACEABLE_DECODE_SPARSE_INDEXER_MODES}, "
+            f"got {sparse_indexer_mode!r}"
+        )
+    return str(sparse_indexer_mode)
+
+
+def _sparse_indexer_uses_trace(sparse_indexer_mode: str) -> bool:
+    return _validate_sparse_indexer_mode(sparse_indexer_mode) in (
+        TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_SCORING_TOPK,
+        TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION,
+    )
+
+
+def _sparse_indexer_drives_attention(sparse_indexer_mode: str, *, attention_read_api: str) -> bool:
+    return _validate_sparse_indexer_mode(
+        sparse_indexer_mode
+    ) == TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION and _uses_compressed_kv_selected_rows(attention_read_api)
+
+
+def _sparse_indexer_selected_row_ids_source(sparse_indexer_mode: str, *, attention_read_api: str) -> str | None:
+    if not _uses_selected_rows_attention(attention_read_api):
+        return None
+    if _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api):
+        return "static_sliding_window_rows_plus_device_indexer_compressed_rows"
+    if _sparse_indexer_uses_trace(sparse_indexer_mode):
+        return "static_host_preflight_for_attention_device_indexer_rows_diagnostic"
+    return "static_host_preflight"
+
+
+def _static_window_rows_from_selected_rows(
+    selected_rows: Sequence[int] | None,
+    *,
+    config: DeepSeekV4FlashConfig,
+) -> tuple[int, ...]:
+    rows = tuple(int(value) for value in (selected_rows or ()) if int(value) < int(config.sliding_window))
+    if not rows:
+        raise ValueError("dynamic sparse-indexer attention requires at least one static sliding-window row")
+    return rows
+
+
+def _sparse_indexer_trace_runtime_summary(
+    sparse_indexer_mode: str,
+    *,
+    attention_read_api: str,
+    indexer_kv_cache_initial: torch.Tensor | None,
+    indexer_topk_width: int,
+) -> dict[str, Any]:
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
+    scoring_in_trace = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    drives_attention = _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api)
+    return {
+        "mode": sparse_indexer_mode,
+        "scoring_in_trace": scoring_in_trace,
+        "topk_in_trace": scoring_in_trace,
+        "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+            sparse_indexer_mode,
+            attention_read_api=attention_read_api,
+        ),
+        "device_selected_row_ids_drive_compaction": drives_attention,
+        "device_selected_row_ids_drive_attention": drives_attention,
+        "topk_indices_dtype": "uint16" if scoring_in_trace else None,
+        "embedding_index_dtype_bridge": "ttnn.typecast(uint16_to_uint32)" if drives_attention else None,
+        "indexer_kv_cache_shape": None
+        if indexer_kv_cache_initial is None
+        else [int(value) for value in indexer_kv_cache_initial.shape],
+        "indexer_topk_width": int(indexer_topk_width),
+    }
+
+
+def _sparse_indexer_trace_report(
+    sparse_indexer_mode: str,
+    *,
+    attention_read_api: str,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    indexer_kv_cache_initial: torch.Tensor | None,
+    selected_rows: Sequence[int] | None,
+) -> dict[str, Any]:
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    scoring_in_trace = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    drives_attention = _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api)
+    compressed_cache_length = (int(positions[0]) + 1) // compress_ratio if compress_ratio > 0 and positions else 0
+    topk_width = min(int(config.index_topk), compressed_cache_length) if scoring_in_trace else 0
+    selected_rows_list = None if selected_rows is None else [int(value) for value in selected_rows]
+    static_window_rows = (
+        list(_static_window_rows_from_selected_rows(selected_rows, config=config))
+        if drives_attention and selected_rows is not None
+        else None
+    )
+    device_compressed_rows = int(topk_width) if drives_attention else 0
+    return {
+        "mode": sparse_indexer_mode,
+        "hf_reference": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:381",
+        "expected_for_layer": compress_ratio == 4,
+        "compress_ratio": compress_ratio,
+        "scoring_in_trace": scoring_in_trace,
+        "topk_in_trace": scoring_in_trace,
+        "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+            sparse_indexer_mode,
+            attention_read_api=attention_read_api,
+        ),
+        "device_selected_row_ids_drive_compaction": drives_attention,
+        "device_selected_row_ids_drive_attention": drives_attention,
+        "attention_read_api": attention_read_api,
+        "indexer_kv_cache_shape": None
+        if indexer_kv_cache_initial is None
+        else [int(value) for value in indexer_kv_cache_initial.shape],
+        "indexer_score_shape": [1, 1, 1, compressed_cache_length] if scoring_in_trace else None,
+        "indexer_topk_shape": [1, 1, 1, topk_width] if scoring_in_trace else None,
+        "topk_indices_dtype": "uint16" if scoring_in_trace else None,
+        "embedding_index_dtype_bridge": "ttnn.typecast(uint16_to_uint32)" if drives_attention else None,
+        "static_window_rows": static_window_rows,
+        "device_compressed_row_count": device_compressed_rows,
+        "selected_rows": selected_rows_list,
+        "compact_window_shape": None
+        if selected_rows_list is None
+        else [1, 1, len(selected_rows_list), int(config.head_dim)],
+        "ttnn_ops": [
+            "ttnn.slice(q_rank_decode_token)",
+            "ttnn.linear(indexer.wq_b)",
+            "ttnn.experimental.rotary_embedding_llama(indexer_q_rope)",
+            "ttnn.linear(indexer.weights_proj)",
+            "ttnn.matmul(indexer_q,indexer_compressed_kv)",
+            "ttnn.relu(indexer_head_scores)",
+            "ttnn.sum(indexer_weighted_head_scores)",
+            "ttnn.topk(indexer_scores)",
+            *(
+                [
+                    "ttnn.typecast(indexer_topk_indices,uint32)",
+                    "ttnn.embedding(indexer_topk_indices_uint32,compressed_kv_cache_table)",
+                    "ttnn.embedding(indexer_topk_indices_uint32,compressed_key_rope_tables)",
+                    "ttnn.concat(static_window_rows,device_compressed_rows)",
+                ]
+                if drives_attention
+                else []
+            ),
+        ]
+        if scoring_in_trace
+        else [],
+        "blocker": None
+        if drives_attention
+        else {
+            "reason": "device-produced indexer rows do not drive selected-row compaction in this mode",
+            "smallest_next_step": (
+                f"use --sparse-indexer-mode {TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_TOPK_ATTENTION}"
+                if sparse_indexer_mode == TRACEABLE_DECODE_SPARSE_INDEXER_TRACE_SCORING_TOPK
+                else "enable trace-resident sparse indexer scoring/top-k mode"
+            ),
+            "device_index_api_note": (
+                "ttnn.topk emits uint16 indices for this width; ttnn.embedding requires uint32 or bfloat16 indices, "
+                "so the trace attention mode inserts ttnn.typecast(uint16_to_uint32) before embedding"
+            ),
+        },
+        "limitations": [
+            "indexer compressed KV cache is seeded by host preflight and is not the full HF Indexer.compressor state",
+            "HF indexer Hadamard/FP4 simulation remains aligned with the existing host preflight reference, not newly added here",
+            *([] if drives_attention else ["selected-row attention still uses static host-preflight row ids"]),
+        ],
+    }
+
+
 def _validate_attention_read_api_combination(
     *,
     attention_read_api: str,
@@ -5500,9 +6425,16 @@ def _traceable_decode_common_ops(
     cache_update_api: str,
     *,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
 ) -> list[str]:
     cache_update_api = _validate_cache_update_api(cache_update_api)
     attention_read_api = _validate_attention_read_api(attention_read_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
+    sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
     ops = [
         "ttnn.rms_norm(attn_norm)",
         "TtAttentionProjection.project_q_rank",
@@ -5558,16 +6490,53 @@ def _traceable_decode_common_ops(
                 "ttnn.slice(compressed_kv_cache_rows)",
             ]
         )
-    if _uses_selected_rows_attention(attention_read_api):
+    if sparse_indexer_trace_enabled:
         ops.extend(
             [
-                "ttnn.reshape(selected_source_cache_to_embedding_table)",
-                "ttnn.embedding(selected_row_idxs,sparse_kv_cache_table)"
-                if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
-                else "ttnn.embedding(selected_row_idxs,kv_cache_table)",
-                "ttnn.unsqueeze_to_4D(selected_kv_window)",
+                "ttnn.slice(indexer_q_rank_decode_token)",
+                "ttnn.linear(indexer.wq_b)",
+                "ttnn.reshape(indexer_q_to_heads)",
+                "ttnn.transpose(indexer_q_heads)",
+                "ttnn.slice(indexer_q_nope/indexer_q_rope)",
+                "ttnn.experimental.rotary_embedding_llama(indexer_q_rope)",
+                "ttnn.concat(indexer_q_nope,indexer_q_rope_rotated)",
+                "ttnn.repeat(indexer_compressed_kv_to_heads)",
+                "ttnn.transpose(indexer_compressed_kv_heads)",
+                "ttnn.matmul(indexer_q,indexer_compressed_kv)",
+                "ttnn.relu(indexer_head_scores)",
+                "ttnn.slice(indexer_decode_input)",
+                "ttnn.linear(indexer.weights_proj)",
+                "ttnn.mul(indexer_head_weights,1/sqrt(index_head_dim*index_heads))",
+                "ttnn.reshape(indexer_head_weights)",
+                "ttnn.mul(indexer_head_scores_relu,indexer_head_weights)",
+                "ttnn.sum(indexer_scores_over_heads)",
+                "ttnn.topk(indexer_scores)",
+                "ttnn.typecast(indexer_topk_indices_uint16_to_uint32)",
             ]
         )
+    if _uses_selected_rows_attention(attention_read_api):
+        if sparse_indexer_drives_attention:
+            ops.extend(
+                [
+                    "ttnn.reshape(sparse_kv_cache_to_embedding_table)",
+                    "ttnn.embedding(static_window_row_idxs,sparse_kv_cache_table)",
+                    "ttnn.reshape(compressed_kv_cache_to_embedding_table)",
+                    "ttnn.embedding(indexer_topk_indices_uint32,compressed_kv_cache_table)",
+                    "ttnn.concat(static_window_rows,device_indexer_compressed_rows)",
+                    "ttnn.embedding(indexer_topk_indices_uint32,compressed_key_rope_tables)",
+                    "ttnn.concat(static_window_rope,device_indexer_compressed_rope)",
+                ]
+            )
+        else:
+            ops.extend(
+                [
+                    "ttnn.reshape(selected_source_cache_to_embedding_table)",
+                    "ttnn.embedding(selected_row_idxs,sparse_kv_cache_table)"
+                    if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
+                    else "ttnn.embedding(selected_row_idxs,kv_cache_table)",
+                    "ttnn.unsqueeze_to_4D(selected_kv_window)",
+                ]
+            )
     return ops
 
 
@@ -5724,9 +6693,14 @@ def _traceable_decode_inside_trace_ops(
     route_plan: TraceableDecodeRoutePlan,
     rope_position_api: str = DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
 ) -> list[str]:
     return [
-        *_traceable_decode_common_ops(cache_update_api, attention_read_api=attention_read_api),
+        *_traceable_decode_common_ops(
+            cache_update_api,
+            attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
+        ),
         *_traceable_decode_attention_ops(
             attention_mode,
             rope_position_api=rope_position_api,
@@ -5745,9 +6719,14 @@ def _traceable_decode_ttnn_ops(
     route_plan: TraceableDecodeRoutePlan,
     rope_position_api: str = DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
 ) -> list[str]:
     return [
-        *_traceable_decode_common_ops(cache_update_api, attention_read_api=attention_read_api),
+        *_traceable_decode_common_ops(
+            cache_update_api,
+            attention_read_api=attention_read_api,
+            sparse_indexer_mode=sparse_indexer_mode,
+        ),
         *_traceable_decode_attention_ops(
             attention_mode,
             rope_position_api=rope_position_api,
@@ -5782,9 +6761,11 @@ def _traceable_decode_reference_ops(
     weights: TraceableDecodeWeights,
     route_plan: TraceableDecodeRoutePlan,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
 ) -> list[str]:
     attention_mode = _validate_attention_mode(attention_mode)
     attention_read_api = _validate_attention_read_api(attention_read_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
         attention_ops = [
             "torch.reshape(q_output_to_q_heads)",
@@ -5882,6 +6863,20 @@ def _traceable_decode_reference_ops(
         "torch.rms_norm_reference(kv_norm)",
         "torch.cache_update_reference",
         *attention_ops,
+        *(
+            [
+                "torch.linear(indexer.wq_b)",
+                "torch.apply_deepseek_v4_rotary(indexer_q_rope)",
+                "torch.einsum(indexer_q,indexer_compressed_kv)",
+                "torch.relu(indexer_head_scores)",
+                "torch.linear(indexer.weights_proj)",
+                "torch.mul(indexer_head_weights,1/sqrt(index_head_dim*index_heads))",
+                "torch.sum(indexer_weighted_head_scores)",
+                "torch.topk(indexer_scores)",
+            ]
+            if _sparse_indexer_uses_trace(sparse_indexer_mode)
+            else []
+        ),
         "torch.grouped_output_projection_a",
         "torch.linear(wo_b)",
         "torch.add(hidden,attention_projected)",
@@ -6159,10 +7154,12 @@ def _sparse_attention_semantics_summary(
     attention_read_api: str,
     cache_update_api: str,
     rope_position_api: str,
+    sparse_indexer_mode: str,
     uses_paged_sdpa_read: bool,
     uses_selected_rows_read: bool,
     selected_cache_rows_by_step: Mapping[int, Sequence[int]],
 ) -> dict[str, Any]:
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     compress_ratio = int(config.compress_ratios[int(layer)])
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
     tensor_inventory = _sparse_attention_tensor_inventory(snapshot_dir, config=config, layer=layer)
@@ -6174,7 +7171,13 @@ def _sparse_attention_semantics_summary(
         sparse_indexer_status = "expected_indexer_tensors_missing"
     elif indexer_expected:
         sparse_indexer_status = (
-            "real_indexer_topk_materialized_outside_trace_consumed_by_selected_rows_compressed_kv_attention"
+            "real_indexer_scoring_topk_in_trace_device_rows_consumed_by_selected_rows_compressed_kv_attention"
+            if _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api)
+            else "real_indexer_scoring_topk_in_trace_static_host_rows_consumed_by_selected_rows_compressed_kv_attention"
+            if _sparse_indexer_uses_trace(sparse_indexer_mode) and uses_compressed_selected_rows
+            else "real_indexer_scoring_topk_in_trace_static_host_rows_consumed_by_selected_rows_dense_attention"
+            if _sparse_indexer_uses_trace(sparse_indexer_mode) and uses_selected_rows_read
+            else "real_indexer_topk_materialized_outside_trace_consumed_by_selected_rows_compressed_kv_attention"
             if uses_compressed_selected_rows
             else "real_indexer_topk_materialized_outside_trace_consumed_by_selected_rows_dense_attention"
             if uses_selected_rows_read
@@ -6194,6 +7197,7 @@ def _sparse_attention_semantics_summary(
         activations=activations,
         route_plans=route_plans,
         attention_read_api=attention_read_api,
+        sparse_indexer_mode=sparse_indexer_mode,
         uses_paged_sdpa_read=uses_paged_sdpa_read,
         uses_selected_rows_read=uses_selected_rows_read,
         selected_cache_rows_by_step=selected_cache_rows_by_step,
@@ -6322,6 +7326,10 @@ def _sparse_attention_semantics_summary(
         ),
         "smallest_next_step": (
             "replace the decode-sized compressed row update with the full HF Compressor decode state "
+            "(kv_state/score_state, APE phase, gated ratio-window pooling, boundary-only writes)"
+            if uses_compressed_selected_rows
+            and _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api)
+            else "replace the decode-sized compressed row update with the full HF Compressor decode state "
             "(kv_state/score_state, APE phase, gated ratio-window pooling, boundary-only writes) and produce selected "
             "row ids on device"
             if uses_compressed_selected_rows
@@ -6333,7 +7341,15 @@ def _sparse_attention_semantics_summary(
             "rows plus attention_sink into a TTNN sparse decode attention kernel"
         ),
         "limitations": [
-            "learned indexer top-k rows are materialized only by a host preflight probe, not by the protected trace",
+            (
+                "learned indexer scoring/top-k rows are produced inside the protected trace and drive compressed-row "
+                "compaction/attention"
+                if _sparse_indexer_drives_attention(sparse_indexer_mode, attention_read_api=attention_read_api)
+                else "learned indexer scoring/top-k rows are produced inside the protected trace but selected-row "
+                "attention still consumes static host-preflight rows"
+                if _sparse_indexer_uses_trace(sparse_indexer_mode)
+                else "learned indexer top-k rows are materialized only by a host preflight probe, not by the protected trace"
+            ),
             (
                 "compressed rows are read from a real compressor-seeded sparse cache, but the protected compressed "
                 "write is a decode-sized stepping stone rather than the full HF ratio-window compressor state"
@@ -6469,12 +7485,22 @@ def _sparse_selected_cache_rows_summary(
     activations: Sequence[torch.Tensor],
     route_plans: Sequence[TraceableDecodeRoutePlan],
     attention_read_api: str,
+    sparse_indexer_mode: str,
     uses_paged_sdpa_read: bool,
     uses_selected_rows_read: bool,
     selected_cache_rows_by_step: Mapping[int, Sequence[int]],
 ) -> dict[str, Any]:
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     compress_ratio = int(config.compress_ratios[int(layer)])
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+    selected_row_ids_source = _sparse_indexer_selected_row_ids_source(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
     real_indexer_rows = _real_indexer_selected_rows_by_step(
         snapshot_dir=snapshot_dir,
         config=config,
@@ -6522,7 +7548,9 @@ def _sparse_selected_cache_rows_summary(
         "first_step_topk_shape": per_step[0]["runtime_topk_shape"] if per_step else None,
         "first_step_runtime_rows": per_step[0]["runtime_rows"] if per_step else None,
         "selected_rows_consumed_by_attention": selected_rows_consumed,
-        "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+        "selected_row_ids_source": selected_row_ids_source,
+        "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
+        "device_selected_row_ids_drive_attention": sparse_indexer_drives_attention,
         "compact_window_shape": per_step[0]["compact_window_shape"] if per_step else None,
         "attention_read_blocker": None
         if uses_selected_rows_read
@@ -6537,6 +7565,7 @@ def _sparse_selected_cache_rows_summary(
             attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_COMPRESSED_KV
             if uses_compressed_selected_rows
             else TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
+            sparse_indexer_mode=sparse_indexer_mode,
         )
         if uses_selected_rows_read
         else None,
@@ -6892,18 +7921,33 @@ def _selected_row_attention_proof_summary(
     first_step: Mapping[str, Any] | None,
     *,
     attention_read_api: str,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
 ) -> dict[str, Any]:
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     selected_rows = None if first_step is None else first_step.get("runtime_rows")
     compact_shape = None if first_step is None else first_step.get("compact_window_shape")
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
     return {
         "selected_rows_consumed_by_attention": bool(selected_rows),
-        "selected_row_ids_source": "static_host_preflight",
+        "selected_row_ids_source": _sparse_indexer_selected_row_ids_source(
+            sparse_indexer_mode,
+            attention_read_api=attention_read_api,
+        ),
+        "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
         "selected_rows": selected_rows,
         "compact_window_shape": compact_shape,
-        "kv_row_compaction": "ttnn.embedding(selected_row_idxs, sparse_kv_cache_table)"
-        if uses_compressed_selected_rows
-        else "ttnn.embedding(selected_row_idxs, kv_cache_table)",
+        "kv_row_compaction": (
+            "ttnn.embedding(static_window_row_idxs,sparse_kv_cache_table) + "
+            "ttnn.embedding(device_indexer_topk_uint32,compressed_kv_cache_table)"
+            if sparse_indexer_drives_attention
+            else "ttnn.embedding(selected_row_idxs, sparse_kv_cache_table)"
+            if uses_compressed_selected_rows
+            else "ttnn.embedding(selected_row_idxs, kv_cache_table)"
+        ),
         "attention_compute": [
             "ttnn.matmul(q_heads, selected_key_heads^T)",
             "ttnn.concat(qk_scores, attention_sink_logits)",
@@ -6915,7 +7959,11 @@ def _selected_row_attention_proof_summary(
         if uses_compressed_selected_rows
         else "selected_rows_from_projected_kv_cache",
         "limitations": [
-            "selected row ids are not produced by the protected trace",
+            (
+                "compressed selected row ids are produced by the protected trace; sliding-window rows remain static"
+                if sparse_indexer_drives_attention
+                else "selected row ids are not consumed from protected-trace top-k output"
+            ),
             (
                 "compressed rows come from a real compressor-seeded sparse cache, but the in-trace compressor write is "
                 "decode-sized and not the full HF ratio-window state machine"
@@ -6942,6 +7990,7 @@ def _attention_path_summary(
     cache_update_api: str = DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
     rope_position_index: int | None = None,
     rope_position_api: str = DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API,
+    sparse_indexer_mode: str = DEFAULT_TRACEABLE_DECODE_SPARSE_INDEXER_MODE,
     selected_rows: Sequence[int] | None = None,
     selected_rows_count: int | None = None,
 ) -> dict[str, Any]:
@@ -6949,9 +7998,19 @@ def _attention_path_summary(
     attention_read_api = _validate_attention_read_api(attention_read_api)
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
+    sparse_indexer_mode = _validate_sparse_indexer_mode(sparse_indexer_mode)
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
     uses_selected_rows_read = _uses_selected_rows_attention(attention_read_api)
     uses_compressed_selected_rows = _uses_compressed_kv_selected_rows(attention_read_api)
+    sparse_indexer_trace_enabled = _sparse_indexer_uses_trace(sparse_indexer_mode)
+    sparse_indexer_drives_attention = _sparse_indexer_drives_attention(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
+    selected_row_ids_source = _sparse_indexer_selected_row_ids_source(
+        sparse_indexer_mode,
+        attention_read_api=attention_read_api,
+    )
     width_repeat_factor = _attention_cache_repeat_factor(config)
     head_repeat_factor = _attention_head_repeat_factor(config)
     window_start = int(cache_update_index)
@@ -6979,6 +8038,8 @@ def _attention_path_summary(
         "cache_read_window_position_source": (
             "mutable_device_cur_pos_tensor"
             if uses_paged_sdpa_read
+            else "device_indexer_topk_compressed_rows_plus_static_sliding_window_rows"
+            if sparse_indexer_drives_attention
             else "static_host_preflight_selected_row_ids_device_tensor"
             if uses_selected_rows_read
             else "static_python_slice_bounds"
@@ -6995,14 +8056,25 @@ def _attention_path_summary(
         "selected_rows": {
             "consumed_by_attention": uses_selected_rows_read,
             "ids": None if selected_rows is None else [int(value) for value in selected_rows],
-            "ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+            "ids_source": selected_row_ids_source,
+            "sparse_indexer_mode": sparse_indexer_mode,
+            "sparse_indexer_scoring_in_trace": sparse_indexer_trace_enabled,
+            "sparse_indexer_topk_in_trace": sparse_indexer_trace_enabled,
+            "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
             "topk_shape": [1, 1, int(selected_rows_count)] if selected_rows_count is not None else None,
             "compact_window_shape": [1, 1, int(selected_rows_count), int(config.head_dim)]
             if selected_rows_count is not None
             else None,
-            "kv_compaction_op": "ttnn.embedding(selected_row_idxs, kv_cache_table)"
-            if uses_selected_rows_read
-            else None,
+            "kv_compaction_op": (
+                "ttnn.embedding(static_window_row_idxs,sparse_kv_cache_table) + "
+                "ttnn.embedding(device_indexer_topk_uint32,compressed_kv_cache_table)"
+                if sparse_indexer_drives_attention
+                else "ttnn.embedding(selected_row_idxs, sparse_kv_cache_table)"
+                if uses_compressed_selected_rows
+                else "ttnn.embedding(selected_row_idxs, kv_cache_table)"
+                if uses_selected_rows_read
+                else None
+            ),
         },
         "cache_expand": {
             "kv_output_dim": _kv_output_dim(config),
@@ -7125,14 +8197,19 @@ def _attention_path_summary(
             "contributed": True if uses_selected_rows_read else (False if uses_paged_sdpa_read else True),
             "source": "not integrated; real indexer row ids are reported outside trace, but paged SDPA reads contiguous rows through cur_pos_tensor"
             if uses_paged_sdpa_read
+            else "device-produced indexer compressed-row ids plus static sliding-window rows drive selected-row compressed-KV attention"
+            if sparse_indexer_drives_attention
             else "real indexer row ids are consumed by selected-row attention from the real compressor-seeded sparse cache"
             if uses_compressed_selected_rows
             else "real indexer row ids are consumed by selected-row dense attention, but compacted from the projected K/V cache rather than a real compressed-KV cache"
             if uses_selected_rows_read
             else "device-resident compressed K/V cache window with row 0 updated from real wkv/kv_norm projection",
             "real_sparse_indexer_selected_tokens": uses_selected_rows_read,
-            "real_sparse_indexer_selected_rows_materialized_outside_trace": int(config.compress_ratios[int(layer)])
-            == 4,
+            "real_sparse_indexer_selected_rows_materialized_outside_trace": (
+                int(config.compress_ratios[int(layer)]) == 4 and not sparse_indexer_trace_enabled
+            ),
+            "real_sparse_indexer_selected_rows_produced_inside_trace": sparse_indexer_trace_enabled,
+            "device_selected_row_ids_drive_compaction": sparse_indexer_drives_attention,
             "compressed_kv_status": (
                 "not_integrated_in_traceable_paged_sdpa_path"
                 if uses_paged_sdpa_read
@@ -7147,6 +8224,8 @@ def _attention_path_summary(
             "contributed": True if uses_selected_rows_read else (False if uses_paged_sdpa_read else True),
             "source": "not integrated; compressor/indexer-selected compressed row ids are reported but not read by paged SDPA"
             if uses_paged_sdpa_read
+            else "device-produced indexer compressed row ids drive compact selected-row attention over a compressed-KV sparse cache"
+            if sparse_indexer_drives_attention
             else "real indexer-selected row ids drive compact selected-row attention over a compressed-KV sparse cache"
             if uses_compressed_selected_rows
             else "real indexer-selected row ids drive compact selected-row attention over the projected K/V cache"
@@ -7392,6 +8471,8 @@ def _traceable_accuracy_items(reference: Mapping[str, torch.Tensor]):
 def _traceable_accuracy_required_for_pass(name: str) -> bool:
     router_dispatch_diagnostics = {
         "router_decode_topk_indices",
+        "sparse_indexer_topk_indices",
+        "sparse_indexer_topk_indices_uint32",
     }
     return name not in router_dispatch_diagnostics
 
@@ -7424,10 +8505,29 @@ def _traceable_accuracy_summary(
         "attention_output_heads",
         "paged_attention_output_heads",
     }
+    selected_row_attention_diagnostics = {
+        "attention_cache_window",
+        "selected_attention_cache_window",
+        "attention_key_cache",
+        "attention_key_cache_nope",
+        "attention_key_cache_rope",
+        "attention_key_cache_rope_rotated",
+        "attention_key_heads",
+        "attention_value_heads",
+        "qk_scores",
+        "attention_scores_with_sink",
+    }
+    router_internal_diagnostics = {
+        "router_logits",
+    }
     local_rtol = max(float(rtol), ATTENTION_OUTPUT_PROJECTION_RTOL) if name in projection_outputs else float(rtol)
     local_atol = max(float(atol), ATTENTION_OUTPUT_PROJECTION_ATOL) if name in projection_outputs else float(atol)
     if name in attention_split_diagnostics:
         local_atol = max(local_atol, 3.0e-1)
+    if name in selected_row_attention_diagnostics:
+        local_atol = max(local_atol, 2.5e-1)
+    if name in router_internal_diagnostics:
+        local_atol = max(local_atol, 2.5e-1)
     summary = _accuracy_summary(
         expected,
         actual,
@@ -7452,6 +8552,11 @@ def _traceable_accuracy_summary(
             "device top-k indices are reported against the torch preflight reference, but static expert dispatch "
             "does not consume these ids yet; this metric is not required for smoke pass/fail"
         )
+    if name in {"sparse_indexer_topk_indices", "sparse_indexer_topk_indices_uint32"}:
+        summary["diagnostic_note"] = (
+            "sparse indexer top-k ids are reported against the torch reference; pass/fail is gated by downstream "
+            "attention/cache tensors because index ties can be precision-sensitive"
+        )
     if name in projection_outputs:
         summary[
             "tolerance_note"
@@ -7460,6 +8565,14 @@ def _traceable_accuracy_summary(
         summary[
             "tolerance_note"
         ] = "internal Q split/RoPE diagnostic uses relaxed absolute tolerance; PCC and final attention outputs remain enforced"
+    if name in selected_row_attention_diagnostics:
+        summary[
+            "tolerance_note"
+        ] = "selected-row attention internal diagnostic uses relaxed absolute tolerance; final attention outputs remain enforced"
+    if name in router_internal_diagnostics:
+        summary[
+            "tolerance_note"
+        ] = "router internal logits use relaxed absolute tolerance; route weights and final outputs remain enforced"
     return summary
 
 
