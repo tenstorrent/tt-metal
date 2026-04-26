@@ -22,6 +22,8 @@ import ttnn
 from models.demos.deepseek_v4_flash.config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v4_flash.cpu_reference import (
     compress_topk_indices,
+    compressor_prefill,
+    indexer_topk,
     rms_norm,
     swiglu_expert,
     v4_router,
@@ -52,7 +54,10 @@ from models.demos.deepseek_v4_flash.real_kv_projection_smoke import (
 )
 from models.demos.deepseek_v4_flash.real_prefill_attention_runtime_smoke import (
     _layer_attention_output_projection_keys,
+    _rotate_compressed_prefill_kv,
+    _rotate_indexer_q,
     decode_real_prefill_attention_projection_weights,
+    decode_real_prefill_indexer_weights,
 )
 from models.demos.deepseek_v4_flash.real_prefill_cache_prep_smoke import (
     apply_deepseek_v4_rotary,
@@ -2362,6 +2367,9 @@ def _base_result(
         config=config,
         layer=layer,
         cache_update_indices=cache_update_indices,
+        weights=weights,
+        activations=activations,
+        route_plans=route_plans,
         attention_read_api=attention_read_api,
         cache_update_api=cache_update_api,
         rope_position_api=rope_position_api,
@@ -4881,6 +4889,9 @@ def _sparse_attention_semantics_summary(
     config: DeepSeekV4FlashConfig,
     layer: int,
     cache_update_indices: Sequence[int],
+    weights: TraceableDecodeWeights,
+    activations: Sequence[torch.Tensor],
+    route_plans: Sequence[TraceableDecodeRoutePlan],
     attention_read_api: str,
     cache_update_api: str,
     rope_position_api: str,
@@ -4895,25 +4906,29 @@ def _sparse_attention_semantics_summary(
     if indexer_expected and indexer_missing:
         sparse_indexer_status = "expected_indexer_tensors_missing"
     elif indexer_expected:
-        sparse_indexer_status = "real_indexer_tensors_identified_not_executed_or_consumed_by_trace"
+        sparse_indexer_status = "real_indexer_topk_materialized_outside_trace_not_consumed_by_attention"
     elif compress_ratio > 0:
         sparse_indexer_status = f"not_expected_for_compress_ratio_{compress_ratio}; hf_uses_reference_compress_topk"
     else:
         sparse_indexer_status = "not_expected_for_uncompressed_layer"
 
     selected_rows = _sparse_selected_cache_rows_summary(
+        snapshot_dir=snapshot_dir,
         config=config,
         layer=layer,
         positions=cache_update_indices,
+        weights=weights,
+        activations=activations,
+        route_plans=route_plans,
         uses_paged_sdpa_read=uses_paged_sdpa_read,
     )
     attention_sink_status = (
         "used_in_paged_sdpa_decode" if uses_paged_sdpa_read else "loaded_not_integrated_in_fixed_slice_attention"
     )
     return {
-        "status": "sink_integrated_selected_rows_blocked"
+        "status": "real_indexer_rows_materialized_attention_read_blocked"
         if uses_paged_sdpa_read
-        else "inventory_only_fixed_slice_path",
+        else "real_indexer_rows_materialized_fixed_slice_attention_blocked",
         "hf_reference_locations": {
             "attention_forward": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:501",
             "indexer_topk": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:381",
@@ -4926,6 +4941,7 @@ def _sparse_attention_semantics_summary(
         "index_topk": int(config.index_topk),
         "sparse_indexer_status": sparse_indexer_status,
         "selected_cache_rows": selected_rows,
+        "real_indexer_selected_rows_consumed_by_attention": False,
         "attention_sink_status": attention_sink_status,
         "attention_sink": {
             "key": f"layers.{layer}.attn.attn_sink",
@@ -4955,6 +4971,7 @@ def _sparse_attention_semantics_summary(
         "selected_row_attention_blocker": {
             "ttnn_api": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
             "ttnn_api_location": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.hpp:29",
+            "selected_rows_consumed_by_attention": False,
             "current_inputs": [
                 "q",
                 "paged K cache",
@@ -4969,11 +4986,25 @@ def _sparse_attention_semantics_summary(
                 "no topk_idxs or selected-row page-table input that maps HF sparse_attn topk rows to K/V rows per "
                 "decode token under one captured trace"
             ),
+            "concrete_shapes": {
+                "hf_topk_idxs": selected_rows["first_step_topk_shape"],
+                "hf_selected_rows": selected_rows["first_step_runtime_rows"],
+                "paged_sdpa_page_table": "[batch, max_num_blocks_per_seq]",
+                "paged_sdpa_cur_pos_tensor": "[batch]",
+                "paged_k_cache": "[num_blocks, num_key_value_heads, block_size, head_dim]",
+                "compact_selected_kv_needed": "[batch, selected_topk, head_dim]",
+            },
             "gather_api_location": "ttnn/cpp/ttnn/operations/data_movement/gather/gather.hpp:12",
             "gather_blocker": (
                 "ttnn.gather can gather tensor elements by an index tensor, but this slice does not have a fused "
                 "gather-to-SDPA path or paged attention page-table format for dynamic per-token top-k selected rows"
             ),
+            "page_table_blocker": (
+                "paged SDPA page_table remaps logical pages, while cur_pos_tensor still makes the kernel consume a "
+                "contiguous prefix of logical rows; it cannot represent HF topk_idxs that mix sliding-window rows "
+                "with compressed-cache rows at the sliding-window offset"
+            ),
+            "evidence": selected_rows["attention_read_blocker"],
         },
         "smallest_next_step": (
             "add a selected-row attention bridge: materialize learned indexer topk rows into a traceable device "
@@ -4981,7 +5012,7 @@ def _sparse_attention_semantics_summary(
             "rows plus attention_sink into a TTNN sparse decode attention kernel"
         ),
         "limitations": [
-            "learned indexer tensors are inventoried but not loaded into the protected traceable decode module",
+            "learned indexer top-k rows are materialized only by a host preflight probe, not by the protected trace",
             "compressed-KV cache rows are not produced or updated by this paged path",
             "paged SDPA still reads a contiguous cur_pos/page-table prefix rather than HF sparse_attn topk_idxs rows",
         ],
@@ -5017,6 +5048,9 @@ def _sparse_attention_tensor_inventory(
                 f"{prefix}.indexer.compressor.ape",
                 f"{prefix}.indexer.compressor.norm.weight",
             ]
+            indexer_q_scale_key = f"{prefix}.indexer.wq_b.scale"
+            if index.has_tensor(indexer_q_scale_key):
+                expected_indexer_keys.append(indexer_q_scale_key)
             expected_keys.extend(expected_indexer_keys)
 
     present_keys = [key for key in expected_keys if index.has_tensor(key)]
@@ -5033,30 +5067,55 @@ def _sparse_attention_tensor_inventory(
 
 def _sparse_selected_cache_rows_summary(
     *,
+    snapshot_dir: Path,
     config: DeepSeekV4FlashConfig,
     layer: int,
     positions: Sequence[int],
+    weights: TraceableDecodeWeights,
+    activations: Sequence[torch.Tensor],
+    route_plans: Sequence[TraceableDecodeRoutePlan],
     uses_paged_sdpa_read: bool,
 ) -> dict[str, Any]:
     compress_ratio = int(config.compress_ratios[int(layer)])
+    real_indexer_rows = _real_indexer_selected_rows_by_step(
+        snapshot_dir=snapshot_dir,
+        config=config,
+        layer=layer,
+        positions=positions,
+        weights=weights,
+        activations=activations,
+        route_plans=route_plans,
+    )
     per_step = [
         _sparse_selected_cache_rows_for_position(
             config=config,
             layer=layer,
             position=int(position),
+            real_indexer_selection=real_indexer_rows.get(step),
             uses_paged_sdpa_read=uses_paged_sdpa_read,
         )
-        for position in positions
+        for step, position in enumerate(positions)
     ]
+    derived_from_real_indexer = any(bool(step.get("derived_from_real_indexer", False)) for step in per_step)
     return {
         "source": (
             "hf_window_topk_plus_reference_compress_topk"
             if compress_ratio != 4
-            else "hf_window_topk_plus_learned_indexer_topk_inventory"
+            else "hf_window_topk_plus_real_learned_indexer_topk_host_preflight"
         ),
         "layout": "HF sparse_attn topk rows index into [sliding_window_cache, compressed_kv_cache]",
-        "derived_from_real_indexer": False,
+        "derived_from_real_indexer": derived_from_real_indexer,
+        "real_indexer_topk_attempted_outside_trace": bool(real_indexer_rows),
+        "real_indexer_topk_executed_outside_trace": derived_from_real_indexer,
         "first_step_topk_shape": per_step[0]["runtime_topk_shape"] if per_step else None,
+        "first_step_runtime_rows": per_step[0]["runtime_rows"] if per_step else None,
+        "selected_rows_consumed_by_attention": False,
+        "attention_read_blocker": _selected_row_attention_blocker_summary(
+            config=config,
+            layer=layer,
+            first_step=per_step[0] if per_step else None,
+            uses_paged_sdpa_read=uses_paged_sdpa_read,
+        ),
         "per_step": per_step,
     }
 
@@ -5066,6 +5125,7 @@ def _sparse_selected_cache_rows_for_position(
     config: DeepSeekV4FlashConfig,
     layer: int,
     position: int,
+    real_indexer_selection: Mapping[str, Any] | None,
     uses_paged_sdpa_read: bool,
 ) -> dict[str, Any]:
     compress_ratio = int(config.compress_ratios[int(layer)])
@@ -5079,10 +5139,18 @@ def _sparse_selected_cache_rows_for_position(
         compressed_rows = []
         compressed_topk_width = 0
         compressed_source = "none"
+    elif compress_ratio == 4 and real_indexer_selection is not None and real_indexer_selection["available"]:
+        compressed_rows = [int(value) for value in real_indexer_selection["compressed_rows"]]
+        compressed_topk_width = int(real_indexer_selection["compressed_topk_width"])
+        compressed_source = "real_learned_indexer_topk_host_preflight"
     elif compress_ratio == 4:
         compressed_rows = None
         compressed_topk_width = min(int(config.index_topk), compressed_cache_length)
-        compressed_source = "learned_indexer_topk_required_not_materialized"
+        compressed_source = (
+            real_indexer_selection.get("reason", "learned_indexer_topk_required_not_materialized")
+            if real_indexer_selection is not None
+            else "learned_indexer_topk_required_not_materialized"
+        )
     else:
         compressed_topk = compress_topk_indices(
             compress_ratio,
@@ -5115,11 +5183,234 @@ def _sparse_selected_cache_rows_for_position(
         "compressed_topk_width": compressed_topk_width,
         "compressed_rows": compressed_rows,
         "compressed_rows_source": compressed_source,
+        "real_indexer_selection": real_indexer_selection,
+        "derived_from_real_indexer": bool(
+            real_indexer_selection is not None and real_indexer_selection.get("available", False)
+        ),
         "runtime_topk_shape": [1, 1, int(window_topk.shape[-1]) + compressed_topk_width],
         "runtime_rows": runtime_rows,
         "paged_sdpa_dense_rows": _cache_rows_read_for_position(int(position)) if uses_paged_sdpa_read else None,
         "rows_drive_attention_in_trace": False,
+        "selected_rows_consumed_by_attention": False,
         "blocker": blocker,
+    }
+
+
+def _real_indexer_selected_rows_by_step(
+    *,
+    snapshot_dir: Path,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    weights: TraceableDecodeWeights,
+    activations: Sequence[torch.Tensor],
+    route_plans: Sequence[TraceableDecodeRoutePlan],
+) -> dict[int, dict[str, Any]]:
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    if compress_ratio != 4:
+        return {}
+    index = RealCheckpointTensorIndex.from_snapshot(snapshot_dir)
+    tensor_inventory = _sparse_attention_tensor_inventory(snapshot_dir, config=config, layer=layer)
+    indexer_keys = tensor_inventory["expected_indexer_keys"]
+    missing = [key for key in indexer_keys if not index.has_tensor(key)]
+    if missing:
+        return {
+            step: {
+                "available": False,
+                "reason": "expected_indexer_tensors_missing",
+                "missing_keys": missing,
+            }
+            for step in range(len(positions))
+        }
+
+    try:
+        metadata = index.metadata_for_keys(indexer_keys)
+        indexer_tensors, _ = index.load_tensors(
+            indexer_keys,
+            max_tensors=len(indexer_keys),
+            max_bytes=sum(item.nbytes for item in metadata),
+        )
+        indexer_weights = decode_real_prefill_indexer_weights(indexer_tensors, config=config, layer=layer)
+    except Exception as exc:
+        return {
+            step: {
+                "available": False,
+                "reason": "real_indexer_weight_decode_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+            for step in range(len(positions))
+        }
+
+    results: dict[int, dict[str, Any]] = {}
+    for step, position in enumerate(positions):
+        activation = activations[min(step, len(activations) - 1)]
+        route_plan = route_plans[min(step, len(route_plans) - 1)]
+        try:
+            results[step] = _real_indexer_selected_rows_for_step(
+                indexer_weights=indexer_weights,
+                weights=weights,
+                config=config,
+                layer=layer,
+                activation=activation,
+                position=int(position),
+                decode_token_index=int(route_plan.decode_token_index),
+            )
+        except Exception as exc:
+            results[step] = {
+                "available": False,
+                "reason": "real_indexer_topk_materialization_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+    return results
+
+
+def _real_indexer_selected_rows_for_step(
+    *,
+    indexer_weights,
+    weights: TraceableDecodeWeights,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    activation: torch.Tensor,
+    position: int,
+    decode_token_index: int,
+) -> dict[str, Any]:
+    compress_ratio = int(config.compress_ratios[int(layer)])
+    compressed_cache_length = (int(position) + 1) // compress_ratio
+    if compressed_cache_length <= 0:
+        return {
+            "available": True,
+            "position": int(position),
+            "compressed_rows": [],
+            "compressed_topk_width": 0,
+            "compressed_cache_length": 0,
+            "topk_shape": [1, 1, 0],
+            "source": "real_learned_indexer_topk_host_preflight_empty_cache",
+        }
+    if activation.ndim != 4 or tuple(activation.shape[:2]) != (1, 1):
+        raise ValueError(f"Expected activation shape [1, 1, seq_len, hidden], got {tuple(activation.shape)}")
+    history_len = min(int(position), int(activation.shape[-2]))
+    if history_len < compress_ratio:
+        return {
+            "available": False,
+            "position": int(position),
+            "reason": "activation_history_shorter_than_compress_ratio",
+            "history_len": history_len,
+            "compress_ratio": compress_ratio,
+        }
+    if not 0 <= int(decode_token_index) < int(activation.shape[-2]):
+        raise ValueError(
+            f"decode_token_index {decode_token_index} is outside activation shape {tuple(activation.shape)}"
+        )
+
+    attn_input = rms_norm(
+        activation[:, 0].contiguous(),
+        weights.attn_norm,
+        eps=float(config.rms_norm_eps),
+    ).to(torch.bfloat16)
+    history_attn_input = attn_input[:, :history_len].contiguous()
+    index_compressed_kv = compressor_prefill(
+        history_attn_input,
+        indexer_weights.compressor.wkv,
+        indexer_weights.compressor.wgate,
+        indexer_weights.compressor.ape,
+        indexer_weights.compressor.norm_weight,
+        compress_ratio=compress_ratio,
+        head_dim=int(config.index_head_dim),
+        norm_eps=float(config.rms_norm_eps),
+    ).to(torch.bfloat16)
+    index_compressed_kv = _rotate_compressed_prefill_kv(
+        index_compressed_kv,
+        config=config,
+        layer=layer,
+        seq_len=history_len,
+        start_pos=0,
+        compress_ratio=compress_ratio,
+    )
+    if int(index_compressed_kv.shape[1]) < compressed_cache_length:
+        return {
+            "available": False,
+            "position": int(position),
+            "reason": "compressed_history_does_not_cover_decode_position",
+            "history_len": history_len,
+            "materialized_compressed_cache_length": int(index_compressed_kv.shape[1]),
+            "required_compressed_cache_length": compressed_cache_length,
+        }
+
+    q_rank_linear = F.linear(attn_input.float(), weights.attention.wq_a.float()).to(torch.bfloat16)
+    q_rank_norm = rms_norm(q_rank_linear, weights.attention.q_norm, eps=float(config.rms_norm_eps))
+    current_q_rank = q_rank_norm[:, int(decode_token_index) : int(decode_token_index) + 1].contiguous()
+    index_q = F.linear(current_q_rank.float(), indexer_weights.wq_b.float()).to(torch.bfloat16)
+    index_q = index_q.reshape(1, 1, int(config.index_n_heads), int(config.index_head_dim))
+    index_q = _rotate_indexer_q(index_q, config=config, layer=layer, start_pos=int(position))
+    index_weights = F.linear(
+        attn_input[:, int(decode_token_index) : int(decode_token_index) + 1].float(),
+        indexer_weights.weights_proj.float(),
+    ).to(torch.bfloat16)
+    index_weights = index_weights.float() * (int(config.index_head_dim) ** -0.5 * int(config.index_n_heads) ** -0.5)
+    topk_idxs = indexer_topk(
+        index_q,
+        index_compressed_kv,
+        index_weights,
+        index_topk=int(config.index_topk),
+        compress_ratio=compress_ratio,
+        start_pos=int(position),
+        offset=int(config.sliding_window),
+    ).to(torch.int32)
+    compressed_rows = _valid_int_values(topk_idxs)
+    return {
+        "available": True,
+        "position": int(position),
+        "source": "real_learned_indexer_topk_host_preflight",
+        "decode_token_index": int(decode_token_index),
+        "history_len": history_len,
+        "compressed_cache_length": compressed_cache_length,
+        "materialized_compressed_cache_length": int(index_compressed_kv.shape[1]),
+        "compressed_topk_width": int(topk_idxs.shape[-1]),
+        "topk_shape": [int(value) for value in topk_idxs.shape],
+        "compressed_rows": compressed_rows,
+        "topk_idxs": [int(value) for value in topk_idxs.reshape(-1).tolist()],
+        "offset": int(config.sliding_window),
+        "rows_are_hf_cache_rows": True,
+        "consumed_by_attention": False,
+        "host_boundary": "real_indexer_topk_materialized_outside_protected_trace",
+    }
+
+
+def _selected_row_attention_blocker_summary(
+    *,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    first_step: Mapping[str, Any] | None,
+    uses_paged_sdpa_read: bool,
+) -> dict[str, Any]:
+    selected_rows = None if first_step is None else first_step.get("runtime_rows")
+    return {
+        "selected_rows_consumed_by_attention": False,
+        "attention_read_api": TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+        if uses_paged_sdpa_read
+        else TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
+        "compress_ratio": int(config.compress_ratios[int(layer)]),
+        "selected_rows": selected_rows,
+        "paged_sdpa_limit": (
+            "page_table_tensor maps logical pages and cur_pos_tensor selects a contiguous prefix; neither input "
+            "accepts HF sparse_attn topk_idxs or an arbitrary selected row list"
+        ),
+        "compact_window_candidate": {
+            "required_kv_shape": "[batch, selected_topk, head_dim]",
+            "required_attention_shape": "[batch, num_heads, 1, selected_topk]",
+            "required_sink_shape": "[num_heads]",
+            "missing_bridge": (
+                "a protected TTNN path that gathers selected cache rows into a compact K/V cache and feeds that "
+                "cache to sink-aware decode attention without host readback"
+            ),
+        },
+        "ttnn_api_gap": {
+            "paged_sdpa_decode": "no topk_idxs/selected_row_idxs argument",
+            "ttnn_gather": "can materialize selected values, but does not itself provide sink-aware sparse attention",
+            "page_table": "block-level remap cannot skip arbitrary rows inside a page or mix compressed-cache offsets",
+        },
     }
 
 
@@ -5266,10 +5557,12 @@ def _attention_path_summary(
         },
         "sparse_compressed_tokens": {
             "contributed": False if uses_paged_sdpa_read else True,
-            "source": "not integrated; paged SDPA reads contiguous sliding-window-style cache rows through cur_pos_tensor"
+            "source": "not integrated; real indexer row ids are reported outside trace, but paged SDPA reads contiguous rows through cur_pos_tensor"
             if uses_paged_sdpa_read
             else "device-resident compressed K/V cache window with row 0 updated from real wkv/kv_norm projection",
             "real_sparse_indexer_selected_tokens": False,
+            "real_sparse_indexer_selected_rows_materialized_outside_trace": int(config.compress_ratios[int(layer)])
+            == 4,
             "compressed_kv_status": (
                 "not_integrated_in_traceable_paged_sdpa_path"
                 if uses_paged_sdpa_read
@@ -5278,7 +5571,7 @@ def _attention_path_summary(
         },
         "compressed_token_contribution": {
             "contributed": False if uses_paged_sdpa_read else True,
-            "source": "not integrated; no compressor/indexer-selected compressed cache rows are read by paged SDPA"
+            "source": "not integrated; compressor/indexer-selected compressed row ids are reported but not read by paged SDPA"
             if uses_paged_sdpa_read
             else "device-resident compressed K/V cache window",
             "updated_row_from_real_kv_projection": True,

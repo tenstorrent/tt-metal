@@ -312,16 +312,18 @@ def test_cpu_traceable_decode_subpath_reports_inventory_and_limitations(tmp_path
     assert result["traceability_flags"]["attention_sink_in_trace"] is False
     assert result["attention_sink_status"] == "loaded_not_integrated_in_fixed_slice_attention"
     assert result["selected_cache_rows_topk_shape"] == [1, 1, 9]
-    assert result["sparse_attention"]["status"] == "inventory_only_fixed_slice_path"
+    assert result["sparse_attention"]["status"] == "real_indexer_rows_materialized_fixed_slice_attention_blocked"
     assert result["sparse_attention"]["compress_ratio"] == 4
     assert result["sparse_attention"]["sparse_indexer_status"] == (
-        "real_indexer_tensors_identified_not_executed_or_consumed_by_trace"
+        "real_indexer_topk_materialized_outside_trace_not_consumed_by_attention"
     )
-    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is False
-    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_rows"] is None
+    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is True
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_rows_consumed_by_attention"] is False
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_rows"] == [8]
     assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_rows_source"] == (
-        "learned_indexer_topk_required_not_materialized"
+        "real_learned_indexer_topk_host_preflight"
     )
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["runtime_rows"] == [0, 1, 2, 3, 4, 8]
     assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["rows_drive_attention_in_trace"] is False
     assert result["sparse_attention"]["attention_sink_status"] == "loaded_not_integrated_in_fixed_slice_attention"
     assert result["sparse_attention"]["attention_sink"]["in_trace"] is False
@@ -531,17 +533,29 @@ def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path:
     assert result["traceability_flags"]["attention_sink_in_trace"] is True
     assert result["attention_sink_status"] == "used_in_paged_sdpa_decode"
     assert result["selected_cache_rows_topk_shape"] == [1, 1, 9]
-    assert result["sparse_attention"]["status"] == "sink_integrated_selected_rows_blocked"
+    assert result["sparse_attention"]["status"] == "real_indexer_rows_materialized_attention_read_blocked"
     assert result["sparse_attention"]["sparse_indexer_status"] == (
-        "real_indexer_tensors_identified_not_executed_or_consumed_by_trace"
+        "real_indexer_topk_materialized_outside_trace_not_consumed_by_attention"
     )
-    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is False
+    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is True
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_rows_consumed_by_attention"] is False
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["compressed_rows"] == [8]
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["runtime_rows"] == [0, 1, 2, 3, 4, 8]
     assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["paged_sdpa_dense_rows"] == {
         "start": 0,
         "end_exclusive": 5,
         "count": 5,
     }
     assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["rows_drive_attention_in_trace"] is False
+    assert result["sparse_attention"]["selected_row_attention_blocker"]["selected_rows_consumed_by_attention"] is False
+    assert result["sparse_attention"]["selected_row_attention_blocker"]["concrete_shapes"]["hf_selected_rows"] == [
+        0,
+        1,
+        2,
+        3,
+        4,
+        8,
+    ]
     assert result["sparse_attention"]["attention_sink_status"] == "used_in_paged_sdpa_decode"
     assert result["sparse_attention"]["attention_sink"]["in_trace"] is True
     assert result["sparse_attention"]["dynamic_cache_write"] is True
