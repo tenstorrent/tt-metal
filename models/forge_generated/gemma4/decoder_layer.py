@@ -294,9 +294,15 @@ class FullDecoderLayer:
         pre_feedforward_layernorm,
         post_feedforward_layernorm,
         layer_scalar,
+        is_terminal=False,
     ):
         self.layer_idx = layer_idx
         self._is_decode = is_decode
+        # When is_terminal=False (regular full layer), runtime_slots is
+        # (k, v, pos). When True (L59), runtime_slots is (k, v) — no pos_ids
+        # slot exists; the body skips the position-increment computation and
+        # the final layer_scalar multiply (LMHead's last_layer_scalar absorbs
+        # it). update_idxs is still provided for paged_update_cache.
         self.runtime_slots = runtime_slots
         self.update_idxs_slot = update_idxs_slot  # decode-only: previous sliding layer's pos_ids slot
         self.attention = attention
@@ -306,20 +312,34 @@ class FullDecoderLayer:
         self.pre_feedforward_layernorm = pre_feedforward_layernorm
         self.post_feedforward_layernorm = post_feedforward_layernorm
         self.layer_scalar = layer_scalar
+        self.is_terminal = is_terminal
 
     def __call__(self, hidden_state, *, sliding_state, full_state, input, shared):
         del sliding_state
-        k_slot, v_slot, pos_slot = self.runtime_slots
-        kv = (input[k_slot], input[v_slot], input[pos_slot])
+        if self.is_terminal:
+            k_slot, v_slot = self.runtime_slots
+            kv = (input[k_slot], input[v_slot], None)
+        else:
+            k_slot, v_slot, pos_slot = self.runtime_slots
+            kv = (input[k_slot], input[v_slot], input[pos_slot])
         if self._is_decode:
-            update_idxs = input[self.update_idxs_slot]
+            update_idxs = input[self.update_idxs_slot] if self.update_idxs_slot is not None else None
             return self._decode_body(hidden_state, kv=kv, update_idxs=update_idxs, shared=shared, **full_state)
         else:
             return self._prefill_body(hidden_state, kv=kv, shared=shared, **full_state)
 
     @classmethod
     def from_state_dict(
-        cls, state_dict, layer_idx, mesh_device, *, is_decode, runtime_slots, update_idxs_slot, rms_eps_tensor
+        cls,
+        state_dict,
+        layer_idx,
+        mesh_device,
+        *,
+        is_decode,
+        runtime_slots,
+        update_idxs_slot,
+        rms_eps_tensor,
+        is_terminal=False,
     ):
         attention = Attention.from_state_dict_full(
             state_dict,
@@ -341,6 +361,7 @@ class FullDecoderLayer:
             attention=attention,
             feed_forward=feed_forward,
             layer_scalar=layer_scalar,
+            is_terminal=is_terminal,
             **norms,
         )
 
@@ -363,6 +384,7 @@ class FullDecoderLayer:
             var_185=shared["var_185"],
             var_191=shared["var_191"],
             var_193=shared["var_193"],
+            compute_position_increment=not self.is_terminal,
         )
         ttnn_multiply_208 = self.post_attention_layernorm(ttnn_reshape_226)
         ttnn.deallocate(ttnn_reshape_226, False)
@@ -386,6 +408,8 @@ class FullDecoderLayer:
         )
         ttnn.deallocate(ttnn_multiply_215, False)
         ttnn.deallocate(ttnn_add_119, False)
+        if self.is_terminal:
+            return ttnn_add_122
         ttnn_multiply_216 = ttnn.multiply(
             ttnn_add_122,
             self.layer_scalar,
@@ -414,6 +438,7 @@ class FullDecoderLayer:
             var_185=shared["var_185"],
             var_187=shared["var_187"],
             var_193=shared["var_193"],
+            compute_position_increment=not self.is_terminal,
         )
         ttnn_multiply_208 = self.post_attention_layernorm(ttnn_reshape_209)
         ttnn_add_120 = ttnn.add(
@@ -435,6 +460,8 @@ class FullDecoderLayer:
         )
         ttnn.deallocate(ttnn_multiply_215, False)
         ttnn.deallocate(ttnn_add_120, False)
+        if self.is_terminal:
+            return ttnn_add_123
         ttnn_multiply_216 = ttnn.multiply(
             ttnn_add_123,
             self.layer_scalar,
