@@ -5,7 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_gelu.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -18,6 +18,11 @@ namespace ckernel {
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
     MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(gelu, sfpu::gelu_init, fast_and_approx, DST_ACCUM_MODE));
+}
+
+template <bool fast_and_approx = true>
+ALWI void gelu_tile_init_pack() {
+    PACK(SFPU_TWO_TEMPLATE_PARAM_INIT(gelu, sfpu::gelu_init, fast_and_approx, DST_ACCUM_MODE));
 }
 
 // clang-format off
@@ -38,6 +43,11 @@ ALWI void gelu_tile_init() {
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
     MATH(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, (int)VectorMode::RC));
+}
+
+template <bool fast_and_approx = true>
+ALWI void gelu_tile_pack(uint32_t idst) {
+    PACK(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, (int)VectorMode::RC));
 }
 
 /**

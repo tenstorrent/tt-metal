@@ -23,6 +23,7 @@ target_sources(
             device/matmul_device_operation_types.hpp
             device/config/matmul_program_config.hpp
             device/config/matmul_program_config_types.hpp
+            shared_with_host/activation_type.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
