@@ -43,7 +43,7 @@ class Packer(BasePacker):
         num_faces = operation.num_faces
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
-            f"    _llk_pack_init_<false, false>(\n"
+            f"    _llk_pack_init_<PackMode::Default, false>(\n"
             f"        pack_dst_format{stage}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
             f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, false>();\n"

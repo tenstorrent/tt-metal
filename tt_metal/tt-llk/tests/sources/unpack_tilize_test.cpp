@@ -122,12 +122,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
     const bool TILIZE = true;
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false /* tilize */>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, num_faces);
 
     const bool is_8bit_format = IS_8BIT_FORMAT(formats.unpack_A_src);
 
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(
+    _llk_pack_init_<UNTILIZE ? PackMode::Untilize : TILIZE ? PackMode::Tilize : PackMode::Default, false>(
         formats.pack_src,
         formats.pack_dst,
         FACE_R_DIM,
@@ -139,8 +139,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_8bit_format /* skip_bh_tilize_workaround */);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, num_faces);
-    _llk_pack_init_<UNTILIZE, false>(formats.pack_dst, FACE_R_DIM, num_faces);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, num_faces);
+    _llk_pack_init_<UNTILIZE ? PackMode::Untilize : PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
 #endif
 

@@ -134,12 +134,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DATUM_COUNT = 16 * 16 * params.num_faces;
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_<UNTILIZE, false, TILIZE>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : TILIZE ? PackMode::Tilize : PackMode::Default>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_init_<UNTILIZE ? PackMode::Untilize : TILIZE ? PackMode::Tilize : PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<UNTILIZE, false>(formats.pack_dst, FACE_R_DIM, params.num_faces);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE ? PackMode::Untilize : PackMode::Default>(formats.pack_src, formats.pack_dst, DATUM_COUNT, FACE_R_DIM, params.num_faces);
+    _llk_pack_init_<UNTILIZE ? PackMode::Untilize : PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
 #endif
 

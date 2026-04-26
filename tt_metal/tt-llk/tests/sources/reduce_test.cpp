@@ -130,17 +130,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, false /* narrow_tile */);
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces);
 #else
-    _llk_pack_init_<false /* untilize */, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */>(formats.pack_dst, tensor_shape.face_r_dim, num_faces, partial_face, narrow_tile);
 #endif
 
     _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();

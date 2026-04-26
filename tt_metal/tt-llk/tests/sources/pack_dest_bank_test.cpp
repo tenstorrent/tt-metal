@@ -127,16 +127,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_blocks         = params.NUM_BLOCKS;
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, tilize_en>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, tilize_en ? PackMode::Tilize : PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, params.num_faces);
 
-    _llk_pack_init_<false, false, tilize_en>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, false, num_tiles_in_block);
+    _llk_pack_init_<tilize_en ? PackMode::Tilize : PackMode::Default, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, params.num_faces, false, false, num_tiles_in_block);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     reconfigure_packer_l1_acc(params.L1_ACC);
 
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, params.num_faces, false, false, num_tiles_in_block);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, params.num_faces);
+    _llk_pack_init_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, params.num_faces, false, false, num_tiles_in_block);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
     reconfigure_packer_l1_acc(params.L1_ACC);
 #endif

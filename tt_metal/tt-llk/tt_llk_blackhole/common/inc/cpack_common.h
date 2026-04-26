@@ -297,7 +297,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-template <bool untilize = false, bool tilize = false>
+template <PackMode mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
@@ -306,9 +306,11 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
-    // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
+    // Untilize/Tilize modes have 2 packer interfaces active, so z counter needs to jump by 2
     // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
-    const std::uint32_t z_stride = ((untilize ^ tilize) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
+    const std::uint32_t z_stride =
+        ((mode == PackMode::Untilize || mode == PackMode::Tilize) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride
+                                                                                                  : FACE_R_DIM * y_stride;
 
     TT_SETDMAREG(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
@@ -320,7 +322,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_NOP;
     TTI_NOP;
 
-    if constexpr (tilize && !untilize)
+    if constexpr (mode == PackMode::Tilize)
     {
         const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
         TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
@@ -565,7 +567,7 @@ inline void reconfig_packer_data_format(
     set_packer_strides(pack_output_src_format, tile_c_dim);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+template <bool is_fp32_dest_acc_en, PackMode mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -587,7 +589,7 @@ inline void configure_pack(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
-    set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
+    set_packer_strides<mode>(pack_src_format, tile_c_dim);
 
     t6_mutex_acquire(mutex::REG_RMW);
 

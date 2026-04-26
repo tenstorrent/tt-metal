@@ -256,4 +256,11 @@ enum class BinaryOp : std::uint8_t
     ADD_TOP_ROW   = 10
 };
 
+enum class PackMode
+{
+    Default  = 0,
+    Untilize = 1,
+    Tilize   = 2,
+};
+
 } // namespace ckernel

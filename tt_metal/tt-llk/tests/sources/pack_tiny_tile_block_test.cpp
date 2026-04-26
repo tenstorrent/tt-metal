@@ -127,11 +127,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_blocks         = params.NUM_BLOCKS;
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
 
     // Standard init sets addr_mods and strides for the tile shape.
-    _llk_pack_init_<false, false, false>(formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, false, false, 1);
+    _llk_pack_init_<PackMode::Default, false>(formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, false, false, 1);
 
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);
@@ -143,8 +143,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the tile shape (face_r_dim, num_faces).
     _llk_pack_block_contiguous_mop_config_<>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
 #else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.num_faces);
-    _llk_pack_init_<false, false>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.num_faces);
+    _llk_pack_init_<PackMode::Default, false>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
 #endif
 

@@ -275,9 +275,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
 
 #ifdef ARCH_BLACKHOLE
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
 #else
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, num_faces);
+        _llk_pack_init_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, num_faces);
 #endif
         // Initialize destination for packing
         _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
