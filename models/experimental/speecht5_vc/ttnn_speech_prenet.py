@@ -88,9 +88,18 @@ class TTNNSpeechEncoderPrenetConfig:
         )
 
 
-def _prepare_group_norm_params(weight: torch.Tensor, bias: torch.Tensor, num_channels: int, device) -> Dict[str, ttnn.Tensor]:
-    # Single-core-across-channel keeps configuration portable across WH/BH.
-    num_cores_across_channel = 1
+def _choose_group_norm_virtual_cols(num_channels: int, device) -> int:
+    # Prefer the widest divisor of channel count that fits device grid-x.
+    grid = device.compute_with_storage_grid_size()
+    max_cols = max(1, int(grid.x))
+    for cols in range(min(max_cols, num_channels), 0, -1):
+        if num_channels % cols == 0:
+            return cols
+    return 1
+
+
+def _prepare_group_norm_params(weight: torch.Tensor, bias: torch.Tensor, num_channels: int, device) -> Dict[str, object]:
+    num_cores_across_channel = _choose_group_norm_virtual_cols(num_channels, device)
     try:
         input_mask = ttnn.create_group_norm_input_mask(num_channels, num_channels, num_cores_across_channel, ttnn.bfloat16)
     except TypeError:
@@ -104,6 +113,7 @@ def _prepare_group_norm_params(weight: torch.Tensor, bias: torch.Tensor, num_cha
         "input_mask": input_mask,
         "weight": _to_ttnn_tensor(weight_rm, device, layout=ttnn.ROW_MAJOR_LAYOUT),
         "bias": _to_ttnn_tensor(bias_rm, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        "core_grid": ttnn.CoreGrid(y=1, x=num_cores_across_channel),
     }
 
 
@@ -253,7 +263,7 @@ class TTNNSpeechEncoderPrenet:
 
         return out_tensor, int(out_length)
 
-    def _apply_group_norm(self, x: ttnn.Tensor, norm_params: Dict[str, ttnn.Tensor], num_groups: int) -> ttnn.Tensor:
+    def _apply_group_norm(self, x: ttnn.Tensor, norm_params: Dict[str, object], num_groups: int) -> ttnn.Tensor:
         try:
             return ttnn.group_norm(
                 x,
@@ -262,7 +272,7 @@ class TTNNSpeechEncoderPrenet:
                 weight=norm_params["weight"],
                 bias=norm_params["bias"],
                 epsilon=self.config.layer_norm_eps,
-                core_grid=ttnn.CoreGrid(y=1, x=1),
+                core_grid=norm_params["core_grid"],
                 dtype=ttnn.bfloat16,
                 inplace=False,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
