@@ -192,8 +192,8 @@ class GroupNorm1D:
         # )
         # self.negative_mask = ttnn.to_device(self.negative_mask, device)
 
-    def _internal_call_(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        batch_size, sequence_length, num_channels = x.shape
+    def _internal_call_(self, input: ttnn.Tensor) -> ttnn.Tensor:
+        batch_size, sequence_length, num_channels = input.shape
         is_height_sharded = is_height_sharded_gn_from_dims(batch_size, sequence_length, num_channels)
         sharded_mem_config, grid_size = determine_expected_group_norm_sharded_config_and_grid_size(
             device=self.device,
@@ -203,8 +203,8 @@ class GroupNorm1D:
             is_height_sharded=is_height_sharded,
             is_row_major=True,
         )
-        out = ttnn.group_norm(
-            ttnn.unsqueeze(x, dim=1),
+        output = ttnn.group_norm(
+            ttnn.unsqueeze(input, dim=1),
             input_mask=self.input_mask_tensor_dict[1 if is_height_sharded else grid_size.x],
             num_groups=self.num_groups + self.num_groups_padding,
             weight=self.weight,
@@ -215,37 +215,37 @@ class GroupNorm1D:
             memory_config=sharded_mem_config,
             inplace=False,
         )
-        return ttnn.squeeze(out, dim=1)
+        return ttnn.squeeze(output, dim=1)
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, input: ttnn.Tensor) -> ttnn.Tensor:
         length_block = 8192
-        batch_size, sequence_length, num_channels = x.shape
+        batch_size, sequence_length, num_channels = input.shape
         if sequence_length <= length_block:
-            x = pad_to_alignment(x)
-            out = self._internal_call_(x)
-            if out.shape[1] != sequence_length:
-                out = ttnn.slice(
-                    out, (0, 0, 0), (batch_size, sequence_length, num_channels), memory_config=ttnn.L1_MEMORY_CONFIG
+            input = pad_to_alignment(input)
+            output = self._internal_call_(input)
+            if output.shape[1] != sequence_length:
+                output = ttnn.slice(
+                    output, (0, 0, 0), (batch_size, sequence_length, num_channels), memory_config=ttnn.L1_MEMORY_CONFIG
                 )
-            return out
+            return output
 
         # slicing
-        out_blocks = []
+        output_blocks = []
         for i in range(0, sequence_length, length_block):
             slice_length = min(length_block, sequence_length - i)
             end_idx = min(i + length_block, sequence_length)
             # start_idx is positive since sequne_length > length_block made sure above
             start_idx = end_idx - length_block
-            x_block = ttnn.slice(x, (0, start_idx, 0), (batch_size, end_idx, num_channels))
-            out = self._internal_call_(x_block)
-            out = ttnn.to_memory_config(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            input_block = ttnn.slice(input, (0, start_idx, 0), (batch_size, end_idx, num_channels))
+            output = self._internal_call_(input_block)
+            output = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if start_idx % length_block != 0:
-                out = ttnn.slice(out, (0, length_block - slice_length, 0), (batch_size, length_block, num_channels))
-            out_blocks.append(out)
-        return ttnn.concat(out_blocks, dim=1)
+                output = ttnn.slice(
+                    output, (0, length_block - slice_length, 0), (batch_size, length_block, num_channels)
+                )
+            output_blocks.append(output)
+        return ttnn.concat(output_blocks, dim=1)
 
     def deallocate(self):
         ttnn.deallocate(self.weight)
         ttnn.deallocate(self.bias)
-        # ttnn.deallocate(self.input_mask_tensor)
-        # ttnn.deallocate(self.negative_mask)

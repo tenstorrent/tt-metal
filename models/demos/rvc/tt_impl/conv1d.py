@@ -194,10 +194,7 @@ class Conv1d:
                 dtype=ttnn.bfloat16,
             )
 
-    def __call__(
-        self,
-        input_tensor: ttnn.Tensor,
-    ):
+    def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         batch_size, input_length, _ = input_tensor.shape
         conv2d_config, slice_config, compute_config = get_conv_configs(
             input_tensor.shape, self.configuration, self.device

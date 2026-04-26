@@ -69,17 +69,17 @@ class LayerNorm:
             device=self.device,
         )
 
-    def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, input: ttnn.Tensor) -> ttnn.Tensor:
         self.weight = ttnn.to_memory_config(self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        out = ttnn.layer_norm(
-            input_tensor,
+        output = ttnn.layer_norm(
+            input,
             epsilon=self.eps,
             weight=self.weight,
             bias=self.bias,
             memory_config=self.memory_config,
         )
-        return out
+        return output
 
     def deallocate(self) -> None:
         if self.weight is not None:

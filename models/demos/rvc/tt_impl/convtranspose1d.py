@@ -146,14 +146,14 @@ class ConvTranspose1d:
             1,
             self.configuration.kernel_size,
         )
-        self.weight_tensor = ttnn.from_torch(
+        self.weight = ttnn.from_torch(
             reshaped_weight,
             dtype=ttnn.bfloat16,
         )
 
-        self.bias_tensor = None
+        self.bias = None
         if bias_key in state_dict and state_dict[bias_key] is not None:
-            self.bias_tensor = ttnn.from_torch(
+            self.bias = ttnn.from_torch(
                 state_dict[bias_key].reshape(1, 1, 1, -1),
                 dtype=ttnn.bfloat16,
             )
@@ -163,9 +163,9 @@ class ConvTranspose1d:
         conv2d_config, slice_config, compute_config = get_conv_configs(
             input_tensor.shape, self.configuration, self.device
         )
-        output, [output_height, output_width], [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
+        output, [output_height, output_width], [self.weight, self.bias] = ttnn.conv_transpose2d(
             input_tensor=ttnn.unsqueeze(input_tensor, dim=1),
-            weight_tensor=self.weight_tensor,
+            weight_tensor=self.weight,
             return_output_dim=True,
             return_weights_and_bias=True,
             device=self.device,
@@ -179,7 +179,7 @@ class ConvTranspose1d:
             padding=[0, 0, self.configuration.padding[0], self.configuration.padding[1]],
             dilation=[1, self.configuration.dilation],
             groups=self.configuration.groups,
-            bias_tensor=self.bias_tensor,
+            bias_tensor=self.bias,
             dtype=self.configuration.dtype,
             conv_config=conv2d_config,
             compute_config=compute_config,

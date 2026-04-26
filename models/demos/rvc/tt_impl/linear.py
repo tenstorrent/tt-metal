@@ -60,15 +60,13 @@ class Linear:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-    def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    def __call__(self, input: ttnn.Tensor) -> ttnn.Tensor:
+        input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
         output_memory_config = (
-            ttnn.DRAM_MEMORY_CONFIG
-            if input_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-            else ttnn.L1_MEMORY_CONFIG
+            ttnn.DRAM_MEMORY_CONFIG if input.memory_config() == ttnn.DRAM_MEMORY_CONFIG else ttnn.L1_MEMORY_CONFIG
         )
-        out = ttnn.linear(
-            input_tensor,
+        output = ttnn.linear(
+            input,
             self.weight_tensor,
             bias=self.bias_tensor,
             dtype=self.dtype,
@@ -76,7 +74,7 @@ class Linear:
             compute_kernel_config=self.compute_config,
             memory_config=output_memory_config,
         )
-        return out
+        return output
 
     def deallocate(self):
         ttnn.deallocate(self.weight_tensor)

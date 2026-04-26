@@ -173,11 +173,9 @@ class GRU:
         direction_output = ttnn.concat(outputs, dim=1)
         return direction_output, h_t
 
-    def __call__(
-        self, input_tensor: ttnn.Tensor, hidden_state: ttnn.Tensor | None = None
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        batch_size, sequence_length, _ = input_tensor.shape
+    def __call__(self, input: ttnn.Tensor, hidden_state: ttnn.Tensor | None = None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+        batch_size, sequence_length, _ = input.shape
 
         if hidden_state is None:
             hidden_state = ttnn.from_torch(
@@ -192,7 +190,7 @@ class GRU:
         else:
             hidden_state = ttnn.to_layout(hidden_state, ttnn.ROW_MAJOR_LAYOUT)
 
-        layer_input = input_tensor
+        layer_input = input
         final_hidden_states = []
 
         for layer in range(self.num_layers):
@@ -286,10 +284,8 @@ class TorchWrappedGRU:
         self.torch_gru.load_state_dict(gru_state_dict, strict=True)
         self.torch_gru.eval()
 
-    def __call__(
-        self, input_tensor: ttnn.Tensor, hidden_state: ttnn.Tensor | None = None
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        torch_input = ttnn.to_torch(input_tensor, mesh_composer=self.output_mesh_composer).to(torch.float32)
+    def __call__(self, input: ttnn.Tensor, hidden_state: ttnn.Tensor | None = None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        torch_input = ttnn.to_torch(input, mesh_composer=self.output_mesh_composer).to(torch.float32)
         torch_hidden = None
         if hidden_state is not None:
             torch_hidden = ttnn.to_torch(hidden_state).to(torch.float32)
