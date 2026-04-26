@@ -1,0 +1,1298 @@
+{
+  "model_name": "/data/hf_cache/Deit/deit-tiny/deit-tiny",
+  "tensors": {
+    "cls_classifier.bias": {
+      "file": "cls_classifier/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        1000
+      ]
+    },
+    "cls_classifier.weight": {
+      "file": "cls_classifier/weight.bin",
+      "shape": [
+        192,
+        1000
+      ]
+    },
+    "deit.embeddings.cls_token": {
+      "file": "deit/embeddings/cls_token.bin",
+      "shape": [
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.embeddings.distillation_token": {
+      "file": "deit/embeddings/distillation_token.bin",
+      "shape": [
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.embeddings.patch_embeddings.projection.bias": {
+      "file": "deit/embeddings/patch_embeddings/projection/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.embeddings.patch_embeddings.projection.weight": {
+      "file": "deit/embeddings/patch_embeddings/projection/weight.bin",
+      "shape": [
+        1,
+        1,
+        1024,
+        192
+      ]
+    },
+    "deit.embeddings.position_embeddings": {
+      "file": "deit/embeddings/position_embeddings.bin",
+      "shape": [
+        1,
+        198,
+        192
+      ]
+    },
+    "deit.encoder.layer.0.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/0/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.0.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/0/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.0.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/0/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.0.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/0/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.0.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/0/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.0.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/0/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.0.layernorm_after.bias": {
+      "file": "deit/encoder/layer/0/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.0.layernorm_after.weight": {
+      "file": "deit/encoder/layer/0/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.0.layernorm_before.bias": {
+      "file": "deit/encoder/layer/0/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.0.layernorm_before.weight": {
+      "file": "deit/encoder/layer/0/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.0.output.dense.bias": {
+      "file": "deit/encoder/layer/0/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.0.output.dense.weight": {
+      "file": "deit/encoder/layer/0/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.1.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/1/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.1.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/1/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.1.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/1/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.1.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/1/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.1.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/1/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.1.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/1/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.1.layernorm_after.bias": {
+      "file": "deit/encoder/layer/1/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.1.layernorm_after.weight": {
+      "file": "deit/encoder/layer/1/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.1.layernorm_before.bias": {
+      "file": "deit/encoder/layer/1/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.1.layernorm_before.weight": {
+      "file": "deit/encoder/layer/1/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.1.output.dense.bias": {
+      "file": "deit/encoder/layer/1/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.1.output.dense.weight": {
+      "file": "deit/encoder/layer/1/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.10.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/10/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.10.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/10/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.10.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/10/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.10.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/10/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.10.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/10/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.10.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/10/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.10.layernorm_after.bias": {
+      "file": "deit/encoder/layer/10/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.10.layernorm_after.weight": {
+      "file": "deit/encoder/layer/10/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.10.layernorm_before.bias": {
+      "file": "deit/encoder/layer/10/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.10.layernorm_before.weight": {
+      "file": "deit/encoder/layer/10/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.10.output.dense.bias": {
+      "file": "deit/encoder/layer/10/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.10.output.dense.weight": {
+      "file": "deit/encoder/layer/10/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.11.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/11/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.11.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/11/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.11.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/11/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.11.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/11/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.11.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/11/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.11.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/11/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.11.layernorm_after.bias": {
+      "file": "deit/encoder/layer/11/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.11.layernorm_after.weight": {
+      "file": "deit/encoder/layer/11/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.11.layernorm_before.bias": {
+      "file": "deit/encoder/layer/11/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.11.layernorm_before.weight": {
+      "file": "deit/encoder/layer/11/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.11.output.dense.bias": {
+      "file": "deit/encoder/layer/11/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.11.output.dense.weight": {
+      "file": "deit/encoder/layer/11/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.2.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/2/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.2.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/2/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.2.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/2/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.2.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/2/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.2.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/2/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.2.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/2/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.2.layernorm_after.bias": {
+      "file": "deit/encoder/layer/2/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.2.layernorm_after.weight": {
+      "file": "deit/encoder/layer/2/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.2.layernorm_before.bias": {
+      "file": "deit/encoder/layer/2/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.2.layernorm_before.weight": {
+      "file": "deit/encoder/layer/2/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.2.output.dense.bias": {
+      "file": "deit/encoder/layer/2/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.2.output.dense.weight": {
+      "file": "deit/encoder/layer/2/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.3.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/3/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.3.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/3/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.3.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/3/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.3.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/3/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.3.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/3/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.3.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/3/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.3.layernorm_after.bias": {
+      "file": "deit/encoder/layer/3/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.3.layernorm_after.weight": {
+      "file": "deit/encoder/layer/3/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.3.layernorm_before.bias": {
+      "file": "deit/encoder/layer/3/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.3.layernorm_before.weight": {
+      "file": "deit/encoder/layer/3/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.3.output.dense.bias": {
+      "file": "deit/encoder/layer/3/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.3.output.dense.weight": {
+      "file": "deit/encoder/layer/3/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.4.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/4/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.4.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/4/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.4.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/4/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.4.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/4/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.4.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/4/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.4.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/4/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.4.layernorm_after.bias": {
+      "file": "deit/encoder/layer/4/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.4.layernorm_after.weight": {
+      "file": "deit/encoder/layer/4/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.4.layernorm_before.bias": {
+      "file": "deit/encoder/layer/4/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.4.layernorm_before.weight": {
+      "file": "deit/encoder/layer/4/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.4.output.dense.bias": {
+      "file": "deit/encoder/layer/4/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.4.output.dense.weight": {
+      "file": "deit/encoder/layer/4/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.5.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/5/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.5.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/5/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.5.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/5/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.5.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/5/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.5.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/5/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.5.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/5/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.5.layernorm_after.bias": {
+      "file": "deit/encoder/layer/5/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.5.layernorm_after.weight": {
+      "file": "deit/encoder/layer/5/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.5.layernorm_before.bias": {
+      "file": "deit/encoder/layer/5/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.5.layernorm_before.weight": {
+      "file": "deit/encoder/layer/5/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.5.output.dense.bias": {
+      "file": "deit/encoder/layer/5/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.5.output.dense.weight": {
+      "file": "deit/encoder/layer/5/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.6.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/6/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.6.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/6/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.6.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/6/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.6.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/6/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.6.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/6/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.6.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/6/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.6.layernorm_after.bias": {
+      "file": "deit/encoder/layer/6/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.6.layernorm_after.weight": {
+      "file": "deit/encoder/layer/6/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.6.layernorm_before.bias": {
+      "file": "deit/encoder/layer/6/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.6.layernorm_before.weight": {
+      "file": "deit/encoder/layer/6/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.6.output.dense.bias": {
+      "file": "deit/encoder/layer/6/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.6.output.dense.weight": {
+      "file": "deit/encoder/layer/6/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.7.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/7/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.7.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/7/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.7.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/7/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.7.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/7/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.7.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/7/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.7.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/7/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.7.layernorm_after.bias": {
+      "file": "deit/encoder/layer/7/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.7.layernorm_after.weight": {
+      "file": "deit/encoder/layer/7/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.7.layernorm_before.bias": {
+      "file": "deit/encoder/layer/7/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.7.layernorm_before.weight": {
+      "file": "deit/encoder/layer/7/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.7.output.dense.bias": {
+      "file": "deit/encoder/layer/7/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.7.output.dense.weight": {
+      "file": "deit/encoder/layer/7/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.8.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/8/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.8.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/8/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.8.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/8/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.8.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/8/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.8.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/8/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.8.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/8/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.8.layernorm_after.bias": {
+      "file": "deit/encoder/layer/8/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.8.layernorm_after.weight": {
+      "file": "deit/encoder/layer/8/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.8.layernorm_before.bias": {
+      "file": "deit/encoder/layer/8/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.8.layernorm_before.weight": {
+      "file": "deit/encoder/layer/8/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.8.output.dense.bias": {
+      "file": "deit/encoder/layer/8/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.8.output.dense.weight": {
+      "file": "deit/encoder/layer/8/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.encoder.layer.9.attention.attention.qkv.bias": {
+      "file": "deit/encoder/layer/9/attention/attention/qkv/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        576
+      ]
+    },
+    "deit.encoder.layer.9.attention.attention.qkv.weight": {
+      "file": "deit/encoder/layer/9/attention/attention/qkv/weight.bin",
+      "shape": [
+        192,
+        576
+      ]
+    },
+    "deit.encoder.layer.9.attention.output.dense.bias": {
+      "file": "deit/encoder/layer/9/attention/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.9.attention.output.dense.weight": {
+      "file": "deit/encoder/layer/9/attention/output/dense/weight.bin",
+      "shape": [
+        192,
+        192
+      ]
+    },
+    "deit.encoder.layer.9.intermediate.dense.bias": {
+      "file": "deit/encoder/layer/9/intermediate/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        768
+      ]
+    },
+    "deit.encoder.layer.9.intermediate.dense.weight": {
+      "file": "deit/encoder/layer/9/intermediate/dense/weight.bin",
+      "shape": [
+        192,
+        768
+      ]
+    },
+    "deit.encoder.layer.9.layernorm_after.bias": {
+      "file": "deit/encoder/layer/9/layernorm_after/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.9.layernorm_after.weight": {
+      "file": "deit/encoder/layer/9/layernorm_after/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.9.layernorm_before.bias": {
+      "file": "deit/encoder/layer/9/layernorm_before/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.9.layernorm_before.weight": {
+      "file": "deit/encoder/layer/9/layernorm_before/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.encoder.layer.9.output.dense.bias": {
+      "file": "deit/encoder/layer/9/output/dense/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        192
+      ]
+    },
+    "deit.encoder.layer.9.output.dense.weight": {
+      "file": "deit/encoder/layer/9/output/dense/weight.bin",
+      "shape": [
+        768,
+        192
+      ]
+    },
+    "deit.layernorm.bias": {
+      "file": "deit/layernorm/bias.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "deit.layernorm.weight": {
+      "file": "deit/layernorm/weight.bin",
+      "shape": [
+        1,
+        1,
+        6,
+        32
+      ]
+    },
+    "distillation_classifier.bias": {
+      "file": "distillation_classifier/bias.bin",
+      "shape": [
+        1,
+        1,
+        1,
+        1000
+      ]
+    },
+    "distillation_classifier.weight": {
+      "file": "distillation_classifier/weight.bin",
+      "shape": [
+        192,
+        1000
+      ]
+    }
+  },
+  "weights_dir": "weights"
+}

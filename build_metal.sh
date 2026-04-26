@@ -30,6 +30,7 @@ show_help() {
     echo "  --build-metal-tests              Build metal Testcases."
     echo "  --build-umd-tests                Build umd Testcases."
     echo "  --build-programming-examples     Build programming examples."
+    echo "  --build-deit-cpp                 Build the DeiT C++ demo."
     echo "  --build-tt-train                 Build tt-train."
     echo "  --build-packages                 Build installation packages (.deb)"
     echo "  --build-all                      Build all optional components."
@@ -75,6 +76,7 @@ build_ttnn_tests="OFF"
 build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
+build_deit_cpp="OFF"
 build_tt_train="OFF"
 build_static_libs="OFF"
 pch="ON"
@@ -113,6 +115,7 @@ build-ttnn-tests
 build-metal-tests
 build-umd-tests
 build-programming-examples
+build-deit-cpp
 build-tt-train
 build-packages
 build-static-libs
@@ -179,6 +182,8 @@ while true; do
             build_umd_tests="ON";;
         --build-programming-examples)
             build_programming_examples="ON";;
+        --build-deit-cpp)
+            build_deit_cpp="ON";;
         --build-tt-train)
             build_tt_train="ON";;
         --build-packages)
@@ -277,6 +282,7 @@ echo "INFO: Enable time trace: $enable_time_trace"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
+echo "INFO: Build DeiT C++ demo: $build_deit_cpp"
 echo "INFO: Enable PCH: $pch"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
@@ -347,6 +353,10 @@ fi
 
 if [ "$build_programming_examples" = "ON" ]; then
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
+fi
+
+if [ "$build_deit_cpp" = "ON" ]; then
+    cmake_args+=("-DBUILD_DEIT_CPP=ON")
 fi
 
 if [ "$build_tt_train" = "ON" ]; then
