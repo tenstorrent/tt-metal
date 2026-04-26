@@ -48,9 +48,10 @@ class Gemma4ForCausalLM:
         lm_head,
         shared,
         cached_main,
-        input_overrides,
         sliding_prelude,
         full_prelude,
+        l58,
+        l59,
     ):
         self._is_decode = is_decode
         self.scaled_embedding = scaled_embedding
@@ -58,20 +59,15 @@ class Gemma4ForCausalLM:
         self.lm_head = lm_head
         self.sliding_prelude = sliding_prelude
         self.full_prelude = full_prelude
-        self.shared = shared  # dict of var_184..var_193 device tensors
-        self.cached_main = cached_main  # transitional: feeds L58/L59 specials only
-        # Per-layer q_norm/k_norm tensors that the L58/L59 special methods
-        # still read from input slots. Applied to the runtime input list
-        # at call time. Goes away when L58/L59 are unified.
-        self.input_overrides = input_overrides
+        # L58/L59 specials — full DecoderLayer instances used as weight
+        # bundles by the verbatim L58/L59 bodies in this file.
+        self.l58 = l58
+        self.l59 = l59
+        self.shared = shared  # dict of var_185..var_193 device tensors
+        self.cached_main = cached_main  # transitional: feeds initial-setup ops in _call_*
         self.model = Gemma4Model(is_decode=is_decode)
 
     def __call__(self, input):
-        # Splat q_norm/k_norm into the input list at slots the L58/L59
-        # specials read from. List is mutated; caller's list is updated
-        # in place (matches the pre-refactor behavior).
-        for slot, tensor in self.input_overrides:
-            input[slot] = tensor
         if self._is_decode:
             return self._call_decode(input)
         else:
@@ -87,12 +83,10 @@ class Gemma4ForCausalLM:
         """
         layer_table = LAYER_TABLE_DECODE if is_decode else LAYER_TABLE_PREFILL
 
-        # Bootstrap cached_main for prelude + L58/L59 specials. Returns a
-        # dict with shared scalars (var_184..var_193 sources) populated.
-        # `apply_hf_overrides` (inside build_cached_main_from_hf) also
-        # writes q_norm/k_norm tensors into input_list at per-layer slots;
-        # we capture those into `input_overrides` to splat into the runtime
-        # input list at __call__ time.
+        # Bootstrap cached_main: still feeds the orchestration (initial
+        # setup ops in _call_*) and the prelude (which holds its own
+        # cached_main reference). After Phase 3 the L58/L59 specials no
+        # longer consume cached_main directly.
         max_norm_slot = max(max(t.get("q_norm_input", 0), t.get("k_norm_input", 0)) for t in layer_table.values())
         input_list = [None] * (max_norm_slot + 1)
         cached_main = gw.build_cached_main_from_hf(
@@ -102,7 +96,6 @@ class Gemma4ForCausalLM:
             mesh_device,
             is_decode=is_decode,
         )
-        input_overrides = [(slot, t) for slot, t in enumerate(input_list) if t is not None]
 
         # Per-RMSNorm eps tensor (var_188 in the legacy plumbing).
         rms_eps_tensor = cached_main["main_const_eval_240"][0]
@@ -195,6 +188,45 @@ class Gemma4ForCausalLM:
             sliding_prelude = gemma4.SlidingPreludePrefill(cached_main)
             full_prelude = gemma4.FullPreludePrefill(cached_main)
 
+        # L58 (sliding) special — only used in prefill mode (decode runs L58
+        # through the regular layer loop).
+        if is_decode:
+            l58 = None
+        else:
+            l58 = gemma4.SlidingDecoderLayer.from_state_dict(
+                hf.state_dict,
+                58,
+                mesh_device,
+                is_decode=False,
+                runtime_slots=tuple(layer_table[58]["runtime_inputs"]),
+                rms_eps_tensor=rms_eps_tensor,
+            )
+
+        # L59 (full) special — used in both modes. L59's runtime_inputs has
+        # only 2 entries (no scalar); pad with a sentinel slot that the
+        # special body never accesses.
+        l59_slots = tuple(layer_table[59]["runtime_inputs"]) + (0,)
+        l59 = gemma4.FullDecoderLayer.from_state_dict(
+            hf.state_dict,
+            59,
+            mesh_device,
+            is_decode=is_decode,
+            runtime_slots=l59_slots,
+            update_idxs_slot=None,
+            rms_eps_tensor=rms_eps_tensor,
+        )
+
+        # last_layer_scalar for the postlude is now self.l59.layer_scalar.
+        # Rebuild the LMHead with that. (We keep softcap from cached_main
+        # for now; it's a no-input scalar that survives Phase 3.)
+        lm_head = gemma4.LMHead(
+            last_layer_scalar=l59.layer_scalar,
+            rms_eps=rms_eps_tensor,
+            norm_weight=cached_main[norm_weight_ce][0],
+            lm_head_weight=cached_main[lm_head_weight_ce][0],
+            softcap=softcap,
+        )
+
         return cls(
             is_decode=is_decode,
             scaled_embedding=scaled_embedding,
@@ -202,9 +234,10 @@ class Gemma4ForCausalLM:
             lm_head=lm_head,
             shared=shared,
             cached_main=cached_main,
-            input_overrides=input_overrides,
             sliding_prelude=sliding_prelude,
             full_prelude=full_prelude,
+            l58=l58,
+            l59=l59,
         )
 
     def _call_decode(self, input):
@@ -1357,7 +1390,7 @@ class Gemma4ForCausalLM:
         ttnn_typecast_36 = full_sin_cache
         ttnn_typecast_39 = full_pos_mask
 
-        ttnn_multiply_1065 = gemma4.RMSNorm(cached_main["main_const_eval_357"][0], var_188)(ttnn_multiply_1062)
+        ttnn_multiply_1065 = gemma4.RMSNorm(self.l59.input_layernorm.weight, var_188)(ttnn_multiply_1062)
         ttnn_reshape_1093 = ttnn.reshape(
             ttnn_multiply_1065,
             [1, 1344],
@@ -1376,7 +1409,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_1093, False)
         ttnn_matmul_424 = ttnn.matmul(
             ttnn_all_gather_355,
-            cached_main["main_const_eval_628"][0],
+            self.l59.attention.k_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -1396,7 +1429,7 @@ class Gemma4ForCausalLM:
         ttnn_rms_norm_177 = ttnn.rms_norm(
             ttnn_reshape_1094,
             epsilon=9.9999999747524271e-07,
-            weight=input[994],
+            weight=self.l59.attention.k_norm_w,
             bias=None,
             residual_input_tensor=None,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -1517,7 +1550,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(var_180, False)
         ttnn_matmul_425 = ttnn.matmul(
             ttnn_all_gather_355,
-            cached_main["main_const_eval_90"][0],
+            self.l59.attention.q_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -1538,7 +1571,7 @@ class Gemma4ForCausalLM:
         ttnn_rms_norm_179 = ttnn.rms_norm(
             ttnn_reshape_1095,
             epsilon=9.9999999747524271e-07,
-            weight=input[1018],
+            weight=self.l59.attention.q_norm_w,
             bias=None,
             residual_input_tensor=None,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -1733,7 +1766,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_typecast_312, False)
         ttnn_matmul_428 = ttnn.matmul(
             ttnn_reshape_1096,
-            cached_main["main_const_eval_414"][0],
+            self.l59.attention.o_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -1773,7 +1806,7 @@ class Gemma4ForCausalLM:
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_reduce_scatter_118, False)
-        ttnn_multiply_1072 = gemma4.RMSNorm(cached_main["main_const_eval_198"][0], var_188)(ttnn_reshape_1098)
+        ttnn_multiply_1072 = gemma4.RMSNorm(self.l59.post_attention_layernorm.weight, var_188)(ttnn_reshape_1098)
         ttnn.deallocate(ttnn_reshape_1098, False)
         ttnn_add_598 = ttnn.add(
             ttnn_multiply_1062,
@@ -1783,13 +1816,13 @@ class Gemma4ForCausalLM:
         )
         ttnn.deallocate(ttnn_multiply_1072, False)
         ttnn.deallocate(ttnn_multiply_1062, False)
-        ttnn_multiply_1075 = gemma4.RMSNorm(cached_main["main_const_eval_27"][0], var_188)(ttnn_add_598)
+        ttnn_multiply_1075 = gemma4.RMSNorm(self.l59.pre_feedforward_layernorm.weight, var_188)(ttnn_add_598)
         ttnn_reshape_1101 = gemma4.FeedForward(
-            cached_main["main_const_eval_172"][0],
-            cached_main["main_const_eval_377"][0],
-            cached_main["main_const_eval_609"][0],
+            self.l59.feed_forward.gate_proj_w,
+            self.l59.feed_forward.up_proj_w,
+            self.l59.feed_forward.down_proj_w,
         )(ttnn_multiply_1075)
-        ttnn_multiply_1079 = gemma4.RMSNorm(cached_main["main_const_eval_63"][0], var_188)(ttnn_reshape_1101)
+        ttnn_multiply_1079 = gemma4.RMSNorm(self.l59.post_feedforward_layernorm.weight, var_188)(ttnn_reshape_1101)
         ttnn.deallocate(ttnn_reshape_1101, False)
         ttnn_add_601 = ttnn.add(
             ttnn_add_598,
@@ -1899,7 +1932,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_rsqrt_232, False)
         ttnn_multiply_1047 = ttnn.multiply(
             ttnn_multiply_1046,
-            cached_main["main_const_eval_40"][0],
+            self.l58.input_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1922,7 +1955,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_978, False)
         ttnn_matmul_417 = ttnn.matmul(
             ttnn_all_gather_349,
-            cached_main["main_const_eval_183"][0],
+            self.l58.attention.fused_qkv_w,
             transpose_a=False,
             transpose_b=False,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -1965,7 +1998,7 @@ class Gemma4ForCausalLM:
         ttnn_rms_norm_174 = ttnn.rms_norm(
             ttnn_reshape_979,
             epsilon=9.9999999747524271e-07,
-            weight=input[978],
+            weight=self.l58.attention.k_norm_w,
             bias=None,
             residual_input_tensor=None,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2244,7 +2277,7 @@ class Gemma4ForCausalLM:
         ttnn_rms_norm_176 = ttnn.rms_norm(
             ttnn_reshape_989,
             epsilon=9.9999999747524271e-07,
-            weight=input[1004],
+            weight=self.l58.attention.q_norm_w,
             bias=None,
             residual_input_tensor=None,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2472,7 +2505,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_transformer_concatenate_heads_58, False)
         ttnn_matmul_420 = ttnn.matmul(
             ttnn_reshape_990,
-            cached_main["main_const_eval_373"][0],
+            self.l58.attention.o_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2571,7 +2604,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_992, False)
         ttnn_multiply_1054 = ttnn.multiply(
             ttnn_multiply_1053,
-            cached_main["main_const_eval_628"][0],
+            self.l58.post_attention_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2642,7 +2675,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_rsqrt_234, False)
         ttnn_multiply_1057 = ttnn.multiply(
             ttnn_multiply_1056,
-            cached_main["main_const_eval_545"][0],
+            self.l58.pre_feedforward_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2665,7 +2698,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_993, False)
         ttnn_matmul_421 = ttnn.matmul(
             ttnn_all_gather_352,
-            cached_main["main_const_eval_445"][0],
+            self.l58.feed_forward.gate_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2678,7 +2711,7 @@ class Gemma4ForCausalLM:
         )
         ttnn_matmul_422 = ttnn.matmul(
             ttnn_all_gather_352,
-            cached_main["main_const_eval_185"][0],
+            self.l58.feed_forward.up_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2700,7 +2733,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_matmul_421, False)
         ttnn_matmul_423 = ttnn.matmul(
             ttnn_multiply_1058,
-            cached_main["main_const_eval_34"][0],
+            self.l58.feed_forward.down_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2799,7 +2832,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_995, False)
         ttnn_multiply_1061 = ttnn.multiply(
             ttnn_multiply_1060,
-            cached_main["main_const_eval_169"][0],
+            self.l58.post_feedforward_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2814,7 +2847,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_add_590, False)
         ttnn_multiply_1062 = ttnn.multiply(
             ttnn_add_593,
-            cached_main["main_const_eval_358"][0],
+            self.l58.layer_scalar,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2913,7 +2946,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_rsqrt_236, False)
         ttnn_multiply_1065 = ttnn.multiply(
             ttnn_multiply_1064,
-            cached_main["main_const_eval_629"][0],
+            self.l59.input_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -2936,7 +2969,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_996, False)
         ttnn_matmul_424 = ttnn.matmul(
             ttnn_all_gather_355,
-            cached_main["main_const_eval_90"][0],
+            self.l59.attention.k_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -2956,7 +2989,7 @@ class Gemma4ForCausalLM:
         ttnn_rms_norm_177 = ttnn.rms_norm(
             ttnn_reshape_997,
             epsilon=9.9999999747524271e-07,
-            weight=input[994],
+            weight=self.l59.attention.k_norm_w,
             bias=None,
             residual_input_tensor=None,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3038,7 +3071,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_rms_norm_178, False)
         ttnn_matmul_425 = ttnn.matmul(
             ttnn_all_gather_355,
-            cached_main["main_const_eval_415"][0],
+            self.l59.attention.q_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3059,7 +3092,7 @@ class Gemma4ForCausalLM:
         ttnn_rms_norm_179 = ttnn.rms_norm(
             ttnn_reshape_998,
             epsilon=9.9999999747524271e-07,
-            weight=input[1018],
+            weight=self.l59.attention.q_norm_w,
             bias=None,
             residual_input_tensor=None,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3273,7 +3306,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_transformer_concatenate_heads_59, False)
         ttnn_matmul_428 = ttnn.matmul(
             ttnn_reshape_999,
-            cached_main["main_const_eval_198"][0],
+            self.l59.attention.o_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3372,7 +3405,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_1001, False)
         ttnn_multiply_1072 = ttnn.multiply(
             ttnn_multiply_1071,
-            cached_main["main_const_eval_27"][0],
+            self.l59.post_attention_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3443,7 +3476,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_rsqrt_238, False)
         ttnn_multiply_1075 = ttnn.multiply(
             ttnn_multiply_1074,
-            cached_main["main_const_eval_172"][0],
+            self.l59.pre_feedforward_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -3466,7 +3499,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_1002, False)
         ttnn_matmul_429 = ttnn.matmul(
             ttnn_all_gather_358,
-            cached_main["main_const_eval_378"][0],
+            self.l59.feed_forward.gate_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3479,7 +3512,7 @@ class Gemma4ForCausalLM:
         )
         ttnn_matmul_430 = ttnn.matmul(
             ttnn_all_gather_358,
-            cached_main["main_const_eval_610"][0],
+            self.l59.feed_forward.up_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3501,7 +3534,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_matmul_429, False)
         ttnn_matmul_431 = ttnn.matmul(
             ttnn_multiply_1076,
-            cached_main["main_const_eval_63"][0],
+            self.l59.feed_forward.down_proj_w,
             transpose_a=False,
             transpose_b=True,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -3600,7 +3633,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_reshape_1004, False)
         ttnn_multiply_1079 = ttnn.multiply(
             ttnn_multiply_1078,
-            cached_main["main_const_eval_389"][0],
+            self.l59.post_feedforward_layernorm.weight,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
