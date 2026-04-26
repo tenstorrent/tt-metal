@@ -24,6 +24,7 @@ using on-device token count accumulation.
 
 from __future__ import annotations
 
+import numpy as np
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Buffer, ModuleList
@@ -275,6 +276,25 @@ class MoE(AbstractModuleBase):
             output = ttml.ops.binary.add(output, self.shared_experts(x))
 
         return output
+
+    def read_activation_probabilities(self) -> np.ndarray:
+        """Non-destructive read of the current per-expert activation probabilities.
+
+        Returns the fraction of tokens for which each expert was selected,
+        accumulated across all forward passes since the last
+        ``update_expert_bias`` (which resets ``_token_counts``). Shape:
+        ``(num_experts,)``, dtype ``float32``, values in ``[0, 1]``.
+
+        Uses the self-normalising identity
+        ``sum(counts) == n_activated * total_tokens`` so no batch-size /
+        grad-accum bookkeeping is required at the call site.
+        """
+        counts = ttnn.to_torch(self._token_counts.tensor.get_value())
+        counts_np = counts.float().cpu().numpy().flatten()
+        total = float(counts_np.sum())
+        if total <= 0.0:
+            return np.zeros_like(counts_np, dtype=np.float32)
+        return (counts_np * float(self.n_activated) / total).astype(np.float32)
 
     def update_expert_bias(self, coeff: float = 0.001) -> None:
         """Auxiliary-loss-free load balancing (DeepSeek-V3 style).
