@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include <ttnn/distributed/tensor_topology.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn {
 
@@ -292,8 +294,53 @@ Tensor empty(
     const DataType& dtype,
     const Layout& layout,
     MeshDevice* device,
-    const MemoryConfig& memory_config) {
-    return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+    const MemoryConfig& memory_config,
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
+    if (!mesh_mapper.has_value()) {
+        return create_device_tensor(TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+    }
+
+    const auto& config = mesh_mapper.value();
+    auto mesh_shape = config.mesh_shape_override.value_or(device->shape());
+    TT_FATAL(
+        config.placements.size() == mesh_shape.dims(),
+        "ttnn::empty: placements size ({}) must match mesh dimensions ({})",
+        config.placements.size(),
+        mesh_shape.dims());
+
+    // Compute per-device shard shape
+    ttnn::Shape::Container shard_dims(shape.view().begin(), shape.view().end());
+    for (size_t i = 0; i < config.placements.size() && i < mesh_shape.dims(); ++i) {
+        if (const auto* shard =
+                std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&config.placements[i])) {
+            auto dim = static_cast<size_t>(shard->dim);
+            TT_FATAL(
+                dim < shard_dims.size(),
+                "ttnn::empty: MeshMapperConfig shard dim {} exceeds tensor rank {}",
+                dim,
+                shard_dims.size());
+            TT_FATAL(
+                shard_dims[dim] % mesh_shape[i] == 0,
+                "ttnn::empty: shape[{}]={} is not divisible by mesh dimension size {}",
+                dim,
+                shard_dims[dim],
+                mesh_shape[i]);
+            shard_dims[dim] /= mesh_shape[i];
+        }
+    }
+    ttnn::Shape device_shape(std::move(shard_dims));
+
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_shape.mesh_size());
+    tt::tt_metal::distributed::MeshShape physical_mesh_shape =
+        mesh_shape.dims() == 1 ? tt::tt_metal::distributed::MeshShape(1, mesh_shape[0]) : mesh_shape;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(physical_mesh_shape)) {
+        coords.push_back(coord);
+    }
+
+    tt::tt_metal::TensorTopology topology(mesh_shape, config.placements, coords);
+    return create_device_tensor(
+        TensorSpec(device_shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device, std::move(topology));
 }
 
 template <typename BufferType>
