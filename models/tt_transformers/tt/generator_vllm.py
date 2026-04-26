@@ -244,6 +244,28 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         "supports_async_decode": True,
     }
 
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific total token budget across all users."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Llama90B on WH T3K
+        if "3.2-90B" in model_name and devices_per_dp_cache == 8 and is_wormhole:
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -341,6 +363,28 @@ class LlamaForCausalLM(Generator):
         "supports_async_decode": True,
     }
 
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific total token budget across all users."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Llama8B on N150
+        if "3.1-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+            return 32_768
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -403,6 +447,28 @@ class QwenForCausalLM(Generator):
         "supports_async_decode": True,
     }
 
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific total token budget across all users."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Qwen3-8B on N150 (same constraint as Llama8B-N150)
+        if "3-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+            return 32_768
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -451,6 +517,28 @@ class MistralForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_async_decode": True,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific total token budget across all users."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # Mistral7B on N150
+        if "7B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -505,6 +593,28 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         "supports_prefix_caching": False,
         "supports_async_decode": True,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        """Returns config-specific total token budget across all users."""
+        devices_per_dp_cache = num_devices // tt_data_parallel
+        is_wormhole = is_wormhole_b0()
+
+        # gemma3-4b on wormhole configurations with up to 2 devices per DP shard
+        if "4b" in model_name.lower() and devices_per_dp_cache <= 2 and is_wormhole:
+            return 65_536
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
