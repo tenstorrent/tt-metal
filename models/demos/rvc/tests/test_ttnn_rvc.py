@@ -1,3 +1,4 @@
+// File: models/demos/rvc/tests/test_ttnn_rvc.py
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: MIT
@@ -5,6 +6,8 @@
 import pytest
 import torch
 import ttnn
+import numpy as np
+import json
 from models.demos.rvc.ttnn_rvc import TtnnRVC
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -43,11 +46,11 @@ def test_ttnn_rvc_end_to_end(device):
     state_dict["vocoder.conv_post.weight"] = torch.randn(1, 512, 7)
     state_dict["vocoder.conv_post.bias"] = torch.randn(1)
 
-    # Create index file
-    index_data = {"feature_bank": np.random.rand(1000, 256).astype(np.float32)}
-    index_file = "test_feature_index.pkl"
-    with open(index_file, "wb") as f:
-        pickle.dump(index_data, f)
+    # Create index file using JSON instead of pickle
+    index_data = {"feature_bank": np.random.rand(1000, 256).astype(np.float32).tolist()}
+    index_file = "test_feature_index.json"
+    with open(index_file, "w") as f:
+        json.dump(index_data, f)
 
     # Model config
     model_config = {
