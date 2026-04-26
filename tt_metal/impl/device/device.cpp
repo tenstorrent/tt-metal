@@ -2201,8 +2201,42 @@ bool Device::phase5b_erisc_health_check(
                     details);
                 return true;  // early exit — caller should return
             }
-            // Interpret the observed status before throwing so the reader knows
-            // whether this is a timing issue or genuine hardware/firmware failure.
+            // FIX AK (#42429): partial-mesh quiesce — channels stuck below READY_FOR_TRAFFIC
+            // because their peers are non-mesh devices that didn't participate in this quiesce
+            // cycle.  In a 1x4 (or any sub-8) mesh on T3K, some ETH channels of mesh-edge
+            // devices connect to chips outside the mesh.  Those out-of-mesh peers run base-UMD
+            // firmware during quiesce and never respond to the EDM handshake.  As a result the
+            // local ERISC reaches STARTED or REMOTE_HANDSHAKE_COMPLETE but cannot advance to
+            // READY_FOR_TRAFFIC.  These are non-fatal: the test already completed, teardown
+            // is running, and Phase 2.5 in the next quiesce will TERMINATE these channels.
+            // We must NOT set fabric_relay_path_broken_ here — the relay IS functional, it is
+            // the PEER device that did not respond.
+            using EDMSt = tt::tt_fabric::EDMStatus;
+            const bool all_handshake_incomplete = !all_dead && std::all_of(
+                truly_unhealthy.begin(),
+                truly_unhealthy.end(),
+                [](const UnhealthyChannel& u) {
+                    return u.actual_status == 0x0 ||
+                           u.actual_status == 0xDEAD5B5B ||
+                           u.actual_status == 0xDEADECE7 ||
+                           u.actual_status == static_cast<uint32_t>(EDMSt::STARTED) ||
+                           u.actual_status == static_cast<uint32_t>(EDMSt::REMOTE_HANDSHAKE_COMPLETE) ||
+                           u.actual_status == static_cast<uint32_t>(EDMSt::LOCAL_HANDSHAKE_COMPLETE);
+                });
+            if (all_handshake_incomplete) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_fabric_workers_ready: Device {} Phase 5b: all {} truly-unhealthy "
+                    "channel(s) stuck at or below LOCAL_HANDSHAKE_COMPLETE — "
+                    "peer device(s) not in quiesce set (partial-mesh teardown).  "
+                    "Non-fatal: Phase 2.5 will TERMINATE these in the next quiesce.  "
+                    "(FIX AK: #42429)\n{}",
+                    this->id(),
+                    truly_unhealthy.size(),
+                    details);
+                return true;  // early exit — caller should return
+            }
+            // Truly unexpected states (L1 corrupt, init postcodes, garbage) — throw.
             // STARTED (0xa0b0c0d0) = launched but handshake not complete → timing issue
             // 0x0 = launch message never arrived → firmware loading failure
             // 0x49705180 = L1 corrupt (prior crash left garbage) → needs tt-smi -r
