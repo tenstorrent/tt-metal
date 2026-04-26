@@ -47,6 +47,29 @@ target_link_libraries(
 # Make sure protobuf files are generated before compiling descriptor merger tests
 add_dependencies(test_descriptor_merger scaleout_generated_protos)
 
+# Test for host removal functionality
+add_executable(test_host_removal test_host_removal.cpp)
+
+set_target_properties(
+    test_host_removal
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
+target_include_directories(test_host_removal SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    test_host_removal
+    PRIVATE
+        TT::ScaleoutTools
+        gmock_main
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
+add_dependencies(test_host_removal scaleout_generated_protos)
+
 # Test for link retraining validation
 add_executable(
     test_link_retraining

@@ -166,6 +166,13 @@ public:
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
+    // Remove a host (by hostname) from the resolved cluster + deployment.
+    // Drops the host's node, any internal connections touching it, and empty subgraphs
+    // left behind; renumbers remaining host_ids to stay contiguous 0..N-1.
+    // Emits a warning and no-ops if `hostname` isn't present. Safe to call repeatedly.
+    void remove_host(const std::string& hostname);
+    void remove_hosts(const std::vector<std::string>& hostnames);
+
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
@@ -212,6 +219,11 @@ private:
         const std::unique_ptr<ResolvedGraphInstance>& graph,
         const std::string& path_prefix,
         std::unordered_map<HostId, std::string>& host_to_node_path);
+
+    // Recursive helper for remove_host(). Drops the node, scrubs connections in the
+    // containing graph, and collapses any sub_instance left empty. Returns true if the
+    // hostname was found and removed (in this subtree), false otherwise.
+    bool remove_host_from_resolved_graph(ResolvedGraphInstance& graph, const std::string& hostname);
 
     // Utility function to generate logical chip connections from cluster hierarchy
     void generate_logical_chip_connections();
