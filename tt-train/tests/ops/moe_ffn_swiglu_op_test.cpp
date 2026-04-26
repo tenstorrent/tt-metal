@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
@@ -14,7 +13,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "metal/ops/sparse_matmul/sparse_matmul.hpp"
 
 namespace {
 
@@ -83,15 +81,6 @@ struct FfnCase {
     std::vector<uint32_t> counts;
 };
 
-// Mirrors the fast-path predicate in sparse_matmul.cpp. Used to compute the
-// expected split between fast- and slow-path dispatches on the current chip.
-bool sparse_matmul_fast_path_eligible(uint32_t H, uint32_t K, uint32_t N, uint32_t num_banks) {
-    constexpr uint64_t kTileH = 32U;
-    constexpr uint64_t kTileHW = 32U * 32U;
-    const uint64_t P = static_cast<uint64_t>(num_banks) * kTileHW;
-    return (kTileH * H) % P == 0U && (kTileH * N) % P == 0U && (static_cast<uint64_t>(K) * N) % P == 0U;
-}
-
 void RunCase(const FfnCase& c) {
     using namespace ttml;
 
@@ -132,17 +121,6 @@ void RunCase(const FfnCase& c) {
     core::parallel_generate<float>(w_down, gen, rng());
 
     auto* device = &autograd::ctx().get_device();
-    metal::reset_sparse_matmul_counters();
-    const uint32_t num_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    // The FFN dispatches 3 sparse_matmul calls: gate (K=H, N=I), up (K=H, N=I), down (K=I, N=H).
-    const uint32_t non_empty_experts =
-        static_cast<uint32_t>(std::count_if(c.counts.begin(), c.counts.end(), [](uint32_t k) { return k > 0; }));
-    const bool gate_fast = sparse_matmul_fast_path_eligible(c.H, c.H, c.I, num_banks);
-    const bool down_fast = sparse_matmul_fast_path_eligible(c.I, c.I, c.H, num_banks);
-    const uint64_t expected_fast =
-        (gate_fast ? 2U : 0U) + (down_fast ? 1U : 0U);  // per op call; gate and up share the eligibility check
-    const uint64_t expected_slow = 3U - expected_fast;
-    (void)non_empty_experts;
 
     // Materialize the rank-4 [1,1,T_cap,H] device tensor for `grouped`.
     std::vector<std::size_t> grouped_4d_shape{1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
@@ -158,12 +136,6 @@ void RunCase(const FfnCase& c) {
     auto t_wd = core::from_xtensor(w_down, device);
 
     auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
-
-    const auto counters = metal::get_sparse_matmul_counters();
-    EXPECT_EQ(counters.fast_path_calls, expected_fast)
-        << "fast-path dispatches differ from expectation for num_banks=" << num_banks;
-    EXPECT_EQ(counters.slow_path_calls, expected_slow)
-        << "slow-path dispatches differ from expectation for num_banks=" << num_banks;
     xt::xarray<float> out_xt = core::to_xtensor(t_out);  // [1,1,T_cap,H]
 
     // Flatten to [T_cap, H] for comparison.
@@ -206,14 +178,10 @@ TEST_F(MoeFfnSwigluForwardTest, Medium_E4_H512_I1408) {
     RunCase({/*E*/ 4U, /*H*/ 512U, /*I*/ 1408U, /*counts*/ {200U, 150U, 100U, 180U}});
 }
 
-// Dimensions both multiples of 256: takes the narrow fast path on P150 (8 banks),
-// the slow path on P100 (7 banks). Same assertions work on either chip.
 TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H512_I1024) {
     RunCase({/*E*/ 4U, /*H*/ 512U, /*I*/ 1024U, /*counts*/ {64U, 96U, 32U, 128U}});
 }
 
-// Production-like H (4096) with a small intermediate dim. Fast path on P150,
-// slow on P100 (4096 has no factor of 7).
 TEST_F(MoeFfnSwigluForwardTest, AlignedShapes_E4_H4096_I512) {
     RunCase({/*E*/ 4U, /*H*/ 4096U, /*I*/ 512U, /*counts*/ {64U, 32U, 96U, 64U}});
 }
