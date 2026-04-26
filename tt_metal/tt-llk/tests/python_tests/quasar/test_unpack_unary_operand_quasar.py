@@ -26,20 +26,23 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
     UNPACKER_ENGINE_SEL,
-    generate_input_dim,
 )
+from helpers.tile_constants import SUPPORTED_TILE_SIZES
+from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
@@ -56,14 +59,6 @@ def generate_unpack_unary_operand_combinations(
 
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
-    dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
-        )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        for dest_sync in (DestSync.Half, DestSync.Full)
-    }
-
     combinations = []
 
     for fmt in formats_list:
@@ -95,17 +90,28 @@ def generate_unpack_unary_operand_combinations(
             for dest_sync in (DestSync.Half, DestSync.Full):
                 for transpose_en in transpose_modes:
                     for unpacker_sel in unpacker_engines:
-                        for dimensions in dimensions_cache[(dest_acc, dest_sync)]:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    transpose_en,
-                                    unpacker_sel,
-                                    dimensions,
+                        # transpose is not supported for tiny-tiles
+                        tile_sizes = (
+                            ((32, 32),)
+                            if transpose_en == Transpose.Yes
+                            else SUPPORTED_TILE_SIZES
+                        )
+                        for tile_dims in tile_sizes:
+                            tile_shape = construct_tile_shape(tile_dims)
+                            for dimensions in generate_unary_input_dimensions(
+                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            ):
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        transpose_en,
+                                        unpacker_sel,
+                                        dimensions,
+                                        tile_dims,
+                                    )
                                 )
-                            )
 
     return combinations
 
@@ -137,16 +143,20 @@ def test_unpack_unary_operand_quasar(
         transpose_en,
         unpacker_sel,
         input_dimensions,
+        tile_dimensions,
     ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    tile_shape = construct_tile_shape(tile_dimensions)
+
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli_w_tile_dimensions(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
     )
 
-    num_faces = 4
+    num_faces = tile_shape.total_num_faces()
 
     golden_src = (
         src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
@@ -174,13 +184,14 @@ def test_unpack_unary_operand_quasar(
             formats.output_format,
             num_faces=num_faces,
             input_dimensions=input_dimensions,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_shape=tile_shape,
         )
 
     configuration = TestConfig(
         "sources/quasar/unpack_unary_operand_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(
@@ -193,9 +204,11 @@ def test_unpack_unary_operand_quasar(
             UNPACK_TRANS_WITHIN_FACE(transpose_en),
         ],
         runtimes=[
-            TEST_FACE_DIMS(),
+            TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES(num_faces),
             TILE_COUNT(tile_cnt_A),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -207,6 +220,9 @@ def test_unpack_unary_operand_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -225,5 +241,5 @@ def test_unpack_unary_operand_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape
     ), "Assert against golden failed"

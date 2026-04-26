@@ -91,7 +91,7 @@ inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_ro
     addr_mod_t {
         .srca = {.clr = use_srca},
         .srcb = {.clr = use_srcb},
-        .dest = {.incr = num_rows_dest},
+        .dest = {.incr = ELTWISE_MATH_ROWS},
     }
         .set(ADDR_MOD_1);
 }
@@ -124,7 +124,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
         {
             for (std::uint32_t mr : MOVE_MATH_ROWS)
             {
-                if (_divisible_by_pow_two_(num_rows_per_matrix, mr))
+                if (_divisible_by_pow_two_(std::max(num_rows_per_matrix, NUM_ROWS_PER_TILE_FRD_8), mr))
                 {
                     return mr;
                 }
@@ -134,7 +134,8 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
     }();
 
     _llk_math_eltwise_unary_datacopy_addrmod_<DATA_COPY_TYPE>(num_rows_per_move_instrn);
-    _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(num_rows_per_matrix, num_matrices, num_rows_per_move_instrn);
+    _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(
+        std::max(num_rows_per_matrix, NUM_ROWS_PER_TILE_FRD_8), num_matrices, num_rows_per_move_instrn);
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
@@ -148,7 +149,9 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
  */
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)
 {
-    _set_dst_write_addr_by_rows_(num_rows_per_tile, tile_idx);
+    // For face_r_dim => 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
+    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
+    _set_dst_write_addr_by_rows_(std::max(num_rows_per_tile, NUM_ROWS_PER_TILE_FRD_8), tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
