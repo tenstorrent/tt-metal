@@ -122,8 +122,9 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
         }
     }
     TT_FATAL(
-        unclaimed_mesh_0_nodes.size() >= 2,
-        "Need at least 2 unclaimed nodes on mesh {} for stage 0 entry and loopback exit, found {}",
+        unclaimed_mesh_0_nodes.size() >= unclaimed_needed,
+        "Need {} unclaimed nodes on mesh {} for stage 0 entry{}, found {}",
+        unclaimed_needed,
         *mesh_ids[0],
         initialize_loopback ? " and loopback exit" : "",
         unclaimed_mesh_0_nodes.size());
