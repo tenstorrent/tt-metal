@@ -59,12 +59,11 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
-// Custom memset — overrides libc_a-memset.o.
-// Without this, libc's memset is placed AFTER .text.zzz_perf_counters in the
-// linker output. Counter code size changes between NC and WC shift memset's
-// address, causing different icache state during profiler init and a consistent
-// 2-6% overhead on tight pack loops. Placing memset here (in trisc.o's .text)
-// keeps it before .text.zzz_perf_counters, at a fixed address in both builds.
+#ifdef PERF_COUNTERS_COMPILED
+// WC-only custom memset: overrides libc_a-memset.o so the linker doesn't place
+// libc's memset after .text.zzz_perf_counters / .text.zzz_profiler_hooks.
+// Pinning memset in trisc.o's .text keeps the layout stable inside WC builds.
+// NC build skips this so its TRISC ELF is byte-identical to MAIN (uses libc memset).
 extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) void* memset(void* s, int c, std::size_t n)
 {
     auto* dst = static_cast<std::uint8_t*>(s);
@@ -74,6 +73,7 @@ extern "C" __attribute__((used, optimize("no-tree-loop-distribute-patterns"))) v
     }
     return s;
 }
+#endif
 
 int main(void)
 {
