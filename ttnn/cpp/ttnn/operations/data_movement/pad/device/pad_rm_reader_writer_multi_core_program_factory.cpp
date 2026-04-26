@@ -30,7 +30,6 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t ntiles_h, uint
         case 1:
             ncores_h = 1;
             nbatch_per_core_h = 1;
-            ntiles_per_core_h = 1;
             switch (ntiles_h) {
                 case 2:
                     ncores_h = 2;
