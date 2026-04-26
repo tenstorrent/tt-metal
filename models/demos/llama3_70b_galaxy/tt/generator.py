@@ -188,15 +188,36 @@ class Generator(WarmupForwardMixin):
         if empty_slots is None:
             empty_slots = list(range(batch))
 
-        # If batch is 32 and prompt_lens are all the same and batch_seq_len * batch is less than 128*1024, use batched prefill
+        # Use batched prefill (B32) when:
+        # - batch >= 16 (enough concurrent users to justify the batch)
+        # - all users have the same padded ISL
+        # - ISL has a compiled B32 trace: for all models ISL=128; for OLMo ISL<=2048
+        #   (OLMo warmup compiles B32 for all support_seqlens < 4096)
+        # - model supports batched prefill
+        is_olmo = getattr(self.model.args, "is_olmo", False)
+        max_batched_prefill_isl = 2048 if is_olmo else 128
         use_batched_prefill = False
         if (
             batch >= 16
             and len(set(prefill_seq_lens)) == 1
-            and prefill_seq_lens[0] == 128
+            and prefill_seq_lens[0] <= max_batched_prefill_isl
+            and prefill_seq_lens[0] in self.model.tt_ccl.support_seqlens
             and getattr(self.model.args, "supports_batched_prefill", True)
         ):
             use_batched_prefill = True
+
+        # For OLMo: when doing sequential B1 prefill with short ISLs (≤ 2048), force
+        # eager mode (no trace). Reason: traced B1 prefill completes in ~340ms at ISL
+        # ~1024, but OLMo's cluster_axis=0 QK-norm (fused_rms_minimal) keeps async
+        # Ethernet fabric CCL in-flight beyond the trace. The next user's trace starts
+        # before the previous user's Ethernet CCL drains, causing NOC deadlocks after
+        # ~8 sequential users. Eager mode has implicit per-op synchronization that
+        # naturally drains the Ethernet fabric between users (same reason ISL 4k B32
+        # works in text_olmo_demo.py — it runs eagerly since no B32 trace exists for
+        # ISL ≥ 4096). At ISL > 2048, traced prefill naturally spaces out enough.
+        olmo_force_eager_threshold = 2048
+        if is_olmo and not use_batched_prefill and any(s <= olmo_force_eager_threshold for s in prefill_seq_lens):
+            enable_trace = False
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
@@ -277,6 +298,20 @@ class Generator(WarmupForwardMixin):
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
+                # For OLMo eager prefill: drain the Ethernet fabric before reading back
+                # results or starting the next user. fused_rms_minimal (cluster_axis=0)
+                # keeps async Ethernet CCL in-flight after the forward pass; without an
+                # explicit sync the readback (to_torch) races against the still-running
+                # fabric and triggers a device timeout.
+                if is_olmo:
+                    ttnn.synchronize_device(self.mesh_device)
+                    # Full CCL reset between sequential OLMo prefill users.
+                    # setup_prefill() only resets once at the decode→prefill transition.
+                    # After each user, fused_rms_minimal (both cluster_axis=0 and 1) leaves
+                    # gather semaphores non-zero. The next user's fused_rms_minimal writer
+                    # waits for semaphore==0 → device queue backs up → timeout.
+                    # reset_gather_and_buffer_idx() clears all semaphore types on all devices.
+                    self.model.tt_ccl.reset_gather_and_buffer_idx()
 
             if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(
@@ -301,6 +336,7 @@ class Generator(WarmupForwardMixin):
                 else:
                     # Single user: logits list has 1 entry, copy into persistent buffer
                     ttnn.copy(input_a=tt_logits_list[0], input_b=self.tt_logits_accumulated[user_id])
+
         prefill_log_probs = None
         # On-device sampling for prefill
         if do_device_sampling:

@@ -165,6 +165,11 @@ class TtTransformer(LightweightModule):
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
+            # Reset physical semaphores on both prefill and decode CCL objects to
+            # clear any stale state left by the previous request's decode phase.
+            self.tt_ccl.reset_gather_and_buffer_idx()
+            if hasattr(self, "tt_ccl_decode"):
+                self.tt_ccl_decode.reset_gather_and_buffer_idx()
 
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
         use_prefetcher = getattr(self.args, "use_prefetcher", True)
@@ -194,6 +199,7 @@ class TtTransformer(LightweightModule):
                 # any captured traces (which reference the original manager ID) remain valid.
                 self.mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
                 self.tt_ccl = self.tt_ccl_decode
+                self.tt_ccl.reset_gather_and_buffer_idx()
             self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
             self._worker_sub_device_id = worker_sub_device_id
             return
@@ -225,6 +231,7 @@ class TtTransformer(LightweightModule):
             )
         else:
             self.tt_ccl = self.tt_ccl_decode
+            self.tt_ccl.reset_gather_and_buffer_idx()
 
     def prepare_prefill_inputs_host(
         self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1

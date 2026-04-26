@@ -319,6 +319,8 @@ class OLMo3ForCausalLM(Generator):
         # With enable_internal_trace=False, sampling is called eagerly after each decode
         # trace execution, which is correct and matches the OLMo demo path.
         self.model.enable_internal_trace = False
+        self._decode_readback_step = 0
+        self._decode_ccl_reset_interval = 4096
 
     @classmethod
     def initialize_vllm_model(
@@ -369,11 +371,33 @@ class OLMo3ForCausalLM(Generator):
         # Sampling params (temperature, top_k, top_p, penalties) are still
         # honored on-device from the second token onwards via decode sampling.
         kwargs.pop("sampling_params", None)
+        # Drain any in-flight async Ethernet CCL from prior decode steps before
+        # starting a new prefill. Late-arriving prefills (after 40+ minutes of
+        # decode) crash at llama_decoder.py:264 because the fabric is saturated.
+        ttnn.synchronize_device(self.mesh_device)
         logits = super().prefill_forward_text(*args, **kwargs)
         return logits[:, -1, :].argmax(dim=-1)
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
+
+    def read_decode_output(self, tt_out, async_read=True):
+        if not async_read:
+            # fused_rms_minimal (cluster_axis=0) dispatches async Ethernet CCL that
+            # remains in-flight after the decode trace completes. The synchronous .cpu()
+            # readback races against this CCL, causing device timeouts. We must drain the
+            # fabric before every readback. Overhead: ~5ms per step (~10% for 32k decode).
+            ttnn.synchronize_device(self.mesh_device)
+            self._decode_readback_step += 1
+            if self._decode_readback_step % self._decode_ccl_reset_interval == 0:
+                # Long OLMo-Think generations can run past 20K decode steps. Even with
+                # per-step synchronization, CCL semaphore/fabric state accumulates until
+                # synchronize_device reports the device as unrecoverable. Reset after a
+                # fully-drained step so the next trace replay starts from clean CCL state.
+                print(f"OLMo decode: resetting CCL state after {self._decode_readback_step} readbacks")
+                self.model.tt_ccl.reset_gather_and_buffer_idx()
+                ttnn.synchronize_device(self.mesh_device)
+        return super().read_decode_output(tt_out, async_read=async_read)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)

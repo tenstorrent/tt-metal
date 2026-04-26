@@ -140,11 +140,52 @@ class TT_CCL:
                     self.persistent_buffers[seqlen] = {}
                     self.all_gather_buffers[seqlen] = {}
 
+    def _reset_semaphore_handle(self, handle):
+        """Reset a semaphore handle or list of handles to 0 on the physical device."""
+        if isinstance(handle, list):
+            for h in handle:
+                ttnn.reset_global_semaphore_value(h, 0)
+        else:
+            ttnn.reset_global_semaphore_value(handle, 0)
+
+    def reset_olmo_prefill_semaphores(self):
+        """Reset gather semaphores for both axes between sequential OLMo prefill users.
+
+        OLMo prefill uses fused_rms_minimal for:
+          - Regular layer norms: cluster_axis=1 → gather_semaphore_handles[1]
+          - QK norms (fused_olmo_qk_norm): cluster_axis=0 → gather_semaphore_handles[0]
+        Both are dispatched async. After ttnn.synchronize_device drains completed ops,
+        the semaphores hold their final values (non-zero). The NEXT user's fused_rms_minimal
+        writer waits for semaphore==0 before writing → hangs → fetch_queue backs up →
+        downstream sync ring_all_gather in MLP triggers the device timeout.
+
+        Full reset_gather_and_buffer_idx() resets all semaphore types (barrier, reduce,
+        ag_async) on all 32 devices and takes ~50 seconds per user. This targeted reset
+        touches only gather semaphores for both axes, keeping the overhead to ~5-8 seconds.
+        """
+        self.gather_idx = [0, 0]
+        for axis in range(2):
+            for idx in range(self.num_cbs):
+                self._reset_semaphore_handle(self.gather_semaphore_handles[axis][idx])
+
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
         self.ag_async_semaphore_idx = [0, 0]
+        # Reset physical semaphore values on device to prevent stale state from
+        # prior runs (e.g. after warmup) from causing CCL deadlocks.
+        for axis in range(2):
+            for idx in range(self.num_cbs):
+                self._reset_semaphore_handle(self.barrier_semaphore_handles[axis][idx])
+                self._reset_semaphore_handle(self.gather_semaphore_handles[axis][idx])
+                self._reset_semaphore_handle(self.reduce_semaphore_handles[axis][idx])
+                self._reset_semaphore_handle(self.ag_async_semaphore_handles[axis][idx])
+        if hasattr(self, "from_semaphore_handles"):
+            for axis in range(2):
+                for idx in range(self.num_cbs):
+                    self._reset_semaphore_handle(self.from_semaphore_handles[axis][idx])
+                    self._reset_semaphore_handle(self.to_semaphore_handles[axis][idx])
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
         semaphore_index = cluster_axis
