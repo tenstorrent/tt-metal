@@ -37,6 +37,7 @@ set(SOURCES
     optimizers/adamw_test.cpp
     optimizers/muon_composite_test.cpp
     ops/newton_schulz_op_test.cpp
+    ops/frobenius_normalize_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -169,6 +170,7 @@ if(TARGET benchmark::benchmark)
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
+        benchmark/frobenius_normalize_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
