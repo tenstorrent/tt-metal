@@ -554,15 +554,7 @@ def _normalize_for_hash(obj):
         if "placement" in obj:
             obj["placement"] = _canonicalize_placement(obj["placement"])
 
-        # storage_type can differ between runs — remove it
-        if "storage_type" in obj:
-            del obj["storage_type"]
-
-        # None-valued keys are equivalent to absent — remove them
         for k in list(obj.keys()):
-            if obj[k] is None and k != "shard_spec":  # shard_spec already handled above
-                del obj[k]
-                continue
             v = obj[k]
             if isinstance(v, str):
                 obj[k] = _strip_object_addresses(v)

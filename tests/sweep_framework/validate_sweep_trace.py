@@ -153,6 +153,10 @@ def _normalize_original_shape(value: Any) -> Any:
 
     if isinstance(parsed, (list, tuple)) and len(parsed) >= 2:
         parsed = list(parsed)
+        # Strip leading 1s so [1, 1, 131072, 64] and [131072, 64] compare equal.
+        # Keep at least 2 dims (the meaningful data dimensions).
+        while len(parsed) > 2 and parsed[0] == 1:
+            parsed.pop(0)
         # Round last 2 dims up to next multiple of 32 (tile boundary)
         for i in (-2, -1):
             dim = parsed[i]
