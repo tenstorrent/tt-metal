@@ -4,7 +4,7 @@
 
 from typing import List
 
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -43,6 +43,40 @@ def get_valid_dest_accumulation_modes(formats):
         return [DestAccumulation.Yes]
 
     return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+def is_invalid_quasar_sfpu_format_combination(
+    fmt: FormatConfig, dest_acc: DestAccumulation
+) -> bool:
+    """
+    Shared invalid-combination filter for Quasar unary SFPU tests.
+
+    Covers rules that apply to every Quasar unary SFPU op; per-op additional
+    restrictions (e.g., integer vs. float input/output mixing) should be
+    checked separately by the caller.
+
+    Returns True if the combination must be skipped.
+    """
+    in_fmt = fmt.input_format
+    out_fmt = fmt.output_format
+
+    # Quasar packer does not support non-Float32 -> Float32 conversion when dest_acc=No.
+    if (
+        in_fmt != DataFormat.Float32
+        and out_fmt == DataFormat.Float32
+        and dest_acc == DestAccumulation.No
+    ):
+        return True
+
+    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes.
+    if (
+        in_fmt == DataFormat.Float32
+        and out_fmt == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        return True
+
+    return False
 
 
 def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
