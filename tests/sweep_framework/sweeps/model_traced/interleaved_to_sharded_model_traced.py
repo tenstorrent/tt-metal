@@ -83,7 +83,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config=None,
-    memory_config=None,
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -93,7 +93,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config,
+        extra_kwargs={"memory_config": memory_config},
+    )
 
     # arg1 is the target sharded memory config for interleaved_to_sharded
     pos_args = extract_positional_args(kwargs)

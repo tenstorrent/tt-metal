@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -55,32 +55,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -92,10 +71,10 @@ def run(
     input_b_dtype,
     input_b_layout,
     input_b_memory_config,
-    dtype=None,  # output dtype
-    memory_config=None,  # output memory_config
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
-    layout=None,  # Additional layout parameter from JSON
+    layout="__ABSENT__",  # __ABSENT__ sentinel: layout kwarg from traced config
     weight_shape=None,  # Alternative weight shape parameter
     weight_dtype=None,  # Alternative weight dtype parameter
     weight_layout=None,  # Alternative weight layout parameter
@@ -114,7 +93,9 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    op_kwargs = build_op_kwargs(kwargs, exclude={"padding_idx", "weight_tensor_placement"})
+    op_kwargs = build_op_kwargs(kwargs, exclude={"padding_idx", "weight_tensor_placement"},
+        extra_kwargs={"memory_config": memory_config, "dtype": dtype, "layout": layout},
+    )
 
     # V2 format provides separate shapes
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -127,8 +108,12 @@ def run(
     else:
         raise ValueError("Either input_b_shape or weight_shape must be provided")
 
-    # Squeeze leading dimensions of 1 from weight shape to make it 2D
-    # E.g., (1, 1, 128256, 2048) -> (128256, 2048)
+    # Keep the original (possibly 4D) shape for TTNN tensor creation so that
+    # the re-tracer records the same shape as the master trace.
+    weight_shape_for_ttnn = tuple(weight_shape_actual)
+
+    # Squeeze leading dimensions of 1 from weight shape to make it 2D for
+    # golden computation.  E.g., (1, 1, 128256, 2048) -> (128256, 2048)
     if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
         # Remove leading 1s
         squeezed_shape = weight_shape_actual
@@ -153,13 +138,16 @@ def run(
     weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
     weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
 
-    # Generate weight tensor
+    # Generate weight tensor using the original (possibly 4D) shape to match
+    # master trace.  The golden function uses a 2D view.
     torch_weight_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), weight_dtype_actual
-    )(weight_shape_actual)
+    )(weight_shape_for_ttnn)
 
+    # Use 2D view for golden computation (embedding requires 2D weights)
+    torch_weight_2d = torch_weight_tensor.view(weight_shape_actual)
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_2d).squeeze()
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -215,7 +203,8 @@ def run(
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config, **op_kwargs)
+    # dtype and memory_config are already in op_kwargs via extra_kwargs in build_op_kwargs
+    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()

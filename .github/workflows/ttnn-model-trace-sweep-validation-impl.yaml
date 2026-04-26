@@ -116,14 +116,14 @@ jobs:
           MODELS_FILTER: ${{ inputs.models-filter }}
         run: |
           mkdir -p model_tracer/traced_operations
-          FILTER_ARGS=""
+          FILTER_ARGS=()
           if [[ -n "$MODELS_FILTER" ]]; then
-            FILTER_ARGS="--models-filter $MODELS_FILTER"
+            FILTER_ARGS=(--models-filter "$MODELS_FILTER")
           fi
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
             "$MANIFEST_PATH" \
             model_tracer/traced_operations/ttnn_operations_master.json \
-            $FILTER_ARGS
+            "${FILTER_ARGS[@]}"
 
       - name: Reconstruct master JSON from pinned trace
         if: ${{ inputs.pinned-trace-id != '' }}
@@ -391,6 +391,7 @@ jobs:
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
         LEAD_MODELS_RUN: ${{ matrix.validation_scope == 'lead_models' && '1' || '0' }}
+        MESH_DEVICE_SHAPE: ${{ matrix.mesh_device_shape }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -514,7 +515,8 @@ jobs:
           python3 tests/sweep_framework/validate_sweep_trace.py \
             --master-trace model_tracer/traced_operations/ttnn_operations_master.json \
             --sweep-trace "${sweep_trace_files[@]}" \
-            --output-report validation_summary.md
+            --output-report validation_summary.md \
+            --pass-threshold 1.0
           validation_exit_code=$?
           set -e
 

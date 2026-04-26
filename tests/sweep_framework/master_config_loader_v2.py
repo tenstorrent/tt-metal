@@ -343,6 +343,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_M=int(cfg["per_core_M"]),
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
+                fuse_batch=bool(cfg.get("fuse_batch", True)),
                 fused_activation=fused_activation,
             )
             if cfg.get("out_block_h") is not None:
@@ -359,7 +360,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 out_subblock_w=int(cfg.get("out_subblock_w", 1)),
                 per_core_M=int(cfg["per_core_M"]),
                 per_core_N=int(cfg["per_core_N"]),
-                fuse_batch=bool(cfg.get("fuse_batch", True)),
+                fuse_batch=bool(cfg.get("fuse_batch", False)),
                 mcast_in0=bool(cfg.get("mcast_in0", True)),
                 fused_activation=fused_activation,
             )
@@ -1054,14 +1055,18 @@ class MasterConfigLoader:
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
             "DataType::BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::UINT16": ttnn.uint16,
+            "DataType::UINT8": ttnn.uint8,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,
             "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.UINT16": ttnn.uint16,
+            "DataType.UINT8": ttnn.uint8,
         }
         return dtype_mapping.get(dtype_str, ttnn.bfloat16)
 
@@ -1261,6 +1266,13 @@ class MasterConfigLoader:
         - {"math_fidelity": ..., ...} -> kept as dict (compute_kernel_config)
         """
         if not isinstance(value, dict):
+            # Handle lists of enum dicts (e.g., input_tensor_a_activations)
+            if isinstance(value, list):
+                parsed_list = []
+                for item in value:
+                    parsed_item = MasterConfigLoader.parse_enum_value(item)
+                    parsed_list.append(parsed_item)
+                return parsed_list
             return value
 
         enum_type = value.get("type")
@@ -1302,6 +1314,24 @@ class MasterConfigLoader:
             if "COL_MAJOR" in repr_str:
                 return ttnn.ShardOrientation.COL_MAJOR
             return ttnn.ShardOrientation.ROW_MAJOR
+
+        if enum_type == "UnaryOpType":
+            repr_str = value.get("repr", "")
+            _unary_op_map = {
+                "SILU": ttnn.UnaryOpType.SILU,
+                "RELU": ttnn.UnaryOpType.RELU,
+                "GELU": ttnn.UnaryOpType.GELU,
+                "SIGMOID": ttnn.UnaryOpType.SIGMOID,
+                "EXP": ttnn.UnaryOpType.EXP,
+                "RECIP": ttnn.UnaryOpType.RECIP,
+                "SQRT": ttnn.UnaryOpType.SQRT,
+                "NEG": ttnn.UnaryOpType.NEG,
+            }
+            for name, enum_val in _unary_op_map.items():
+                if name in repr_str:
+                    return enum_val
+            # Unknown UnaryOpType — keep as dict for sweep test to handle
+            return value
 
         # CoreGrid, compute_kernel_config, program_config, etc. stay as dicts
         # so they survive JSON serialization. The sweep test's run() converts them.
@@ -1353,14 +1383,15 @@ class MasterConfigLoader:
                         # It's a tensor - parse and store
                         parsed_dtype = self.parse_dtype(tensor_config.dtype)
                         parsed_layout = self.parse_layout(tensor_config.layout)
-                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                        # Skip this config if memory_config parsing returned None
-                        # (happens with mesh-sharded tensors missing grid info)
-                        if parsed_mem_config is None:
-                            raise ValueError(
-                                f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
+                        try:
+                            parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+                        except (ValueError, KeyError, TypeError) as mem_err:
+                            config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
+                            logger.warning(
+                                f"⚠️ Memory config for arg{arg_idx} in config_hash={config_hash_display} "
+                                f"failed to parse ({mem_err}) — falling back to DRAM_MEMORY_CONFIG"
                             )
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         positional_tensors.append(
                             {
@@ -1369,6 +1400,7 @@ class MasterConfigLoader:
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
                                 "tensor_placement": tensor_config.tensor_placement,
+                                "storage_type": getattr(tensor_config, "storage_type", "StorageType::DEVICE"),
                             }
                         )
                     else:
@@ -1383,11 +1415,15 @@ class MasterConfigLoader:
                     if tensor_config:
                         parsed_dtype = self.parse_dtype(tensor_config.dtype)
                         parsed_layout = self.parse_layout(tensor_config.layout)
-                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                        if parsed_mem_config is None:
-                            logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
-                            continue
+                        try:
+                            parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+                        except (ValueError, KeyError, TypeError) as mem_err:
+                            config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
+                            logger.warning(
+                                f"⚠️ Named tensor kwarg '{key}' in config_hash={config_hash_display} "
+                                f"mem_config parse failed ({mem_err}) — falling back to DRAM"
+                            )
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
                         config_dict[f"{key}_dtype"] = parsed_dtype
@@ -1411,8 +1447,16 @@ class MasterConfigLoader:
 
             except Exception as e:
                 config_hash_display = config_hash[:16] + "..." if config_hash else "unknown"
-                logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
-                continue
+                logger.warning(f"⚠️ Error processing config_hash={config_hash_display}: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                # Instead of skipping entirely, try to salvage what we can.
+                # If we have at least positional tensor info, keep the config.
+                if not config_dict and not positional_tensors:
+                    logger.warning(f"   → Skipping config entirely (no data extracted)")
+                    continue
+                else:
+                    logger.warning(f"   → Keeping partial config (extracted {len(config_dict)} kwargs + {len(positional_tensors)} tensors)")
 
             # Add positional tensor parameters with consistent naming
             if positional_tensors:
@@ -1423,6 +1467,10 @@ class MasterConfigLoader:
                     config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                     config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                     config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
+
+                # Propagate storage_type from the first positional tensor (arg0)
+                # so sweep tests can distinguish HOST vs DEVICE tensors.
+                config_dict["storage_type"] = positional_tensors[0].get("storage_type", "StorageType::DEVICE")
 
                 if "output_memory_config" not in config_dict:
                     if "memory_config" in config_dict:

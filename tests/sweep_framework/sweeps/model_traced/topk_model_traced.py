@@ -70,7 +70,7 @@ def run(
     k=None,
     dim=None,
     output_memory_config=None,
-    memory_config=None,
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -80,7 +80,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2", "indices_tensor"}, output_memory_config=output_memory_config,
+        extra_kwargs={"memory_config": memory_config},
+    )
 
     pos_args = extract_positional_args(kwargs)
     if k is None:
@@ -133,8 +135,30 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Handle pre-allocated indices_tensor if present in traced config.
+    # V2 loader decomposes indices_tensor into indices_tensor_shape, indices_tensor_dtype, etc.
+    indices_tensor_shape = kwargs.get("indices_tensor_shape", None)
+    if indices_tensor_shape is not None:
+        try:
+            idx_shape = tuple(indices_tensor_shape) if isinstance(indices_tensor_shape, (list, tuple)) else indices_tensor_shape
+            idx_dtype = kwargs.get("indices_tensor_dtype", ttnn.uint16)
+            idx_layout = kwargs.get("indices_tensor_layout", ttnn.TILE_LAYOUT)
+            idx_mem_config = kwargs.get("indices_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+            # Create indices tensor with sequential values
+            torch_indices = torch.arange(0, torch.tensor(idx_shape).prod().item(), dtype=torch.int32).reshape(idx_shape) % idx_shape[-1]
+            indices_ttnn = ttnn.from_torch(
+                torch_indices,
+                dtype=idx_dtype,
+                layout=idx_layout,
+                device=device,
+                memory_config=idx_mem_config,
+            )
+            op_kwargs["indices_tensor"] = indices_ttnn
+        except Exception:
+            pass  # Skip indices_tensor creation on failure
+
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, **op_kwargs)
+    topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

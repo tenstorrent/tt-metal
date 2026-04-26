@@ -85,11 +85,11 @@ def _is_infrastructure_key(key: str) -> bool:
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
         return True
-    # memory_config from traced kwargs should not leak into op_kwargs.
-    # It is handled via the output_memory_config parameter in sweep module run() functions.
-    # Passing it through causes "incompatible function arguments" for ops that don't accept it.
-    if key == "memory_config":
-        return True
+    # memory_config from traced kwargs is kept by default so that model-traced
+    # sweep validation can replicate the exact kwargs the model passed.
+    # Sweep modules for ops that don't accept memory_config should add it to
+    # the exclude set when calling build_op_kwargs().
+    # (Previously filtered globally, which prevented validation match.)
     # Any key ending with _tensor_placement is tensor placement metadata
     if key.endswith("_tensor_placement"):
         return True
@@ -223,17 +223,18 @@ def build_op_kwargs(
     exclude: Optional[Set[str]] = None,
     include_only: Optional[Set[str]] = None,
     output_memory_config: Any = None,
+    keep_none: bool = False,
+    extra_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Extract actual op kwargs from the full test vector kwargs.
 
     Filters out infrastructure keys, positional tensor params, named tensor kwargs,
-    output_memory_config, memory_config, and ``__ABSENT__`` sentinel values.
+    output_memory_config, and ``__ABSENT__`` sentinel values.
     Parses dict values into ttnn objects.
 
-    Note: ``memory_config`` is filtered out by default because most ops either
-    don't accept it or handle it via separate positional parameters.  Sweep
-    modules that need ``memory_config`` in op kwargs should add it explicitly
-    after calling this function.
+    Note: ``memory_config`` is now kept by default so that model-traced sweep
+    validation can replicate the exact kwargs the model passed.  Sweep modules
+    for ops that don't accept ``memory_config`` should add it to *exclude*.
 
     Note: Positional args (``arg0``, ``arg1``, …) are filtered out because they
     are positional parameters, not keyword arguments.  Use
@@ -244,18 +245,26 @@ def build_op_kwargs(
         exclude: Additional keys to exclude (op-specific, e.g., keys already handled)
         include_only: If set, only include these specific keys (overrides default filtering)
         output_memory_config: Unused, kept for backward compatibility.
+        keep_none: If True, keep kwargs whose value is None (needed for
+            model-traced validation where the model explicitly passed None).
+        extra_kwargs: Additional key-value pairs to merge into the result after
+            filtering.  Useful for re-injecting named params (e.g. memory_config,
+            dtype) that were captured by the run() signature and thus absent
+            from **kwargs.  Values are parsed through :func:`parse_dict_value`.
+            ``__ABSENT__`` sentinels and (when *keep_none* is False) None values
+            are still skipped.
 
     Returns:
         Dict of parsed op kwargs ready to pass as **op_kwargs to the ttnn op.
-        None values and ``__ABSENT__`` sentinels are excluded.
+        None values (unless *keep_none*) and ``__ABSENT__`` sentinels are excluded.
     """
     all_keys = set(kwargs.keys())
     exclude = exclude or set()
     op_kwargs = {}
 
     for key, value in kwargs.items():
-        # Skip None values
-        if value is None:
+        # Skip None values (unless keep_none is set)
+        if value is None and not keep_none:
             continue
 
         # Skip __ABSENT__ sentinel values (parameter not present in traced config)
@@ -279,6 +288,24 @@ def build_op_kwargs(
         parsed = parse_dict_value(key, value)
         if parsed is not None:
             op_kwargs[key] = parsed
+        elif keep_none and value is None:
+            # Preserve explicit None when keep_none is set
+            op_kwargs[key] = None
+
+    # Merge extra_kwargs (re-injected named params like memory_config, dtype).
+    # Named params that use ``"__ABSENT__"`` as default can reliably indicate
+    # "trace did not include this key" vs "trace explicitly had None".  We skip
+    # ``__ABSENT__`` but ALLOW None through (the model explicitly passed None).
+    if extra_kwargs:
+        for key, value in extra_kwargs.items():
+            if value == "__ABSENT__":
+                continue
+            if value is None:
+                op_kwargs[key] = None
+                continue
+            parsed = parse_dict_value(key, value)
+            if parsed is not None:
+                op_kwargs[key] = parsed
 
     return op_kwargs
 

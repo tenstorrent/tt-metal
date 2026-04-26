@@ -41,9 +41,6 @@ if model_traced_params:
 
 
 def invalidate_vector(test_vector) -> tuple:
-    storage_type = test_vector.get("storage_type")
-    if storage_type and "HOST" in str(storage_type):
-        return True, "HOST storage operation: CPU-side preprocessing, not a device operation to test"
     return False, None
 
 
@@ -97,6 +94,8 @@ def run(
 
     if value is None:
         value = 0.0
+    elif isinstance(value, int):
+        value = float(value)
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -116,25 +115,24 @@ def run(
     else:
         padding = [[0, 0]] * len(shape)
 
-    # PyTorch reference
+    # PyTorch reference — use clamped value for golden since torch.pad
+    # rejects values that overflow the target dtype. ttnn.pad handles them
+    # internally (clamping to dtype range).
     torch_padding = []
     for i in range(len(padding) - 1, -1, -1):
         for p in padding[i]:
             torch_padding.append(p)
-    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+    golden_value = torch.tensor(value, dtype=torch.bfloat16).float().item()
+    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=golden_value)
 
     if isinstance(padding, list):
         padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
 
-    if not is_mesh_device or not input_a_tensor_placement:
-        input_tensor = ttnn.from_torch(
-            torch_input,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
-    else:
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    if is_host:
+        input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
+    elif is_mesh_device and input_a_tensor_placement:
         input_tensor = create_tensor_on_mesh(
             torch_input,
             device,
@@ -142,6 +140,14 @@ def run(
             input_a_layout,
             input_a_memory_config,
             input_a_tensor_placement,
+        )
+    else:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
         )
 
     start_time = start_measuring_time()

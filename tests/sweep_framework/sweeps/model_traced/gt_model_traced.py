@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
@@ -50,30 +50,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
-
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -89,8 +70,8 @@ def run(
     storage_type="StorageType::DEVICE",
     arg1=None,  # May contain scalar value from V2 traced configs
     use_legacy=None,  # Legacy mode flag from V2 traced configs
-    memory_config=None,  # Alternative memory_config parameter from V2 traced configs
-    dtype=None,  # Output dtype from V2 traced configs
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     *,
     device,
     **kwargs,
@@ -101,7 +82,27 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar", "output_tensor"}, output_memory_config=output_memory_config,
+        extra_kwargs={"memory_config": memory_config, "dtype": dtype},
+    )
+
+    # Handle pre-allocated output_tensor if present in traced config.
+    # V2 loader decomposes output_tensor into output_tensor_shape, output_tensor_dtype, etc.
+    output_tensor_shape = kwargs.get("output_tensor_shape", None)
+    if output_tensor_shape is not None:
+        try:
+            out_shape = tuple(output_tensor_shape) if isinstance(output_tensor_shape, (list, tuple)) else output_tensor_shape
+            out_dtype = kwargs.get("output_tensor_dtype", input_a_dtype)
+            out_layout = kwargs.get("output_tensor_layout", ttnn.TILE_LAYOUT)
+            out_mem_config = kwargs.get("output_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+            torch_out = torch.zeros(out_shape, dtype=torch.float32)
+            output_preallocated = ttnn.from_torch(
+                torch_out, dtype=out_dtype, layout=out_layout,
+                device=device, memory_config=out_mem_config,
+            )
+            op_kwargs["output_tensor"] = output_preallocated
+        except Exception:
+            pass  # Skip pre-allocated output on failure
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = (

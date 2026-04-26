@@ -68,7 +68,7 @@ def run(
     input_a_memory_config,
     output_dtype=None,
     output_memory_config=None,
-    memory_config=None,
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -78,17 +78,25 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "dtype"}, output_memory_config=output_memory_config,
+        extra_kwargs={"memory_config": memory_config},
+    )
 
     pos_args = extract_positional_args(kwargs)
-    output_dtype = output_dtype or kwargs.get("dtype", pos_args.get(1, ttnn.float32))
-    if isinstance(output_dtype, dict):
-        output_dtype = parse_dtype(output_dtype.get("repr", ""))
-    elif isinstance(output_dtype, str):
-        output_dtype = parse_dtype(output_dtype)
+    # Determine output dtype: explicit param > kwargs dtype > positional arg1 > default
+    # Use chained `or` so that None values (V2 loader filler) fall through correctly.
+    raw_dtype = output_dtype or kwargs.get("dtype") or pos_args.get(1)
+    if raw_dtype is None:
+        raw_dtype = ttnn.float32
+    if isinstance(raw_dtype, dict):
+        output_dtype = parse_dtype(raw_dtype.get("repr", ""))
+    elif isinstance(raw_dtype, str):
+        output_dtype = parse_dtype(raw_dtype)
+    else:
+        output_dtype = raw_dtype
     if output_dtype is None:
         output_dtype = ttnn.float32
-    if output_memory_config is None and memory_config is not None:
+    if output_memory_config is None and memory_config is not None and memory_config != "__ABSENT__":
         output_memory_config = memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -134,11 +142,18 @@ def run(
     is_host = storage_type and "HOST" in str(storage_type)
 
     if not is_host:
-        if is_mesh_device:
-            # Typecast is element-wise: replicate to all devices and compare
-            # device-0 output against the original reference tensor.
-            # Using create_tensor_on_mesh with ShardTensor2dMesh repeats/shards
-            # the input, causing a mismatch when extracting device 0 only.
+        if is_mesh_device and input_a_tensor_placement:
+            # Use the traced placement to match master trace behavior
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        elif is_mesh_device:
+            # No placement info — replicate to all devices
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -159,7 +174,15 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    # Pass dtype as kwarg or positional to match how master trace captured it.
+    # V2 loader uses "__ABSENT__" for keys missing from a config, but fills None
+    # for keys present in other configs.  A non-None arg1 means the master trace
+    # used positional; otherwise it used the dtype= kwarg.
+    has_positional_arg1 = kwargs.get("arg1") is not None and kwargs.get("arg1") != "__ABSENT__"
+    if has_positional_arg1:
+        output_tensor = ttnn.typecast(input_tensor_a, output_dtype, **op_kwargs)
+    else:
+        output_tensor = ttnn.typecast(input_tensor_a, dtype=output_dtype, **op_kwargs)
     # Use device-0 extraction (no mesh composer) to get per-device output that
     # matches the per-device reference tensor.  Typecast is element-wise so each
     # device's output independently matches the reference.

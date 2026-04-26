@@ -78,9 +78,9 @@ def run(
     transpose_a=False,
     transpose_b=False,
     storage_type="StorageType::DEVICE",
-    memory_config=None,  # Alternative memory_config parameter
-    dtype=None,  # Output dtype
-    core_grid=None,  # Core grid configuration
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    core_grid="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     program_config=None,  # Program configuration
     compute_kernel_config=None,  # Compute kernel configuration
     activation=None,  # Activation function
@@ -115,10 +115,10 @@ def run(
             if isinstance(dtype, dict)
             else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
         )
-    # Skip traced program_config: block dimensions and grid sizes are computed for the
-    # original device/mesh and don't match the test device. Let ttnn auto-compute.
-    # The fallback below clears sharded configs when program_config is None.
-    program_config = None
+    # Parse traced program_config — the sweep runs on the same N300 hardware,
+    # so block dimensions and grid sizes from the master trace are valid.
+    if isinstance(program_config, dict):
+        program_config = parse_dict_value("program_config", program_config)
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -128,23 +128,23 @@ def run(
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     output_memory_config = dict_to_memory_config(kwargs.get("output_memory_config", None))
 
-    # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
-    # Exclude program_config (handled above), activation (used for golden too),
-    # and output_tile (a Tile object that can't be auto-parsed from dict).
-    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
+    # Extract sub_device_id and global_cb from kwargs (master trace has these as None)
+    sub_device_id = kwargs.get("sub_device_id", "__ABSENT__")
+    global_cb = kwargs.get("global_cb", "__ABSENT__")
 
-    # When program_config is None (grid-based configs dropped), the shard_spec in
-    # memory configs was computed for the original device and is invalid. Clear sharded
-    # configs so ttnn.linear auto-determines compatible settings.
-    if program_config is None:
-        if memory_config is not None and "SHARDED" in str(memory_config):
-            memory_config = None
-        if output_memory_config is not None and "SHARDED" in str(output_memory_config):
-            output_memory_config = None
-        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
-            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
-            del parsed_op_kwargs["memory_config"]
+    # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
+    # Exclude program_config (handled above as named param), activation (used for golden too),
+    # and output_tile (a Tile object that can't be auto-parsed from dict).
+    # Build extra_kwargs only with non-None, non-__ABSENT__ values to avoid
+    # injecting extra keys for configs where master doesn't have them.
+    linear_extra_kw = {}
+    if memory_config is not None and memory_config != "__ABSENT__":
+        linear_extra_kw["memory_config"] = memory_config
+    if dtype is not None and dtype != "__ABSENT__":
+        linear_extra_kw["dtype"] = dtype
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile", "program_config", "sub_device_id", "global_cb"},
+        extra_kwargs=linear_extra_kw,
+    )
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -316,7 +316,7 @@ def run(
         matmul_kwargs = {}
         if compute_kernel_config is not None:
             matmul_kwargs["compute_kernel_config"] = compute_kernel_config
-        if dtype is not None:
+        if dtype is not None and dtype != "__ABSENT__":
             matmul_kwargs["dtype"] = dtype
         try:
             output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
@@ -327,20 +327,20 @@ def run(
             except Exception:
                 output_tensor = ttnn.matmul(ttnn_a, ttnn_b)
     else:
-        linear_kwargs = {
-            "bias": ttnn_bias,
-        }
+        linear_kwargs = {}
+        if ttnn_bias is not None:
+            linear_kwargs["bias"] = ttnn_bias
         if transpose_a:
             linear_kwargs["transpose_a"] = transpose_a
         if transpose_b:
             linear_kwargs["transpose_b"] = transpose_b
 
-        if memory_config is not None:
+        if memory_config is not None and memory_config != "__ABSENT__":
             linear_kwargs["memory_config"] = memory_config
         elif output_memory_config is not None:
             linear_kwargs["memory_config"] = output_memory_config
 
-        if dtype is not None:
+        if dtype is not None and dtype != "__ABSENT__":
             linear_kwargs["dtype"] = dtype
 
         if program_config is not None:
@@ -349,11 +349,21 @@ def run(
         if compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
-        if core_grid is not None:
+        # Pass core_grid when present in traced config (including None).
+        # The validator treats None-valued keys and absent keys as equivalent,
+        # so it's safe to pass None through.
+        if core_grid != "__ABSENT__":
             linear_kwargs["core_grid"] = core_grid
 
         if activation is not None:
             linear_kwargs["activation"] = activation
+
+        # Pass sub_device_id and global_cb when present in traced config (including None).
+        # The validator treats None-valued keys and absent keys as equivalent.
+        if sub_device_id != "__ABSENT__":
+            linear_kwargs["sub_device_id"] = sub_device_id
+        if global_cb != "__ABSENT__":
+            linear_kwargs["global_cb"] = global_cb
 
         linear_kwargs.update(parsed_op_kwargs)
         try:

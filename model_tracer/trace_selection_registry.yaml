@@ -50,6 +50,7 @@ targets:
         - deepseek-llm-7b-chat
         - deepseek-r1-distill-qwen-32b
         - efficientnetb0
+        - llama-3.2-1b
         - falcon7b
         - llama-3.2-11b-vision-instruct
         - llama-3.2-1b-instruct
@@ -66,7 +67,7 @@ targets:
         - vit
         - vit_2
         - whisper
-      trace: [3,4,5,7]
+      trace: [3,4,5,7,8]
 
 registry:
   - trace_id: 1
@@ -151,7 +152,7 @@ registry:
     notes: ''
 
   - trace_id: 8
-    status: draft
+    status: active
     models: [llama-3.2-1b]
     hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
     trace_uid: b1498e7d-136e-45d1-a2e3-bdde0f098ae0

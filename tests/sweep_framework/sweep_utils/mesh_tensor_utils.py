@@ -211,7 +211,7 @@ def create_tensor_on_mesh(
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
         try:
-            actual_mesh = mesh_device.shape()
+            actual_mesh = mesh_device.shape  # property, not a method call
             actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
         except Exception:
             actual_rows, actual_cols = 1, 1
@@ -220,6 +220,18 @@ def create_tensor_on_mesh(
         mesh_compatible = actual_rows >= traced_rows and actual_cols >= traced_cols
 
         entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
+
+        # Check if any shard dimension exceeds tensor rank and pad if needed.
+        # The master trace may record 2D tensors (e.g., [32, 128256]) with
+        # PlacementShard(2) or PlacementShard(3) referencing higher dims.
+        # Pad to 4D so the shard dims are valid.
+        shard_dims = [int(m.group(1)) for m in re.finditer(r"PlacementShard\((-?\d+)\)", placement_str)]
+        max_shard_dim = max((d if d >= 0 else d + torch_tensor.ndim for d in shard_dims), default=-1)
+        if max_shard_dim >= torch_tensor.ndim:
+            # Pad tensor to at least max_shard_dim + 1 dimensions
+            target_ndim = max(max_shard_dim + 1, 4)
+            while torch_tensor.ndim < target_ndim:
+                torch_tensor = torch_tensor.unsqueeze(0)
 
         dist_raw = tensor_placement.get("distribution_shape", "")
         if isinstance(dist_raw, str):
@@ -248,11 +260,15 @@ def create_tensor_on_mesh(
 
             # Traced shapes are per-device (post-shard). ShardTensor2dMesh expects
             # global (pre-shard) shapes. Expand by tiling shard dims by mesh sizes.
-            repeat_factors = [1] * torch_tensor.ndim
-            if dims_tuple[0] is not None:
-                repeat_factors[dims_tuple[0]] = mesh_shape_tuple[0]
-            if dims_tuple[1] is not None:
-                repeat_factors[dims_tuple[1]] = mesh_shape_tuple[1]
+            ndim = torch_tensor.ndim
+            repeat_factors = [1] * ndim
+            for idx, mesh_size in [(dims_tuple[0], mesh_shape_tuple[0]),
+                                   (dims_tuple[1], mesh_shape_tuple[1])]:
+                if idx is not None:
+                    # Normalize negative indices
+                    d = idx if idx >= 0 else idx + ndim
+                    if 0 <= d < ndim:
+                        repeat_factors[d] = mesh_size
             torch_tensor = torch_tensor.repeat(*repeat_factors)
 
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
@@ -262,8 +278,11 @@ def create_tensor_on_mesh(
                 dim = int(shard_match.group(1))
                 dims_tuple = (None, dim)
 
-                repeat_factors = [1] * torch_tensor.ndim
-                repeat_factors[dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
+                ndim = torch_tensor.ndim
+                d = dim if dim >= 0 else dim + ndim
+                repeat_factors = [1] * ndim
+                if 0 <= d < ndim:
+                    repeat_factors[d] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
                 torch_tensor = torch_tensor.repeat(*repeat_factors)
 
                 mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)

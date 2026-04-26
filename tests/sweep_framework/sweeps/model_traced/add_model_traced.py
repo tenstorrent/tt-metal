@@ -70,8 +70,8 @@ def run(
     storage_type="StorageType::DEVICE",
     arg1=None,  # May contain scalar value from V2 traced configs
     use_legacy=None,  # Legacy mode flag from V2 traced configs
-    memory_config=None,  # Alternative memory_config parameter from V2 traced configs
-    dtype=None,  # Output dtype from V2 traced configs
+    memory_config="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
+    dtype="__ABSENT__",  # __ABSENT__ sentinel: distinguishes "not in trace" from "trace had None"
     *,
     device,
     **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
@@ -85,7 +85,18 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    # Only include memory_config/dtype when present in the traced config.
+    # V2 loader uses "__ABSENT__" sentinel for keys missing from a config.
+    # None is a valid value (master trace may have dtype=None explicitly).
+    extra_kw = {}
+    if memory_config != "__ABSENT__":
+        extra_kw["memory_config"] = memory_config
+    if dtype != "__ABSENT__":
+        extra_kw["dtype"] = dtype
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"scalar"}, output_memory_config=output_memory_config,
+        extra_kwargs=extra_kw,
+    )
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
