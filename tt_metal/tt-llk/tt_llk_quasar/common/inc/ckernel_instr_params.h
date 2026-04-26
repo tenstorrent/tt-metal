@@ -343,6 +343,7 @@ struct p_sfpu
         constexpr static std::uint32_t FP32   = 0b0011; // stored data will be interpreted as fp32 format
         constexpr static std::uint32_t INT32  = 0b0100; // stored data will be interpreted as int32 (sign + magnitude) format
         constexpr static std::uint32_t UINT8  = 0b0101; // stored data will be interpreted as unsigned int8 format
+        constexpr static std::uint32_t INT8   = 0b0101; // signed int8 (sign + magnitude); same bits as UINT8 per Quasar ISA
         constexpr static std::uint32_t UINT16 = 0b0110; // stored data will be interpreted as unsigned int16 format
                                                         // TODO - Luka: add the other formats
     };

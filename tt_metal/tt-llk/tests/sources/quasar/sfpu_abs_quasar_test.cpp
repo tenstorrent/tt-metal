@@ -158,9 +158,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU abs (SFPABS) in-place on Dest for each tile.
     // Tile index must match the one used by the producer (datacopy above, or
     // UNPACK-to-Dest), so it is offset by params.DST_INDEX.
-    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+    //
+    // Dispatch on Dest format. Integer formats (Int8/UInt8/Int32) need
+    // SFPLOAD/SFPSTORE with the matching int sfpmem mode because Dest stores
+    // signed ints as sign+magnitude (not 2's complement). Float and MX paths
+    // use DEFAULT and let ALU_FORMAT_SPEC_REG pick the load format. The test
+    // harness has no compile-time format template, so the branch is runtime
+    // but each arm resolves to a fully-inlined template instantiation.
+    if (src_format == DataFormat::Int8)
     {
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_, params.DST_INDEX + i, num_sfpu_iterations);
+        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        {
+            _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_<DataFormat::Int8>, params.DST_INDEX + i, num_sfpu_iterations);
+        }
+    }
+    else if (src_format == DataFormat::UInt8)
+    {
+        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        {
+            _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_<DataFormat::UInt8>, params.DST_INDEX + i, num_sfpu_iterations);
+        }
+    }
+    else if (src_format == DataFormat::Int32)
+    {
+        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        {
+            _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_<DataFormat::Int32>, params.DST_INDEX + i, num_sfpu_iterations);
+        }
+    }
+    else
+    {
+        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        {
+            _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_abs_<DataFormat::Float32>, params.DST_INDEX + i, num_sfpu_iterations);
+        }
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
