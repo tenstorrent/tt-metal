@@ -1,0 +1,26 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "Generate audio following instruction."
+    },
+    {
+      "role": "user",
+      "content": "Use the same speaker identity as the reference clip."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "audio",
+          "audio_ref": "en_woman",
+          "duration": 2.0
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Say: This Tenstorrent demo is using a real voice reference."
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "cases": [
+    {
+      "name": "tts_es_brief_update",
+      "mode": "tts",
+      "language": "es",
+      "max_audio_steps": 64,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Generate audio following instruction."
+        },
+        {
+          "role": "user",
+          "content": "Da una breve actualización para el equipo. Explica que la demostración pública ya genera audio, usa referencias de voz reales y mantiene un tono claro y tranquilo para la revisión de hoy."
+        }
+      ]
+    },
+    {
+      "name": "clone_en_status_note",
+      "mode": "voice_clone",
+      "language": "en",
+      "max_audio_steps": 64,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Generate audio following instruction."
+        },
+        {
+          "role": "user",
+          "content": "Use the same speaker identity as the reference clip."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "audio",
+              "audio_ref": "en_woman",
+              "duration": 2.0
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Say that the public demo now uses a real voice reference, runs on TT hardware, and is ready for a strict accuracy check."
+        }
+      ]
+    },
+    {
+      "name": "dialog_en_two_speakers",
+      "mode": "dialog",
+      "language": "en",
+      "max_audio_steps": 64,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Generate a short two-speaker dialog with distinct voices."
+        },
+        {
+          "role": "user",
+          "content": "Speaker A reference."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "audio",
+              "audio_ref": "en_woman",
+              "duration": 2.0
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Speaker B reference."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "audio",
+              "audio_ref": "en_man",
+              "duration": 2.0
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[SPEAKER0] Did the public demo keep the real voice references for the review? [SPEAKER1] Yes, and the accuracy run now compares TT output directly against the PyTorch reference before we publish the results."
+        }
+      ]
+    }
+  ]
+}

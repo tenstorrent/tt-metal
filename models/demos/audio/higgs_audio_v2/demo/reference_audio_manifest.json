@@ -1,0 +1,27 @@
+{
+  "asset_version": "boson-ai-higgs-audio-8b1539a02d5764317724a904a344a0f1be8a736e",
+  "upstream_repo": "https://github.com/boson-ai/higgs-audio",
+  "upstream_commit": "8b1539a02d5764317724a904a344a0f1be8a736e",
+  "clips": [
+    {
+      "id": "en_woman",
+      "speaker_id": "en_woman",
+      "language": "en",
+      "audio_path": "voice_prompts/en_woman.wav",
+      "source_url": "https://raw.githubusercontent.com/boson-ai/higgs-audio/8b1539a02d5764317724a904a344a0f1be8a736e/examples/voice_prompts/en_woman.wav",
+      "sha256": "e1d49dc69f3b0731ed7b10ddf51dfc8f73465d4323f45841d93583d8b1e4d3e6",
+      "duration_s": 6.411,
+      "transcript": "The device would work during the day as well, if you took steps to either block direct sunlight or point it away from the sun."
+    },
+    {
+      "id": "en_man",
+      "speaker_id": "en_man",
+      "language": "en",
+      "audio_path": "voice_prompts/en_man.wav",
+      "source_url": "https://raw.githubusercontent.com/boson-ai/higgs-audio/8b1539a02d5764317724a904a344a0f1be8a736e/examples/voice_prompts/en_man.wav",
+      "sha256": "1ca3df71ad1b6968765e69870220d34c6b2c2550a499cf59560d9d764d10b94e",
+      "duration_s": 7.709,
+      "transcript": "Maintaining your ability to learn translates into increased marketability, improved career options and higher salaries."
+    }
+  ]
+}

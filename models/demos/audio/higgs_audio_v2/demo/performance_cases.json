@@ -1,0 +1,94 @@
+{
+  "cases": [
+    {
+      "name": "tts_es_project_update_long",
+      "mode": "tts",
+      "language": "es",
+      "max_audio_steps": 256,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Generate audio following instruction."
+        },
+        {
+          "role": "user",
+          "content": "Haz una actualización oral larga y serena para una revisión técnica. Explica que la demostración pública usa la ruta TT de extremo a extremo para la generación autoregresiva, conserva referencias reales de voz para clonación y diálogo, y mide su rendimiento con un informe reproducible. Añade que el objetivo del equipo es mantener una salida estable, una voz clara y una latencia suficientemente baja para cargas largas de inferencia."
+        }
+      ]
+    },
+    {
+      "name": "clone_en_review_update_long",
+      "mode": "voice_clone",
+      "language": "en",
+      "max_audio_steps": 256,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Generate audio following instruction."
+        },
+        {
+          "role": "user",
+          "content": "Use the same speaker identity as the reference clip."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "audio",
+              "audio_ref": "en_woman",
+              "duration": 2.0
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Record a longer review update that says the public demo now keeps a minimal surface, uses a real voice reference, and measures throughput together with real-time factor on TT hardware. Close by saying that the published path is focused on dependable single-device execution, accurate audio-token generation, and a reproducible performance report."
+        }
+      ]
+    },
+    {
+      "name": "dialog_en_review_long",
+      "mode": "dialog",
+      "language": "en",
+      "max_audio_steps": 256,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Generate a short four-turn two-speaker dialog with distinct voices."
+        },
+        {
+          "role": "user",
+          "content": "Speaker A reference."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "audio",
+              "audio_ref": "en_woman",
+              "duration": 2.0
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Speaker B reference."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "audio",
+              "audio_ref": "en_man",
+              "duration": 2.0
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[SPEAKER0] Before we publish the demo, what do we verify on hardware? [SPEAKER1] We verify token accuracy against the PyTorch reference, then we measure tokens per second and the total real-time factor on longer prompts. [SPEAKER0] Why did we reduce the public surface? [SPEAKER1] Because the demo should show the real workload clearly without extra plumbing that does not help the public review."
+        }
+      ]
+    }
+  ]
+}
