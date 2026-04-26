@@ -60,6 +60,9 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
     partial_state_dict = {
         "weight": state_dict[f"{state_dict_prefix}output.weight"],
     }
+    bias_key = f"{state_dict_prefix}output.bias"
+    if bias_key in state_dict:
+        partial_state_dict["bias"] = state_dict[bias_key]
 
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_lm_head()

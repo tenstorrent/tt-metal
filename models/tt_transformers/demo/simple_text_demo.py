@@ -954,6 +954,10 @@ def test_demo_text(
                 f"Max sequence length: {max_seq_len} for batch: {batch_size} not supported for model: {hf_dir} on device: {mesh_device}"
             )
 
+    if "phi-1" in hf_dir.lower() or "phi-1_5" in hf_dir.lower():
+        if not use_hf_rope:
+            pytest.skip("Phi-1 or Phi-1_5 models need set use_hf_rope to True because of Partial Rotary Embedding")
+
     # uneven split of devices per DP group not supported
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
