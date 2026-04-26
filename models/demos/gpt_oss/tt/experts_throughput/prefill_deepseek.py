@@ -166,19 +166,108 @@ def forward_prefill_deepseek(
     weights=None,
     program_config=None,
 ):
-    """Prefill forward using DeepSeek dispatch/combine with GPT-OSS expert compute."""
+    """DeepSeek prefill MoE with seq-dim chunking.
+
+    Wraps _forward_prefill_deepseek_chunk, splitting inputs along the seq
+    dim when seq_per_device > prefill_config.seq_len_per_chip. This lets
+    us serve arbitrary contexts (up to model max_context) while keeping
+    each MoE call within the post_combine_reduce 72-core hardware limit.
+
+    Input seq MUST be an integer multiple of prefill_config.seq_len_per_chip.
+    hidden_states seq dim is axis 2 (shape [1, 1, S, H]);
+    topk_expert_indices / topk_expert_weights seq dim is axis 0.
+    """
+    pc = prefill_config
+    chunk = pc.seq_len_per_chip
+    seq_per_device = hidden_states.shape[2] if len(hidden_states.shape) >= 3 else hidden_states.shape[0]
+
+    if seq_per_device == chunk:
+        return _forward_prefill_deepseek_chunk(
+            hidden_states,
+            topk_expert_indices,
+            topk_expert_weights,
+            config,
+            prefill_config,
+            mesh_device,
+            mesh_config,
+            ccl_manager,
+            weights,
+            program_config,
+        )
+
+    assert seq_per_device % chunk == 0, (
+        f"DeepSeek prefill requires seq ({seq_per_device}) to be a multiple of " f"seq_len_per_chip ({chunk})."
+    )
+    n_chunks = seq_per_device // chunk
+    logger.info(f"DeepSeek prefill: chunking seq={seq_per_device} into {n_chunks} x {chunk}")
+
+    h_chunks = ttnn.split(hidden_states, chunk, dim=2)
+    i_chunks = ttnn.split(topk_expert_indices, chunk, dim=0)
+    w_chunks = ttnn.split(topk_expert_weights, chunk, dim=0)
+    ttnn.deallocate(hidden_states)
+    ttnn.deallocate(topk_expert_indices)
+    ttnn.deallocate(topk_expert_weights)
+
+    outs = []
+    for h, i, w in zip(h_chunks, i_chunks, w_chunks):
+        out = _forward_prefill_deepseek_chunk(
+            h,
+            i,
+            w,
+            config,
+            prefill_config,
+            mesh_device,
+            mesh_config,
+            ccl_manager,
+            weights,
+            program_config,
+        )
+        ttnn.deallocate(h)
+        ttnn.deallocate(i)
+        ttnn.deallocate(w)
+        # Compress per-chunk output to BFP8 before accumulating. Halves the
+        # peak working set during concat (critical for seq >= 128K contexts).
+        out_compact = ttnn.typecast(out, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if out_compact is not out:
+            ttnn.deallocate(out)
+        outs.append(out_compact)
+    acc = ttnn.concat(outs, dim=2)
+    for o in outs:
+        ttnn.deallocate(o)
+    return acc
+
+
+def _forward_prefill_deepseek_chunk(
+    hidden_states,
+    topk_expert_indices,
+    topk_expert_weights,
+    config,
+    prefill_config,
+    mesh_device,
+    mesh_config=None,
+    ccl_manager=None,
+    weights=None,
+    program_config=None,
+):
+    """One-shot DeepSeek prefill — input seq must equal prefill_config.seq_len_per_chip."""
     pc = prefill_config
     # Use pre-permuted weights (GROUP-BASED ordering matching dispatch table)
     pw = getattr(pc, "permuted_weights", None) or weights
 
     # Step 1: All-gather x across TP axis
+    x_full_is_new = False
     if mesh_device.shape[1] > 1 and hidden_states.shape[-1] < config.hidden_size:
         x_full = ttnn.all_gather(hidden_states, dim=-1, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
+        x_full_is_new = True
     else:
         x_full = hidden_states
 
     if x_full.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x_full_prev = x_full
         x_full = ttnn.to_layout(x_full, ttnn.ROW_MAJOR_LAYOUT)
+        if x_full_is_new and x_full is not x_full_prev:
+            ttnn.deallocate(x_full_prev)
+        x_full_is_new = True
 
     # Step 2: Routing setup
     if topk_expert_indices.dtype == ttnn.uint16:
@@ -186,7 +275,9 @@ def forward_prefill_deepseek(
     else:
         idx_tile = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
         idx_u16 = ttnn.typecast(idx_tile, ttnn.uint16)
+        ttnn.deallocate(idx_tile)
         idx_for_routing = ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(idx_u16)
 
     tt_offsets, tt_counts, _ = pc.routing_setup(
         ttnn_top_k_experts_indices=idx_for_routing,
@@ -194,24 +285,33 @@ def forward_prefill_deepseek(
         seq_len_per_chip=pc.seq_len_per_chip,
         num_experts_per_tok=config.num_experts_per_tok,
     )
+    ttnn.deallocate(idx_for_routing)
 
     # Step 3: Format indices/scores for dispatch
     if topk_expert_indices.dtype != ttnn.int32:
         indices_tile = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
         indices_i32 = ttnn.typecast(indices_tile, ttnn.int32)
+        ttnn.deallocate(indices_tile)
         indices_rm = ttnn.to_layout(indices_i32, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(indices_i32)
     else:
         indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     scores_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     scores_for_reduce = ttnn.clone(scores_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    # Step 4: Reshape to 3D for dispatch
+    # Step 4: Reshape to 3D for dispatch (reshape is a view; dispatch consumes)
     x_3d = ttnn.reshape(x_full, (1, pc.seq_len_per_chip, config.hidden_size))
     w_3d = ttnn.reshape(scores_rm, (1, pc.seq_len_per_chip, config.num_experts_per_tok))
     i_3d = ttnn.reshape(indices_rm, (1, pc.seq_len_per_chip, config.num_experts_per_tok))
 
     # Step 5: Dispatch
     dispatched, metadata = pc.dispatch_module(x_3d, w_3d, i_3d, tt_offsets, pc.tt_dispatch_table)
+    # Dispatch done — x/scores/indices no longer needed
+    if x_full_is_new:
+        ttnn.deallocate(x_full)
+    ttnn.deallocate(scores_rm)
+    ttnn.deallocate(indices_rm)
+    ttnn.deallocate(tt_offsets)
 
     # Step 6: Expert compute using GROUP-permuted ThroughputExpertWeights
     buf = ttnn.squeeze(dispatched, dim=0)
@@ -219,6 +319,7 @@ def forward_prefill_deepseek(
         buf = ttnn.unsqueeze(buf, dim=0)
     # NaN cleanup skipped — unfilled dispatch slots dont affect valid token outputs
     buf_tiled = ttnn.to_layout(buf, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(dispatched)
 
     memory_config = ttnn.DRAM_MEMORY_CONFIG
 
@@ -256,12 +357,18 @@ def forward_prefill_deepseek(
 
     # Step 7: Combine
     combined = pc.combine_module(expert_out_rm, metadata, tt_counts)
+    ttnn.deallocate(expert_out_rm)
+    ttnn.deallocate(metadata)
+    ttnn.deallocate(tt_counts)
 
-    # Step 8: Fused post-combine reduce
+    # Step 8: Fused post-combine reduce (w_reduce/w_5d may be views of scores_for_reduce)
     w_reduce = ttnn.reshape(scores_for_reduce, (1, 1, pc.seq_len_per_chip, config.num_experts_per_tok))
     w_5d = ttnn.unsqueeze(w_reduce, dim=-1)
+    w_5d_is_new = False
     if w_5d.layout != ttnn.ROW_MAJOR_LAYOUT:
+        w_5d_prev = w_5d
         w_5d = ttnn.to_layout(w_5d, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w_5d_is_new = w_5d is not w_5d_prev
     try:
         summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
             combined, w_5d, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -285,8 +392,16 @@ def forward_prefill_deepseek(
         summed = ttnn.reshape(acc, (1, 1, seq, D))
         summed = ttnn.to_layout(summed, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    # post_combine_reduce done — free combined, weight scratch
+    ttnn.deallocate(combined)
+    if w_5d_is_new:
+        ttnn.deallocate(w_5d)
+    ttnn.deallocate(scores_for_reduce)
+
     if mesh_device.shape[1] > 1:
         output = ttnn.all_reduce(summed, cluster_axis=1, num_links=4, topology=ttnn.Topology.Linear)
+        if output is not summed:
+            ttnn.deallocate(summed)
     else:
         output = summed
 

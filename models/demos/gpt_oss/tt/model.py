@@ -638,9 +638,12 @@ class Model:
                 page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
             batch_size = users_per_row * num_rows
         users_per_row = batch_size // num_rows
-        # Pack GPT_OSS_USERS_PER_ROW users into each pass to amortise trace-execute cost.
-        # upr must divide users_per_row evenly.
-        upr = max(1, int(os.environ.get("GPT_OSS_USERS_PER_ROW", 1)))
+        # Pack upr users per pass to amortise trace cost. Default upr=8 when
+        # max prefill seq <= 128 (memory permits packing); else upr=1 (longer
+        # seqs already saturate the device, packing exhausts DRAM).
+        max_seq = max(prefill_seq_lens) if prefill_seq_lens else 128
+        default_upr = 8 if max_seq <= 128 else 1
+        upr = max(1, int(os.environ.get("GPT_OSS_USERS_PER_ROW", default_upr)))
         upr = min(upr, users_per_row)
         while users_per_row % upr != 0:
             upr -= 1
