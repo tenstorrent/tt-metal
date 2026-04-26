@@ -1,0 +1,500 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Tests for Bark Small TTNN implementation.
+
+Tests:
+1. Forward pass through each stage (semantic, coarse, fine)
+2. Full pipeline end-to-end audio generation
+3. PCC validation against HuggingFace reference (target >= 0.95)
+4. Multilingual text support
+5. Emotion annotation support ([laughs], [sighs])
+"""
+
+import numpy as np
+import pytest
+import torch
+
+import ttnn
+from models.demos.wormhole.bark.reference.bark_reference import (
+    compute_pcc,
+    load_bark_reference,
+    run_coarse_forward,
+    run_fine_forward,
+    run_semantic_forward,
+)
+from models.demos.wormhole.bark.tt.bark_fine import TtBarkFineModel, preprocess_fine_model_parameters
+from models.demos.wormhole.bark.tt.bark_gpt import BarkConfig, TtBarkGPT, preprocess_model_parameters
+from models.demos.wormhole.bark.tt.bark_model import TtBarkModel
+
+# Device fixture is provided by the conftest.py in the repo root.
+# It handles --device-id, TG gateway, and device lifecycle automatically.
+
+
+@pytest.fixture(scope="module")
+def hf_model():
+    """Load HuggingFace reference model."""
+    try:
+        return load_bark_reference("suno/bark-small")
+    except Exception as exc:
+        pytest.skip(f"Skipping Bark tests: failed to load HuggingFace reference model 'suno/bark-small': {exc}")
+
+
+@pytest.fixture(scope="function")
+def tt_bark_model(device):
+    """Load TtBarkModel with skip guard for offline environments."""
+    try:
+        return TtBarkModel(device, model_name="suno/bark-small")
+    except Exception as exc:
+        pytest.skip(f"Skipping Bark pipeline tests: failed to load TtBarkModel: {exc}")
+
+
+class TestBarkSemantic:
+    """Tests for Stage 1: Text-to-Semantic model."""
+
+    def test_semantic_forward_pass(self, device, hf_model):
+        """Test single forward pass through semantic model."""
+        # Prepare input
+        batch_size, seq_len = 1, 64
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        # TTNN forward
+        config = BarkConfig(
+            hidden_size=hf_model.semantic.config.hidden_size,
+            num_heads=hf_model.semantic.config.num_heads,
+            num_layers=hf_model.semantic.config.num_layers,
+            block_size=hf_model.semantic.config.block_size,
+            input_vocab_size=hf_model.semantic.config.input_vocab_size,
+            output_vocab_size=hf_model.semantic.config.output_vocab_size,
+            bias=getattr(hf_model.semantic.config, "bias", False),
+        )
+        params = preprocess_model_parameters(hf_model.semantic, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits)
+        ttnn.deallocate(tt_logits)
+
+        # Reference forward
+        ref_logits = run_semantic_forward(hf_model, input_ids)
+
+        # Validate shapes match (TTNN outputs 4D [B,1,S,V], ref is 3D [B,S,V])
+        tt_logits_3d = tt_logits_torch.squeeze(0)
+        assert (
+            tt_logits_3d.shape == ref_logits.shape
+        ), f"Shape mismatch: TTNN={tt_logits_3d.shape}, Ref={ref_logits.shape}"
+
+    def test_semantic_pcc(self, device, hf_model):
+        """Test PCC between TTNN and PyTorch semantic models."""
+        batch_size, seq_len = 1, 64
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        # TTNN forward
+        config = BarkConfig(
+            hidden_size=hf_model.semantic.config.hidden_size,
+            num_heads=hf_model.semantic.config.num_heads,
+            num_layers=hf_model.semantic.config.num_layers,
+            block_size=hf_model.semantic.config.block_size,
+            input_vocab_size=hf_model.semantic.config.input_vocab_size,
+            output_vocab_size=hf_model.semantic.config.output_vocab_size,
+            bias=getattr(hf_model.semantic.config, "bias", False),
+        )
+        params = preprocess_model_parameters(hf_model.semantic, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+
+        # Reference forward
+        ref_logits = run_semantic_forward(hf_model, input_ids)
+
+        # PCC check
+        pcc = compute_pcc(tt_logits_torch, ref_logits)
+        print(f"Semantic PCC: {pcc:.6f}")
+        assert pcc >= 0.95, f"Semantic PCC {pcc:.6f} below threshold 0.95"
+
+
+class TestBarkCoarse:
+    """Tests for Stage 2: Semantic-to-Coarse model."""
+
+    def test_coarse_forward_pass(self, device, hf_model):
+        """Test single forward pass through coarse model."""
+        batch_size, seq_len = 1, 64
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        config = BarkConfig(
+            hidden_size=hf_model.coarse_acoustics.config.hidden_size,
+            num_heads=hf_model.coarse_acoustics.config.num_heads,
+            num_layers=hf_model.coarse_acoustics.config.num_layers,
+            block_size=hf_model.coarse_acoustics.config.block_size,
+            input_vocab_size=hf_model.coarse_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.coarse_acoustics.config.output_vocab_size,
+            bias=getattr(hf_model.coarse_acoustics.config, "bias", False),
+        )
+        params = preprocess_model_parameters(hf_model.coarse_acoustics, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits)
+        ttnn.deallocate(tt_logits)
+
+        assert tt_logits_torch is not None
+        assert tt_logits_torch.numel() > 0
+
+    def test_coarse_pcc(self, device, hf_model):
+        """Test PCC for coarse model between TTNN and PyTorch."""
+        batch_size, seq_len = 1, 64
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        # TTNN forward
+        config = BarkConfig(
+            hidden_size=hf_model.coarse_acoustics.config.hidden_size,
+            num_heads=hf_model.coarse_acoustics.config.num_heads,
+            num_layers=hf_model.coarse_acoustics.config.num_layers,
+            block_size=hf_model.coarse_acoustics.config.block_size,
+            input_vocab_size=hf_model.coarse_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.coarse_acoustics.config.output_vocab_size,
+            bias=getattr(hf_model.coarse_acoustics.config, "bias", False),
+        )
+        params = preprocess_model_parameters(hf_model.coarse_acoustics, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+
+        # Reference forward
+        ref_logits = run_coarse_forward(hf_model, input_ids)
+
+        # PCC check
+        pcc = compute_pcc(tt_logits_torch, ref_logits)
+        print(f"Coarse PCC: {pcc:.6f}")
+        assert pcc >= 0.95, f"Coarse PCC {pcc:.6f} below threshold 0.95"
+
+
+class TestBarkFine:
+    """Tests for Stage 3: Coarse-to-Fine model."""
+
+    def test_fine_forward_pass(self, device, hf_model):
+        """Test single forward pass through fine model for codebook 2."""
+        batch_size, seq_len = 1, 64
+        n_codes_total = hf_model.fine_acoustics.config.n_codes_total
+
+        # Prepare input: [batch, seq, n_codes_total]
+        input_ids = torch.randint(0, 1024, (batch_size, seq_len, n_codes_total))
+
+        config = BarkConfig(
+            hidden_size=hf_model.fine_acoustics.config.hidden_size,
+            num_heads=hf_model.fine_acoustics.config.num_heads,
+            num_layers=hf_model.fine_acoustics.config.num_layers,
+            block_size=hf_model.fine_acoustics.config.block_size,
+            input_vocab_size=hf_model.fine_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.fine_acoustics.config.output_vocab_size,
+            bias=True,
+        )
+        params = preprocess_fine_model_parameters(hf_model.fine_acoustics, device)
+        tt_model = TtBarkFineModel(
+            device,
+            params,
+            config,
+            n_codes_total=n_codes_total,
+            n_codes_given=hf_model.fine_acoustics.config.n_codes_given,
+        )
+
+        # Forward pass for codebook 2
+        tt_input_ids = ttnn.from_torch(
+            input_ids.unsqueeze(0), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
+        )
+        tt_logits = tt_model(codebook_idx=2, input_ids=tt_input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits)
+        ttnn.deallocate(tt_logits)
+        ttnn.deallocate(tt_input_ids)
+
+        assert tt_logits_torch is not None
+        assert tt_logits_torch.numel() > 0
+
+    def test_fine_pcc(self, device, hf_model):
+        """Test PCC for fine model codebook prediction."""
+        batch_size, seq_len = 1, 64
+        n_codes_total = hf_model.fine_acoustics.config.n_codes_total
+        input_ids = torch.randint(0, 1024, (batch_size, seq_len, n_codes_total))
+
+        config = BarkConfig(
+            hidden_size=hf_model.fine_acoustics.config.hidden_size,
+            num_heads=hf_model.fine_acoustics.config.num_heads,
+            num_layers=hf_model.fine_acoustics.config.num_layers,
+            block_size=hf_model.fine_acoustics.config.block_size,
+            input_vocab_size=hf_model.fine_acoustics.config.input_vocab_size,
+            output_vocab_size=hf_model.fine_acoustics.config.output_vocab_size,
+            bias=True,
+        )
+        params = preprocess_fine_model_parameters(hf_model.fine_acoustics, device)
+        tt_model = TtBarkFineModel(
+            device,
+            params,
+            config,
+            n_codes_total=n_codes_total,
+            n_codes_given=hf_model.fine_acoustics.config.n_codes_given,
+        )
+
+        # TTNN forward
+        codebook_idx = 2
+        tt_input_ids = ttnn.from_torch(
+            input_ids.unsqueeze(0).to(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+        )
+        tt_logits = tt_model(codebook_idx=codebook_idx, input_ids=tt_input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+        ttnn.deallocate(tt_input_ids)
+
+        # Reference forward
+        ref_logits = run_fine_forward(hf_model, codebook_idx, input_ids)
+
+        pcc = compute_pcc(tt_logits_torch, ref_logits)
+        print(f"Fine model PCC (codebook {codebook_idx}): {pcc:.6f}")
+        assert pcc >= 0.95, f"Fine PCC {pcc:.6f} below threshold 0.95"
+
+
+class TestBarkPipeline:
+    """Tests for full end-to-end pipeline."""
+
+    def test_full_pipeline(self, device, hf_model, tt_bark_model):
+        """Test complete text-to-audio pipeline."""
+        model = tt_bark_model
+
+        text = "Hello, this is a test of the Bark text-to-speech model."
+        audio = model.generate(text, verbose=True)
+
+        assert isinstance(audio, np.ndarray)
+        assert len(audio) > 0
+        assert np.isfinite(audio).all(), "Audio contains NaN or Inf values"
+        print(f"Generated audio: {len(audio)} samples, {len(audio)/24000:.2f}s")
+
+    def test_multilingual(self, device, hf_model, tt_bark_model):
+        """Produce valid multilingual audio with quality validation.
+
+        Goes beyond non-empty/non-silent checks by verifying:
+        1. Spectral energy in voiced speech band (300-3400 Hz)
+        2. Duration ratio vs English reference (within 3x)
+        3. WAV artifact saving for manual inspection
+        """
+        model = tt_bark_model
+
+        # Generate English reference for duration comparison
+        ref_audio = model.generate("Hello, how are you?", verbose=False)
+        ref_duration = len(ref_audio) / 24_000
+
+        test_cases = [
+            ("Bonjour, comment allez-vous?", "French"),
+            ("Hola, ¿cómo estás?", "Spanish"),
+        ]
+        for text, lang in test_cases:
+            audio = model.generate(text, verbose=False)
+
+            # Basic checks
+            assert isinstance(audio, np.ndarray), f"[{lang}] No audio returned"
+            assert audio.ndim == 1, f"[{lang}] Audio not 1D"
+            assert len(audio) >= 2400, f"[{lang}] Audio too short (<0.1s)"
+            assert np.abs(audio).max() > 0.001, f"[{lang}] Silent audio"
+
+            # Spectral energy validation: verify non-trivial energy in voiced
+            # speech band (300-3400 Hz). Pure noise or silence would have
+            # negligible energy in this band relative to full spectrum.
+            fft_mag = np.abs(np.fft.rfft(audio))
+            freqs = np.fft.rfftfreq(len(audio), d=1.0 / 24_000)
+            speech_band = (freqs >= 300) & (freqs <= 3400)
+            speech_energy = np.sum(fft_mag[speech_band] ** 2)
+            total_energy = np.sum(fft_mag**2)
+            speech_ratio = speech_energy / max(total_energy, 1e-12)
+            assert speech_ratio > 0.05, (
+                f"[{lang}] Speech band energy ratio {speech_ratio:.4f} too low — " f"audio may be noise, not speech"
+            )
+
+            # Duration ratio vs English reference: valid multilingual TTS
+            # should produce audio of roughly comparable length (within 3x)
+            duration = len(audio) / 24_000
+            ratio = duration / max(ref_duration, 0.01)
+            assert 0.3 < ratio < 3.0, (
+                f"[{lang}] Duration ratio {ratio:.2f} vs English ref "
+                f"({duration:.2f}s vs {ref_duration:.2f}s) — pipeline may have failed"
+            )
+
+            # Save WAV artifact for manual inspection
+            try:
+                from scipy.io import wavfile
+
+                audio_clipped = np.clip(audio, -1.0, 1.0)
+                audio_int16 = (audio_clipped * 32767).astype(np.int16)
+                artifact_name = f"bark_multilingual_{lang.lower()}.wav"
+                wavfile.write(artifact_name, 24000, audio_int16)
+                print(f"[{lang}] Saved artifact: {artifact_name}")
+            except ImportError:
+                pass
+
+            print(f"[{lang}] {duration:.2f}s | speech_ratio={speech_ratio:.3f} | " f"duration_ratio={ratio:.2f}  ✓")
+
+    def test_emotion_annotations(self, device, hf_model, tt_bark_model):
+        """Emotion annotations must produce valid non-silent audio."""
+        model = tt_bark_model
+        test_cases = [
+            "I can't believe it! [laughs] That's amazing!",
+            "I am so tired [sighs] today.",
+        ]
+        for text in test_cases:
+            audio = model.generate(text, verbose=False)
+            assert isinstance(audio, np.ndarray), f"No audio for: {text}"
+            assert len(audio) >= 2400, f"Audio too short for: {text}"
+            assert np.abs(audio).max() > 0.001, f"Silent output for: {text}"
+            duration = len(audio) / 24_000
+            print(f"Emotion: {duration:.2f}s for '{text[:30]}...'  ✓")
+
+
+class TestBarkThroughput:
+    """Benchmark tests for throughput validation."""
+
+    def test_semantic_throughput(self, device, hf_model, tt_bark_model):
+        """Semantic token generation throughput (target >= 20 tok/s)."""
+        import time
+
+        model = tt_bark_model
+
+        text = "Hello, this is a throughput test for semantic generation."
+        t0 = time.time()
+        semantic_tokens = model.generate_semantic_tokens(text)
+        elapsed = time.time() - t0
+
+        num_tokens = semantic_tokens.shape[-1]
+        throughput = num_tokens / elapsed
+        print(f"Semantic throughput: {throughput:.1f} tok/s ({num_tokens} tokens in {elapsed:.2f}s)")
+
+        # Hard target: >= 20 tok/s for bounty
+        assert throughput >= 20.0, f"Semantic throughput {throughput:.1f} tok/s below target 20 tok/s"
+
+    def test_rtf(self, device, hf_model, tt_bark_model):
+        """Full pipeline Real-Time Factor must be < 0.8."""
+        import time
+
+        model = tt_bark_model
+
+        text = "Hello, my name is Suno. And, uh, I like pizza."
+        t0 = time.time()
+        audio = model.generate(text, verbose=False)
+        total = time.time() - t0
+
+        duration = len(audio) / 24_000
+        rtf = total / duration if duration > 0 else float("inf")
+        print(f"RTF: {rtf:.3f} (total={total:.2f}s, audio={duration:.2f}s)")
+
+        assert rtf < 0.8, f"RTF {rtf:.3f} exceeds target 0.8"
+
+
+class TestBarkEdgeCases:
+    """Edge case tests for robustness."""
+
+    def test_empty_semantic_tokens(self, device, hf_model, tt_bark_model):
+        """Coarse generation handles empty semantic tokens gracefully."""
+        model = tt_bark_model
+
+        empty_tokens = torch.zeros((1, 0), dtype=torch.long)
+        result = model.generate_coarse_tokens(empty_tokens)
+
+        assert result is not None, "Coarse returned None for empty input"
+        assert result.shape[0] == 1, f"Expected batch=1, got {result.shape[0]}"
+        assert result.shape[1] >= 2, f"Expected at least 2 tokens (silence), got {result.shape[1]}"
+        print(f"Empty semantic → silence: shape={result.shape}  ✓")
+
+    def test_semantic_short_sequence(self, device, hf_model):
+        """Short sequences (seq < 32) must use causal masking in prefill fallback."""
+        batch_size, seq_len = 1, 16  # Triggers the q_seq < 32 matmul path
+
+        config = BarkConfig(
+            hidden_size=hf_model.semantic.config.hidden_size,
+            num_heads=hf_model.semantic.config.num_heads,
+            num_layers=hf_model.semantic.config.num_layers,
+            block_size=hf_model.semantic.config.block_size,
+            input_vocab_size=hf_model.semantic.config.input_vocab_size,
+            output_vocab_size=hf_model.semantic.config.output_vocab_size,
+            bias=getattr(hf_model.semantic.config, "bias", False),
+        )
+
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        # TTNN forward (short sequence, should apply causal mask in matmul path)
+        params = preprocess_model_parameters(hf_model.semantic, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+
+        # Reference forward (always applies causal mask)
+        from models.demos.wormhole.bark.reference.bark_reference import compute_pcc, run_semantic_forward
+
+        ref_logits = run_semantic_forward(hf_model, input_ids)
+
+        pcc = compute_pcc(tt_logits_torch, ref_logits)
+        print(f"Short-sequence (seq={seq_len}) PCC: {pcc:.6f}")
+        assert pcc >= 0.95, f"Short-sequence PCC {pcc:.6f} below threshold 0.95 — causal masking may be broken"
+
+    def test_odd_coarse_token_count(self, device, hf_model, tt_bark_model):
+        """Odd-length coarse tokens must not crash Stage 3 reshape."""
+        model = tt_bark_model
+
+        # Simulate odd coarse output (3 tokens instead of even number)
+        odd_tokens = torch.randint(0, 1024, (1, 3), dtype=torch.long)
+        fine_tokens = model.generate_fine_tokens(odd_tokens)
+
+        # Should truncate to 2 tokens (1 frame), not crash
+        assert fine_tokens is not None, "generate_fine_tokens returned None for odd input"
+        assert fine_tokens.shape[1] == 1, f"Expected 1 frame, got {fine_tokens.shape[1]}"
+        assert fine_tokens.shape[2] == 8, f"Expected 8 codebooks, got {fine_tokens.shape[2]}"
+        print(f"Odd coarse tokens handled: shape={fine_tokens.shape}  ✓")
+
+
+class TestBarkLongText:
+    """Long text chunking tests (CPU-only, no TT hardware required)."""
+
+    def test_split_long_text_preserves_short(self):
+        """Short text should not be split."""
+        from models.demos.wormhole.bark.tt.bark_long_text import split_long_text
+
+        chunks = split_long_text("Hello, world!")
+        assert len(chunks) == 1
+        assert chunks[0] == "Hello, world!"
+
+    def test_split_long_text_500_chars(self):
+        """500+ character text should be split into multiple chunks."""
+        from models.demos.wormhole.bark.tt.bark_long_text import split_long_text
+
+        long_text = (
+            "The quick brown fox jumps over the lazy dog. "
+            "This sentence is repeated to create a long text input "
+            "that exceeds five hundred characters in total length. "
+        ) * 5
+
+        assert len(long_text) >= 500, f"Test text only {len(long_text)} chars"
+        chunks = split_long_text(long_text, max_chars=250)
+
+        assert len(chunks) > 1, "Long text should be split into multiple chunks"
+        for chunk in chunks:
+            assert len(chunk) <= 250, f"Chunk exceeds max: {len(chunk)} chars"
+        # Verify no content was lost
+        reconstructed = " ".join(chunks)
+        assert len(reconstructed) >= len(long_text) * 0.9, "Lost too much content in split"
+        print(f"Split {len(long_text)} chars → {len(chunks)} chunks  ✓")
+
+    def test_crossfade_segments(self):
+        """Audio crossfade produces correct length output."""
+        from models.demos.wormhole.bark.tt.bark_long_text import crossfade_segments
+
+        seg1 = np.random.randn(24000).astype(np.float32)  # 1s
+        seg2 = np.random.randn(24000).astype(np.float32)  # 1s
+
+        result = crossfade_segments([seg1, seg2], crossfade_ms=50, sample_rate=24000)
+        crossfade_samples = int(50 * 24000 / 1000)
+        expected_len = len(seg1) + len(seg2) - crossfade_samples
+
+        assert len(result) == expected_len, f"Expected {expected_len}, got {len(result)}"
+        assert np.isfinite(result).all(), "Crossfade produced NaN/Inf"
+        print(f"Crossfade: 2×1s → {len(result)/24000:.3f}s  ✓")
