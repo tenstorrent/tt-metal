@@ -19,20 +19,36 @@
  * @tparam BType: Broadcast type for SrcB. Currently only BroadcastType::NONE is supported on Quasar.
  * @param operandA: The input operand dataflow buffer for source A
  * @param operandB: The input operand dataflow buffer for source B
- * @param transpose: Unused param; only for API compatibiliy.
+ * @param transpose_of_faces: Unused param; only for API compatibility.
+ * @param within_face_16x16_transpose: Unused param; only for API compatibility.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
-    const std::uint32_t operandA, const std::uint32_t operandB, [[maybe_unused]] const std::uint32_t transpose = 0) {
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    [[maybe_unused]] const std::uint32_t transpose_of_faces,
+    [[maybe_unused]] const std::uint32_t within_face_16x16_transpose) {
     static_assert(BType == BroadcastType::NONE, "Broadcast types will be added in a future update");
 
-    // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that transpose is unused
+    // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that transpose_of_faces
+    // and within_face_16x16_transpose are unused
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
     // num_tiles set to 1 for back-compatibility with existing APIs, can be increased in the future for better
     // performance.
     _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    llk_unpack_AB_init<BType>(operandA, operandB, 0, 0);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void llk_unpack_AB_init(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose) {
+    llk_unpack_AB_init<BType>(operandA, operandB, transpose, transpose);
 }
 
 /**
