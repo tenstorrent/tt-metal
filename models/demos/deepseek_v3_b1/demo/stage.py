@@ -20,10 +20,12 @@ import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.micro_ops.persistent_loop.op import PersistentLoop
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import (
     HostIoPlacement,
     LoopbackConfig,
     PipelineBlock,
+    PipelineBlockKind,
     StageMetadata,
 )
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
@@ -56,17 +58,13 @@ ACTIVATION_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_PAGE_SIZE_BYTES)
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 SECOND_PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 7)
 
-# Embedding core coords for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
-EMBEDDING_H2D_CORE_COORD = ttnn.CoreCoord(12, 0)
+# Embedding D2H core coord for the combined SpecLMHead+Embedding stage (column 12, outside mcast grid)
 EMBEDDING_D2H_CORE_COORD = ttnn.CoreCoord(12, 1)
-ARGMAX_RELAY_CORE = ttnn.CoreCoord(12, 2)
 
 # MTP constants
-embedding_dim = 7168
-mtp_output_dim = 7168
 num_dram_banks = 8
 METADATA_NUM_ELEMS = 32
-mtp_n_per_core = mtp_output_dim // num_dram_banks
+mtp_n_per_core = ACTIVATION_DIM // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
 # Token metadata payload: just token info (id, type, pos) — same physical size as TOKEN.
@@ -96,10 +94,10 @@ class StageKind(ABC):
     """Abstract stage kind: controls PipelineBlock creation, setup, and compute launch."""
 
     @abstractmethod
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        """Create and return the PipelineBlock for this stage."""
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlockKind:
+        """Create and return the pipeline block for this stage."""
 
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+    def setup(self, ctx: StageContext, pipeline_block: PipelineBlockKind) -> None:
         """Post-creation setup (tensor allocation, etc).
 
         Decoder stages may also compile/build device programs here so ``launch_compute`` only
@@ -112,8 +110,17 @@ class StageKind(ABC):
     def terminate_auxiliary(self) -> None:
         """Terminate auxiliary sockets. Default: no-op."""
 
-    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlockKind) -> None:
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlockKind) -> None:
+        """Signal the stage's persistent compute kernels to exit on the next iteration.
+
+        Concrete stages that launch persistent compute kernels (e.g. LMHead, Decoder)
+        override this to set a termination semaphore. The pipeline orchestrator then
+        pushes a dummy token through the pipeline so each stage can complete its final
+        iteration and break naturally at the top-of-loop termination check. Default: no-op.
+        """
 
 
 class PassthroughPayload(Enum):
@@ -304,7 +311,6 @@ class SpecLMHeadStage(StageKind):
     N_PER_CORE = 160
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
     A_TILE = ttnn.Tile([1, 32])
-    B_TILE = ttnn.Tile([32, 32])
     OUT_TILE = ttnn.Tile([1, 32])
     ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 0)
     LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
@@ -380,11 +386,6 @@ class SpecLMHeadStage(StageKind):
         )
         argmax_final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(cls.ARGMAX_FINAL_CORE, cls.ARGMAX_FINAL_CORE)])
 
-        input_a_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (cls.M, cls.K + METADATA_NUM_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
-        )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -511,8 +512,10 @@ class SpecLMHeadStage(StageKind):
             "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
             "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
         }
+        self._persistent_loop = PersistentLoop(mesh_device, worker_crs, self._persistent_mode)
         if self._persistent_mode:
-            self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
+            self._state["persistent_next_iter_semaphore"] = self._persistent_loop.next_iter_semaphore
+            self._state["termination_semaphore"] = self._persistent_loop.termination_semaphore
 
     def run_auxiliary_sockets(self) -> None:
         pass
@@ -543,10 +546,14 @@ class SpecLMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+            termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
         )
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        self._persistent_loop.terminate()
 
 
 class BaseLMHeadStage(StageKind):
@@ -559,9 +566,8 @@ class BaseLMHeadStage(StageKind):
     N_PER_CORE = 160
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
     A_TILE = ttnn.Tile([1, 32])
-    B_TILE = ttnn.Tile([32, 32])
     OUT_TILE = ttnn.Tile([1, 32])
-    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)  # Changed from (0, 1) to (0, 0)
+    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)
     LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
 
     def __init__(
@@ -644,11 +650,6 @@ class BaseLMHeadStage(StageKind):
         )
         argmax_final_core_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(BaseLMHeadStage.ARGMAX_FINAL_CORE, BaseLMHeadStage.ARGMAX_FINAL_CORE)]
-        )
-        input_a_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (BaseLMHeadStage.M, BaseLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR),
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -818,28 +819,6 @@ class BaseLMHeadStage(StageKind):
             )
             reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, reduce_sem_crs, 0) for _ in range(4)]
 
-        sender = BaseLMHeadStage.LMHEAD_INPUT_CORE
-        matmul_bbox = matmul_core_grid.bounding_box()
-        mcast_end_x = max(matmul_bbox.end.x, sender.x)
-        mcast_end_y = max(matmul_bbox.end.y, sender.y)
-        mcast_receiver_ranges = []
-        if sender.y > 0:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mcast_end_x, sender.y - 1))
-            )
-        if sender.x > 0:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(0, sender.y), ttnn.CoreCoord(sender.x - 1, sender.y))
-            )
-        if sender.x < mcast_end_x:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(sender.x + 1, sender.y), ttnn.CoreCoord(mcast_end_x, sender.y))
-            )
-        if sender.y < mcast_end_y:
-            mcast_receiver_ranges.append(
-                ttnn.CoreRange(ttnn.CoreCoord(0, sender.y + 1), ttnn.CoreCoord(mcast_end_x, mcast_end_y))
-            )
-
         eh_gather_output_buf = None
 
         if self._enable_mtp:
@@ -912,9 +891,10 @@ class BaseLMHeadStage(StageKind):
             num_cores = compute_grid_size.x * compute_grid_size.y
             available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
             self._lmhead_state["mtp_bcast_semaphores"] = [ttnn.create_global_semaphore(mesh_device, available_cores, 0)]
+        self._persistent_loop = PersistentLoop(mesh_device, worker_crs, self._persistent_mode)
         if self._persistent_mode:
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
-            self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
+            self._lmhead_state["persistent_next_iter_semaphore"] = self._persistent_loop.next_iter_semaphore
+            self._lmhead_state["termination_semaphore"] = self._persistent_loop.termination_semaphore
 
     def run_auxiliary_sockets(self) -> None:
         pass
@@ -952,6 +932,7 @@ class BaseLMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+            termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=True,
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
             metadata_tensor=d.get("metadata_tensor"),
@@ -961,6 +942,9 @@ class BaseLMHeadStage(StageKind):
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
         )
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        self._persistent_loop.terminate()
 
 
 class _CombinedPipelineBlock:
@@ -1115,6 +1099,26 @@ class _CombinedPipelineBlock:
     def read_output(self, output_tensor) -> None:
         self.d2h_socket.read_tensor(output_tensor)
 
+    def push_dummy_token(self) -> None:
+        """Push a single zeroed token through the H2D socket. See :meth:`PipelineBlock.push_dummy_token`."""
+        page_words = TOKEN_PAGE_SIZE_BYTES // 4
+        dummy = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.h2d_socket.write_tensor(dummy)
+
+    def drain_dummy_output(self) -> None:
+        """Drain one page from the D2H socket. See :meth:`PipelineBlock.drain_dummy_output`."""
+        page_words = TOKEN_META_PAGE_SIZE_BYTES // 4
+        sink = ttnn.from_torch(
+            torch.zeros(1, page_words, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.d2h_socket.read_tensor(sink)
+
     def get_downstream_socket(self):
         """SpecLMHead reads activation+metadata from this socket (loopback entry downstream)."""
         return self.entry_socket_interface.get_downstream_socket()
@@ -1128,7 +1132,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
     """Combined SpecLMHead + Embedding on the same mesh.
 
     SpecLMHead occupies (0,0)-(10,9).  Embedding I/O uses column 12:
-      H2D at EMBEDDING_H2D_CORE_COORD, D2H at EMBEDDING_D2H_CORE_COORD,
+      H2D at PIPELINE_CORE_COORD, D2H at EMBEDDING_D2H_CORE_COORD,
       argmax final at ARGMAX_FINAL_CORE.  Exit D2D relay uses PIPELINE_CORE_COORD.
 
     Pipeline topology:
