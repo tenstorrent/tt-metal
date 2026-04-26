@@ -410,9 +410,19 @@ TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_TinyLlamaLikeChannelShape) {
     CompareKernelVsReferenceWithShape({1, 1, 2048, 2048}, 1e-5F);
 }
 
-TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_TinyLlamaLikeHiddenShape) {
-    // TinyLlama MLP hidden dim is 5632. Keep sequence short for test runtime.
-    CompareKernelVsReferenceWithShape({1, 1, 32, 5632}, 1e-5F);
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_TinyLlamaLikeSequenceHiddenShape) {
+    // TinyLlama max sequence length with MLP hidden dim.
+    CompareKernelVsReferenceWithShape({1, 1, 2048, 5632}, 1e-5F);
+}
+
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_UndisclosedModelSequenceHiddenShape) {
+    // Undisclosed-model max sequence length with expert hidden dim.
+    CompareKernelVsReferenceWithShape({1, 1, 4096, 512}, 1e-5F);
+}
+
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_UndisclosedModelLongSequenceHiddenShape) {
+    // Undisclosed-model long-context sequence length with expert hidden dim.
+    CompareKernelVsReferenceWithShape({1, 1, 32768, 512}, 1e-5F);
 }
 
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_Llama1bLikeHiddenShape) {
