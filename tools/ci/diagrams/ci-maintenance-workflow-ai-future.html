@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Future AI-Driven CI Maintenance Workflow</title>
+  <style>
+    :root {
+      --bg: #0b1324;
+      --panel: #0f172a;
+      --node: #1e293b;
+      --node-border: #334155;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --start: #38bdf8;
+      --engine: #22c55e;
+      --decision: #f59e0b;
+      --human: #f472b6;
+      --line: #64748b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top, #13213d 0%, var(--bg) 52%);
+      padding: 24px;
+    }
+    .wrap {
+      max-width: 1500px;
+      margin: 0 auto;
+      background: color-mix(in oklab, var(--panel) 92%, black 8%);
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 22px 50px rgba(0, 0, 0, 0.35);
+    }
+    h1 { margin: 0 0 6px; font-size: 28px; }
+    .subtitle { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+    svg {
+      width: 100%;
+      height: auto;
+      background: linear-gradient(180deg, rgba(15,23,42,0.25) 0%, rgba(15,23,42,0.75) 100%);
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+    }
+    .node {
+      fill: var(--node);
+      stroke: var(--node-border);
+      stroke-width: 2;
+      rx: 12;
+      ry: 12;
+    }
+    .start { stroke: var(--start); }
+    .engine { stroke: var(--engine); }
+    .decision { stroke: var(--decision); }
+    .human { stroke: var(--human); }
+    .t { fill: var(--text); font-size: 13px; font-weight: 700; }
+    .s { fill: var(--muted); font-size: 11px; font-weight: 500; }
+    .line {
+      stroke: var(--line);
+      stroke-width: 2.5;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+    .label { fill: #d1d5db; font-size: 11px; font-weight: 700; }
+    .legend {
+      margin-top: 14px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid #22314f;
+      border-radius: 999px;
+      background: #0b1220;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Target State: Fully AI-Driven CI Maintenance (No BrAIn)</h1>
+    <p class="subtitle">
+      Autonomous loop using GitHub workflows + Cursor CLI + Slack notifications, with humans only for PR approval and exception handling.
+    </p>
+
+    <svg viewBox="0 0 1500 1740" role="img" aria-label="Future AI-driven CI maintenance flowchart">
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+          <polygon points="0,0 10,4 0,8" fill="#64748b"></polygon>
+        </marker>
+      </defs>
+
+      <!-- Top -->
+      <rect class="node start" x="520" y="30" width="460" height="84"></rect>
+      <text class="t" x="750" y="62" text-anchor="middle">Scheduler/Event Trigger Starts AI Cycle</text>
+      <text class="s" x="750" y="84" text-anchor="middle">Cron + workflow completion + issue/PR comment events</text>
+      <text class="s" x="750" y="100" text-anchor="middle">No human-in-the-loop for routine triage steps</text>
+
+      <rect class="node engine" x="180" y="170" width="450" height="92"></rect>
+      <text class="t" x="405" y="202" text-anchor="middle">Run extract_failing_jobs.py</text>
+      <text class="s" x="405" y="224" text-anchor="middle">Find deterministic repeated failures on main</text>
+      <text class="s" x="405" y="241" text-anchor="middle">Candidate incidents for ticket create/update</text>
+
+      <rect class="node engine" x="870" y="170" width="450" height="92"></rect>
+      <text class="t" x="1095" y="202" text-anchor="middle">Run export_slack_channel.py</text>
+      <text class="s" x="1095" y="224" text-anchor="middle">Pull latest pipeline triage signal context</text>
+      <text class="s" x="1095" y="241" text-anchor="middle">Used for higher-quality owner recommendations/messages</text>
+
+      <rect class="node engine" x="520" y="320" width="460" height="92"></rect>
+      <text class="t" x="750" y="352" text-anchor="middle">AI Triage Engine Correlates Evidence</text>
+      <text class="s" x="750" y="374" text-anchor="middle">Logs + issue history + CODEOWNERS + recency + confidence checks</text>
+      <text class="s" x="750" y="391" text-anchor="middle">Determines: close, open, update, solve, disable, or wait</text>
+
+      <!-- Ticket hygiene loop -->
+      <rect class="node engine" x="90" y="480" width="420" height="102"></rect>
+      <text class="t" x="300" y="514" text-anchor="middle">Auto Close Tickets</text>
+      <text class="s" x="300" y="536" text-anchor="middle">Close only when true fix/pass criteria met</text>
+      <text class="s" x="300" y="553" text-anchor="middle">Loop until no additional eligible closures</text>
+      <text class="s" x="300" y="570" text-anchor="middle">Post closure reason + job links</text>
+
+      <rect class="node engine" x="540" y="480" width="420" height="102"></rect>
+      <text class="t" x="750" y="514" text-anchor="middle">Auto Create / Update Tickets</text>
+      <text class="s" x="750" y="536" text-anchor="middle">Create deterministic issues, refresh stale issues</text>
+      <text class="s" x="750" y="553" text-anchor="middle">Assign owners automatically</text>
+      <text class="s" x="750" y="570" text-anchor="middle">Maintain reproducible evidence in body/comments</text>
+
+      <rect class="node engine" x="990" y="480" width="420" height="102"></rect>
+      <text class="t" x="1200" y="514" text-anchor="middle">Auto Slack Notifications</text>
+      <text class="s" x="1200" y="536" text-anchor="middle">Draft + send pipeline channel updates</text>
+      <text class="s" x="1200" y="553" text-anchor="middle">Include issue links, owners, deadline, confidence</text>
+      <text class="s" x="1200" y="570" text-anchor="middle">Thread replies become AI action requests</text>
+
+      <rect class="node engine" x="520" y="610" width="460" height="54"></rect>
+      <text class="t" x="750" y="637" text-anchor="middle">Post-Slack State Collector</text>
+      <text class="s" x="750" y="656" text-anchor="middle">Reads thread updates + issue/PR state snapshots before action selection</text>
+
+      <rect class="node decision" x="520" y="700" width="460" height="84"></rect>
+      <text class="t" x="750" y="732" text-anchor="middle">Action Selector (hourly tick + optional Slack events)</text>
+      <text class="s" x="750" y="754" text-anchor="middle">Small fix request, stale validation, or SLA breach</text>
+      <text class="s" x="750" y="771" text-anchor="middle">SLA breach = incident unresolved past 48h threshold</text>
+
+      <!-- Action branches -->
+      <rect class="node engine" x="60" y="850" width="430" height="126"></rect>
+      <text class="t" x="275" y="884" text-anchor="middle">Path A: Auto Solve Ticket</text>
+      <text class="s" x="275" y="906" text-anchor="middle">Run Cursor CLI against focused prompt/rules</text>
+      <text class="s" x="275" y="923" text-anchor="middle">Generate patch + branch + draft PR</text>
+      <text class="s" x="275" y="940" text-anchor="middle">Apply low-risk policy constraints (scope whitelist)</text>
+      <text class="s" x="275" y="957" text-anchor="middle">Trigger targeted verification workflows</text>
+
+      <rect class="node engine" x="535" y="850" width="430" height="126"></rect>
+      <text class="t" x="750" y="884" text-anchor="middle">Path B: Auto Disable After SLA</text>
+      <text class="s" x="750" y="906" text-anchor="middle">If unresolved for 48h, disable minimum test/job scope</text>
+      <text class="s" x="750" y="923" text-anchor="middle">Open draft PR with explicit re-enable conditions</text>
+      <text class="s" x="750" y="940" text-anchor="middle">Notify owners + infra if disabled repeatedly</text>
+      <text class="s" x="750" y="957" text-anchor="middle">Track disable debt in issue metadata</text>
+
+      <rect class="node engine" x="1010" y="850" width="430" height="126"></rect>
+      <text class="t" x="1225" y="884" text-anchor="middle">Path C: Refresh Stale Validation</text>
+      <text class="s" x="1225" y="906" text-anchor="middle">Use (triage) Cursor CLI workflow + kickoff workflow logic</text>
+      <text class="s" x="1225" y="923" text-anchor="middle">Dispatch new targeted runs when old ones are stale</text>
+      <text class="s" x="1225" y="940" text-anchor="middle">Update PR/issue threads with fresh run URLs</text>
+      <text class="s" x="1225" y="957" text-anchor="middle">Keep feedback cycle current without manual reruns</text>
+
+      <!-- PR gate -->
+      <rect class="node decision" x="520" y="1080" width="460" height="84"></rect>
+      <text class="t" x="750" y="1112" text-anchor="middle">PR Ready + Confidence Above Threshold?</text>
+      <text class="s" x="750" y="1134" text-anchor="middle">Checks: tests status, policy compliance, change risk, drift</text>
+
+      <rect class="node human" x="520" y="1230" width="460" height="106"></rect>
+      <text class="t" x="750" y="1264" text-anchor="middle">Human Approval Boundary</text>
+      <text class="s" x="750" y="1286" text-anchor="middle">AI tags CI owners + your team only when review is needed</text>
+      <text class="s" x="750" y="1303" text-anchor="middle">Humans approve/merge PRs or request changes</text>
+      <text class="s" x="750" y="1320" text-anchor="middle">Everything else stays autonomous</text>
+
+      <rect class="node engine" x="520" y="1400" width="460" height="88"></rect>
+      <text class="t" x="750" y="1432" text-anchor="middle">AI Post-Merge / Post-Decision Cleanup</text>
+      <text class="s" x="750" y="1454" text-anchor="middle">Close or update issues, re-enable tests when fixed, reassign/escalate if blocked</text>
+      <text class="s" x="750" y="1471" text-anchor="middle">Persist state, metrics, and next actions</text>
+
+      <rect class="node start" x="520" y="1550" width="460" height="84"></rect>
+      <text class="t" x="750" y="1582" text-anchor="middle">Continuous Autonomous Loop</text>
+      <text class="s" x="750" y="1604" text-anchor="middle">Repeat on next cron tick or event trigger</text>
+      <text class="s" x="750" y="1620" text-anchor="middle">Goal: near-zero manual triage effort</text>
+
+      <!-- Connectors -->
+      <path class="line" d="M750,114 L750,150"></path>
+      <path class="line" d="M750,150 L405,150 L405,170"></path>
+      <path class="line" d="M750,150 L1095,150 L1095,170"></path>
+      <path class="line" d="M405,262 L405,300 L750,300 L750,320"></path>
+      <path class="line" d="M1095,262 L1095,300 L750,300 L750,320"></path>
+
+      <path class="line" d="M750,412 L750,448 L300,448 L300,480"></path>
+      <path class="line" d="M750,412 L750,480"></path>
+      <path class="line" d="M750,412 L750,448 L1200,448 L1200,480"></path>
+
+      <path class="line" d="M510,531 L540,531"></path>
+      <path class="line" d="M960,531 L990,531"></path>
+      <path class="line" d="M750,582 L750,610"></path>
+      <path class="line" d="M750,664 L750,700"></path>
+
+      <path class="line" d="M680,784 L275,850"></path>
+      <path class="line" d="M750,784 L750,850"></path>
+      <path class="line" d="M820,784 L1225,850"></path>
+      <text class="label" x="270" y="832">Fix request / small change</text>
+      <text class="label" x="760" y="832">SLA breach (48h unresolved)</text>
+      <text class="label" x="1080" y="832">Validation stale</text>
+
+      <!-- Combined fan-in to PR gate -->
+      <path class="line" d="M275,976 L275,1030 L750,1030"></path>
+      <path class="line" d="M750,976 L750,1030"></path>
+      <path class="line" d="M1225,976 L1225,1030 L750,1030"></path>
+      <path class="line" d="M750,1030 L750,1080"></path>
+
+      <path class="line" d="M750,1164 L750,1230"></path>
+      <path class="line" d="M750,1336 L750,1400"></path>
+      <path class="line" d="M750,1488 L750,1550"></path>
+
+      <!-- Retry loop from quality gate -->
+      <path class="line" d="M980,1122 L1460,1122 L1460,742 L980,742"></path>
+      <text class="label" x="1200" y="1112">NO: keep auto-iterating</text>
+
+      <!-- Positive label -->
+      <text class="label" x="786" y="1218">YES: request human approval</text>
+    </svg>
+
+    <div class="legend">
+      <div class="chip"><span class="dot" style="background:#38bdf8;"></span> Trigger / loop lifecycle</div>
+      <div class="chip"><span class="dot" style="background:#22c55e;"></span> AI-owned automated actions</div>
+      <div class="chip"><span class="dot" style="background:#f59e0b;"></span> Decision gates / policy checks</div>
+      <div class="chip"><span class="dot" style="background:#f472b6;"></span> Human approval boundary only</div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Pretty-print Cursor stream-json output while preserving raw logs."""
+
+from __future__ import annotations
+
+import json
+import sys
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any
+
+
+def safe_get_text(obj: dict[str, Any]) -> str:
+    message = obj.get("message", {})
+    content = message.get("content", [])
+    parts: list[str] = []
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+    return "".join(parts)
+
+
+def normalize_for_log(text: str) -> str:
+    return " ".join(text.replace("\r", "").replace("\n", " ").split())
+
+
+def tool_label(obj: dict[str, Any]) -> str:
+    tool_call = obj.get("tool_call", {})
+    if isinstance(tool_call, dict):
+        for key in tool_call:
+            if key.endswith("ToolCall"):
+                return key[: -len("ToolCall")]
+    return "unknown"
+
+
+def overlap_suffix_prefix(old: str, new: str) -> int:
+    max_k = min(len(old), len(new))
+    for k in range(max_k, 0, -1):
+        if old[-k:] == new[:k]:
+            return k
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: stream_json_pretty.py <raw_output_path>", file=sys.stderr)
+        return 2
+
+    raw_path = Path(sys.argv[1])
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+
+    assistant_chars = 0
+    assistant_buffer = ""
+    last_assistant_snapshot = ""
+    last_printed_preview = ""
+    final_marker_seen = False
+    final_marker = "===FINAL_REPORT_MD==="
+
+    def flush_assistant(force: bool = False) -> None:
+        nonlocal assistant_buffer, last_printed_preview
+        while assistant_buffer:
+            split_idx = -1
+            for punct in ("\n", ".", "!", "?"):
+                idx = assistant_buffer.rfind(punct)
+                if idx > split_idx:
+                    split_idx = idx
+
+            if force:
+                chunk = assistant_buffer
+                assistant_buffer = ""
+            elif split_idx >= 80:
+                chunk = assistant_buffer[: split_idx + 1]
+                assistant_buffer = assistant_buffer[split_idx + 1 :]
+            elif len(assistant_buffer) >= 420:
+                # Force periodic emission on long unpunctuated spans.
+                chunk = assistant_buffer[:420]
+                assistant_buffer = assistant_buffer[420:]
+            else:
+                break
+
+            preview = normalize_for_log(chunk)
+            if preview:
+                # Skip exact duplicate preview lines.
+                if preview == last_printed_preview:
+                    continue
+                # Skip near-duplicates/corrections that only slightly modify
+                # the previous preview.
+                if last_printed_preview:
+                    if preview.startswith(last_printed_preview) and len(preview) - len(last_printed_preview) < 80:
+                        continue
+                    if last_printed_preview.startswith(preview):
+                        continue
+                    similarity = SequenceMatcher(None, last_printed_preview, preview).ratio()
+                    if similarity >= 0.97 and abs(len(preview) - len(last_printed_preview)) < 80:
+                        continue
+                print(f"[assistant] {preview}", flush=True)
+                last_printed_preview = preview
+
+    with raw_path.open("w", encoding="utf-8") as raw_out:
+        for line in sys.stdin:
+            raw_out.write(line)
+            raw_out.flush()
+
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            try:
+                obj = json.loads(stripped)
+            except Exception:
+                continue
+
+            event_type = obj.get("type")
+            subtype = obj.get("subtype")
+
+            if event_type == "system":
+                if subtype == "init":
+                    model = obj.get("model", "unknown")
+                    print(f"[system] initialized model={model}", flush=True)
+                continue
+
+            if event_type == "tool_call":
+                if subtype == "started":
+                    print(f"[tool] started {tool_label(obj)}", flush=True)
+                elif subtype == "completed":
+                    print(f"[tool] completed {tool_label(obj)}", flush=True)
+                continue
+
+            if event_type == "assistant":
+                text = safe_get_text(obj)
+                if text:
+                    # stream-json often emits cumulative snapshots, sometimes with
+                    # resets/overlaps. Compute a stable incremental delta.
+                    if text.startswith(last_assistant_snapshot):
+                        delta = text[len(last_assistant_snapshot) :]
+                    elif last_assistant_snapshot.startswith(text):
+                        # Older snapshot replayed; ignore.
+                        delta = ""
+                    else:
+                        # Some models emit corrected near-duplicate snapshots
+                        # (for example spacing tweaks). Suppress those.
+                        if last_assistant_snapshot:
+                            similarity = SequenceMatcher(
+                                None,
+                                normalize_for_log(last_assistant_snapshot),
+                                normalize_for_log(text),
+                            ).ratio()
+                            if similarity >= 0.985:
+                                delta = ""
+                                last_assistant_snapshot = text
+                                continue
+                        overlap = overlap_suffix_prefix(last_assistant_snapshot, text)
+                        delta = text[overlap:]
+                    last_assistant_snapshot = text
+
+                    if delta:
+                        assistant_chars += len(delta)
+
+                        if not final_marker_seen:
+                            merged = assistant_buffer + delta
+                            marker_idx = merged.find(final_marker)
+                            if marker_idx >= 0:
+                                # Flush any pre-marker text and stop detailed logging.
+                                assistant_buffer = merged[:marker_idx]
+                                flush_assistant(force=True)
+                                print("[assistant] final markdown section started", flush=True)
+                                final_marker_seen = True
+                                assistant_buffer = ""
+                            else:
+                                assistant_buffer = merged
+                                flush_assistant(force=False)
+                continue
+
+            if event_type == "result":
+                flush_assistant(force=True)
+                duration = obj.get("duration_ms")
+                print(f"[result] completed duration_ms={duration}", flush=True)
+                last_assistant_snapshot = ""
+                continue
+
+    flush_assistant(force=True)
+    print(f"[summary] assistant_chars_streamed={assistant_chars}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

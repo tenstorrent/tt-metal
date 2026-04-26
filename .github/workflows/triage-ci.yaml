@@ -1,29 +1,226 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) CI Triage Autonomy"
 
 on:
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days of Slack history to export"
+        required: false
+        default: "30"
+      data-report-model:
+        description: "Cursor model for Slack data gathering report"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
+      data-gathering-mode:
+        description: "If checked, run Cursor agent to generate Slack stats report"
+        required: false
+        type: boolean
+        default: false
+      auto-disable-model:
+        description: "Cursor model for stale auto-disable mode"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
+      stale-hours-threshold:
+        description: "Slack message age threshold in hours for automatic disable actions"
+        required: false
+        default: "32"
+      stale-progress-hold-hours:
+        description: "Hours to defer disable after fresh progress signal"
+        required: false
+        default: "24"
+      max-auto-disable-actions:
+        description: "Maximum number of disable PRs to attempt in one run"
+        required: false
+        default: "3"
+      max-attempts-per-item:
+        description: "Maximum attempts per candidate before needs_human"
+        required: false
+        default: "10"
+      extra-pr-check-workflows:
+        description: "Optional comma-separated early workflows after PR create (pr-gate.yaml,merge-gate.yaml)"
+        required: false
+        default: ""
+      target-pr-repo:
+        description: "Repository where auto-disable draft PRs should be created"
+        required: false
+        default: "ebanerjeeTT/tt-metal"
+      target-pr-base:
+        description: "Base branch in target PR repo"
+        required: false
+        default: "main"
+      fork-workflow-outcomes:
+        description: "JSON mapping of mocked fork workflow results; values can be 'outcome' string or object {outcome,error,...}"
+        required: false
+        default: "{}"
+      fork-push-check-only:
+        description: "If checked, only verify fork branch creation and skip all triage/AI work"
+        required: false
+        type: boolean
+        default: false
+      auto-disable-dry-run:
+        description: "If checked, produce plan only and skip push/PR/kickoff execution"
+        required: false
+        type: boolean
+        default: false
+      m4-max-new-issues:
+        description: "Maximum number of new M4 issues/slack bootstrap messages to create in one run"
+        required: false
+        default: "1"
+      m4-max-agent-reviews:
+        description: "Deprecated compatibility input (M4 now reviews all eligible jobs in one batch call)"
+        required: false
+        default: "0"
+      testing-mode:
+        description: "If checked, run only owner-resolution Slack testing session"
+        required: false
+        type: boolean
+        default: false
+      testing-max-codeowners:
+        description: "Maximum CODEOWNERS GitHub users to test in testing mode"
+        required: false
+        default: "10"
+      run-scope:
+        description: "Which modular stage(s) to run"
+        required: false
+        type: choice
+        options:
+          - full
+          - data-report-only
+          - draft-prs-only
+          - create-issues-only
+          - thread-lifecycle-only
+          - issue-lifecycle-only
+          - bug-escape-only
+        default: "full"
+      issue-lifecycle-processed-hours:
+        description: "Minimum hours between processing the same issue again"
+        required: false
+        default: "24"
+      issue-lifecycle-max-issues:
+        description: "Maximum number of issues to process per issue lifecycle run"
+        required: false
+        default: "3"
+      issue-lifecycle-model:
+        description: "Cursor model for issue lifecycle analysis"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
 
 permissions:
-  contents: read
+  actions: write
+  contents: write
+  issues: read
+  pull-requests: write
 
 jobs:
-  cursor-cli-smoke-test:
+  fork-push-check:
+    name: "Fork branch push probe"
+    if: ${{ inputs['fork-push-check-only'] }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Ensure EVAN_RESTRICTED_TOKEN is configured
+        env:
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          if [ -z "$TARGET_PR_PUSH_TOKEN" ]; then
+            echo "Missing secret EVAN_RESTRICTED_TOKEN"
+            exit 1
+          fi
+
+      - name: Create probe branch on fork
+        env:
+          TARGET_PR_REPO: ${{ github.event.inputs['target-pr-repo'] || 'ebanerjeeTT/tt-metal' }}
+          TARGET_PR_BASE: ${{ github.event.inputs['target-pr-base'] || 'main' }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          login="$(GH_TOKEN="$TARGET_PR_PUSH_TOKEN" gh api user --jq .login)"
+          probe_branch="ci-fork-push-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          askpass="$(mktemp)"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) echo "$GIT_PUSH_USER" ;;
+            *) echo "$GIT_PUSH_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          git config user.name "CI Auto Disable Bot"
+          git config user.email "ci-auto-disable-bot@tenstorrent.invalid"
+          # Ensure checkout-injected GITHUB_TOKEN credentials do not override PAT auth.
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          git fetch "https://github.com/${TARGET_PR_REPO}.git" "$TARGET_PR_BASE"
+          git checkout -B "$probe_branch" FETCH_HEAD
+          git commit --allow-empty -m "ci: fork push probe ${GITHUB_RUN_ID}"
+          GIT_TERMINAL_PROMPT=0 \
+          GIT_ASKPASS="$askpass" \
+          GIT_PUSH_USER="$login" \
+          GIT_PUSH_TOKEN="$TARGET_PR_PUSH_TOKEN" \
+          git push "https://github.com/${TARGET_PR_REPO}.git" "HEAD:refs/heads/${probe_branch}"
+          echo "Probe branch pushed to ${TARGET_PR_REPO}: ${probe_branch}"
+
+  prep-triage-data:
+    name: "Prepare triage data"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Ensure CURSOR_API_KEY is configured
+      - name: Ensure SLACK_BOT_TOKEN is configured
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "Missing secret SLACK_BOT_TOKEN"
             exit 1
           fi
 
-      - name: Install Cursor CLI
+      - name: Install Cursor CLI (kept for upcoming analysis steps)
         run: |
           set -euo pipefail
           install_script="$(mktemp)"
@@ -35,14 +232,840 @@ jobs:
           rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
-      - name: Run simple Cursor prompt
+      - name: Export Evan top-level Slack messages and thread replies
         env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
+          python tools/ci/export_slack_author_threads.py \
+            --channel-id C0APK6215B5 \
+            --author-user-id U08GTDV8MDH \
+            --days "${{ github.event.inputs.days || 30 }}" \
+            --output build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+
+      - name: Enrich export with GitHub issue closure booleans
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/enrich_slack_with_issue_status.py \
+            --input build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json \
+            --output build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+
+      - name: Upload Slack export artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: slack-C0APK6215B5-U08GTDV8MDH-threads
+          path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+          retention-days: 7
+
+      - name: Export last 14 days of triage channel activity
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/export_slack_channel.py \
+            --channel-id C0APK6215B5 \
+            --days 14 \
+            --output build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+
+      - name: Enrich triage channel export with issue closure booleans
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/enrich_slack_with_issue_status.py \
+            --input build_ci/raw_data/slack_C0APK6215B5_last_14_days.json \
+            --output build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+
+      - name: Ensure CURSOR_API_KEY is configured (data gathering mode)
+        if: ${{ inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
             exit 1
+          fi
+
+      - name: Ensure CURSOR_API_KEY is configured (auto-disable mode)
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Ensure EVAN_RESTRICTED_TOKEN is configured for fork/issue access (auto-disable mode)
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          if [ -z "$TARGET_PR_PUSH_TOKEN" ]; then
+            echo "Missing secret EVAN_RESTRICTED_TOKEN (required for fork push/PR + issue access)"
+            exit 1
+          fi
+
+      - name: Upload shared raw-data bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-raw-data
+          path: |
+            build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+            build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+          retention-days: 7
+
+  run-data-report:
+    name: "Run data gathering report"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'data-report-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
+      - name: Generate Slack data gathering report with Cursor agent
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        uses: ./.github/actions/generate-slack-data-report
+        with:
+          input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+          report-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
+          model: ${{ github.event.inputs['data-report-model'] || 'claude-4-sonnet' }}
+
+      - name: Upload data gathering report artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: slack-C0APK6215B5-U08GTDV8MDH-report
+          path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
+          retention-days: 7
+
+      - name: Publish report to run summary
+        run: |
+          set -euo pipefail
+          report_path="build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md"
+          {
+            echo "# Slack Data Gathering Report"
+            echo
+            cat "$report_path"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  run-draft-prs:
+    name: "Run draft PR create/update stage"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'draft-prs-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
+      - name: Install Cursor CLI for disable planning
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Auto-disable stale unresolved CI messages
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        uses: ./.github/actions/auto-disable-stale-ci
+        with:
+          input-json-path: build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+          stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
+          hold-hours-after-progress: ${{ github.event.inputs['stale-progress-hold-hours'] || '24' }}
+          max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}
+          max-attempts-per-item: ${{ github.event.inputs['max-attempts-per-item'] || '10' }}
+          extra-pr-check-workflows: ${{ github.event.inputs['extra-pr-check-workflows'] || '' }}
+          target-pr-repo: ${{ github.event.inputs['target-pr-repo'] || 'ebanerjeeTT/tt-metal' }}
+          target-pr-base: ${{ github.event.inputs['target-pr-base'] || 'main' }}
+          fork-workflow-outcomes: ${{ github.event.inputs['fork-workflow-outcomes'] || '{}' }}
+          model: ${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}
+          dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
+          output-dir: build_ci/auto_disable
+
+      - name: Upload draft PR stage artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: draft-pr-stage-artifacts
+          path: |
+            build_ci/auto_disable/stale_candidates.json
+            build_ci/auto_disable/disable_actions.json
+            build_ci/auto_disable/execution_result.json
+            build_ci/auto_disable/summary.md
+            build_ci/auto_disable/debug
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
+          retention-days: 7
+
+  run-create-issues:
+    name: "Run issue creation stage"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'create-issues-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
+      - name: M4 restore previous cache artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/m4_cache_prev
+          prev_run_id="$(gh run list --workflow triage-ci.yaml --repo tenstorrent/tt-metal --status success --limit 1 --json databaseId --jq '.[0].databaseId' || true)"
+          if [ -n "${prev_run_id:-}" ] && [ "$prev_run_id" != "null" ]; then
+            gh run download "$prev_run_id" --repo tenstorrent/tt-metal -n auto-disable-artifacts -D build_ci/m4_cache_prev || true
+          fi
+
+      - name: M4 extract deterministic failing jobs from aggregate workflow data
+        env:
+          # Use repo-scoped GITHUB_TOKEN for aggregate-workflow-data artifact reads.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/extract_failing_jobs.py \
+            --cache-input "build_ci/m4_cache_prev" \
+            --cache-output "build_ci/ci_ticketing/create_tickets/failing_jobs_cache.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/failing_jobs.json"
+
+      - name: M4 create issues and post Slack bootstrap messages
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+          AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/m4_create_issues_and_notify.py \
+            --failing-jobs-json "build_ci/ci_ticketing/create_tickets/failing_jobs.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json" \
+            --review-cache-json "build_ci/ci_ticketing/create_tickets/m4_review_cache.json" \
+            --previous-artifact-dir "build_ci/m4_cache_prev" \
+            --auto-triage-slack-json "build_ci/raw_data/slack_C0APK6215B5_last_14_days.json" \
+            --max-new-issues "${{ github.event.inputs['m4-max-new-issues'] || '1' }}" \
+            --max-agent-reviews "${{ github.event.inputs['m4-max-agent-reviews'] || '0' }}" \
+            --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
+
+      - name: Upload issue-creation artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: create-issues-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/failing_jobs.json
+            build_ci/ci_ticketing/create_tickets/failing_jobs_cache.json
+            build_ci/ci_ticketing/create_tickets/downloaded_logs
+            build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
+            build_ci/ci_ticketing/create_tickets/m4_review_cache.json
+          retention-days: 7
+
+  run-thread-lifecycle:
+    name: "Run thread analysis + assignment stage"
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'thread-lifecycle-only') }}
+    needs: [prep-triage-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download shared raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+
+      - name: Download triage state if present
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state
+        continue-on-error: true
+
+      - name: Restore previous triage state artifact (cross-run gating)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/load_previous_triage_state.py \
+            --repo tenstorrent/tt-metal \
+            --workflow triage-ci.yaml \
+            --artifact-name triage-state \
+            --state-path build_ci/triage_state/ci_triage_state.json
+
+      - name: Ensure triage state file exists
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/triage_state
+          if [ ! -f "build_ci/triage_state/ci_triage_state.json" ]; then
+            cat > build_ci/triage_state/ci_triage_state.json <<'EOF'
+          {"version":1,"updated_at_utc":"","items":[]}
+          EOF
+          fi
+
+      - name: Ensure CURSOR_API_KEY is configured for M5 agent review
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI for M5 agent review
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: M5 lifecycle follow-up + assignment + post-disable notices
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          python tools/ci/m5_manage_issue_lifecycle.py \
+            --slack-json "build_ci/raw_data/slack_C0APK6215B5_last_14_days.json" \
+            --state-json "build_ci/triage_state/ci_triage_state.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json" \
+            --summary-md "build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md" \
+            --channel-id "C0APK6215B5"
+
+      - name: Upload thread lifecycle artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: thread-lifecycle-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
+          retention-days: 7
+
+  run-bug-escape:
+    name: "Run bug-escape enrichment stage"
+    if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'bug-escape-only') && (needs.run-thread-lifecycle.result == 'success' || needs.run-thread-lifecycle.result == 'skipped') }}
+    needs: [run-thread-lifecycle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download triage state
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state
+        continue-on-error: true
+
+      - name: Restore previous triage state artifact (cross-run gating)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/load_previous_triage_state.py \
+            --repo tenstorrent/tt-metal \
+            --workflow triage-ci.yaml \
+            --artifact-name triage-state \
+            --state-path build_ci/triage_state/ci_triage_state.json
+
+      - name: Ensure triage state file exists
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/triage_state
+          if [ ! -f "build_ci/triage_state/ci_triage_state.json" ]; then
+            cat > build_ci/triage_state/ci_triage_state.json <<'EOF'
+          {"version":1,"updated_at_utc":"","items":[]}
+          EOF
+          fi
+
+      - name: M6 bug-escape enrichment (test scope)
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/m6_bug_escape_enrichment.py \
+            --state-json "build_ci/triage_state/ci_triage_state.json" \
+            --issue-repo "ebanerjeeTT/issue_dump" \
+            --output-json "build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json" \
+            --summary-md "build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
+
+      - name: Upload bug-escape artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: bug-escape-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md
+          retention-days: 7
+
+      - name: Publish bug-escape summary to run summary
+        run: |
+          set -euo pipefail
+          m6_md="build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
+          if [ -s "$m6_md" ]; then
+            echo "# M6 Bug Escape Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$m6_md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No M6 summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  run-issue-lifecycle:
+    name: "Run issue lifecycle stage"
+    if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && (inputs['run-scope'] == 'full' || inputs['run-scope'] == 'issue-lifecycle-only') && (needs.run-create-issues.result == 'success' || needs.run-create-issues.result == 'skipped') }}
+    needs: [prep-triage-data, run-create-issues]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download triage state if present
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state
+        continue-on-error: true
+
+      - name: Restore previous triage state artifact (cross-run gating)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/load_previous_triage_state.py \
+            --repo tenstorrent/tt-metal \
+            --workflow triage-ci.yaml \
+            --artifact-name triage-state \
+            --state-path build_ci/triage_state/ci_triage_state.json
+
+      - name: Ensure triage state file exists
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/triage_state
+          if [ ! -f "build_ci/triage_state/ci_triage_state.json" ]; then
+            cat > build_ci/triage_state/ci_triage_state.json <<'EOF'
+          {"version":1,"updated_at_utc":"","items":[]}
+          EOF
+          fi
+
+      - name: Ensure CURSOR_API_KEY is configured for issue lifecycle analysis
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI for issue lifecycle analysis
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Run issue lifecycle analysis and actions
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          MAIN_REPO_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          python tools/ci/issue_lifecycle_stage.py \
+            --state-json "build_ci/triage_state/ci_triage_state.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/issue_lifecycle_result.json" \
+            --summary-md "build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md" \
+            --issue-repo "ebanerjeeTT/issue_dump" \
+            --source-repo "tenstorrent/tt-metal" \
+            --processed-hours "${{ github.event.inputs['issue-lifecycle-processed-hours'] || '24' }}" \
+            --max-issues "${{ github.event.inputs['issue-lifecycle-max-issues'] || '3' }}" \
+            --model "${{ github.event.inputs['issue-lifecycle-model'] || 'claude-4-sonnet' }}"
+
+      - name: Upload issue lifecycle artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: issue-lifecycle-stage-artifacts
+          path: |
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
+          retention-days: 7
+
+  finalize-autonomy-artifacts:
+    name: "Finalize autonomy artifacts + summary"
+    if: ${{ always() && !inputs['fork-push-check-only'] && !inputs['testing-mode'] && !inputs['data-gathering-mode'] && inputs['run-scope'] == 'full' }}
+    needs: [run-draft-prs, run-create-issues, run-thread-lifecycle, run-bug-escape, run-issue-lifecycle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download draft PR stage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: draft-pr-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download issue creation artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: create-issues-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download thread lifecycle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: thread-lifecycle-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download bug escape artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bug-escape-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download issue lifecycle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: issue-lifecycle-stage-artifacts
+          path: build_ci
+        continue-on-error: true
+
+      - name: Download raw-data bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: triage-raw-data
+          path: build_ci/raw_data
+        continue-on-error: true
+
+      - name: Upload auto-disable artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: auto-disable-artifacts
+          path: |
+            build_ci/auto_disable/stale_candidates.json
+            build_ci/auto_disable/disable_actions.json
+            build_ci/auto_disable/execution_result.json
+            build_ci/auto_disable/summary.md
+            build_ci/auto_disable/debug
+            build_ci/ci_ticketing/create_tickets/failing_jobs.json
+            build_ci/ci_ticketing/create_tickets/failing_jobs_cache.json
+            build_ci/ci_ticketing/create_tickets/downloaded_logs
+            build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
+            build_ci/ci_ticketing/create_tickets/m4_review_cache.json
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_events.json
+            build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_result.json
+            build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md
+            build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+          retention-days: 7
+
+      - name: Publish modular autonomy summary to run summary
+        run: |
+          set -euo pipefail
+          summary_path="build_ci/auto_disable/summary.md"
+          if [ -s "$summary_path" ]; then
+            {
+              echo "# Auto Disable Summary"
+              echo
+              cat "$summary_path"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "# Auto Disable Summary"
+              echo
+              echo "No summary produced."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          m4_json="build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json"
+          if [ -s "$m4_json" ]; then
+            python3 tools/ci/render_m4_summary.py --input-json "$m4_json" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          m5_md="build_ci/ci_ticketing/create_tickets/m5_lifecycle_summary.md"
+          if [ -s "$m5_md" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$m5_md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          m6_md="build_ci/ci_ticketing/create_tickets/m6_bug_escape_summary.md"
+          if [ -s "$m6_md" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$m6_md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          issue_lifecycle_md="build_ci/ci_ticketing/create_tickets/issue_lifecycle_summary.md"
+          if [ -s "$issue_lifecycle_md" ]; then
+            echo >> "$GITHUB_STEP_SUMMARY"
+            cat "$issue_lifecycle_md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  triage-ci-testing-session:
+    name: "Run CI triage testing session"
+    if: ${{ !inputs['fork-push-check-only'] && inputs['testing-mode'] }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Ensure SLACK_BOT_TOKEN is configured
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "Missing secret SLACK_BOT_TOKEN"
+            exit 1
+          fi
+
+      - name: Ensure EVAN_RESTRICTED_TOKEN is configured
+        env:
+          OWNER_LOOKUP_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          if [ -z "$OWNER_LOOKUP_TOKEN" ]; then
+            echo "Missing secret EVAN_RESTRICTED_TOKEN"
+            exit 1
+          fi
+
+      - name: Ensure CURSOR_API_KEY is configured
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI for testing-mode thread analysis
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Run owner-resolution Slack testing session
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/testing_owner_resolution_session.py \
+            --codeowners-path ".github/CODEOWNERS" \
+            --slack-channel-id "C0APK6215B5" \
+            --max-codeowners "${{ github.event.inputs['testing-max-codeowners'] || '10' }}" \
+            --output-json "build_ci/testing/owner_resolution_session.json" \
+            --summary-md "build_ci/testing/owner_resolution_session.md"
+
+      - name: Run thread persona simulation session
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          python tools/ci/testing_thread_persona_session.py \
+            --slack-channel-id "C0APK6215B5" \
+            --output-json "build_ci/testing/thread_persona_session.json" \
+            --summary-md "build_ci/testing/thread_persona_session.md"
+
+      - name: Run testing-mode triage E2E thread session
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          python tools/ci/testing_triage_e2e_session.py \
+            --slack-channel-id "C0APK6215B5" \
+            --max-threads 3 \
+            --output-json "build_ci/testing/triage_e2e_session.json" \
+            --summary-md "build_ci/testing/triage_e2e_session.md"
+
+      - name: Upload testing session artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-testing-session
+          path: |
+            build_ci/testing/owner_resolution_session.json
+            build_ci/testing/owner_resolution_session.md
+            build_ci/testing/thread_persona_session.json
+            build_ci/testing/thread_persona_session.md
+            build_ci/testing/triage_e2e_session.json
+            build_ci/testing/triage_e2e_session.md
+          retention-days: 7
+
+      - name: Publish testing summary to run summary
+        run: |
+          set -euo pipefail
+          summary_path="build_ci/testing/owner_resolution_session.md"
+          {
+            echo "# CI Triage Testing Session"
+            echo
+            cat "$summary_path"
+            echo
+            cat "build_ci/testing/thread_persona_session.md"
+            echo
+            cat "build_ci/testing/triage_e2e_session.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-run-summary:
+    name: "Publish unified run summary"
+    if: ${{ always() }}
+    needs:
+      [
+        fork-push-check,
+        prep-triage-data,
+        run-data-report,
+        run-draft-prs,
+        run-create-issues,
+        run-thread-lifecycle,
+        run-bug-escape,
+        run-issue-lifecycle,
+        finalize-autonomy-artifacts,
+        triage-ci-testing-session,
+      ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download summary-relevant artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build_ci/summary_artifacts
+        continue-on-error: true
+
+      - name: Publish always-on summary
+        run: |
+          set -euo pipefail
+          {
+            echo "# CI Triage Unified Summary"
+            echo
+            echo "- run-scope: \`${{ github.event.inputs['run-scope'] || 'full' }}\`"
+            echo "- data-gathering-mode: \`${{ github.event.inputs['data-gathering-mode'] || 'false' }}\`"
+            echo "- testing-mode: \`${{ github.event.inputs['testing-mode'] || 'false' }}\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          append_if_exists() {
+            file_path="$1"
+            title="$2"
+            if [ -s "$file_path" ]; then
+              {
+                echo "## $title"
+                echo
+                cat "$file_path"
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+
+          append_if_exists "build_ci/summary_artifacts/auto-disable-artifacts/summary.md" "Auto Disable"
+          append_if_exists "build_ci/summary_artifacts/thread-lifecycle-stage-artifacts/m5_lifecycle_summary.md" "Thread Lifecycle"
+          append_if_exists "build_ci/summary_artifacts/issue-lifecycle-stage-artifacts/issue_lifecycle_summary.md" "Issue Lifecycle"
+          append_if_exists "build_ci/summary_artifacts/bug-escape-stage-artifacts/m6_bug_escape_summary.md" "Bug Escape"
+          append_if_exists "build_ci/summary_artifacts/slack-C0APK6215B5-U08GTDV8MDH-report/slack_C0APK6215B5_U08GTDV8MDH_report.md" "Data Gathering Report"
+          append_if_exists "build_ci/summary_artifacts/triage-testing-session/owner_resolution_session.md" "Testing Session - Owner Resolution"
+          append_if_exists "build_ci/summary_artifacts/triage-testing-session/thread_persona_session.md" "Testing Session - Thread Persona"
+          append_if_exists "build_ci/summary_artifacts/triage-testing-session/triage_e2e_session.md" "Testing Session - E2E"
+
+          m4_json="build_ci/summary_artifacts/create-issues-stage-artifacts/m4_issue_and_slack_result.json"
+          if [ -s "$m4_json" ]; then
+            {
+              echo "## M4 Issue Creation"
+              echo
+              python3 tools/ci/render_m4_summary.py --input-json "$m4_json"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
           fi

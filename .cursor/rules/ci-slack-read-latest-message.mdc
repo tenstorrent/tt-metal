@@ -1,0 +1,37 @@
+---
+description: Read and print the newest Slack message from a fixed public channel using Slack Web API.
+alwaysApply: false
+---
+
+# Slack Latest Message (Test)
+
+Use this rule when asked to read the newest message from Slack channel `C08SJ7MGESY`.
+
+## Goal
+
+Print the most recent message content from that channel for verification/testing.
+
+## Required Inputs
+
+- No runtime input is required for channel selection; channel is fixed to `C08SJ7MGESY`.
+- Environment variable `SLACK_BOT_TOKEN` must be set to a valid Slack bot token (`xoxb-...`).
+
+## Required Flow
+
+1. Use direct shell commands with `curl` against Slack Web API.
+2. Call `conversations.history` with:
+   - `channel=C08SJ7MGESY`
+   - `limit=1`
+3. Parse and print:
+   - message timestamp (`ts`)
+   - user/bot id (`user` or `bot_id`)
+   - message text (`text`)
+   - permalink when available (using `chat.getPermalink`)
+4. If API response has `ok=false`, print the Slack error reason and stop.
+5. Never print or log the token value.
+
+## Scope and Safety
+
+- Public channels only.
+- Bot must already be a member of channel `C08SJ7MGESY`.
+- Required scope: `channels:history`.

@@ -1,0 +1,138 @@
+---
+description: Solve a CI GitHub ticket by producing a draft PR, with explicit user approval before running workflows.
+alwaysApply: false
+---
+
+# Solve CI Ticket with Draft PR
+
+Use this rule when asked to solve a CI issue ticket in `tenstorrent/tt-metal` and produce a draft PR.
+
+## Required Input
+
+- Exactly one GitHub issue URL or issue number in `tenstorrent/tt-metal`.
+- If the input is missing, stop and ask for it.
+
+## Optional Input
+
+- One auto-triage workflow run URL (for example, `(triage) Auto Triage` run link).
+- This input is optional and must not block command usage.
+- If provided, review the run summary findings and use them as hypotheses, not ground truth.
+
+- One **failing GitHub Actions job or workflow run** URL (for example `.../actions/runs/<run_id>/job/<job_id>` or `.../actions/runs/<run_id>`).
+- Optional; must not block command usage.
+- If provided, **fetch and read that job’s (or run’s) logs before deep implementation work**. Use `gh run view`, `gh api` for job logs, or the Actions UI as needed. Treat log output as **primary evidence** for the real failure (failed steps, stderr, pytest names, paths, exit codes); reconcile with the issue body and auto-triage when they differ.
+
+## Goal
+
+Produce either:
+1. A draft PR linked to the issue, with a proposed fix and test plan, or
+2. A clear "cannot safely/credibly fix alone" handoff with recommended owners.
+
+## Forbidden: `.github/time_budget.yaml`
+
+- **Never modify `.github/time_budget.yaml`** when solving CI tickets. It exists to cap total pipeline time per team/SKU; editing it to pass `verify_time_budget.py` or unblock longer jobs circumvents that enforcement.
+- If a longer job timeout in `tests/pipeline_reorg/*.yaml` (or similar) would exceed the summed budget, prefer: speeding up or slimming the failing tests, splitting/sharding into separate jobs that fit within the existing budget, or carefully reducing another job’s timeout in the **same** matrix when justified—otherwise hand off (e.g. `#tt-metal-infra` / CODEOWNERS) rather than raising budget caps.
+- Only change `time_budget.yaml` if the user explicitly instructs you to override this rule.
+
+## Required Safety Gate (Workflow Runs)
+
+You must never trigger GitHub workflow runs automatically.
+
+After creating the draft PR, stop and ask the user exactly:
+
+`do you want me to kick off the workflow runs to test my changes now?`
+
+- If the user says yes, trigger selected workflows.
+- If the user says no or does not clearly approve, do not trigger workflows.
+
+When runs are triggered, immediately update the PR description to include links to the newly executing runs.
+
+## Required Safety Gate (Local Hardware Test Runs)
+
+If required hardware is locally available, you must not run local hardware tests automatically.
+
+After creating the draft PR, stop and ask the user exactly:
+
+`do you want me to run the local hardware tests to validate my changes now?`
+
+- If the user says yes, run only targeted local hardware tests relevant to the failing ticket.
+- If the user says no or does not clearly approve, do not run local hardware tests.
+- If hardware is not locally available, state that constraint and continue with CI/log-driven validation.
+
+## Workflow Run Selection Policy
+
+To avoid wasting CI capacity, default to **targeted** workflow execution:
+- Use the **official workflow** that contains the failing job instead of `Custom test dispatch`.
+- Before triggering, create a temporary commit with message prefix `[TO REVERT]` that comments out every workflow section/test matrix entry unrelated to the target failing test.
+- Push that temporary commit and run the official workflow so validation inherits production workflow environment, mounts, and secrets.
+- Immediately after the workflow run is queued, revert the temporary commit with `git revert` (do not rewrite branch history) and push, so the PR returns to merge-intended content while the run continues.
+- Report both the temporary commit hash and the revert commit hash in status updates.
+
+Broad/full workflows (for example `(T3K) T3000 e2e tests`) are exceptions and should be used only when:
+- the user explicitly asks for full-pipeline coverage, or
+- the fix impacts shared infrastructure and targeted dispatch is insufficient to validate risk.
+
+## Required End-to-End Flow
+
+1. Resolve and inspect the issue with `gh issue view`.
+2. If a failing job or workflow run URL is provided:
+   - parse run id and job id (if any) from the URL,
+   - pull logs early (`gh run view <run_id> --log-failed`, `gh run view <run_id> --job <job_id> --log`, or equivalent),
+   - extract concrete failure signals to drive the root-cause hypothesis and validation plan.
+3. If an auto-triage run URL is provided:
+   - review the triage summary content,
+   - extract likely culprit commit(s), suspected files/owners, and failure classification,
+   - cross-check those claims against the failing-job logs (if provided), issue text, and code before relying on them.
+4. Create a fix branch from updated `main`.
+5. Reproduce/analyze from issue evidence plus any fetched job logs (failing test path, related files).
+6. Implement smallest credible fix plus targeted regression coverage when possible.
+7. Run local checks that do not require unavailable hardware.
+8. Commit and push branch.
+9. Open a **draft PR** that:
+   - links the issue (`Closes #<issue>` or `Refs #<issue>` as appropriate),
+   - summarizes root cause hypothesis and change,
+   - includes the failing job/run link when one was supplied,
+   - notes whether auto-triage was used and whether its hypotheses were confirmed or rejected,
+   - states local validation done and hardware limitations (if any),
+   - includes a concrete CI test plan.
+10. If required hardware is locally available, ask the explicit local hardware-test permission question from the safety gate and run only targeted local tests if approved.
+11. Ask the explicit workflow permission question from the safety gate.
+12. If approved, trigger workflows using the run selection policy above:
+   - create/push the `[TO REVERT]` workflow-pruning commit,
+   - trigger the official workflow,
+   - revert/push immediately after dispatch,
+   - patch PR body with run URL plus both temporary/revert commit hashes.
+13. Report status and next expected checkpoint.
+
+## Hardware-Constrained Behavior
+
+If required hardware is unavailable:
+- Do not pretend local reproduction succeeded.
+- Use CI/log-driven diagnosis and minimal-risk fix strategy.
+- Explicitly state limitation in the draft PR.
+
+## Give-Up / Escalation Criteria
+
+You may stop and hand off only with evidence. Do this when one or more applies:
+- cannot reliably reproduce or narrow root cause from logs and code,
+- likely hardware/firmware behavior requires domain owner confirmation,
+- attempted safe fixes fail and confidence remains low,
+- risk of broad regressions is high without owner review.
+
+If handing off, recommend assignees using:
+- `.github/CODEOWNERS` for affected paths,
+- recent `git blame`/authors on touched files,
+- workflow/job ownership context from issue and workflows.
+
+Provide:
+- who should take it,
+- why they are appropriate,
+- what was tried,
+- concrete next steps for the new owner.
+
+## Git and PR Standards
+
+- Use direct `gh` and `git` commands.
+- Keep commits focused and minimal.
+- Never force-push to protected branches.
+- Do not mark PR ready-for-review automatically; keep draft unless user asks otherwise.

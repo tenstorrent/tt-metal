@@ -1,0 +1,68 @@
+---
+description: Evaluate and close stale CI maintenance issues in tt-metal using latest main-branch evidence.
+alwaysApply: false
+---
+
+# Close CI Maintenance Tickets
+
+Use this rule when asked to decide whether CI maintenance issues in `tenstorrent/tt-metal` should be closed.
+
+## Goal
+
+Close only issues that are no longer actionable based on the latest completed run on `main`.
+
+## Required Scope
+
+1. Review only issues labeled `glean CI maintenance`.
+2. Evaluate all candidate issues first.
+3. Apply any close-cap limit only in the final close step.
+
+## Required Workflow
+
+0. **Start with a clean slate.** Before doing anything else, delete any stale files in `build_ci/ci_ticketing/close_tickets` (e.g. old `closed_tickets.json` and contents of `glean_review_logs`) so you never rely on pre-existing outputs; all inputs for this run must be produced or re-fetched during this run.
+1. Use only direct `gh` / `gh api` commands.
+2. If you need temporary scripts, place them in `.build_ci/data/ci_ticketing_temp`.
+3. Before starting review, ensure `build_ci/ci_ticketing/close_tickets/glean_review_logs` is clear (already done in step 0 if you cleared it there).
+4. For each issue:
+   - Extract the failing test name and root-cause error from the issue body.
+   - Inspect the latest completed workflow run on `main` for that same job.
+   - Review failure logs manually yourself.
+5. Never write or use a script that closes tickets automatically.
+
+## Mandatory checks before closing for “now passing”
+
+Generic “job is green” or “some tests PASSED” is not enough.
+
+1. **Narrow identifier** — From the issue, take the most specific failing slice you can: full pytest node id, parametrization substring (e.g. `prefill_seq2048`), gtest filter name, or the exact command/step cited in the ticket.
+2. **Log evidence** — In the **passing** job’s full log, confirm that identifier appears on lines that show **execution** of that case, then **PASSED** / **OK** (or equivalent). If the identifier never appears, or only appears under “deselected” / collection summaries while the job still passes, treat that as **not fixed** (the slice was excluded or not run).
+3. **Launcher / source check** — On current `main`, open the script or workflow fragment that actually runs that job’s tests (e.g. `tests/scripts/t3000/*.sh`, impl YAML, or `pytest` line in the workflow). If that command uses `-k` / `--ignore` / a reduced file list, a commented-out matrix row, or other exclusion that **drops** the failing identifier from what CI runs, **do not close** the issue for “passing”; the failure was sidestepped, not resolved.
+4. **Commits / PRs that reference the issue** — Search recent `main` history for the issue number in **commit messages** and **merged PR** titles/bodies (`#NNNN`, `Refs #NNNN`, `(#NNNN)`, etc.). Examples: `gh search commits "NNNN repo:tenstorrent/tt-metal" --order desc` (cap results, e.g. 10–20) and/or `gh pr list --repo tenstorrent/tt-metal --search "NNNN" --state merged -L 15`. Read any hit that merged after the failures: if it explicitly **skips**, **filters** (`-k not …`), **disables**, or **removes** the job or test slice tied to the ticket, that is strong evidence the green job is a **workaround** — **do not close** for “fixed” unless steps 2–3 still show the original failing slice actually runs and passes.
+
+Steps 2–4 reinforce each other: logs alone can miss `-k 'not foo'`; the launcher shows it; linked merges often **say** it in the PR title or description (e.g. “skip … Refs #NNNN”).
+
+## Close vs Keep Open Rules
+
+### Close the issue if either condition is true
+
+- The exact previously failing test is now passing.
+- The exact previously failing test still fails, but the test-level root cause is clearly different.
+
+### Keep the issue open if any condition is true
+
+- The same root cause is still present.
+- The difference is cosmetic only (timestamps, ANSI, formatting, host/runner, dynamic IDs).
+- The evidence is only infrastructure noise (transient network/runner/process exit lines).
+- The job is a matrix job with multiple matching instances and at least one still fails with the same root cause.
+- The test appears to pass only because it was disabled, skipped, removed from the test suite, or **excluded from the CI invocation** (e.g. `pytest -k 'not …'`, narrower file list, skipped matrix job). When a test is "now passing", apply **Mandatory checks before closing for “now passing”** above: logs must show that **the same** failing identifier ran and passed, the launcher on `main` must not exclude it, and **commits/PRs referencing the issue** must not show a merge whose stated purpose is to skip or narrow coverage for that failure.
+
+## Output File
+
+Write closed issues to:
+
+- `build_ci/ci_ticketing/close_tickets/closed_tickets.json`
+
+Each JSON object must include:
+
+- `issue_url`
+- `old_failure_message`
+- `new_failure_message` (use `"currently passing"` when applicable)
