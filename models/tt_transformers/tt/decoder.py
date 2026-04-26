@@ -29,6 +29,7 @@ class TransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         prefetcher=None,
+        first_layer=False,
     ):
         super().__init__()
 
@@ -48,6 +49,7 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
+        self.first_layer = first_layer
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
         self.attention = ActualAttentionClass(
@@ -218,11 +220,14 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+        skip_mem_cfg = self.args.get_residual_mem_config(
+            mode, self.prefetcher, residual_replicated=self.pre_ff_norm is not None
+        )
 
-        assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        if self.pre_ff_norm is None:
+            assert (
+                x.memory_config() == skip_mem_cfg
+            ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
@@ -231,7 +236,16 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
-        attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
+        attn_in = self.attention_norm(
+            x,
+            mode,
+            norm_config=attn_norm_config,
+            residual=residual if self.pre_ff_norm else None,
+            skip_allgather=not self.first_layer and self.pre_ff_norm,
+        )
+
+        if type(attn_in) is tuple:
+            attn_in, residual = attn_in
 
         # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
         if batch_size > 1:
@@ -271,21 +285,20 @@ class TransformerBlock(LightweightModule):
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
 
         if self.pre_ff_norm is not None:
-            # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded
-            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
-                hidden_states = ttnn.mesh_partition(
-                    hidden_states,
-                    memory_config=hidden_states.memory_config(),
-                    dim=3,
-                    cluster_axis=1,
-                )
-
+            # # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded
+            # if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+            #     hidden_states = ttnn.mesh_partition(
+            #         hidden_states,
+            #         memory_config=hidden_states.memory_config(),
+            #         dim=3,
+            #         cluster_axis=1,
+            #     )
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
             pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
+            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config, skip_allgather=True)
 
         ttnn.deallocate(attn_out)
 
@@ -302,13 +315,13 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             hidden_states = self.post_ff_norm(hidden_states, mode, norm_config=post_ff_norm_config)  # Gathered
-            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
-                hidden_states = ttnn.mesh_partition(
-                    hidden_states,
-                    memory_config=hidden_states.memory_config(),
-                    dim=3,
-                    cluster_axis=1,
-                )
+            # if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+            #     hidden_states = ttnn.mesh_partition(
+            #         hidden_states,
+            #         memory_config=hidden_states.memory_config(),
+            #         dim=3,
+            #         cluster_axis=1,
+            #     )
 
         out = ttnn.add(
             residual,
