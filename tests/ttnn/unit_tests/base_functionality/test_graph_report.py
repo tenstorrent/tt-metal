@@ -27,6 +27,7 @@ import graph_report
 
 # Now import ttnn for device tests
 import ttnn
+
 from models.common.utility_functions import is_wormhole_b0
 
 
@@ -62,6 +63,249 @@ def _import_to_db(report_dict, tmp_path):
     db_path = graph_report.import_report(report_path, tmp_path / "output")
     conn = sqlite3.connect(db_path)
     return conn, conn.cursor()
+
+
+@pytest.fixture
+def single_relu_python_io():
+    """python_io sidecar for single_relu_mock_graph with a minimal stack trace.
+
+    The stack trace makes import_report treat this as a detailed-tensor-report capture,
+    so the tensor_lifetime table is populated (gated on has_stack_traces in import_report).
+    """
+    return [
+        {
+            "name": "ttnn::relu",
+            "arguments": {},
+            "input_tensor_ids": [42],
+            "output_tensor_ids": [101],
+            "python_stack_trace": ['  File "model.py", line 10, in forward\n    out = ttnn.relu(x)\n'],
+        }
+    ]
+
+
+@pytest.fixture
+def single_relu_mock_graph():
+    """Minimal graph: one ttnn::relu consuming tensor 42 and producing tensor 101.
+
+    Shared across TestTensorLifetime cases that only need a single-producer /
+    single-consumer trace to validate schema-level wiring.
+    """
+    return [
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+        {
+            "counter": 1,
+            "node_type": "tensor",
+            "params": {"tensor_id": "42", "shape": "[1,1,32,32]"},
+            "connections": [],
+        },
+        {
+            "counter": 2,
+            "node_type": "function_start",
+            "params": {"name": "ttnn::relu", "inputs": "1"},
+            "connections": [],
+            "input_tensors": [1],
+        },
+        {
+            "counter": 3,
+            "node_type": "tensor",
+            "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+            "connections": [],
+        },
+        {
+            "counter": 4,
+            "node_type": "function_end",
+            "params": {"name": "ttnn::relu"},
+            "connections": [3],
+            "duration_ns": 1000,
+        },
+        {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
+
+
+class TestInnermostStackFrame:
+    """Unit tests for graph_report._innermost_stack_frame."""
+
+    def test_none_input_returns_none_pair(self):
+        assert graph_report._innermost_stack_frame(None) == (None, None)
+
+    def test_empty_string_returns_none_pair(self):
+        assert graph_report._innermost_stack_frame("") == (None, None)
+
+    def test_malformed_text_with_no_file_line_returns_none_pair(self):
+        assert graph_report._innermost_stack_frame("Traceback (most recent call last):\n  random text\n") == (
+            None,
+            None,
+        )
+
+    def test_single_frame(self):
+        trace = '  File "/path/to/model.py", line 42, in forward\n    out = self.layer(x)\n'
+        fname, lineno = graph_report._innermost_stack_frame(trace)
+        assert fname == "/path/to/model.py"
+        assert lineno == 42
+
+    def test_multiple_frames_returns_first_innermost(self):
+        # _capture_python_stack_trace orders frames innermost-first.
+        # The first File/line entry should be the callsite nearest the op.
+        trace = (
+            '  File "/inner/op.py", line 5, in run\n'
+            "    result = ttnn.relu(x)\n"
+            '  File "/middle/wrapper.py", line 20, in call\n'
+            "    return self.op(x)\n"
+            '  File "/outer/demo.py", line 99, in main\n'
+            "    wrapper(t)\n"
+        )
+        fname, lineno = graph_report._innermost_stack_frame(trace)
+        assert fname == "/inner/op.py"
+        assert lineno == 5
+
+    def test_multiple_frames_does_not_return_outermost(self):
+        # Regression guard: the original bug used matches[-1] (outermost) which
+        # pinned every tensor to the same demo.py entry point.
+        trace = (
+            '  File "/inner/op.py", line 5, in run\n'
+            "    result = ttnn.relu(x)\n"
+            '  File "/outer/demo.py", line 99, in main\n'
+            "    wrapper(t)\n"
+        )
+        fname, lineno = graph_report._innermost_stack_frame(trace)
+        assert fname != "/outer/demo.py"
+        assert lineno != 99
+
+    def test_line_number_parsed_as_int(self):
+        trace = '  File "model.py", line 123, in forward\n'
+        _, lineno = graph_report._innermost_stack_frame(trace)
+        assert isinstance(lineno, int)
+        assert lineno == 123
+
+
+class TestTensorLifetime:
+    """Tensor lifetime metadata for late-deallocation analysis (tt-metal#27868)."""
+
+    def test_compute_tensor_lifetime_records_smoke(self):
+        operations = [(1, "ttnn::relu", 0.0), (2, "ttnn::add", 0.0), (3, "ttnn::deallocate", 0.0)]
+        input_tensors = [(1, 0, 42), (2, 0, 101), (3, 0, 101)]
+        output_tensors = [(1, 0, 101)]
+        stack_traces = [
+            (
+                1,
+                '  File "producer_ctx.py", line 10, in forward\n    x\n  File "producer.py", line 2, in run\n',
+            ),
+            (
+                2,
+                '  File "consumer_ctx.py", line 3, in wrap\n    z\n  File "consumer.py", line 99, in step\n',
+            ),
+        ]
+        kept = {42, 101}
+        recs = graph_report.compute_tensor_lifetime_records(
+            operations, input_tensors, output_tensors, stack_traces, kept
+        )
+        by_id = {r["tensor_id"]: r for r in recs}
+        assert by_id[42]["producer_operation_id"] is None
+        assert by_id[42]["last_use_operation_id"] == 1
+        assert by_id[42]["last_use_source_file"] == "producer_ctx.py"
+        assert by_id[42]["last_use_source_line"] == 10
+        assert by_id[101]["producer_operation_id"] == 1
+        assert by_id[101]["last_use_operation_id"] == 2
+        assert by_id[101]["deallocate_operation_id"] == 3
+        assert by_id[101]["producer_source_file"] == "producer_ctx.py"
+        assert by_id[101]["producer_source_line"] == 10
+        assert by_id[101]["last_use_source_file"] == "consumer_ctx.py"
+        assert by_id[101]["last_use_source_line"] == 3
+
+    @pytest.mark.parametrize(
+        "op_name",
+        [
+            "ttnn.deallocate",  # Python-registered (dot separator)
+            "ttnn::deallocate",  # synthesized by importer for bare buffer_deallocate nodes
+            "Tensor::deallocate",  # C++ GraphTracker in tensor.cpp
+        ],
+    )
+    def test_deallocate_operation_id_matched_for_all_known_names(self, op_name):
+        """All three known dealloc op names must be recognised."""
+        operations = [(10, op_name, 0.0)]
+        input_tensors = [(10, 0, 999)]
+        output_tensors = []
+        stack_traces = []
+        recs = graph_report.compute_tensor_lifetime_records(
+            operations, input_tensors, output_tensors, stack_traces, {999}
+        )
+        assert len(recs) == 1
+        assert recs[0]["deallocate_operation_id"] == 10, f"{op_name!r} not treated as deallocate"
+
+    @pytest.mark.parametrize(
+        "op_name",
+        [
+            "ComplexTensor::deallocate",  # lookalike — not a tensor-dealloc op
+            "MeshTensor::deallocate",
+            "ttnn::partial_deallocate",
+            "ttnn.some_deallocate",
+            "buffer_deallocate",  # graph node type, not an op name
+        ],
+    )
+    def test_deallocate_operation_id_not_matched_for_lookalikes(self, op_name):
+        """Suffix-matching lookalikes must NOT be treated as dealloc ops."""
+        operations = [(10, op_name, 0.0)]
+        input_tensors = [(10, 0, 999)]
+        output_tensors = []
+        stack_traces = []
+        recs = graph_report.compute_tensor_lifetime_records(
+            operations, input_tensors, output_tensors, stack_traces, {999}
+        )
+        assert len(recs) == 1
+        assert recs[0]["deallocate_operation_id"] is None, f"{op_name!r} incorrectly treated as deallocate"
+        # The op should appear as last_use_operation_id since it consumed the tensor as input
+        assert recs[0]["last_use_operation_id"] == 10
+
+    def test_tensor_lifetime_table_populated_on_import(self, tmp_path, single_relu_mock_graph, single_relu_python_io):
+        # python_io with stack traces signals enable_detailed_tensor_report=True to import_report,
+        # which is required for the tensor_lifetime table to be populated.
+        report = _make_report(single_relu_mock_graph, python_io=single_relu_python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute(
+            "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id "
+            "FROM tensor_lifetime ORDER BY tensor_id"
+        )
+        rows = {r[0]: r for r in cursor.fetchall()}
+        assert rows[42][1] is None  # tensor 42 has no producer op in this graph
+        assert rows[42][2] == 1  # tensor 42 is consumed by op 1 (ttnn::relu)
+        assert rows[101][1] == 1  # tensor 101 is produced by op 1
+        assert rows[101][2] is None  # tensor 101 is never consumed — orphan candidate
+        conn.close()
+
+    def test_tensor_lifetime_table_empty_without_stack_traces(self, tmp_path, single_relu_mock_graph):
+        """tensor_lifetime must NOT be populated when no stack traces are present.
+
+        enable_detailed_tensor_report=False (the default) means begin_graph_capture does
+        not record stack traces. import_report detects this via has_stack_traces=False and
+        skips record_tensor_lifetime, leaving the table empty.
+        """
+        report = _make_report(single_relu_mock_graph)  # no python_io → no stack traces
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT COUNT(*) FROM tensor_lifetime")
+        assert cursor.fetchone()[0] == 0
+        conn.close()
+
+    def test_tensor_consumers_mirror_input_tensors(self, tmp_path, single_relu_mock_graph):
+        report = _make_report(single_relu_mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT operation_id, input_index, tensor_id FROM input_tensors ORDER BY tensor_id")
+        inp = cursor.fetchall()
+        cursor.execute("SELECT tensor_id, operation_id, input_index FROM tensor_consumers ORDER BY tensor_id")
+        tc = cursor.fetchall()
+        assert len(tc) == len(inp)
+        assert {(r[2], r[0], r[1]) for r in inp} == {(r[0], r[1], r[2]) for r in tc}
+        conn.close()
+
+    def test_tensor_producers_mirror_output_tensors(self, tmp_path, single_relu_mock_graph):
+        report = _make_report(single_relu_mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+        cursor.execute("SELECT operation_id, output_index, tensor_id FROM output_tensors ORDER BY tensor_id")
+        out = cursor.fetchall()
+        cursor.execute("SELECT tensor_id, operation_id, output_index FROM tensor_producers ORDER BY tensor_id")
+        tp = cursor.fetchall()
+        assert len(tp) == len(out)
+        assert {(r[2], r[0], r[1]) for r in out} == {(r[0], r[1], r[2]) for r in tp}
+        conn.close()
 
 
 class TestImportGraphUnit:
