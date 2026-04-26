@@ -104,7 +104,7 @@ def ds_rms_norm_ttnn(
     Returns:
         Normalized output tensor (same shape as input)
     """
-    return RMSNorm._rmsnorm_forward(x, cfg)
+    return RMSNorm._rmsnorm_forward_prefill(x, cfg)
 
 
 def _run_ds_rms_norm_test(
