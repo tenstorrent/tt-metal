@@ -1027,7 +1027,6 @@ void py_module(nb::module_& mod) {
                 >>> # All processes continue from here
         )doc");
 
-
     // Allgather a single int from every rank; returns list[int] of length num_ranks.
     mod.def(
         "allgather_int",
