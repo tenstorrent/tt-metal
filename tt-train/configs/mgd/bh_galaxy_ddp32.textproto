@@ -1,0 +1,22 @@
+# mesh_shape: [32, 1] — DDP=32 (first dim, RING)
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 1 ], dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
