@@ -1,0 +1,240 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+
+class LMHead(LightweightModule):
+    def __init__(
+        self,
+        args,
+        mesh_device,
+        dtype,
+        state_dict,
+        state_dict_prefix,
+        weight_cache_path,
+        max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        tt_ccl=None,
+        prefetcher_setup=None,
+    ):
+        super().__init__()
+        self.args = args
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        self.vocab_size = args.vocab_size
+        self.padded_vocab_size = args.padded_vocab_size
+        self.num_devices = args.num_devices
+        self.tt_ccl = tt_ccl
+
+        size_per_device = self.padded_vocab_size // self.num_devices
+        num_splits = math.ceil(size_per_device / max_columns_per_device)
+
+        split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
+        split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+
+        # Split the output weights
+        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
+        self.output_weights = []
+        self.output_weights_decode = []
+        self.output_weights_prefill = []
+        num_splits = 1
+        is_olmo_init = getattr(args, "is_olmo", False)
+        decode_cache_suffix = "dram_interleaved_decode" if is_olmo_init else "dram_width_sharded_decode"
+        cache_file_name_decode = (
+            None
+            if args.dummy_weights
+            else weight_cache_path
+            / f"output_lm_head_{num_splits}_split_shard_0_v{self.padded_vocab_size}_{decode_cache_suffix}"
+        )
+        cache_file_name_prefill = (
+            None
+            if args.dummy_weights
+            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_v{self.padded_vocab_size}_dram_prefill"
+        )
+        padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
+        padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
+
+        if args.is_70b:
+            is_olmo = getattr(args, "is_olmo", False)
+            if is_olmo:
+                # OLMo: use DRAM interleaved weight; ring matmul bypassed in forward
+                memory_config_decode = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                memory_config_decode = args.create_dram_sharded_mem_config_lm_head(
+                    k=args.dim // 4, n=self.padded_vocab_size // 8
+                )
+            memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            memory_config = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if args.dim == 2048
+                else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
+            )
+
+        for i in range(num_splits):
+            index = i * self.padded_vocab_size // num_splits
+            self.output_weights_decode.append(  # (2k, 16k) 128* 1024
+                ttnn.as_tensor(
+                    padded_lm_head[..., index : index + self.padded_vocab_size // num_splits],
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=memory_config_decode,
+                    cache_file_name=cache_file_name_decode,
+                )
+            )
+            self.output_weights_prefill.append(  # (2k, 16k) 128* 1024
+                ttnn.as_tensor(
+                    padded_lm_head[..., index : index + self.padded_vocab_size // num_splits],
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=memory_config_prefill,
+                    cache_file_name=cache_file_name_prefill,
+                )
+            )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
+        self.program_configs = [args.model_config["LM_HEAD_TG_RING_PROGCFG"]] * num_splits
+        self.output_memory_config = args.model_config["LM_HEAD_OUT_RING_MEMCFG"]
+        self.prefill_pc = args.model_config["LM_HEAD_PREFILL_PROGCFG"]
+
+    def forward_on_host(self, x: ttnn.Tensor):
+        x_torch = ttnn.to_torch(
+            x,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                dims=(0, 3),
+                mesh_shape=(8, 4),
+            ),
+        )  # [8, 1, 32, 2048 * 4]
+        x_torch = x_torch[:1]
+
+        weight_torch = ttnn.to_torch(
+            self.output_weights[0],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device=self.mesh_device, dims=(3, 2), mesh_shape=list(self.mesh_device.shape)
+            ),
+        )
+
+        output_torch = torch.matmul(x_torch.float(), weight_torch.float())
+
+        output = ttnn.as_tensor(
+            output_torch,
+            dtype=ttnn.bfloat8_b,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        return [output]
+
+    def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
+        outputs = []
+        num_links = self.args.model_config.get("GALAXY_NUM_LINKS", 1)
+        is_olmo = getattr(self.args, "is_olmo", False)
+        if mode == "decode":
+            if is_olmo:
+                # OLMo: ring matmul bypassed (K=1280 not divisible by ring_size*32=768).
+                # Use plain DRAM linear: weight loaded as DRAM interleaved per device.
+                x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                for weight in self.output_weights_decode:
+                    output = ttnn.linear(
+                        x_dram,
+                        weight,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        dtype=ttnn.bfloat8_b,
+                    )
+                    outputs.append(output)
+                ttnn.deallocate(x_dram)
+            else:
+                for weight, pc in zip(self.output_weights_decode, self.program_configs):
+                    x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+                    output = ttnn.linear(
+                        x,
+                        weight,
+                        compute_kernel_config=self.compute_kernel_config,
+                        program_config=pc,
+                        memory_config=self.output_memory_config,
+                        dtype=ttnn.bfloat8_b,
+                        sub_device_id=worker_sub_device_id,
+                    )
+                    output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
+                    outputs.append(output)
+        else:
+            is_minimal_config = hasattr(self.prefill_pc, "M_block_size")
+            for weight, pc in zip(self.output_weights_prefill, self.program_configs):
+                linear_kwargs = dict(
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b,
+                )
+                if not is_minimal_config:
+                    linear_kwargs["program_config"] = self.prefill_pc
+                output = ttnn.linear(x, weight, **linear_kwargs)
+                # Minimal matmul is not giving any performance improvement over linear
+                # output = ttnn.experimental.minimal_matmul(
+                #     input_tensor=x,
+                #     weight_tensor=weight,
+                #     config=self.prefill_pc,
+                #     dtype=ttnn.bfloat8_b,
+                #     compute_kernel_config=self.compute_kernel_config,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
+                x.deallocate(True)
+                outputs.append(output)
+
+        outputs_reduced = []
+        for output in outputs:
+            if is_olmo and mode == "decode":
+                # output is already in DRAM_MEMORY_CONFIG from the OLMo linear path;
+                # pass directly to avoid double-dealloc via to_memory_config alias
+                rs_output = self.tt_ccl.line_reduce_scatter(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
+                )
+                ttnn.deallocate(output)
+                ag_output = self.tt_ccl.line_all_gather(
+                    rs_output,
+                    dim=3,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(rs_output)
+                outputs_reduced.append(ag_output)
+            else:
+                output_reduced = self.tt_ccl.line_all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                    lm_head=True,
+                    buffer_key="LM_HEAD",
+                )
+                outputs_reduced.append(
+                    ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                )
+        return outputs_reduced

@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.olmo_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+
+
+class DistributedNorm(LightweightModule):
+    def __init__(self, norm, args, tt_ccl=None, ccl_topology=None):
+        self.norm = norm
+        self.args = args
+        self.tt_ccl = tt_ccl
+        self.ccl_topology = ccl_topology
+        # Choose grid based on model type to ensure tile-aligned shards
+        # OLMo: dim=5120, dim//4=1280, need 1280/N to be tile-aligned (divisible by 32)
+        # - 10 cores: 1280/10=128 ✓
+        # - 16 cores: 1280/16=80 ✗
+        is_olmo = getattr(args, "is_olmo", False)
+        if args.qk_norm or is_olmo:
+            # Use 10 cores for QK-norm models or OLMo (1280/10=128, tile-aligned)
+            core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
+        else:
+            # Use 16 cores for Llama (2048/16=128, tile-aligned)
+            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(2, 0)
+        core_range = ttnn.CoreRange(
+            grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+        )
+        num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+        hidden_size_per_device_distributed_ln = args.dim // 4
+        self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, hidden_size_per_device_distributed_ln // num_cores_ln),
+            core_grid=ttnn.CoreRangeSet(
+                {
+                    core_range,
+                }
+            ),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+            subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+            block_h=1,
+            block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+            inplace=False,
+        )
+        self.ln_sharded_stats_memcfg = None
+        # self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
+        #     shape=[1, 1, 32, 32 * 4],
+        #     core_grid=ttnn.CoreGrid(y=1, x=1),
+        #     strategy=ttnn.ShardStrategy.WIDTH,
+        # )
+        # ttnn.create_sharded_memory_config(
+        #     shape=[1, 1, 32, 32 * 4],
+        #     core_grid=ttnn.CoreGrid(y=1, x=1),
+        #     strategy=ttnn.ShardStrategy.WIDTH,
+        # )
+        self.ln_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+    def forward(self, x, res, mode):
+        """Apply a norm, possibly gathering inputs if required."""
+        if mode == "decode":
+            # Use gather_in_mem_cfg as output config if not specified
+            # This ensures output is in the correct sharded format for OLMo (10 cores, 128 shard width)
+            output_cfg = (
+                self.norm.output_mem_config if self.norm.output_mem_config is not None else self.gather_in_mem_cfg
+            )
+            return tt_sharded_distributed_rmsnorm(
+                x,
+                res,
+                epsilon=self.norm.eps,
+                gamma=self.norm.weight_distributed,
+                mesh_device=self.args.mesh_device,
+                ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                ln_sharded_progcfg=self.ln_prg_cfg,
+                ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                tt_ccl=self.tt_ccl,
+                output_mem_config=output_cfg,
+                ccl_topology=self.ccl_topology,
+            )
+        else:
+            return tt_distributed_rmsnorm(
+                x,
+                epsilon=self.norm.eps,
+                gamma=self.norm.weight_distributed,
+                mesh_device=self.args.mesh_device,
+                compute_kernel_config=self.ln_cfg,
+                tt_ccl=self.tt_ccl,
+            )
