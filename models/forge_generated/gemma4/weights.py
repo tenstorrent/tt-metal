@@ -1,24 +1,22 @@
 """HuggingFace state-dict loader for Gemma4.
 
-Phase 2 source-of-truth for static weights. Reads safetensors via
-`safetensors.safe_open` (mmap-backed; no full-tensor reads until each
-slot is accessed). Returns a torch state_dict keyed by HF parameter
-names.
+Reads safetensors via `safetensors.safe_open` (mmap-backed; no
+full-tensor reads until each slot is accessed) and returns a torch
+state_dict keyed by HF parameter names.
 
-Lifted constants (rotary inv_freq, embed_scale) are NOT in the
+Lifted constants (rotary inv_freq, embed_scale) are not in the
 safetensors; they're produced by `extract_lifted_constants()` which
-instantiates transformers' Gemma4TextRotaryEmbedding directly on CPU
-(small) to read its computed buffers.
+meta-instantiates `Gemma4TextRotaryEmbedding` and reads its computed
+buffers.
 
-Naming note: gemma-4-31B-it is a multimodal model. The language-model
-weights live under `model.language_model.X` in the HF state_dict, but
-the codegen's `arg_mapping.json` refers to them as `model.X` (relative
-to the language model). `slot_to_hf_key()` adds the
-`model.language_model.` prefix where needed.
+`apply_hf_scalar_overrides` builds a transient dict of scalar tensors
+(zeros, fills, aranges, one-hot helpers) that the prelude / shared
+scalar / causal-mask helper consume during model construction.
+
+`mesh_mapper_for_role` / `role_for_hf_key` map weight roles to mesh
+shard/replicate strategies for `ttnn.as_tensor`.
 """
-import json
 import pathlib
-import re
 from dataclasses import dataclass
 from typing import Dict
 
@@ -111,81 +109,6 @@ def extract_lifted_constants(config) -> Dict[str, torch.Tensor]:
 
 
 # ============================================================================
-# Slot-name → HF-state_dict-key translation.
-# ============================================================================
-
-# Cached arg_mapping.json contents per file
-_ARG_MAPPING_CACHE: Dict[str, Dict[int, dict]] = {}
-
-
-def _load_arg_mapping(arg_mapping_path: pathlib.Path) -> Dict[int, dict]:
-    key = str(arg_mapping_path)
-    if key not in _ARG_MAPPING_CACHE:
-        with open(arg_mapping_path) as f:
-            raw = json.load(f)
-        _ARG_MAPPING_CACHE[key] = {int(k): v for k, v in raw.items()}
-    return _ARG_MAPPING_CACHE[key]
-
-
-# Encoded leaf-path → HF dotted leaf path
-_LEAF_DECODE = {
-    # L__ entries (no __parameters__ suffix)
-    "input_layernorm_weight": "input_layernorm.weight",
-    "post_attention_layernorm_weight": "post_attention_layernorm.weight",
-    "pre_feedforward_layernorm_weight": "pre_feedforward_layernorm.weight",
-    "post_feedforward_layernorm_weight": "post_feedforward_layernorm.weight",
-    "self_attn_q_norm_weight": "self_attn.q_norm.weight",
-    "self_attn_k_norm_weight": "self_attn.k_norm.weight",
-    "layer_scalar": "layer_scalar",
-    # self___ entries (with __parameters__weight suffix)
-    "self_attn_q_proj__parameters__weight": "self_attn.q_proj.weight",
-    "self_attn_k_proj__parameters__weight": "self_attn.k_proj.weight",
-    "self_attn_v_proj__parameters__weight": "self_attn.v_proj.weight",
-    "self_attn_o_proj__parameters__weight": "self_attn.o_proj.weight",
-    "mlp_gate_proj__parameters__weight": "mlp.gate_proj.weight",
-    "mlp_up_proj__parameters__weight": "mlp.up_proj.weight",
-    "mlp_down_proj__parameters__weight": "mlp.down_proj.weight",
-}
-
-_LAYERED_PREFIX_RE = re.compile(r"^(?:L__self___|self___)model_layers__modules__(\d+)___(.+)$")
-
-# Top-level (non-per-layer) entries
-_TOP_LEVEL_DECODE = {
-    "model.embed_tokens.weight": "model.language_model.embed_tokens.weight",
-    "model.norm.weight": "model.language_model.norm.weight",
-    "self___lm_head__parameters__weight": "model.language_model.embed_tokens.weight",  # tied
-    # Lifted constants (NOT in state_dict; signaled to caller)
-    "model.embed_tokens.embed_scale": "<LIFTED>model.embed_tokens.embed_scale",
-    "model.rotary_emb.sliding_attention_inv_freq": "<LIFTED>model.rotary_emb.sliding_attention_inv_freq",
-    "model.rotary_emb.full_attention_inv_freq": "<LIFTED>model.rotary_emb.full_attention_inv_freq",
-    # Tracer-lifted scalar bf16 constants (softcap / rms_eps / similar);
-    # actual derivation handled via `lifted_tensor_value` lookup at use-site.
-    "L['self'].model.lifted_tensor_0": "<LIFTED>lifted_tensor_0",
-    "L['self'].model.lifted_tensor_1": "<LIFTED>lifted_tensor_1",
-}
-
-
-def slot_to_hf_key(slot_name: str) -> str:
-    """Translate a codegen-slot name (from `arg_mapping.json`) to an
-    HF state_dict key. Returns a key prefixed with '<LIFTED>' if the
-    target is a lifted constant rather than a state_dict entry. Raises
-    ValueError if the slot is a runtime arg or otherwise unrecognizable.
-    """
-    if slot_name.startswith("args_"):
-        raise ValueError(f"slot {slot_name!r} is a runtime arg, not a weight")
-    if slot_name in _TOP_LEVEL_DECODE:
-        return _TOP_LEVEL_DECODE[slot_name]
-    m = _LAYERED_PREFIX_RE.match(slot_name)
-    if m:
-        layer_idx, leaf = m.group(1), m.group(2)
-        if leaf not in _LEAF_DECODE:
-            raise ValueError(f"unknown leaf path {leaf!r} (layer {layer_idx})")
-        decoded_leaf = _LEAF_DECODE[leaf]
-        return f"model.language_model.layers.{layer_idx}.{decoded_leaf}"
-    raise ValueError(f"unrecognized slot name: {slot_name!r}")
-
-
-# ============================================================================
 # Per-role mesh-mapper lookup.
 # ============================================================================
 
@@ -260,76 +183,6 @@ def role_for_hf_key(hf_key: str) -> str:
         if len(rest) == 2:
             return rest[1]  # self_attn.q_proj → q_proj
     raise ValueError(f"unknown HF key for role lookup: {hf_key!r}")
-
-
-def _verify_slot_translation(arg_mapping_path: pathlib.Path, hf_state_dict: Dict[str, torch.Tensor]) -> list:
-    """Sanity check: every non-runtime slot's HF key resolves in the
-    state_dict (or is a lifted-constant marker).
-    """
-    mapping = _load_arg_mapping(arg_mapping_path)
-    missing = []
-    for slot, info in mapping.items():
-        name = info["name"]
-        if name.startswith("args_"):
-            continue
-        try:
-            key = slot_to_hf_key(name)
-        except ValueError as e:
-            missing.append((slot, name, str(e)))
-            continue
-        if key.startswith("<LIFTED>"):
-            continue  # lifted-constant marker; handled separately
-        if key not in hf_state_dict:
-            missing.append((slot, name, f"key {key!r} not in HF state_dict"))
-    return missing
-
-
-# ============================================================================
-# HF helper utilities for prelude construction.
-#
-# `apply_hf_scalar_overrides` builds the no-input scalar tensors (zeros,
-# fills, aranges, one-hot mask helpers) that the prelude classes consume
-# during construction. The result is a transient dict; once the preludes
-# (and other from_state_dict consumers) have extracted what they need,
-# the dict is discarded.
-# ============================================================================
-
-_HF_BUNDLE_CACHE: Dict[str, "HfWeights"] = {}
-
-
-def get_hf_weights_cached() -> "HfWeights":
-    """Module-level cache for the HF state_dict + lifted constants.
-    First call takes ~10-30s; subsequent calls are O(1).
-    """
-    if "default" not in _HF_BUNDLE_CACHE:
-        _HF_BUNDLE_CACHE["default"] = load_hf_weights()
-    return _HF_BUNDLE_CACHE["default"]
-
-
-# Top-level cached_main key map. Per-side because the codegen-key
-# numbering differs between prefill and decode.
-_TOP_LEVEL_KEYS = {
-    "prefill": {
-        "embed_weight": "main_const_eval_436",
-        "embed_scale": "main_const_eval_255",
-        "final_norm": "main_const_eval_50",
-        "lm_head_weight": "main_const_eval_171",
-    },
-    "decode": {
-        "embed_weight": "main_const_eval_435",
-        "embed_scale": "main_const_eval_255",
-        "final_norm": "main_const_eval_254",
-        "lm_head_weight": "main_const_eval_50",
-    },
-}
-
-# RMSNorm role → _LAYER_TABLE weight-key field
-_RMSNORM_LT_KEYS = {
-    "input_layernorm": "input_layernorm",
-    "post_attention_layernorm": "post_attn_ln",
-    "pre_feedforward_layernorm": "pre_ff_ln",
-    "post_feedforward_layernorm": "post_ff_ln",
-}
 
 
 def apply_hf_scalar_overrides(cached_main: dict, hf, mesh_device, *, is_decode: bool) -> None:
