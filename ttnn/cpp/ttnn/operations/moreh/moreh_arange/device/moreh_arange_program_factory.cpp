@@ -5,10 +5,17 @@
 #include "moreh_arange_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
-MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::ProgramFactory::create(
+
+using namespace tt::tt_metal;
+
+static constexpr const char* WRITER_KERNEL_TILE =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange.cpp";
+static constexpr const char* WRITER_KERNEL_RM =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp";
+
+ProgramDescriptor MorehArangeOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
@@ -24,40 +31,45 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(grid, Wt);
 
-    // Create program
-    Program program = Program();
+    ProgramDescriptor desc;
 
-    // Create circular buffer
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        tt::tt_metal::datatype_to_dataformat_converter(dtype),
-        {
-            {tt::CBIndex::c_16, 1},
-        });
+    // Circular buffer
+    auto out_data_format = datatype_to_dataformat_converter(dtype);
+    const uint32_t out_tile_size = tile_size(out_data_format);
+    constexpr uint32_t cb_id = tt::CBIndex::c_16;
 
-    // Create write kernel
-    std::map<std::string, std::string> writer_defines;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_id,
+            .data_format = out_data_format,
+            .page_size = out_tile_size,
+        }}},
+    });
+
+    // Writer kernel
+    KernelDescriptor::Defines writer_defines;
     switch (dtype) {
-        case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
-        case DataType::INT32: writer_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
-        case DataType::FLOAT32: writer_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
+        case DataType::BFLOAT16: writer_defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
+        case DataType::INT32: writer_defines.emplace_back("OUTPUT_DTYPE_INT32", "1"); break;
+        case DataType::FLOAT32: writer_defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
         default: break;
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
 
-    auto kernel_id = CreateWriteKernel(
-        program,
-        operation_attributes.untilize_out
-            ? "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp"
-            : "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange.cpp",
-        all_cores,
-        writer_compile_time_args,
-        writer_defines);
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = operation_attributes.untilize_out ? WRITER_KERNEL_RM : WRITER_KERNEL_TILE;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = std::move(all_cores);
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.defines = std::move(writer_defines);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.reserve(num_cores);
 
-    // Set runtime arguments
+    // Runtime args per core
     uint32_t core_h = grid.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
@@ -69,34 +81,23 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         } else {
             TT_FATAL(false, "Core not in specified core ranges");
         }
-        std::vector<uint32_t> writer_args = {
-            output.buffer()->address(),
-            tile_offset,
-            num_tiles_per_core,
-            *reinterpret_cast<uint32_t*>(&start),
-            *reinterpret_cast<uint32_t*>(&step),
-            output.element_size()};
-        SetRuntimeArgs(program, kernel_id, core, writer_args);
+
+        writer_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                output.buffer()->address(),
+                tile_offset,
+                num_tiles_per_core,
+                *reinterpret_cast<uint32_t*>(&start),
+                *reinterpret_cast<uint32_t*>(&step),
+                output.element_size()});
+
         tile_offset += num_tiles_per_core;
     }
-    return {std::move(program), {kernel_id, num_cores, core_h}};
+
+    desc.kernels.push_back(std::move(writer_desc));
+
+    return desc;
 }
 
-void MorehArangeOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& output) {
-    const auto& program = cached_program.program;
-    const auto& kernel_id = cached_program.shared_variables.kernel_id;
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto core_h = cached_program.shared_variables.core_h;
-    auto src_dram_buffer_address = output.buffer()->address();
-
-    for (uint32_t icore = 0; icore < num_cores; ++icore) {
-        CoreCoord core = {icore / core_h, icore % core_h};
-        auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
-        runtime_args[0] = src_dram_buffer_address;
-    }
-}
 }  // namespace ttnn::operations::moreh::moreh_arange
