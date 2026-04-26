@@ -22,13 +22,12 @@ Environment:
 """
 import argparse
 
+import gemma4
 import torch
-import ttnn
+from gemma4 import weights as gw
 from transformers import AutoTokenizer
 
-import gemma4
-from gemma4 import weights as gw
-
+import ttnn
 
 PREFILL_SEQ_LEN = 19  # baked into the codegen
 
@@ -37,18 +36,18 @@ def _tokenize(prompt: str, tokenizer) -> list[int]:
     """Apply gemma's chat template + tokenize. Pad/truncate to PREFILL_SEQ_LEN."""
     messages = [{"role": "user", "content": prompt}]
     enc = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt",
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
         return_dict=True,
     )
     ids = enc["input_ids"][0].tolist()
     if len(ids) > PREFILL_SEQ_LEN:
-        print(f"[warn] prompt is {len(ids)} tokens after chat-template; "
-              f"truncating to {PREFILL_SEQ_LEN}.")
+        print(f"[warn] prompt is {len(ids)} tokens after chat-template; " f"truncating to {PREFILL_SEQ_LEN}.")
         ids = ids[:PREFILL_SEQ_LEN]
     elif len(ids) < PREFILL_SEQ_LEN:
         pad_id = tokenizer.pad_token_id or 0
-        print(f"[info] padding from {len(ids)} → {PREFILL_SEQ_LEN} tokens "
-              f"(pad_id={pad_id}).")
+        print(f"[info] padding from {len(ids)} → {PREFILL_SEQ_LEN} tokens " f"(pad_id={pad_id}).")
         ids = ids + [pad_id] * (PREFILL_SEQ_LEN - len(ids))
     return ids
 
@@ -58,11 +57,10 @@ def _override_token_ids(runtime: dict, ids: list[int], device) -> None:
     user_tokens = torch.tensor(ids, dtype=torch.int32).reshape(1, PREFILL_SEQ_LEN)
     runtime[7] = ttnn.as_tensor(
         user_tokens,
-        dtype=ttnn.DataType.INT32, layout=ttnn.Layout.ROW_MAJOR,
+        dtype=ttnn.DataType.INT32,
+        layout=ttnn.Layout.ROW_MAJOR,
         device=device,
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None
-        ),
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
 
@@ -81,23 +79,18 @@ def run(prompt: str) -> tuple[int, str]:
 
     hf = gw.load_hf_weights()
     layer_table = gemma4.LAYER_TABLE_PREFILL
-    max_norm_slot = max(
-        max(t.get("q_norm_input", 0), t.get("k_norm_input", 0))
-        for t in layer_table.values()
-    )
+    max_norm_slot = max(max(t.get("q_norm_input", 0), t.get("k_norm_input", 0)) for t in layer_table.values())
     n_slots = max(max(runtime) + 1, max_norm_slot + 1)
     input_list = [None] * n_slots
     for slot, t in runtime.items():
         input_list[slot] = t
 
-    cached_main = gw.build_cached_main_from_hf(
-        hf, input_list, layer_table, device, is_decode=False,
+    model = gemma4.Gemma4ForCausalLM.from_state_dict(
+        hf,
+        device,
+        is_decode=False,
     )
-
-    model = gemma4.Gemma4ForCausalLM.from_consteval(
-        layer_table=layer_table, is_decode=False,
-    )
-    out = model(input_list, cached_main=cached_main)
+    out = model(input_list)
     logits = out[-1]
 
     logits_host = ttnn.from_device(logits)
@@ -119,8 +112,7 @@ def main():
         "prompt",
         nargs="?",
         default="What is your favorite city?",
-        help="A short question (must fit in 19 tokens after chat-template "
-              "wrapping).",
+        help="A short question (must fit in 19 tokens after chat-template " "wrapping).",
     )
     args = parser.parse_args()
     run(args.prompt)

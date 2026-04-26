@@ -2,15 +2,10 @@
 
 Construction is HF-state-dict-driven: `from_state_dict(hf, mesh_device,
 *, is_decode)` builds the full module tree (60 decoder layers, scaled
-embedding, LM head). Per-layer weights, runtime-input slot indices,
-and the per-RMSNorm eps tensor are baked into the layer instances at
-construction time.
-
-The legacy prelude classes and the L58/L59 special methods still
-consume `self.cached_main` for assets (RoPE inv-freq tables, scalar
-constants, L58/L59 weights). Those go away in subsequent commits when
-the prelude is replaced by a RoPE class and L58/L59 are unified into
-the regular loop.
+embedding, LM head, sliding/full preludes, L58/L59 specials). Every
+weight, scalar constant, and RoPE inv-freq tensor lives as a named
+instance attribute; the runtime call path takes only the runtime input
+list (KV caches, position IDs, token IDs).
 """
 import gemma4
 from gemma4 import utils
@@ -47,7 +42,7 @@ class Gemma4ForCausalLM:
         layers,
         lm_head,
         shared,
-        cached_main,
+        causal_mask_one_hot,
         sliding_prelude,
         full_prelude,
         l58,
@@ -59,12 +54,14 @@ class Gemma4ForCausalLM:
         self.lm_head = lm_head
         self.sliding_prelude = sliding_prelude
         self.full_prelude = full_prelude
-        # L58/L59 specials — full DecoderLayer instances used as weight
+        # L58/L59 specials — DecoderLayer instances used as weight
         # bundles by the verbatim L58/L59 bodies in this file.
         self.l58 = l58
         self.l59 = l59
         self.shared = shared  # dict of var_185..var_193 device tensors
-        self.cached_main = cached_main  # transitional: feeds initial-setup ops in _call_*
+        # bf16 (1,1,256,1) one_hot helper used to build the causal mask
+        # at the top of _call_*.
+        self.causal_mask_one_hot = causal_mask_one_hot
         self.model = Gemma4Model(is_decode=is_decode)
 
     def __call__(self, input):
@@ -75,55 +72,38 @@ class Gemma4ForCausalLM:
 
     @classmethod
     def from_state_dict(cls, hf, mesh_device, *, is_decode):
-        """Build the full model from an HfWeights bundle.
-
-        `hf.state_dict` provides per-layer weights; `cached_main` is
-        bootstrapped via `weights.build_cached_main_from_hf` for the
-        remaining consumers (prelude + L58/L59 specials).
+        """Build the full model from an HfWeights bundle. Every weight
+        and scalar constant becomes an instance attribute; nothing is
+        kept around as a runtime dict.
         """
         layer_table = LAYER_TABLE_DECODE if is_decode else LAYER_TABLE_PREFILL
 
-        # Bootstrap cached_main: still feeds the orchestration (initial
-        # setup ops in _call_*) and the prelude (which holds its own
-        # cached_main reference). After Phase 3 the L58/L59 specials no
-        # longer consume cached_main directly.
-        max_norm_slot = max(max(t.get("q_norm_input", 0), t.get("k_norm_input", 0)) for t in layer_table.values())
-        input_list = [None] * (max_norm_slot + 1)
-        cached_main = gw.build_cached_main_from_hf(
-            hf,
-            input_list,
-            layer_table,
-            mesh_device,
-            is_decode=is_decode,
-        )
+        # Build the no-input scalar constants and RoPE inv_freq tables into
+        # a transient dict. apply_hf_scalar_overrides covers all the simple
+        # tensor constants (zeros, fills, aranges, one-hot mask helper);
+        # RoPESetup populates the sliding/full inv_freq matmul operands.
+        # The dict is only used for prelude construction below; nothing
+        # references it after that.
+        transient_cm: dict = {}
+        gw.apply_hf_scalar_overrides(transient_cm, hf, mesh_device, is_decode=is_decode)
+        gemma4.RoPESetup.from_hf(hf, mesh_device, is_decode=is_decode).populate_cached_main(transient_cm)
 
-        # Per-RMSNorm eps tensor (var_188 in the legacy plumbing).
-        rms_eps_tensor = cached_main["main_const_eval_240"][0]
+        # Per-RMSNorm eps tensor.
+        rms_eps_tensor = transient_cm["main_const_eval_240"][0]
+
+        # One-hot causal mask helper. Same recipe in both modes (bf16
+        # (1,1,256,1) one_hot at the last position); the codegen numbered
+        # them differently per artifact (ce_535 decode, ce_536 prefill).
+        causal_mask_one_hot = transient_cm["main_const_eval_535" if is_decode else "main_const_eval_536"][0]
+
+        # softcap tensor (bf16 (1,1,1) fill=final_logit_softcapping).
+        softcap = transient_cm["main_const_eval_171" if is_decode else "main_const_eval_314"][0]
 
         # Top-level submodules.
         scaled_embedding = gemma4.ScaledEmbedding.from_state_dict(
             hf.state_dict,
             hf.lifted,
             mesh_device,
-        )
-        # LMHead consumes scalar tensors that share lifetime with cached_main;
-        # pull them from cached_main directly.
-        if is_decode:
-            last_layer_scalar = cached_main["main_const_eval_388"][0]
-            norm_weight_ce = "main_const_eval_254"
-            lm_head_weight_ce = "main_const_eval_50"
-            softcap = cached_main["main_const_eval_171"][0]
-        else:
-            last_layer_scalar = cached_main["main_const_eval_254"][0]
-            norm_weight_ce = "main_const_eval_50"
-            lm_head_weight_ce = "main_const_eval_171"
-            softcap = cached_main["main_const_eval_314"][0]
-        lm_head = gemma4.LMHead(
-            last_layer_scalar=last_layer_scalar,
-            rms_eps=rms_eps_tensor,
-            norm_weight=cached_main[norm_weight_ce][0],
-            lm_head_weight=cached_main[lm_head_weight_ce][0],
-            softcap=softcap,
         )
 
         # Per-layer construction. Decode runs L0..L58 through the loop and
@@ -160,33 +140,33 @@ class Gemma4ForCausalLM:
         # the `shared` kwarg passed through __call__.
         if is_decode:
             shared = {
-                "var_185": cached_main["main_const_eval_0"][1],
-                "var_186": cached_main["main_const_eval_0"][2],
+                "var_185": transient_cm["main_const_eval_0"][1],
+                "var_186": transient_cm["main_const_eval_0"][2],
                 "var_188": rms_eps_tensor,
-                "var_190": cached_main["main_const_eval_334"][0],
-                "var_191": cached_main["main_const_eval_337"][0],
-                "var_192": cached_main["main_const_eval_486"][0],
-                "var_193": cached_main["main_const_eval_489"][0],
+                "var_190": transient_cm["main_const_eval_334"][0],
+                "var_191": transient_cm["main_const_eval_337"][0],
+                "var_192": transient_cm["main_const_eval_486"][0],
+                "var_193": transient_cm["main_const_eval_489"][0],
             }
         else:
             shared = {
-                "var_185": cached_main["main_const_eval_0"][1],
-                "var_186": cached_main["main_const_eval_0"][2],
-                "var_187": cached_main["main_const_eval_186"][0],
+                "var_185": transient_cm["main_const_eval_0"][1],
+                "var_186": transient_cm["main_const_eval_0"][2],
+                "var_187": transient_cm["main_const_eval_186"][0],
                 "var_188": rms_eps_tensor,
-                "var_190": cached_main["main_const_eval_266"][0],
-                "var_192": cached_main["main_const_eval_335"][0],
-                "var_193": cached_main["main_const_eval_338"][0],
+                "var_190": transient_cm["main_const_eval_266"][0],
+                "var_192": transient_cm["main_const_eval_335"][0],
+                "var_193": transient_cm["main_const_eval_338"][0],
             }
 
         # Preludes: bind cached_main once at construction; runtime calls
         # don't pass it.
         if is_decode:
-            sliding_prelude = gemma4.SlidingPreludeDecode(cached_main)
-            full_prelude = gemma4.FullPreludeDecode(cached_main)
+            sliding_prelude = gemma4.SlidingPreludeDecode.from_consteval(transient_cm)
+            full_prelude = gemma4.FullPreludeDecode.from_consteval(transient_cm)
         else:
-            sliding_prelude = gemma4.SlidingPreludePrefill(cached_main)
-            full_prelude = gemma4.FullPreludePrefill(cached_main)
+            sliding_prelude = gemma4.SlidingPreludePrefill.from_consteval(transient_cm)
+            full_prelude = gemma4.FullPreludePrefill.from_consteval(transient_cm)
 
         # L58 (sliding) special — only used in prefill mode (decode runs L58
         # through the regular layer loop).
@@ -216,14 +196,13 @@ class Gemma4ForCausalLM:
             rms_eps_tensor=rms_eps_tensor,
         )
 
-        # last_layer_scalar for the postlude is now self.l59.layer_scalar.
-        # Rebuild the LMHead with that. (We keep softcap from cached_main
-        # for now; it's a no-input scalar that survives Phase 3.)
-        lm_head = gemma4.LMHead(
-            last_layer_scalar=l59.layer_scalar,
+        # LMHead: norm_weight and lm_head_weight (tied to embed_tokens)
+        # come from HF state_dict directly.
+        lm_head = gemma4.LMHead.from_state_dict(
+            hf.state_dict,
+            mesh_device,
             rms_eps=rms_eps_tensor,
-            norm_weight=cached_main[norm_weight_ce][0],
-            lm_head_weight=cached_main[lm_head_weight_ce][0],
+            last_layer_scalar=l59.layer_scalar,
             softcap=softcap,
         )
 
@@ -233,7 +212,7 @@ class Gemma4ForCausalLM:
             layers=layers,
             lm_head=lm_head,
             shared=shared,
-            cached_main=cached_main,
+            causal_mask_one_hot=causal_mask_one_hot,
             sliding_prelude=sliding_prelude,
             full_prelude=full_prelude,
             l58=l58,
@@ -242,11 +221,8 @@ class Gemma4ForCausalLM:
 
     def _call_decode(self, input):
         """Decode forward pass: prelude → 59-layer loop → L59 special →
-        postlude. The legacy `cached_main` dict is aliased from
-        `self.cached_main` so the (still-unrefactored) prelude and L59
-        special continue to work. Subsequent commits replace those.
+        postlude. All weights and constants flow through self.X.
         """
-        cached_main = self.cached_main
         var_0 = input[0]
         var_1 = input[1]
         var_2 = input[7]
@@ -430,17 +406,7 @@ class Gemma4ForCausalLM:
         var_180 = input[993]
         var_181 = input[1007]
         var_182 = input[1008]
-        var_183 = cached_main["main_const_eval_0"]
-        var_184 = var_183[0]
-        var_185 = var_183[1]
-        var_186 = var_183[2]
-        var_187 = cached_main["main_const_eval_171"][0]
-        var_188 = cached_main["main_const_eval_240"][0]
-        var_189 = cached_main["main_const_eval_266"][0]
-        var_190 = cached_main["main_const_eval_334"][0]
-        var_191 = cached_main["main_const_eval_337"][0]
-        var_192 = cached_main["main_const_eval_486"][0]
-        var_193 = cached_main["main_const_eval_489"][0]
+        var_185 = self.shared["var_185"]
         utils_DeviceGetter_get_device_0 = utils.DeviceGetter.get_device((1, 4))
         ttnn_to_layout_0 = ttnn.to_layout(var_0, ttnn.Layout.TILE, None, memory_config=None)
         ttnn.deallocate(var_0, False)
@@ -460,7 +426,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_to_layout_1, False)
         ttnn_logical_and_0 = ttnn.logical_and(
             ttnn_reshape_0,
-            cached_main["main_const_eval_535"][0],
+            self.causal_mask_one_hot,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -586,7 +552,6 @@ class Gemma4ForCausalLM:
         ttnn_add_575, ttnn_where_253, ttnn_where_255 = layer_kv_outputs[57]
         ttnn_add_585, ttnn_where_258, ttnn_where_260 = layer_kv_outputs[58]
         ttnn_add_601 = self._full_layer_59_decode(
-            cached_main=cached_main,
             hidden_state=ttnn_multiply_1062,
             full_cos_cache=ttnn_typecast_35,
             full_sin_cache=ttnn_typecast_36,
@@ -780,11 +745,8 @@ class Gemma4ForCausalLM:
 
     def _call_prefill(self, input):
         """Prefill forward pass: prelude → 58-layer loop → L58/L59 specials
-        → postlude. The legacy `cached_main` dict is aliased from
-        `self.cached_main`; the prelude and the L58/L59 specials continue
-        to consume it until subsequent commits replace them.
+        → postlude. All weights and constants flow through self.X.
         """
-        cached_main = self.cached_main
         var_0 = input[0]
         var_1 = input[1]
         var_2 = input[7]
@@ -968,17 +930,13 @@ class Gemma4ForCausalLM:
         var_180 = input[993]
         var_181 = input[1007]
         var_182 = input[1008]
-        var_183 = cached_main["main_const_eval_0"]
-        var_184 = var_183[0]
-        var_185 = var_183[1]
-        var_186 = var_183[2]
-        var_187 = cached_main["main_const_eval_186"][0]
-        var_188 = cached_main["main_const_eval_240"][0]
-        var_189 = cached_main["main_const_eval_242"][0]
-        var_190 = cached_main["main_const_eval_266"][0]
-        var_191 = cached_main["main_const_eval_314"][0]
-        var_192 = cached_main["main_const_eval_335"][0]
-        var_193 = cached_main["main_const_eval_338"][0]
+        var_185 = self.shared["var_185"]
+        var_186 = self.shared["var_186"]
+        var_187 = self.shared["var_187"]
+        var_188 = self.shared["var_188"]
+        var_190 = self.shared["var_190"]
+        var_192 = self.shared["var_192"]
+        var_193 = self.shared["var_193"]
         # Side-effecting device init — the assignment is not read but the call
         # registers the multi-device mesh used by every subsequent ttnn op.
         # Do NOT remove despite "unused variable" warnings.
@@ -1001,7 +959,7 @@ class Gemma4ForCausalLM:
         ttnn.deallocate(ttnn_to_layout_1, False)
         ttnn_logical_and_0 = ttnn.logical_and(
             ttnn_reshape_0,
-            cached_main["main_const_eval_536"][0],
+            self.causal_mask_one_hot,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -1148,7 +1106,6 @@ class Gemma4ForCausalLM:
             ttnn_concat_219,
             ttnn_concat_220,
         ) = self._sliding_layer_58_prefill(
-            cached_main=cached_main,
             hidden_state=ttnn_multiply_1044,
             causal_mask_logical_and=ttnn_logical_and_0,
             causal_mask_logical_not=ttnn_logical_not_0,
@@ -1160,26 +1117,15 @@ class Gemma4ForCausalLM:
             var_178=var_178,
             var_179=var_179,
             var_180=var_180,
-            var_185=var_185,
-            var_186=var_186,
-            var_187=var_187,
-            var_188=var_188,
-            var_190=var_190,
-            var_192=var_192,
-            var_193=var_193,
             input=input,
         )
         ttnn_add_602 = self._full_layer_59_prefill(
-            cached_main=cached_main,
             hidden_state=ttnn_multiply_1062,
             full_cos_cache=ttnn_reshape_104,
             full_sin_cache=ttnn_reshape_105,
             full_pos_mask=ttnn_typecast_39,
             var_181=var_181,
             var_182=var_182,
-            var_187=var_187,
-            var_188=var_188,
-            var_193=var_193,
             input=input,
         )
         ttnn_multiply_1084 = self.lm_head(ttnn_add_602)
@@ -1369,7 +1315,7 @@ class Gemma4ForCausalLM:
             ttnn_multiply_1084,
         ]
 
-    def _full_layer_59_decode(self, *, cached_main, hidden_state, full_cos_cache, full_sin_cache, full_pos_mask, input):
+    def _full_layer_59_decode(self, *, hidden_state, full_cos_cache, full_sin_cache, full_pos_mask, input):
         """Last full-attention decoder layer (index 59). Special because its
         layer_scalar multiply is absorbed into `_final_norm_lm_head_softcap`,
         so this helper returns the pre-layer-scalar residual `ttnn_add_601`
@@ -1381,9 +1327,9 @@ class Gemma4ForCausalLM:
         var_180 = input[993]  # update_idxs (= L58's runtime_c slot)
         var_181 = input[1007]  # L59 runtime_a
         var_182 = input[1008]  # L59 runtime_b
-        var_188 = cached_main["main_const_eval_240"][0]
-        var_191 = cached_main["main_const_eval_337"][0]
-        var_193 = cached_main["main_const_eval_489"][0]
+        var_188 = self.shared["var_188"]
+        var_191 = self.shared["var_191"]
+        var_193 = self.shared["var_193"]
 
         ttnn_multiply_1062 = hidden_state
         ttnn_typecast_35 = full_cos_cache
@@ -1838,7 +1784,6 @@ class Gemma4ForCausalLM:
     def _sliding_layer_58_prefill(
         self,
         *,
-        cached_main,
         hidden_state,
         causal_mask_logical_and,
         causal_mask_logical_not,
@@ -1850,15 +1795,15 @@ class Gemma4ForCausalLM:
         var_178,
         var_179,
         var_180,
-        var_185,
-        var_186,
-        var_187,
-        var_188,
-        var_190,
-        var_192,
-        var_193,
         input,
     ):
+        var_185 = self.shared["var_185"]
+        var_186 = self.shared["var_186"]
+        var_187 = self.shared["var_187"]
+        var_188 = self.shared["var_188"]
+        var_190 = self.shared["var_190"]
+        var_192 = self.shared["var_192"]
+        var_193 = self.shared["var_193"]
         """Last sliding-attention decoder layer (index 58). Special because
         its body emits two `ttnn_concat_*` ops that pre-stage the K cache for
         the trailing full-attention layer (L59). Op sequence is verbatim from
@@ -2865,18 +2810,17 @@ class Gemma4ForCausalLM:
     def _full_layer_59_prefill(
         self,
         *,
-        cached_main,
         hidden_state,
         full_cos_cache,
         full_sin_cache,
         full_pos_mask,
         var_181,
         var_182,
-        var_187,
-        var_188,
-        var_193,
         input,
     ):
+        var_187 = self.shared["var_187"]
+        var_188 = self.shared["var_188"]
+        var_193 = self.shared["var_193"]
         """Last full-attention decoder layer (index 59). Special because its
         layer_scalar mul is absorbed into `_final_norm_lm_head_softcap` (the
         postlude); the helper returns `ttnn_add_602`, the pre-layer-scalar

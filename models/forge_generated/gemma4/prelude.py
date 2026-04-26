@@ -1,12 +1,12 @@
 """Sliding-window and full-attention preludes (RoPE cos/sin caches +
 mask helpers). One class per (prefill|decode, sliding|full) combination
 because the bodies differ structurally enough that a unified body would
-be more confusing than helpful. Phase 2 may unify after HF loading
-patterns are clear.
+be more confusing than helpful.
 
-Bodies are verbatim copies of the legacy `_sliding_prelude` and
-`_full_prelude` from `gemma4_{prefill,decode}/model.py`, with
-`_cached__main` renamed to `cached_main` (threaded as a __call__ arg).
+Each class owns its scalar constants and inv_freq tensors as named
+instance attributes (`self.c_X`). Bodies are verbatim copies of the
+legacy codegen output with the cached_main lookups rewritten to
+attribute access.
 """
 import ttnn
 
@@ -14,16 +14,20 @@ import ttnn
 class SlidingPreludeDecode:
     """Sliding-attention prelude for decode.
 
-    Verbatim wrap of the codegen-derived sliding-decode prelude. Returns
-    (typecast_2, typecast_3, reshape_3, reshape_18, to_layout_11,
-    typecast_11). Six outputs.
+    Returns (typecast_2, typecast_3, reshape_3, reshape_18,
+    to_layout_11, typecast_11) — six outputs.
     """
 
-    def __init__(self, cached_main):
-        self._cached_main = cached_main
+    def __init__(self, *, c_0, c_266, c_626, c_242, c_400, c_621, c_543):
+        self.c_0 = c_0  # 3-tuple
+        self.c_266 = c_266  # uint32 (1,) fill=256
+        self.c_626 = c_626  # sliding_attention_inv_freq reshaped, fp32 [1,128,1]
+        self.c_242 = c_242  # int32 (256,) arange(0..255)
+        self.c_400 = c_400  # int32 (1,1) zeros
+        self.c_621 = c_621  # bf16 (1,1,1,1) zeros (lifted_tensor_0)
+        self.c_543 = c_543  # bf16 (1,1,1,1) bf16_min (lifted_tensor_1)
 
     def __call__(self, input, ttnn_to_layout_0, ttnn_add_0):
-        cached_main = self._cached_main
         """Compute shared sliding-attention prelude tensors once per call:
         RoPE cos/sin caches, position-id reshapes/typecasts, causal mask
         helper. The op sequence is the verbatim block previously inlined
@@ -31,8 +35,8 @@ class SlidingPreludeDecode:
         and return them; now they live in this dedicated prelude function.
         """
         var_7 = input[26]
-        var_184 = cached_main["main_const_eval_0"][0]
-        var_189 = cached_main["main_const_eval_266"][0]
+        var_184 = self.c_0[0]
+        var_189 = self.c_266
 
         ttnn_typecast_1 = ttnn.typecast(
             ttnn_to_layout_0,
@@ -46,7 +50,7 @@ class SlidingPreludeDecode:
         )
         ttnn.deallocate(ttnn_typecast_1, False)
         ttnn_matmul_1 = ttnn.matmul(
-            cached_main["main_const_eval_626"][0],
+            self.c_626,
             ttnn_reshape_3,
             transpose_a=False,
             transpose_b=False,
@@ -99,7 +103,7 @@ class SlidingPreludeDecode:
         )
         ttnn_add_5 = ttnn.add(
             ttnn_subtract_0,
-            cached_main["main_const_eval_242"][0],
+            self.c_242,
             dtype=ttnn.DataType.INT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -171,7 +175,7 @@ class SlidingPreludeDecode:
         ttnn_to_layout_9 = ttnn.to_layout(var_7, ttnn.Layout.TILE, None, memory_config=None)
         ttnn_ne_0 = ttnn.ne(
             ttnn_to_layout_9,
-            cached_main["main_const_eval_400"][0],
+            self.c_400,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -275,8 +279,8 @@ class SlidingPreludeDecode:
         ttnn.deallocate(ttnn_logical_and_2, False)
         ttnn_where_5 = ttnn.where(
             ttnn_logical_and_3,
-            cached_main["main_const_eval_621"][0],
-            cached_main["main_const_eval_543"][0],
+            self.c_621,
+            self.c_543,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_logical_and_3, False)
@@ -299,30 +303,40 @@ class SlidingPreludeDecode:
 
     @classmethod
     def from_consteval(cls, cached_main):
-        return cls(cached_main)
+        return cls(
+            c_0=cached_main["main_const_eval_0"],
+            c_266=cached_main["main_const_eval_266"][0],
+            c_626=cached_main["main_const_eval_626"][0],
+            c_242=cached_main["main_const_eval_242"][0],
+            c_400=cached_main["main_const_eval_400"][0],
+            c_621=cached_main["main_const_eval_621"][0],
+            c_543=cached_main["main_const_eval_543"][0],
+        )
 
 
 class FullPreludeDecode:
     """Full-attention prelude for decode.
 
-    Verbatim wrap of the codegen-derived full-decode prelude. Returns
-    (typecast_35, typecast_36, typecast_39).
+    Returns (typecast_35, typecast_36, typecast_39).
     """
 
-    def __init__(self, cached_main):
-        self._cached_main = cached_main
+    def __init__(self, *, c_75, c_123, c_316, c_486, c_509):
+        self.c_75 = c_75  # full_attention_inv_freq reshaped, fp32 [1,256,1]
+        self.c_123 = c_123  # bf16 (1,1,1,1) -inf
+        self.c_316 = c_316  # int32 (1,1,1,256) arange(0..255)
+        self.c_486 = c_486  # bf16 (1,1,1,1) zeros (var_192 in decode)
+        self.c_509 = c_509  # uint32 (1,256) arange(0..255) ROW_MAJOR
 
     def __call__(self, input, ttnn_reshape_0, ttnn_reshape_3, ttnn_reshape_18, ttnn_to_layout_11):
-        cached_main = self._cached_main
         """Compute the full-attention prelude tensors once per call: full RoPE
         cos/sin caches and a position-id-based mask helper. Used by every full
         decoder layer. The op sequence is the verbatim block previously inlined
         inside layer 5's body. Mirrors prefill commit 828f1b4ef.
         """
-        var_192 = cached_main["main_const_eval_486"][0]
+        var_192 = self.c_486
 
         ttnn_matmul_37 = ttnn.matmul(
-            cached_main["main_const_eval_75"][0],
+            self.c_75,
             ttnn_reshape_3,
             transpose_a=False,
             transpose_b=False,
@@ -369,7 +383,7 @@ class FullPreludeDecode:
         ttnn.deallocate(ttnn_sin_1, False)
         ttnn_ge_2 = ttnn.ge(
             ttnn_reshape_18,
-            cached_main["main_const_eval_316"][0],
+            self.c_316,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -381,7 +395,7 @@ class FullPreludeDecode:
         )
         ttnn.deallocate(ttnn_ge_2, False)
         ttnn_embedding_22 = ttnn.embedding(
-            cached_main["main_const_eval_509"][0],
+            self.c_509,
             ttnn_to_layout_11,
             padding_idx=None,
             layout=ttnn.Layout.TILE,
@@ -405,7 +419,7 @@ class FullPreludeDecode:
         ttnn_where_27 = ttnn.where(
             ttnn_logical_and_5,
             var_192,
-            cached_main["main_const_eval_123"][0],
+            self.c_123,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_logical_and_5, False)
@@ -428,22 +442,33 @@ class FullPreludeDecode:
 
     @classmethod
     def from_consteval(cls, cached_main):
-        return cls(cached_main)
+        return cls(
+            c_75=cached_main["main_const_eval_75"][0],
+            c_123=cached_main["main_const_eval_123"][0],
+            c_316=cached_main["main_const_eval_316"][0],
+            c_486=cached_main["main_const_eval_486"][0],
+            c_509=cached_main["main_const_eval_509"][0],
+        )
 
 
 class SlidingPreludePrefill:
     """Sliding-attention prelude for prefill (sequence of 19 tokens).
 
-    Verbatim wrap of the codegen-derived sliding-prefill prelude. Returns
-    (typecast_2, typecast_3, reshape_3, reshape_15, reshape_16,
-    reshape_18, to_layout_11, typecast_11). Eight outputs.
+    Returns (typecast_2, typecast_3, reshape_3, reshape_15, reshape_16,
+    reshape_18, to_layout_11, typecast_11) — eight outputs.
     """
 
-    def __init__(self, cached_main):
-        self._cached_main = cached_main
+    def __init__(self, *, c_0, c_242, c_487, c_627, c_401, c_544, c_490, c_622):
+        self.c_0 = c_0  # 3-tuple (prefill: arange(-237..18), full=19)
+        self.c_242 = c_242  # int32 (1,) fill=256 (var_189 prefill)
+        self.c_487 = c_487  # sliding_attention_inv_freq reshaped, fp32 [1,128,1]
+        self.c_627 = c_627  # int32 (19,) arange(0..18)
+        self.c_401 = c_401  # int32 (256,) arange(0..255)
+        self.c_544 = c_544  # int32 (1,1) zeros
+        self.c_490 = c_490  # bf16 (1,1,1,1) zeros (lifted_tensor_0)
+        self.c_622 = c_622  # bf16 (1,1,1,1) bf16_min (lifted_tensor_1)
 
     def __call__(self, input, ttnn_to_layout_0):
-        cached_main = self._cached_main
         """Compute shared sliding-attention prelude tensors once per call:
         RoPE cos/sin caches, position-id reshapes, layout/typecast helpers.
         The op sequence is the verbatim block previously inlined inside
@@ -451,12 +476,12 @@ class SlidingPreludePrefill:
         them; now they live in this dedicated prelude function.
         """
         var_7 = input[26]
-        var_184 = cached_main["main_const_eval_0"][0]
-        var_189 = cached_main["main_const_eval_242"][0]
+        var_184 = self.c_0[0]
+        var_189 = self.c_242
 
         ttnn_add_2 = ttnn.add(
             ttnn_to_layout_0,
-            cached_main["main_const_eval_627"][0],
+            self.c_627,
             dtype=ttnn.DataType.INT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -472,7 +497,7 @@ class SlidingPreludePrefill:
         )
         ttnn.deallocate(ttnn_typecast_1, False)
         ttnn_matmul_1 = ttnn.matmul(
-            cached_main["main_const_eval_487"][0],
+            self.c_487,
             ttnn_reshape_3,
             transpose_a=False,
             transpose_b=False,
@@ -550,7 +575,7 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_slice_7, False)
         ttnn_add_6 = ttnn.add(
             ttnn_subtract_0,
-            cached_main["main_const_eval_401"][0],
+            self.c_401,
             dtype=ttnn.DataType.INT32,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -629,7 +654,7 @@ class SlidingPreludePrefill:
         ttnn_to_layout_9 = ttnn.to_layout(var_7, ttnn.Layout.TILE, None, memory_config=None)
         ttnn_ne_0 = ttnn.ne(
             ttnn_to_layout_9,
-            cached_main["main_const_eval_544"][0],
+            self.c_544,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -733,8 +758,8 @@ class SlidingPreludePrefill:
         ttnn.deallocate(ttnn_logical_and_2, False)
         ttnn_where_5 = ttnn.where(
             ttnn_logical_and_3,
-            cached_main["main_const_eval_490"][0],
-            cached_main["main_const_eval_622"][0],
+            self.c_490,
+            self.c_622,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_logical_and_3, False)
@@ -758,30 +783,41 @@ class SlidingPreludePrefill:
 
     @classmethod
     def from_consteval(cls, cached_main):
-        return cls(cached_main)
+        return cls(
+            c_0=cached_main["main_const_eval_0"],
+            c_242=cached_main["main_const_eval_242"][0],
+            c_487=cached_main["main_const_eval_487"][0],
+            c_627=cached_main["main_const_eval_627"][0],
+            c_401=cached_main["main_const_eval_401"][0],
+            c_544=cached_main["main_const_eval_544"][0],
+            c_490=cached_main["main_const_eval_490"][0],
+            c_622=cached_main["main_const_eval_622"][0],
+        )
 
 
 class FullPreludePrefill:
     """Full-attention prelude for prefill.
 
-    Verbatim wrap of the codegen-derived full-prefill prelude. Returns
-    (reshape_104, reshape_105, typecast_39).
+    Returns (reshape_104, reshape_105, typecast_39).
     """
 
-    def __init__(self, cached_main):
-        self._cached_main = cached_main
+    def __init__(self, *, c_123, c_129, c_217, c_335, c_510):
+        self.c_123 = c_123  # uint32 (1,256) arange(0..255) ROW_MAJOR (NOT same as decode's c_123)
+        self.c_129 = c_129  # full_attention_inv_freq reshaped, fp32 [1,256,1]
+        self.c_217 = c_217  # bf16 (1,1,1,1) -inf
+        self.c_335 = c_335  # bf16 (1,1,1,1) zeros (var_192 prefill)
+        self.c_510 = c_510  # int32 (1,1,1,256) arange(0..255)
 
     def __call__(self, input, ttnn_reshape_0, ttnn_reshape_3, ttnn_reshape_18, ttnn_to_layout_11):
-        cached_main = self._cached_main
         """Compute the full-attention prelude tensors once per call: full RoPE
         cos/sin caches and a position-id-based mask helper. Used by every full
         decoder layer. The op sequence is the verbatim block previously inlined
         inside layer 5's body.
         """
-        var_192 = cached_main["main_const_eval_335"][0]
+        var_192 = self.c_335
 
         ttnn_matmul_37 = ttnn.matmul(
-            cached_main["main_const_eval_129"][0],
+            self.c_129,
             ttnn_reshape_3,
             transpose_a=False,
             transpose_b=False,
@@ -841,7 +877,7 @@ class FullPreludePrefill:
         ttnn.deallocate(ttnn_typecast_36, False)
         ttnn_ge_2 = ttnn.ge(
             ttnn_reshape_18,
-            cached_main["main_const_eval_510"][0],
+            self.c_510,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
@@ -853,7 +889,7 @@ class FullPreludePrefill:
         )
         ttnn.deallocate(ttnn_ge_2, False)
         ttnn_embedding_22 = ttnn.embedding(
-            cached_main["main_const_eval_123"][0],
+            self.c_123,
             ttnn_to_layout_11,
             padding_idx=None,
             layout=ttnn.Layout.TILE,
@@ -877,7 +913,7 @@ class FullPreludePrefill:
         ttnn_where_27 = ttnn.where(
             ttnn_logical_and_5,
             var_192,
-            cached_main["main_const_eval_217"][0],
+            self.c_217,
             memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         )
         ttnn.deallocate(ttnn_logical_and_5, False)
@@ -896,4 +932,10 @@ class FullPreludePrefill:
 
     @classmethod
     def from_consteval(cls, cached_main):
-        return cls(cached_main)
+        return cls(
+            c_123=cached_main["main_const_eval_123"][0],
+            c_129=cached_main["main_const_eval_129"][0],
+            c_217=cached_main["main_const_eval_217"][0],
+            c_335=cached_main["main_const_eval_335"][0],
+            c_510=cached_main["main_const_eval_510"][0],
+        )
