@@ -485,25 +485,43 @@ function deduplicateAndSortRuns(runs) {
 }
 
 /**
- * Computes the latest conclusion for a set of runs
+ * Returns the latest non-cancelled/non-skipped run from a deduplicated, sorted
+ * list. This matches the fetch step's targetRun selection logic so that run IDs
+ * used for error-snippet lookups correspond to runs we actually downloaded data for.
+ * @param {Array} sortedRuns - Deduplicated and sorted runs (newest first)
+ * @returns {Object|null} The first run whose conclusion is not cancelled/skipped, or null
+ */
+function findLatestActionableRun(sortedRuns) {
+  return sortedRuns.find(r => {
+    const conc = r && r.conclusion;
+    return conc !== 'cancelled' && conc !== 'skipped';
+  }) || null;
+}
+
+/**
+ * Computes the latest conclusion for a set of runs, skipping cancelled/skipped
+ * runs. This matches the fetch step's targetRun selection logic: cancelled runs
+ * don't produce useful failure data, so they shouldn't drive the success/failure
+ * determination.
  * @param {Array} runs - Array of workflow runs
  * @returns {string|null} 'success', 'failure', or null
  */
 function computeLatestConclusion(runs) {
-  const mainBranchRuns = deduplicateAndSortRuns(runs);
-  const latest = mainBranchRuns[0];
+  const latest = findLatestActionableRun(deduplicateAndSortRuns(runs));
   if (!latest) return null;
   return latest.conclusion === 'success' ? 'success' : 'failure';
 }
 
 /**
- * Gets the latest run info for a set of runs
+ * Gets the latest run info for a set of runs, skipping cancelled/skipped runs.
+ * This matches the fetch step's targetRun selection logic so that the run_id
+ * used for error-snippet lookups corresponds to a run we actually downloaded
+ * annotations/logs for.
  * @param {Array} runs - Array of workflow runs
  * @returns {Object|null} Run info object or null
  */
 function computeLatestRunInfo(runs) {
-  const mainBranchRuns = deduplicateAndSortRuns(runs);
-  const latest = mainBranchRuns[0];
+  const latest = findLatestActionableRun(deduplicateAndSortRuns(runs));
   if (!latest) return null;
   return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
 }
@@ -1055,6 +1073,94 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
   return ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
 }
 
+/**
+ * Promotes stayed_failing workflows matching a run name to regressions,
+ * so auto-triage picks them up. Used when a stayed_failing workflow was never
+ * properly triaged (e.g. error info was unavailable at the time of the original
+ * regression). When used, all other (non-promoted) regressions are cleared so
+ * that auto-triage only targets the forced workflow.
+ *
+ * @param {string} forceRunName - Workflow run name or substring (e.g. "apc nightly debug run with watcher")
+ * @param {Array} stayedFailingDetails - Array of stayed_failing detail objects (modified: matching items removed)
+ * @param {Array} regressedDetails - Array of regressed detail objects (modified: cleared then promoted items set)
+ * @param {Array} changes - Array of change objects (modified: matching entries updated to success_to_fail)
+ * @returns {number} Number of workflows promoted
+ */
+function promoteStayedFailingToRegressed(forceRunName, stayedFailingDetails, regressedDetails, changes) {
+  if (!forceRunName) return 0;
+
+  const needle = forceRunName.toLowerCase();
+  const toPromote = [];
+  const toRemoveIndices = [];
+
+  for (let i = 0; i < stayedFailingDetails.length; i++) {
+    const item = stayedFailingDetails[i];
+    const name = (item.name || '').toLowerCase();
+    if (name.includes(needle)) {
+      toPromote.push(item);
+      toRemoveIndices.push(i);
+    }
+  }
+
+  if (toPromote.length === 0) {
+    core.warning(`[FORCE-REGRESSION] No stayed_failing workflows matched "${forceRunName}"`);
+    return 0;
+  }
+
+  // Remove matched items from stayedFailingDetails (reverse order to preserve indices)
+  for (let i = toRemoveIndices.length - 1; i >= 0; i--) {
+    stayedFailingDetails.splice(toRemoveIndices[i], 1);
+  }
+
+  // Clear existing regressions so auto-triage only targets the forced workflow
+  const existingCount = regressedDetails.length;
+  regressedDetails.length = 0;
+  if (existingCount > 0) {
+    core.info(`[FORCE-REGRESSION] Cleared ${existingCount} existing regression(s) to focus on forced workflow only`);
+  }
+
+  for (const item of toPromote) {
+    // Assign owners from error snippets (same logic as enrichFailingDetails for regressions)
+    const ownerSet = new Map();
+    for (const sn of (item.error_snippets || [])) {
+      if (Array.isArray(sn.owner)) {
+        for (const o of sn.owner) {
+          if (!o) continue;
+          const k = `${o.id || ''}|${o.name || ''}`;
+          ownerSet.set(k, o);
+        }
+      }
+    }
+    let owners = Array.from(ownerSet.values());
+    if (!owners.length) {
+      owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
+    }
+    item.owners = owners;
+
+    regressedDetails.push(item);
+    core.info(`[FORCE-REGRESSION] Promoted "${item.name}" to regression (${(item.failing_jobs || []).length} failing jobs, ${(item.error_snippets || []).length} error snippets)`);
+
+    // Update the change entry in the changes array with regression-specific fields
+    // so workflow-status-changes.json is consistent with normal regressions
+    const changeRef = changes.find(c => c.name === item.name);
+    if (changeRef) {
+      changeRef.change = 'success_to_fail';
+      changeRef.previous = 'success';
+      changeRef.owners = item.owners;
+      changeRef.original_owner_names_for_generic_exit = item.original_owner_names_for_generic_exit || [];
+      changeRef.error_snippets = item.error_snippets;
+      changeRef.failing_jobs = item.failing_jobs;
+      changeRef.first_failed_run_id = item.first_failed_run_id;
+      changeRef.first_failed_run_url = item.first_failed_run_url;
+      changeRef.first_failed_created_at = item.first_failed_created_at;
+      changeRef.first_failed_head_sha = item.first_failed_head_sha;
+      changeRef.first_failed_head_short = item.first_failed_head_short;
+    }
+  }
+
+  return toPromote.length;
+}
+
 module.exports = {
   getWorkflowLink,
   findGoodBadCommits,
@@ -1072,6 +1178,7 @@ module.exports = {
   enrichRegressions,
   enrichStayedFailing,
   detectJobLevelRegressions,
+  promoteStayedFailingToRegressed,
   buildRegressionsSection,
   buildStayedFailingSection,
 };

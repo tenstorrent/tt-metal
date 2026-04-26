@@ -78,6 +78,7 @@ const {
   computeStatusChanges,
   enrichFailingDetails,
   detectJobLevelRegressions,
+  promoteStayedFailingToRegressed,
   buildRegressionsSection,
   buildStayedFailingSection,
 } = reporting;
@@ -112,6 +113,7 @@ async function run() {
     const gtestLogsIndexPath = core.getInput('gtest-logs-index-path', { required: false }); // optional: path to gtest logs index JSON
     const otherLogsIndexPath = core.getInput('other-logs-index-path', { required: false }); // optional: path to other logs index JSON
     const lastSuccessTimestampsPath = core.getInput('last-success-timestamps-path', { required: false }); // optional: path to last success timestamps JSON
+    const forceRegressionWorkflow = (core.getInput('force-regression-workflow', { required: false }) || '').trim();
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -207,6 +209,13 @@ async function run() {
     // This identifies NEW failing jobs in pipelines that were already failing
     await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
+    // If force-regression-workflow is set, promote matching stayed_failing workflows to regressions
+    if (forceRegressionWorkflow) {
+      const promoted = promoteStayedFailingToRegressed(forceRegressionWorkflow, stayedFailingDetails, regressedDetails, changes);
+      core.info(`[FORCE-REGRESSION] Promoted ${promoted} workflow(s) matching "${forceRegressionWorkflow}" from stayed_failing to regressions`);
+    }
+
+    // upload the changes json to the artifact space
     // Persist generated payloads to files so downstream jobs can consume them
     // without pushing large JSON strings through workflow outputs/env vars.
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
