@@ -78,6 +78,7 @@ tt::DataFormat from_flatbuffer(flatbuffer::DataFormat input) {
         case flatbuffer::DataFormat::Bfp2_b: return tt::DataFormat::Bfp2_b;
         case flatbuffer::DataFormat::Lf8: return tt::DataFormat::Lf8;
         case flatbuffer::DataFormat::Fp8_e4m3: return tt::DataFormat::Fp8_e4m3;
+        case flatbuffer::DataFormat::MxFp4: return tt::DataFormat::MxFp4;
         case flatbuffer::DataFormat::Int8: return tt::DataFormat::Int8;
         case flatbuffer::DataFormat::Tf32: return tt::DataFormat::Tf32;
         case flatbuffer::DataFormat::UInt8: return tt::DataFormat::UInt8;

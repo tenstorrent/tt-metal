@@ -317,16 +317,20 @@ static void run_dump_cb(DevicePrintFixture* fixture, const std::shared_ptr<distr
         s.core,
         ComputeConfig{.compile_args = {static_cast<uint32_t>(NUM_TILES)}});
 
+    // SingleCoreSetup configures the DRAM buffers with page_size = buf_sz
+    // (whole buffer), so aligned_page_size would over-return. The real
+    // per-tile DRAM stride is just tt::tile_size(FMT).
+    const uint32_t per_tile_dram_stride = static_cast<uint32_t>(tt::tile_size(FMT));
     SetRuntimeArgs(
         *s.program,
         reader,
         s.core,
-        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES), per_tile_dram_stride});
     SetRuntimeArgs(
         *s.program,
         writer,
         s.core,
-        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES), per_tile_dram_stride});
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
@@ -370,16 +374,19 @@ static void run_dump_l1(DevicePrintFixture* fixture, const std::shared_ptr<distr
         s.core,
         ComputeConfig{.compile_args = {static_cast<uint32_t>(NUM_TILES)}});
 
+    // See run_dump_cb: DRAM buffer is single whole-buffer page, so pass the
+    // real per-tile stride (tile_size(FMT)) directly.
+    const uint32_t per_tile_dram_stride = static_cast<uint32_t>(tt::tile_size(FMT));
     SetRuntimeArgs(
         *s.program,
         reader,
         s.core,
-        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES), per_tile_dram_stride});
     SetRuntimeArgs(
         *s.program,
         writer,
         s.core,
-        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES), per_tile_dram_stride});
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);
@@ -423,16 +430,19 @@ static void run_dump_typed(DevicePrintFixture* fixture, const std::shared_ptr<di
         s.core,
         ComputeConfig{.compile_args = {static_cast<uint32_t>(NUM_TILES)}});
 
+    // See run_dump_cb: DRAM buffer is single whole-buffer page, so pass the
+    // real per-tile stride (tile_size(FMT)) directly.
+    const uint32_t per_tile_dram_stride = static_cast<uint32_t>(tt::tile_size(FMT));
     SetRuntimeArgs(
         *s.program,
         reader,
         s.core,
-        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES), per_tile_dram_stride});
     SetRuntimeArgs(
         *s.program,
         writer,
         s.core,
-        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+        {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES), per_tile_dram_stride});
 
     auto input =
         tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, NUM_TILES * 1024);

@@ -259,6 +259,10 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
+    // DRAM buffer is configured with page_size = byte_size (whole buffer),
+    // so aligned_page_size() returns the whole-buffer stride, not per-tile.
+    // Derive the per-tile DRAM stride directly from byte_size / num_tiles.
+    const uint32_t per_tile_stride = (uint32_t)(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
@@ -267,6 +271,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
             (uint32_t)input_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
+            per_tile_stride,
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -276,6 +281,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
             (uint32_t)output_dram_byte_address,
             0,
             (uint32_t)test_config.num_tiles,
+            per_tile_stride,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -428,6 +434,11 @@ bool reader_datacopy_writer(
 
     uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
+    // DRAM buffer uses page_size = byte_size (whole-buffer), so derive the
+    // per-tile stride directly. byte_size covers all test_config.num_tiles
+    // tiles across all threads; the stride between consecutive tiles in DRAM
+    // is byte_size / test_config.num_tiles.
+    const uint32_t per_tile_stride = (uint32_t)(byte_size / test_config.num_tiles);
     tt_metal::SetRuntimeArgs(
         program_,
         reader_kernel,
@@ -435,7 +446,8 @@ bool reader_datacopy_writer(
         {
             (uint32_t)input_dram_byte_address,
             0,
-            num_tiles_per_thread
+            num_tiles_per_thread,
+            per_tile_stride,
         });
     tt_metal::SetRuntimeArgs(
         program_,
@@ -444,7 +456,8 @@ bool reader_datacopy_writer(
         {
             (uint32_t)output_dram_byte_address,
             0,
-            num_tiles_per_thread
+            num_tiles_per_thread,
+            per_tile_stride,
         });
 
     auto blocking = device->arch() == ARCH::QUASAR;
