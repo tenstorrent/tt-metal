@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
@@ -324,19 +324,32 @@ class TtPrefillBlock(LightweightModule):
         kvpe_cache: ttnn.Tensor,
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
+        on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        actual_isl: Optional[int] = None,
     ):
         """
         Args:
             x: [1, 1, seq_len_local, emb_dim_per_tp] TILE_LAYOUT, TP-sharded
             rope_tensors: dict with keys "cos_matrix", "sin_matrix", "trans_matrix"
             return_kv_cache: if True, also return KVPE cache from MLA
+            on_layer_complete: optional callback passed to MLA; fires after
+                fill_cache_for_user_(). MLA also zeros padding before fill when set.
+            actual_isl: actual (unpadded) input sequence length; required when
+                on_layer_complete is set.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
-        mla_out = self.mla.forward(attn_norm_out, rope_tensors, kvpe_cache, cache_user_idx=cache_layer_idx)
+        mla_out = self.mla.forward(
+            attn_norm_out,
+            rope_tensors,
+            kvpe_cache,
+            cache_user_idx=cache_layer_idx,
+            on_layer_complete=on_layer_complete,
+            actual_isl=actual_isl,
+        )
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
