@@ -4,15 +4,83 @@
 
 #pragma once
 
-#include "sfpu/ckernel_sfpu_elu.h"
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
+
+// ======================================================================
+// ELU via Cody-Waite range reduction + factored expm1 polynomial
+//
+// Algorithm: x = k*ln(2) + r, |r| <= ln(2)/2
+//   expm1(r) = r * h(r), h(r) = minimax degree 5 on [-ln2/2, ln2/2]
+//   exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
+//
+// BF16 h degree 4: max abs error = 1.60e-7 (Sollya remez)
+// FP32 h degree 5: max abs error = 8.67e-9 (Sollya remez)
+// ======================================================================
+
+// Cody-Waite constants
+constexpr float CW_INV_LN2 = 1.4426950408889634f;
+constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
+constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
-    _calculate_elu_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(slope);
+    sfpi::vFloat alpha = Converter::as_float(slope);
+    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
+    // 0x4B400000 - 127 = 0x4B3FFF81: c231 int pre-biased by IEEE 754 exponent of 1.0f
+    // Fuses k_int ISUB + bias IADD into a single ISUB in the setexp call
+    const sfpi::vInt c231_bias = 0x4B3FFF81;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+
+        // Clamp to prevent exponent underflow (k < -127 wraps setexp)
+        // Safe for x >= 0 check: max(x, -87) preserves sign for positive x
+        sfpi::vFloat lo = -87.0f;
+        sfpi::vec_min_max(lo, x);
+
+        // Cody-Waite range reduction: x = k*ln(2) + r
+        sfpi::vFloat tmp = x * CW_INV_LN2 + c231;
+        sfpi::vFloat k_f = tmp - c231;
+        sfpi::vFloat r = k_f * CW_NEG_LN2_HI + x;
+        r = r + k_f * CW_NEG_LN2_LO;
+
+        // expm1(r) = r * h(r), Horner evaluation of h
+#ifdef INP_FLOAT32
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r,
+            sfpi::vConst1,
+            5.0000000000e-01f,
+            1.6666504741e-01f,
+            4.1666239500e-02f,
+            8.3691505715e-03f,
+            1.3948583510e-03f);
+#else
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r, sfpi::vConst1, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
+#endif
+        h = r * h;
+
+        // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - c231_bias);
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
+        result = alpha * result;
+
+        v_if(x >= 0.0f) { result = x; }
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+template <bool APPROXIMATION_MODE>
+void elu_init() {}
+
+}  // namespace ckernel::sfpu

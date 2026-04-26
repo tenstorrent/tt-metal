@@ -5,38 +5,78 @@
 #pragma once
 
 #include "ckernel.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
-// CELU: alpha * (exp(x / alpha) - 1)
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_celu(uint32_t param0, uint32_t param1) {
-    // All params are in FP16_B format
-    // param0 = alpha
-    // param1 = alpha_recip
+// ======================================================================
+// CELU via Cody-Waite range reduction + factored expm1 polynomial
+//
+// Same algorithm as ELU, evaluated on x_rescaled = x/alpha.
+// celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
+// ======================================================================
 
+// Cody-Waite constants
+constexpr float CELU_CW_INV_LN2 = 1.4426950408889634f;
+constexpr float CELU_CW_NEG_LN2_HI = -0.6931152343750000f;
+constexpr float CELU_CW_NEG_LN2_LO = -3.19461832987e-05f;
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+inline void calculate_celu(uint32_t param0, uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
-    // SFPU microcode
+    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat xr = alpha_recip * x;
 
-        v_if(v < sfpi::vConst0) {
-            // Compute exp(x / alpha)
-            sfpi::vFloat exp_val =
-                _sfpu_exp_21f_bf16_<true>(v * alpha_recip);  // is_fp32_dest_acc_en set to true to avoid rounding as it
-                                                             // has to be done at the end of operation
+        // Clamp to prevent exponent underflow
+        sfpi::vFloat lo = -87.0f;
+        sfpi::vec_min_max(lo, xr);
 
-            sfpi::vFloat result = alpha * (exp_val - sfpi::vConst1);
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
-            }
-            sfpi::dst_reg[0] = result;
-        }
+        // Cody-Waite range reduction on x_rescaled
+        sfpi::vFloat tmp = xr * CELU_CW_INV_LN2 + c231;
+        sfpi::vFloat k_f = tmp - c231;
+        sfpi::vFloat r = k_f * CELU_CW_NEG_LN2_HI + xr;
+        r = r + k_f * CELU_CW_NEG_LN2_LO;
+
+        // expm1(r) = r * h(r)
+#ifdef INP_FLOAT32
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r,
+            sfpi::vConst1,
+            5.0000000000e-01f,
+            1.6666504741e-01f,
+            4.1666239500e-02f,
+            8.3691505715e-03f,
+            1.3948583510e-03f);
+#else
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            r, sfpi::vConst1, 4.9999371171e-01f, 1.6666433215e-01f, 4.1875664145e-02f, 8.3751315251e-03f);
+#endif
+        h = r * h;
+
+        // Reconstruct: exp(xr)-1 = (2^k - 1) + 2^k * expm1(r)
+        // 0x4B3FFF81 = 0x4B400000 - 127: fuses k_int ISUB + bias IADD into one ISUB
+        constexpr int kC231Bias = 0x4B3FFF81;
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - kC231Bias);
+        sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
+        result = alpha * result;
+
+        v_if(x >= 0.0f) { result = x; }
         v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+        }
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
+
+template <bool APPROXIMATION_MODE>
+void celu_init() {}
 
 }  // namespace ckernel::sfpu

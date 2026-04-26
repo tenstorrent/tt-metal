@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,43 +12,37 @@
 namespace ckernel::sfpu {
 
 // ======================================================================
-// ELU via Cody-Waite range reduction + factored expm1 polynomial
+// SELU via Cody-Waite range reduction + factored expm1 polynomial
 //
-// Algorithm: x = k*ln(2) + r, |r| <= ln(2)/2
-//   expm1(r) = r * h(r), h(r) = minimax degree 5 on [-ln2/2, ln2/2]
-//   exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-//
-// BF16 h degree 4: max abs error = 1.60e-7 (Sollya remez)
-// FP32 h degree 5: max abs error = 8.67e-9 (Sollya remez)
+// selu(x) = scale * x for x>=0, scale * alpha * (exp(x)-1) for x<0
+// scale ≈ 1.0507, alpha ≈ 1.6733, scale*alpha ≈ 1.7581
 // ======================================================================
 
 // Cody-Waite constants
-constexpr float CW_INV_LN2 = 1.4426950408889634f;
-constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
-constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
+constexpr float SELU_CW_INV_LN2 = 1.4426950408889634f;
+constexpr float SELU_CW_NEG_LN2_HI = -0.6931152343750000f;
+constexpr float SELU_CW_NEG_LN2_LO = -3.19461832987e-05f;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_elu(uint slope) {
-    sfpi::vFloat alpha = Converter::as_float(slope);
+inline void calculate_selu(uint scale, uint alpha) {
+    const sfpi::vFloat scale_val = Converter::as_float(scale);
+    const sfpi::vFloat scale_alpha = Converter::as_float(scale) * Converter::as_float(alpha);
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
-    // 0x4B400000 - 127 = 0x4B3FFF81: c231 int pre-biased by IEEE 754 exponent of 1.0f
-    // Fuses k_int ISUB + bias IADD into a single ISUB in the setexp call
-    const sfpi::vInt c231_bias = 0x4B3FFF81;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to prevent exponent underflow (k < -127 wraps setexp)
+        // Clamp to prevent exponent underflow
         // Safe for x >= 0 check: max(x, -87) preserves sign for positive x
         sfpi::vFloat lo = -87.0f;
         sfpi::vec_min_max(lo, x);
 
-        // Cody-Waite range reduction: x = k*ln(2) + r
-        sfpi::vFloat tmp = x * CW_INV_LN2 + c231;
+        // Cody-Waite range reduction
+        sfpi::vFloat tmp = x * SELU_CW_INV_LN2 + c231;
         sfpi::vFloat k_f = tmp - c231;
-        sfpi::vFloat r = k_f * CW_NEG_LN2_HI + x;
-        r = r + k_f * CW_NEG_LN2_LO;
+        sfpi::vFloat r = k_f * SELU_CW_NEG_LN2_HI + x;
+        r = r + k_f * SELU_CW_NEG_LN2_LO;
 
-        // expm1(r) = r * h(r), Horner evaluation of h
+        // expm1(r) = r * h(r)
 #ifdef INP_FLOAT32
         sfpi::vFloat h = PolynomialEvaluator::eval(
             r,
@@ -65,11 +59,12 @@ inline void calculate_elu(uint slope) {
         h = r * h;
 
         // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
-        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - c231_bias);
+        constexpr int kC231Bias = 0x4B3FFF81;
+        sfpi::vFloat two_k = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - kC231Bias);
         sfpi::vFloat result = (two_k - sfpi::vConst1) + two_k * h;
-        result = alpha * result;
+        result = scale_alpha * result;
 
-        v_if(x >= 0.0f) { result = x; }
+        v_if(x >= 0.0f) { result = scale_val * x; }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
@@ -81,6 +76,6 @@ inline void calculate_elu(uint slope) {
 }
 
 template <bool APPROXIMATION_MODE>
-void elu_init() {}
+void selu_init() {}
 
 }  // namespace ckernel::sfpu
