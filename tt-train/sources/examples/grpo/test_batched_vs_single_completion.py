@@ -4,6 +4,8 @@
 
 import pytest
 
+from ttml.common.config import DeviceConfig, TransformerConfig
+
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 
@@ -12,31 +14,39 @@ TEMPERATURE = 0.0
 MAX_COMPLETION_LENGTH = 256
 NUM_GENERATIONS = 1
 
-TRANSFORMER_CONFIG = {
-    "model_type": "llama",
-    "num_heads": 32,
-    "num_groups": 8,
-    "embedding_dim": 2048,
-    "intermediate_dim": 8192,
-    "dropout_prob": 0.0,
-    "num_blocks": 16,
-    "weight_tying": "enabled",
-    "vocab_size": 32000,
-    "max_sequence_length": 1024,
-    "runner_type": "memory_efficient",
-    "theta": 500000.0,
-    "rope_scaling": {
-        "scaling_factor": 32.0,
-        "high_freq_factor": 4.0,
-        "low_freq_factor": 1.0,
-        "original_context_length": 8192,
-    },
-}
+TRANSFORMER_CONFIG = TransformerConfig(
+    {
+        "transformer_config": {
+            "model_type": "llama",
+            "num_heads": 32,
+            "num_groups": 8,
+            "embedding_dim": 2048,
+            "intermediate_dim": 8192,
+            "dropout_prob": 0.0,
+            "num_blocks": 16,
+            "weight_tying": "enabled",
+            "vocab_size": 32000,
+            "max_sequence_length": 1024,
+            "runner_type": "memory_efficient",
+            "theta": 500000.0,
+            "rope_scaling": {
+                "scaling_factor": 32.0,
+                "high_freq_factor": 4.0,
+                "low_freq_factor": 1.0,
+                "original_context_length": 8192,
+            },
+        }
+    }
+)
 
-DEVICE_CONFIG = {
-    "enable_ddp": False,
-    "mesh_shape": [1, 1],
-}
+DEVICE_CONFIG = DeviceConfig(
+    {
+        "device_config": {
+            "enable_ddp": False,
+            "mesh_shape": [1, 1],
+        }
+    }
+)
 
 SYSTEM_PROMPT = (
     "You are a precise geography assistant.\n"
