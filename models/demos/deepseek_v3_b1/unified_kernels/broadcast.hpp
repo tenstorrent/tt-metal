@@ -65,7 +65,9 @@ struct Broadcast {
         uint32_t isRoot,
         uint32_t chunkSizeBytes,
         uint32_t lastChunkSizeBytes,
-        uint32_t numChunks>
+        uint32_t numChunks,
+        uint32_t cbOutId = 0,
+        uint32_t outNumTiles = 0>
     struct WriterCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
@@ -77,6 +79,8 @@ struct Broadcast {
         static constexpr uint32_t chunk_size_bytes = chunkSizeBytes;
         static constexpr uint32_t last_chunk_size_bytes = lastChunkSizeBytes;
         static constexpr uint32_t num_chunks = numChunks;
+        static constexpr uint32_t cb_out_id = cbOutId;
+        static constexpr uint32_t out_num_tiles = outNumTiles;
         static_assert(num_links <= Broadcast::MAX_NUM_LINKS, "num_links exceeds MAX_NUM_LINKS");
         static_assert(num_chunks > 0, "num_chunks must be greater than 0");
     };
@@ -100,11 +104,65 @@ struct Broadcast {
     public:
         void operator()(const RTArgs& args) {
             if constexpr (IsWorkerCore) {
+                open_connections_impl(args, /*reset_header_pool=*/true);
+                impl(args);
+            }
+        }
+
+        void open_connections(const RTArgs& args, bool reset_header_pool = true) {
+            if constexpr (IsWorkerCore) {
+                open_connections_impl(args, reset_header_pool);
+            }
+        }
+
+        void run(const RTArgs& args) {
+            if constexpr (IsWorkerCore) {
                 impl(args);
             }
         }
 
     private:
+#if defined(COMPILE_FOR_NCRISC)
+        std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
+        std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
+        uint64_t dst_noc_base = 0;
+        std::array<uint64_t, CTArgs::num_links> sem_nocs;
+        std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
+#endif
+
+        void open_connections_impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] bool reset_header_pool) {
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (IsWorkerCore) {
+                if (reset_header_pool) {
+                    PacketHeaderPool::reset();
+                }
+
+                size_t arg_idx = args.per_core_rta_arg_idx_offset;
+                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
+                    const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+                    const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
+                        connections[connection_idx] =
+                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                                arg_idx);
+                        connections[connection_idx].open_start();
+                        headers[connection_idx] = PacketHeaderPool::allocate_header();
+                        fabric_set_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
+                        connections[connection_idx].open_finish();
+                    }
+                }
+
+                dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
+                for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                    sem_nocs[link_idx] =
+                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
+                    sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
+                }
+            }
+#endif
+        }
+
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             // ================================================================
@@ -145,35 +203,6 @@ struct Broadcast {
             // NCRISC - bcast writer
             // ================================================================
             if constexpr (IsWorkerCore) {
-                PacketHeaderPool::reset();
-
-                std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
-                std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
-                size_t arg_idx = args.per_core_rta_arg_idx_offset;
-                for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
-                    const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-                    const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-                    for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
-                        const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + link_idx;
-                        connections[connection_idx] =
-                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                                arg_idx);
-                        connections[connection_idx].open_start();
-                        headers[connection_idx] = PacketHeaderPool::allocate_header();
-                        fabric_set_unicast_route(headers[connection_idx], dst_chip_id, dst_mesh_id);
-                        connections[connection_idx].open_finish();
-                    }
-                }
-
-                const uint64_t dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
-                std::array<uint64_t, CTArgs::num_links> sem_nocs;
-                std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
-                for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
-                    sem_nocs[link_idx] =
-                        safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
-                    sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
-                }
-
                 auto send_chunk = [&](uint32_t connection_idx,
                                       uint32_t link_idx,
                                       uint32_t src_base_addr,
@@ -226,12 +255,20 @@ struct Broadcast {
                 //   * leaf node (num_neighbors == 0), where forwarding loops are no-ops.
                 // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
                 // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
-
+                if constexpr (CTArgs::out_num_tiles != 0) {
+                    cb_reserve_back(CTArgs::cb_out_id, CTArgs::out_num_tiles);
+                }
                 if constexpr (CTArgs::is_root) {
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
-                    constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
-                    noc_async_write(src, dst_noc_base, tensor_size_bytes);
+                    if (src != args.tensor_address0) {
+                        constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
+                        noc_async_write(src, dst_noc_base, tensor_size_bytes);
+                    }
+                    if constexpr (CTArgs::out_num_tiles != 0) {
+                        ASSERT(src == args.tensor_address0);
+                        cb_push_back(CTArgs::cb_out_id, CTArgs::out_num_tiles);
+                    }
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
@@ -241,6 +278,9 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
                     };
                     forward_chunks(src, sem_wait);
+                    if constexpr (CTArgs::out_num_tiles != 0) {
+                        cb_push_back(CTArgs::cb_out_id, CTArgs::out_num_tiles);
+                    }
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
