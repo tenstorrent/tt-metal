@@ -1,0 +1,8 @@
+﻿ttnn.transformer.ring\_joint\_scaled\_dot\_product\_attention
+=============================================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.ring_joint_scaled_dot_product_attention:
+
+.. autooperation:: ttnn.transformer.ring_joint_scaled_dot_product_attention

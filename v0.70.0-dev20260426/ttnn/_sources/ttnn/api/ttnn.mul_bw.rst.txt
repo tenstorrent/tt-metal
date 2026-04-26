@@ -1,0 +1,8 @@
+﻿ttnn.mul\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.mul_bw:
+
+.. autooperation:: ttnn.mul_bw

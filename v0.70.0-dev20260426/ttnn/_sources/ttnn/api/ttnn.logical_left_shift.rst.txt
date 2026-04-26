@@ -1,0 +1,8 @@
+﻿ttnn.logical\_left\_shift
+=========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logical_left_shift:
+
+.. autooperation:: ttnn.logical_left_shift

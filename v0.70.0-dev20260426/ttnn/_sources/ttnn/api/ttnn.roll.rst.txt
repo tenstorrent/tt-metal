@@ -1,0 +1,8 @@
+﻿ttnn.roll
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.roll:
+
+.. autooperation:: ttnn.roll

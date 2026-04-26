@@ -1,0 +1,8 @@
+﻿ttnn.transformer.flash\_multi\_latent\_attention\_decode
+========================================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.flash_multi_latent_attention_decode:
+
+.. autooperation:: ttnn.transformer.flash_multi_latent_attention_decode

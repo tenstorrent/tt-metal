@@ -1,0 +1,8 @@
+﻿ttnn.to\_layout
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.to_layout:
+
+.. autooperation:: ttnn.to_layout

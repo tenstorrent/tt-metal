@@ -1,0 +1,8 @@
+﻿ttnn.stack
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.stack:
+
+.. autooperation:: ttnn.stack

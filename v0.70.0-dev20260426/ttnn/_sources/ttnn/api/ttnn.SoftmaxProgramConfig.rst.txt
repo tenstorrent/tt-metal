@@ -1,0 +1,14 @@
+﻿ttnn.SoftmaxProgramConfig
+=========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.SoftmaxProgramConfig:
+
+
+.. autoclass:: ttnn.SoftmaxProgramConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+   :member-order: bysource
