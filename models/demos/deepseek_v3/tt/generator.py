@@ -23,6 +23,7 @@ from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -35,6 +36,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     make_deepseek_sampling_args,
 )
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import create_run_config, deallocate_weight_config_tensors
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -427,18 +429,60 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self.enable_mtp:
             cache_subdir_name = f"{cache_subdir_name}_mtp"
 
-        self.model_weight_config = get_weight_config(
-            ModuleClass=RowBatchedModel,
-            hf_config=self.hf_config,
-            weight_cache_path=weight_cache_base,
-            mesh_device=self.mesh_device,
-            force_recalculate=self.force_recalculate,
-            random_weights=self.random_weights,
-            model_path=self.model_path,
-            single_layer=self.single_layer,
-            cache_subdir_name=cache_subdir_name,
-            use_weight_cache=self.use_weight_cache,
-        )
+        try:
+            self.model_weight_config = get_weight_config(
+                ModuleClass=RowBatchedModel,
+                hf_config=self.hf_config,
+                weight_cache_path=weight_cache_base,
+                mesh_device=self.mesh_device,
+                force_recalculate=self.force_recalculate,
+                random_weights=self.random_weights,
+                model_path=self.model_path,
+                single_layer=self.single_layer,
+                cache_subdir_name=cache_subdir_name,
+                use_weight_cache=self.use_weight_cache,
+            )
+        except FileNotFoundError:
+            if not self.use_weight_cache or not self.enable_mtp or weight_cache_base is None:
+                raise
+            logger.warning(
+                "Combined DeepSeek MTP weight cache '{}' is missing; loading the base model cache and "
+                "converting only the MTP layer.",
+                weight_cache_base / cache_subdir_name / f"mesh_{self.mesh_device.shape[0]}x{self.mesh_device.shape[1]}",
+            )
+            self.model_weight_config = get_weight_config(
+                ModuleClass=RowBatchedModel,
+                hf_config=self.hf_config,
+                weight_cache_path=weight_cache_base,
+                mesh_device=self.mesh_device,
+                force_recalculate=False,
+                random_weights=self.random_weights,
+                model_path=self.model_path,
+                single_layer=self.single_layer,
+                cache_subdir_name=f"{self.hf_config.num_hidden_layers}_layers",
+                use_weight_cache=True,
+            )
+            mtp_layer_idx = int(self.hf_config.num_hidden_layers)
+            mtp_state_dict = LazyStateDict(Path(self.model_path)).view_with_prefix(f"model.layers.{mtp_layer_idx}.")
+            try:
+                if "eh_proj.weight" not in mtp_state_dict:
+                    raise RuntimeError(
+                        f"Could not find MTP weights under model.layers.{mtp_layer_idx} in {self.model_path}."
+                    )
+                self.model_weight_config["mtp"] = get_weight_config(
+                    ModuleClass=MTP2D,
+                    hf_config=self.hf_config,
+                    state_dicts=(mtp_state_dict,),
+                    weight_cache_path=weight_cache_base,
+                    mesh_device=self.mesh_device,
+                    force_recalculate=False,
+                    cache_subdir_name=f"{self.hf_config.num_hidden_layers}_layers_mtp_module",
+                )
+            finally:
+                try:
+                    mtp_state_dict.close()
+                except AttributeError:
+                    pass
 
     def _assert_mtp_available(self) -> None:
         if not self.enable_mtp:
