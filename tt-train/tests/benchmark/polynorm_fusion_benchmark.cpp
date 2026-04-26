@@ -31,7 +31,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <numeric>
-#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -43,6 +42,7 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/polynorm_op.hpp"
+#include "test_utils/random_data.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -141,14 +141,6 @@ bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
     return std::find(cfg.model_filter.begin(), cfg.model_filter.end(), name) != cfg.model_filter.end();
 }
 
-std::vector<float> make_random_values(size_t count, uint32_t seed, float low = -1.0F, float high = 1.0F) {
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<float> dist(low, high);
-    std::vector<float> values(count);
-    std::generate(values.begin(), values.end(), [&]() { return dist(gen); });
-    return values;
-}
-
 RunResult run_single_mode(
     const ModelShape& shape,
     const SweepConfig& cfg,
@@ -165,7 +157,8 @@ RunResult run_single_mode(
     const ttnn::Shape w_shape({1, 1, 1, 3});
     const ttnn::Shape b_shape({1, 1, 1, 1});
     const size_t x_count = static_cast<size_t>(batch_size) * sequence_length * shape.embedding_dim;
-    const auto x_host = make_random_values(x_count, 2026U + batch_size + shape.embedding_dim);
+    const auto x_host =
+        ttml::test_utils::make_uniform_vector<float>(x_count, -1.0F, 1.0F, 2026U + batch_size + shape.embedding_dim);
     const auto w_host = std::vector<float>{0.2F, 0.3F, 0.5F};
     const auto b_host = std::vector<float>{0.1F};
     constexpr float epsilon = 1e-5F;
