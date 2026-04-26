@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
+from PIL import Image
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -57,8 +58,13 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, model_location_generator):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["train"]["image"][0]
+    image_path = hf_hub_download(
+        repo_id="huggingface/cats-image",
+        filename="cats_image.jpeg",
+        repo_type="dataset",
+        revision="ccdec0af347ae11c5315146402c3e16c8bbf4149",
+    )
+    image = Image.open(image_path).convert("RGB")
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     inputs = image_processor(image, return_tensors="pt")

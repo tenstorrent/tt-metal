@@ -165,4 +165,34 @@ TEST_F(BinaryOpsForwardTest, DivBroadcast) {
     EXPECT_TRUE(xt::allclose(result, expected));
 }
 
+TEST_F(BinaryOpsForwardTest, MinSameShape) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = {{{{1.F, 5.F, 3.F, 8.F}}}};
+    xt::xarray<float> data_b = {{{{4.F, 2.F, 3.F, 6.F}}}};
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device));
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device));
+
+    auto out = min(a, b);
+    auto result = core::to_xtensor(out->get_value());
+
+    xt::xarray<float> expected = {{{{1.F, 2.F, 3.F, 6.F}}}};
+    EXPECT_TRUE(xt::allclose(result, expected));
+}
+
+TEST_F(BinaryOpsForwardTest, MaxSameShape) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = {{{{1.F, 5.F, 3.F, 8.F}}}};
+    xt::xarray<float> data_b = {{{{4.F, 2.F, 3.F, 6.F}}}};
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device));
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device));
+
+    auto out = max(a, b);
+    auto result = core::to_xtensor(out->get_value());
+
+    xt::xarray<float> expected = {{{{4.F, 5.F, 3.F, 8.F}}}};
+    EXPECT_TRUE(xt::allclose(result, expected));
+}
+
 }  // namespace ttml::ops::tests

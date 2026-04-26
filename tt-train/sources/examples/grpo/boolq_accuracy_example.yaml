@@ -1,0 +1,9 @@
+# Accuracy evaluation config for BoolQ + Llama-3.2-1B on a single P150.
+# MGD path: tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]

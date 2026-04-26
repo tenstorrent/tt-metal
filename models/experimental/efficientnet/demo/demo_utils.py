@@ -17,8 +17,9 @@ import cv2
 import torch
 import ttnn
 import torchvision
+from huggingface_hub import hf_hub_download
 from loguru import logger
-from datasets import load_dataset
+from PIL import Image
 
 from models.common.utility_functions import (
     torch2tt_tensor,
@@ -45,8 +46,13 @@ def preprocess():
 
 
 def download_images(img_path):
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image_path = hf_hub_download(
+        repo_id="huggingface/cats-image",
+        filename="cats_image.jpeg",
+        repo_type="dataset",
+        revision="ccdec0af347ae11c5315146402c3e16c8bbf4149",
+    )
+    image = Image.open(image_path).convert("RGB")
     image.save(img_path)
     logger.info(f"Input image saved to {img_path}")
 

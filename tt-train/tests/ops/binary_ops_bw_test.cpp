@@ -122,6 +122,50 @@ TEST_F(BinaryOpsBackwardTest, DivSameShape) {
     EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, /* rtol */ 1e-2F, /* atol */ 1e-2F));
 }
 
+TEST_F(BinaryOpsBackwardTest, MinSameShape) {
+    auto* device = &autograd::ctx().get_device();
+    //                a wins     b wins    tie       a wins
+    xt::xarray<float> data_a = {{{{1.F, 5.F, 3.F, 2.F}}}};
+    xt::xarray<float> data_b = {{{{4.F, 2.F, 3.F, 8.F}}}};
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), /* requires_grad */ true);
+
+    auto out = min(a, b);
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    // grad flows to the winner; ties split 50/50
+    xt::xarray<float> expected_a_grad = {{{{1.F, 0.F, 0.5F, 1.F}}}};
+    xt::xarray<float> expected_b_grad = {{{{0.F, 1.F, 0.5F, 0.F}}}};
+    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad, 1e-3F, 1e-3F));
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F));
+}
+
+TEST_F(BinaryOpsBackwardTest, MaxSameShape) {
+    auto* device = &autograd::ctx().get_device();
+    //                b wins     a wins    tie       b wins
+    xt::xarray<float> data_a = {{{{1.F, 5.F, 3.F, 2.F}}}};
+    xt::xarray<float> data_b = {{{{4.F, 2.F, 3.F, 8.F}}}};
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), /* requires_grad */ true);
+
+    auto out = max(a, b);
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    // grad flows to the winner; ties split 50/50
+    xt::xarray<float> expected_a_grad = {{{{0.F, 1.F, 0.5F, 0.F}}}};
+    xt::xarray<float> expected_b_grad = {{{{1.F, 0.F, 0.5F, 1.F}}}};
+    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad, 1e-3F, 1e-3F));
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, 1e-3F, 1e-3F));
+}
+
 // ============================================================================
 // Parametrized broadcast backward tests
 // ============================================================================

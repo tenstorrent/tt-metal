@@ -812,24 +812,11 @@ def main():
     hf_model.eval()
 
     # Load speaker embeddings.
-    # datasets 2.9.0 + fsspec >=2024 has a LocalFileSystem incompatibility; fall back
-    # to reading the cached Arrow file directly when load_dataset raises NotImplementedError.
-    try:
-        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
-        speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
-    except NotImplementedError:
-        import pyarrow as pa, glob, os, numpy as np
-
-        cache_root = os.path.expanduser("~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors")
-        arrow_files = glob.glob(os.path.join(cache_root, "**", "*validation*.arrow"), recursive=True)
-        if not arrow_files:
-            raise RuntimeError(
-                "Could not find cached cmu-arctic-xvectors arrow file. "
-                "Delete ~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors and re-run."
-            )
-        with pa.memory_map(arrow_files[0], "r") as src:
-            table = pa.ipc.open_stream(src).read_all()
-        speaker_embeddings = torch.tensor(np.array(table["xvector"][7306].as_py())).unsqueeze(0)
+    # ``Matthijs/cmu-arctic-xvectors`` is a script-only dataset and stops loading
+    # on ``datasets >= 4``. ``regisss/cmu-arctic-xvectors`` is a parquet mirror
+    # with the same ``xvector`` column and ``validation`` split.
+    embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
+    speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
     # Initialize TTNN device
     print("Initializing TTNN device...")

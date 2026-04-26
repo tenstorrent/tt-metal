@@ -23,6 +23,8 @@ autograd::TensorPtr sub(const autograd::TensorPtr& a, const autograd::TensorPtr&
 autograd::TensorPtr mul(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 autograd::TensorPtr mul(const autograd::TensorPtr& a, float b);
 autograd::TensorPtr div(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
+autograd::TensorPtr min(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
+autograd::TensorPtr max(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 
 }  // namespace ttml::ops
 

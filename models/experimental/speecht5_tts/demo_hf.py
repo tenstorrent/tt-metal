@@ -123,7 +123,7 @@ def main():
         print("   Dropout disabled for HF model (matching TTNN implementation)")
 
         # Load speaker embeddings
-        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+        embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
         speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
         print("✅ Models loaded successfully!")

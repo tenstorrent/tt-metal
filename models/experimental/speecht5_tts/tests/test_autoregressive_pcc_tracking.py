@@ -308,7 +308,7 @@ def run_multi_step_pcc_test(text, num_steps=20, disable_dropout=True, max_chunk_
     pytorch_postnet = load_postnet_ref()
     hf_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
 
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+    embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
     speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
     if disable_dropout:
@@ -584,7 +584,7 @@ def run_true_autoregressive_test(text, num_steps=20, disable_dropout=True, max_c
     pytorch_postnet = load_postnet_ref()
     hf_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
 
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+    embeddings_dataset = load_dataset("regisss/cmu-arctic-xvectors", split="validation")
     speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
     if disable_dropout:
