@@ -151,14 +151,6 @@ target_link_libraries(
         TTNN::TTNN
 )
 
-add_executable(polynorm_fusion_benchmark benchmark/polynorm_fusion_benchmark.cpp)
-target_link_libraries(
-    polynorm_fusion_benchmark
-    PUBLIC
-        ttml
-        TTNN::TTNN
-)
-
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
@@ -169,6 +161,7 @@ if(TARGET benchmark::benchmark)
         benchmark/matmuls_benchmark.cpp
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
+        benchmark/polynorm_fusion_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
