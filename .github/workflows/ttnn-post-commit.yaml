@@ -108,6 +108,7 @@ jobs:
       image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         LOGURU_LEVEL: INFO
+        OPENBLAS_NUM_THREADS: 1
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
