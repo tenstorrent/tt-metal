@@ -1279,7 +1279,9 @@ def parse_tracy_args(raw: str) -> TracyConfig:
 
 
 def parse_rank_bindings_mapping(
-    mapping_yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None
+    mapping_yaml_path: Path,
+    mock_cluster_rank_binding: Optional[Path] = None,
+    skip_mgd_check: bool = False,
 ) -> TTRunConfig:
     """Load subcontext_id_to_rank_bindings, merge overlays into one TTRunConfig (global MPI ranks)."""
     resolved_mapping = resolve_path(mapping_yaml_path, description="Rank bindings mapping file", must_be_file=True)
@@ -1309,11 +1311,11 @@ def parse_rank_bindings_mapping(
         if not overlay_path.is_absolute():
             candidate = (mapping_dir / overlay_path).resolve()
             if candidate.is_file():
-                sub_config = parse_binding_config(candidate, None)
+                sub_config = parse_binding_config(candidate, None, skip_mgd_check=skip_mgd_check)
             else:
-                sub_config = parse_binding_config(overlay_path, None)
+                sub_config = parse_binding_config(overlay_path, None, skip_mgd_check=skip_mgd_check)
         else:
-            sub_config = parse_binding_config(overlay_path, None)
+            sub_config = parse_binding_config(overlay_path, None, skip_mgd_check=skip_mgd_check)
 
         if first_mesh is None:
             first_mesh = sub_config.mesh_graph_desc_path
