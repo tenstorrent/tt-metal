@@ -1298,7 +1298,7 @@ def parse_rank_bindings_mapping(
     if not raw_map:
         raise ValueError(f"'{map_key}' must not be empty")
 
-    sub_ids = sorted(raw_map.keys(), key=lambda k: int(k))
+    sub_ids = sorted(raw_map.keys(), key=int)
     merged_rank_bindings: List[RankBinding] = []
     first_mesh: Optional[Path] = None
     merged_global_env: Dict[str, str] = {}
