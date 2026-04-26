@@ -9,7 +9,11 @@ import time
 from typing import Union
 
 import numpy as np
-import pytest
+
+try:
+    import pytest
+except ImportError:
+    pytest = None
 import torch
 from loguru import logger
 from ttnn.device import Arch
@@ -957,7 +961,7 @@ def blocked_mm_with_conv_act(
                 act_address_map_index += 1
                 weight_address_map_this_block_size = weight_address_map[weight_address_map_index]
                 weight_address_map_index += 1
-                (mm_act_block, act_address_map_index) = read_conv_act_into_mm_act_block(
+                mm_act_block, act_address_map_index = read_conv_act_into_mm_act_block(
                     conv_act,
                     act_address_map_index,
                     act_address_map,
