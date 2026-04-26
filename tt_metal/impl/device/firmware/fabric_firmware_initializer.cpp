@@ -549,6 +549,15 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         // GAP 5: Record force-reset channels so the next verify_all_fabric_channels_healthy()
         // can distinguish "was force-reset" from "corrupt from prior crash".
         std::vector<std::string> reset_failed_channels;
+        // FIX AJ (#42429): Track non-MMIO devices whose relay path is confirmed dead during
+        // this force-reset pass (diagnostic read threw OR assert_risc_reset threw).
+        // Used below to skip l1_barrier() for these devices — l1_barrier on a dead-relay
+        // device calls wait_for_non_mmio_flush() which BLOCKS INDEFINITELY rather than
+        // throwing, causing the GitHub Actions 5-minute job timeout.  The try/catch around
+        // l1_barrier only helps if it throws; a blocking hang is not catchable.
+        // These devices are safe to skip — their relay queue can't be drained anyway, and
+        // the next session's relay_broken guard will protect against queue saturation.
+        std::unordered_set<ChipId> relay_dead_devices;
         for (const auto& ch : pending) {
             // Diagnostic read: log the last-seen status before asserting reset.
             // Wrapped in try/catch — if the read itself throws (e.g. device unresponsive),
@@ -568,6 +577,10 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     ch.dev->id(),
                     ch.eth_chan_id,
                     read_ex.what());
+                // FIX AJ: relay path is dead — mark device so l1_barrier is skipped below.
+                if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
+                    relay_dead_devices.insert(ch.dev->id());
+                }
             }
             log_warning(
                 tt::LogMetal,
@@ -616,6 +629,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                     e.what());
                 reset_failed_channels.push_back(
                     fmt::format("dev={}/chan={}", ch.dev->id(), ch.eth_chan_id));
+                // FIX AJ: if assert itself threw (relay path completely dead), mark device
+                // so we skip l1_barrier below — l1_barrier on a dead-relay non-MMIO device
+                // blocks indefinitely in wait_for_non_mmio_flush instead of throwing.
+                if (cluster_.get_associated_mmio_device(ch.dev->id()) != ch.dev->id()) {
+                    relay_dead_devices.insert(ch.dev->id());
+                }
             }
         }
 
@@ -659,6 +678,19 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     for (auto* dev : devices_) {
         if (cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
             // MMIO devices: l1_barrier is always safe, but there is no relay queue to drain.
+            continue;
+        }
+        // FIX AJ (#42429): skip l1_barrier for devices whose relay path was confirmed dead
+        // (diagnostic read or assert_risc_reset threw) during the force-reset pass above.
+        // l1_barrier() → wait_for_non_mmio_flush() BLOCKS INDEFINITELY on a dead-relay
+        // non-MMIO device instead of throwing, so try/catch cannot protect against it.
+        if (relay_dead_devices.count(dev->id())) {
+            log_warning(
+                tt::LogMetal,
+                "FabricFirmwareInitializer::teardown: skipping relay drain l1_barrier for "
+                "non-MMIO Device {} — relay path confirmed dead during force-reset (FIX AJ); "
+                "relay queue may still have stuck commands but blocking here would hang the job",
+                dev->id());
             continue;
         }
         try {
