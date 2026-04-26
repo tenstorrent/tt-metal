@@ -260,12 +260,12 @@ void softmax_reduce_c() {
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in0_cb).fifo_rd_ptr << cb_addr_shift);
     auto scale_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(scale_cb).fifo_rd_ptr << cb_addr_shift);
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_reduce_c in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
-    }
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_reduce_c scale[" << i << "]: " << BF16(scale_ptr[i]) << ENDL();
-    }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_reduce_c in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
+    // }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_reduce_c scale[" << i << "]: " << BF16(scale_ptr[i]) << ENDL();
+    // }
 #endif
     constexpr uint32_t reduce_dst_idx = 0;
     for (uint32_t i = 0; i < rows; i++) {
@@ -281,9 +281,9 @@ void softmax_reduce_c() {
             constexpr uint32_t debug_elems = 32;
             auto out_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 get_local_cb_interface(out_cb).fifo_wr_ptr << cb_addr_shift);
-            for (uint32_t j = 0; j < debug_elems; ++j) {
-                DPRINT << "softmax_reduce_c out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
-            }
+            // for (uint32_t j = 0; j < debug_elems; ++j) {
+            //     DPRINT << "softmax_reduce_c out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
+            // }
         }
 #endif
         cb_push_back(out_cb, 1);
@@ -301,9 +301,9 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     constexpr uint32_t debug_elems = 32;
     auto in_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in_cb).fifo_rd_ptr << cb_addr_shift);
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_recip_block_inplace in[" << i << "]: " << BF16(in_ptr[i]) << ENDL();
-    }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_recip_block_inplace in[" << i << "]: " << BF16(in_ptr[i]) << ENDL();
+    // }
 #endif
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
@@ -318,9 +318,9 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
             constexpr uint32_t debug_elems = 32;
             auto out_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 get_local_cb_interface(in_cb).fifo_wr_ptr << cb_addr_shift);
-            for (uint32_t j = 0; j < debug_elems; ++j) {
-                DPRINT << "softmax_recip_block_inplace out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
-            }
+            // for (uint32_t j = 0; j < debug_elems; ++j) {
+            //     DPRINT << "softmax_recip_block_inplace out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
+            // }
         }
 #endif
         cb_push_back(in_cb, 1);
@@ -340,12 +340,12 @@ void softmax_mul_block_bcast_scalar() {
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in0_cb).fifo_rd_ptr << cb_addr_shift);
     auto scalar_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
         get_local_cb_interface(in1_scalar_cb).fifo_rd_ptr << cb_addr_shift);
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_mul_block_bcast_scalar in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
-    }
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_mul_block_bcast_scalar scalar[" << i << "]: " << BF16(scalar_ptr[i]) << ENDL();
-    }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_mul_block_bcast_scalar in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
+    // }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_mul_block_bcast_scalar scalar[" << i << "]: " << BF16(scalar_ptr[i]) << ENDL();
+    // }
 #endif
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
@@ -359,9 +359,9 @@ void softmax_mul_block_bcast_scalar() {
             constexpr uint32_t debug_elems = 32;
             auto out_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
                 get_local_cb_interface(out_cb).fifo_wr_ptr << cb_addr_shift);
-            for (uint32_t j = 0; j < debug_elems; ++j) {
-                DPRINT << "softmax_mul_block_bcast_scalar out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
-            }
+            // for (uint32_t j = 0; j < debug_elems; ++j) {
+            //     DPRINT << "softmax_mul_block_bcast_scalar out[" << j << "]: " << BF16(out_ptr[j]) << ENDL();
+            // }
         }
 #endif
         cb_push_back(out_cb, 1);
@@ -384,12 +384,12 @@ inline void softmax_mul_block_bcast_cols(
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in0_cb).fifo_rd_ptr << cb_addr_shift);
     auto in1_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_local_cb_interface(in1_cb).fifo_rd_ptr << cb_addr_shift);
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_mul_block_bcast_cols in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
-    }
-    for (uint32_t i = 0; i < debug_elems; ++i) {
-        DPRINT << "softmax_mul_block_bcast_cols in1[" << i << "]: " << BF16(in1_ptr[i]) << ENDL();
-    }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_mul_block_bcast_cols in0[" << i << "]: " << BF16(in0_ptr[i]) << ENDL();
+    // }
+    // for (uint32_t i = 0; i < debug_elems; ++i) {
+    //     DPRINT << "softmax_mul_block_bcast_cols in1[" << i << "]: " << BF16(in1_ptr[i]) << ENDL();
+    // }
 #endif
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
@@ -445,8 +445,8 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
     auto in1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_local_cb_interface(in_indices_cb).fifo_rd_ptr << cb_addr_shift);
     for (uint32_t i = 0; i < 160; ++i) {
-        UNPACK(DPRINT << "local scores[" << i << "]: " << BF16(in0_ptr[i]) << ENDL());
-        UNPACK(DPRINT << "local indices[" << i << "]: " << in1_ptr[i] << ENDL());
+        UNPACK(DPRINT << "scores prior to llk[" << i << "]: " << BF16(in0_ptr[i]) << ENDL());
+        UNPACK(DPRINT << "indices prior to llk[" << i << "]: " << in1_ptr[i] << ENDL());
     }
     UNPACK(DPRINT << "--------------------------------" << ENDL());
     cb_reserve_back(out_scores_cb, 1);
@@ -532,11 +532,11 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles) {
     auto out1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_local_cb_interface(out_indices_cb).fifo_wr_ptr << cb_addr_shift);
 
-    for (uint32_t i = 0; i < 32; ++i) {
-        PACK(DPRINT << "Standard out_scores_cb[" << i << "]: " << BF16(out0_ptr[i]) << ENDL());
-        PACK(DPRINT << "Standardout_indices_cb[" << i << "]: " << out1_ptr[i] << ENDL());
-    }
-    PACK(DPRINT << "--------------------------------" << ENDL());
+    // for (uint32_t i = 0; i < 32; ++i) {
+    //     PACK(DPRINT << "Standard out_scores_cb[" << i << "]: " << BF16(out0_ptr[i]) << ENDL());
+    //     PACK(DPRINT << "Standardout_indices_cb[" << i << "]: " << out1_ptr[i] << ENDL());
+    // }
+    // PACK(DPRINT << "--------------------------------" << ENDL());
 
     cb_push_back(out_scores_cb, 1);
     cb_push_back(out_indices_cb, 1);
@@ -566,7 +566,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     //     UNPACK(DPRINT << "scores[" << i << "]: " << BF16(in0_ptr[i]) << ENDL());
     //     UNPACK(DPRINT << "indices[" << i << "]: " << in1_ptr[i] << ENDL());
     // }
-    UNPACK(DPRINT << "--------------------------------" << ENDL());
+    // UNPACK(DPRINT << "--------------------------------" << ENDL());
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
@@ -1244,6 +1244,7 @@ struct TopKSampling {
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
+            DPRINT << "Sending mesh top-K via fabric to dst_chip_id: " << metadata.dst_chip_id << " dst_mesh_id: " << metadata.dst_mesh_id << " at l1 addr: " << metadata.dst_scores_addr << " and " << metadata.dst_indices_addr << ENDL();
             set_unicast_route(
                 packet_header,
                 static_cast<uint16_t>(metadata.dst_chip_id),
@@ -1418,8 +1419,10 @@ struct TopKSampling {
                             constexpr uint32_t s1_tiles = CTArgs::stage1_num_slots * CTArgs::topk_k;
                             constexpr uint32_t s1_input_tiles = (s1_tiles + 1023) / 1024;
                             cb_reserve_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
+                            DPRINT << "Stage 1 Score pointer on receiver: " << get_write_ptr(CTArgs::mesh_stage_scores_cb) << ENDL();
                             cb_push_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
                             cb_reserve_back(CTArgs::mesh_stage_indices_cb, s1_input_tiles);
+                            DPRINT << "Stage 1 Indices pointer on receiver: " << get_write_ptr(CTArgs::mesh_stage_indices_cb) << ENDL();
                             cb_push_back(CTArgs::mesh_stage_indices_cb, s1_input_tiles);
 
                             cb_wait_front(CTArgs::topk_out_scores_cb, 1);
@@ -1465,8 +1468,10 @@ struct TopKSampling {
                             constexpr uint32_t s2_tiles = CTArgs::stage2_num_slots * CTArgs::topk_k;
                             constexpr uint32_t s2_input_tiles = (s2_tiles + 1023) / 1024;
                             cb_reserve_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
+                            DPRINT << "Stage 2 Score pointer on receiver: " << get_write_ptr(CTArgs::mesh_stage_scores_cb) << ENDL();
                             cb_push_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
                             cb_reserve_back(CTArgs::mesh_stage_indices_cb, s2_input_tiles);
+                            DPRINT << "Stage 2 Indices pointer on receiver: " << get_write_ptr(CTArgs::mesh_stage_indices_cb) << ENDL();
                             cb_push_back(CTArgs::mesh_stage_indices_cb, s2_input_tiles);
 
                             cb_wait_front(CTArgs::topk_out_scores_cb, 1);
@@ -1524,9 +1529,9 @@ struct TopKSampling {
                 const uint32_t global_scores = get_read_ptr(CTArgs::winner_cb_id);
                 if constexpr (IsMeshSenderCore) {
                     // Mesh sender: wait for NCRISC to finish, then send via fabric
-                    const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
+                    const BriscMeshSendMetadata fabric_meta = load_mesh_send_metadata(arg_idx);
                     send_mesh_topk_via_fabric_brisc(
-                        args.final_noc_x, args.final_noc_y, global_scores, metadata, arg_idx);
+                        args.final_noc_x, args.final_noc_y, global_scores, fabric_meta, arg_idx);
                 } else {
                     // Top-P filtering + random categorical selection
                     if constexpr (!CTArgs::mesh_mode || CTArgs::stage2_receiver) {

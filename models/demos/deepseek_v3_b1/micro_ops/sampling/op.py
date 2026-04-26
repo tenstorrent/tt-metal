@@ -1113,11 +1113,24 @@ class SamplingOp:
 
                 if is_stage1_receiver or is_stage2_receiver:
                     final_core_crs = ttnn.CoreRangeSet([ttnn.CoreRange(final_core_coord, final_core_coord)])
+                    # Per-device CB total_size MUST equal the number of pages the
+                    # device pushes/pops per iteration so the FIFO wraps cleanly
+                    # between iterations. Otherwise the CB read pointer drifts
+                    # and TRISC's LLK reads stale L1.
+                    #
+                    # Stage-1-only receivers (target_row, non-target_col):
+                    #   push/pop stage1_mesh_tiles per iter.
+                    # Final receiver (= stage2_receiver):
+                    #   push/pop stage1_mesh_tiles + stage2_mesh_tiles per iter.
+                    device_mesh_tiles = stage1_mesh_tiles
+                    if is_stage2_receiver:
+                        device_mesh_tiles += stage2_mesh_tiles
+
                     mesh_scores_cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
                         mesh_stage_scores_cb,
                         scores_scratch_device,
                         address_offset=0,
-                        total_size=total_mesh_stage_tiles * bf16_tile_size,
+                        total_size=device_mesh_tiles * bf16_tile_size,
                     )
                     mesh_scores_cb_fmt = ttnn.CBFormatDescriptor(
                         buffer_index=mesh_stage_scores_cb,
@@ -1132,7 +1145,7 @@ class SamplingOp:
                         mesh_stage_indices_cb,
                         indices_scratch_device,
                         address_offset=0,
-                        total_size=total_mesh_stage_tiles * uint32_tile_size,
+                        total_size=device_mesh_tiles * uint32_tile_size,
                     )
                     mesh_indices_cb_fmt = ttnn.CBFormatDescriptor(
                         buffer_index=mesh_stage_indices_cb,

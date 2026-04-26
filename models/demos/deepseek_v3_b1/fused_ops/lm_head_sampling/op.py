@@ -1075,11 +1075,16 @@ class LMHeadSampling:
                             return 0 if ring_distance <= first_half_threshold else 1
 
                         argmax_mesh_mode = 1
+                        # sampling.hpp declares stage{1,2}_slot_base_offset but
+                        # never references them; the kernel uses
+                        # scores_scratch_stage2_offset / indices_scratch_stage2_offset
+                        # for the stage-2 base instead. Pass 0 to match
+                        # micro_ops/sampling/op.py:874,878 (the legacy non-zero
+                        # value here was an argmax.hpp leftover, since argmax
+                        # actually consumed these as raw byte offsets).
                         argmax_stage1_slot_base_offset = 0
                         argmax_stage1_num_slots = mesh_rows
-                        argmax_stage2_slot_base_offset = (
-                            argmax_stage1_slot_base_offset + argmax_stage1_num_slots * sampling_winner_page_bytes
-                        )
+                        argmax_stage2_slot_base_offset = 0
                         argmax_stage2_num_slots = mesh_cols
                         argmax_stage1_expected_remote_incs = mesh_rows - 1
                         argmax_stage2_expected_remote_incs = mesh_cols - 1
@@ -1087,16 +1092,20 @@ class LMHeadSampling:
                         argmax_stage1_receiver = 1 if row == target_row else 0
                         argmax_stage2_sender = 1 if (row == target_row and col != target_col) else 0
                         argmax_stage2_receiver = 1 if (row == target_row and col == target_col) else 0
-                        argmax_stage1_local_slot_offset = (
-                            argmax_stage1_slot_base_offset + row * sampling_winner_page_bytes
-                        )
-                        argmax_stage2_local_slot_offset = (
-                            argmax_stage2_slot_base_offset + col * sampling_winner_page_bytes
-                        )
+                        # sampling.hpp expects these as SLOT INDICES (not byte
+                        # offsets) — see unified_kernels/sampling.hpp:732,736 where
+                        # the kernel multiplies by topk_{scores,indices}_slot_bytes
+                        # itself. argmax.hpp used these as raw byte offsets, which
+                        # is where the legacy `_offset` naming and the byte-offset
+                        # computation came from. Mirrors micro_ops/sampling/op.py:877,881.
+                        argmax_stage1_local_slot_offset = row
+                        argmax_stage2_local_slot_offset = col
                         is_argmax_mesh_sender_core = bool(argmax_stage1_sender or argmax_stage2_sender)
-                        argmax_mesh_local_send_slot_offset = (
-                            argmax_stage1_local_slot_offset if argmax_stage1_sender else argmax_stage2_local_slot_offset
-                        )
+                        # Unused by sampling.hpp on the sender side (the sender
+                        # reads from the winner CB, not from a scratch slot).
+                        # argmax.hpp used this to address `scratch_addr + offset`.
+                        # Matches micro_ops/sampling/op.py:882.
+                        argmax_mesh_local_send_slot_offset = 0
 
                         if is_argmax_mesh_sender_core:
                             if argmax_stage1_sender:
@@ -2121,38 +2130,62 @@ class LMHeadSampling:
                         )
 
                     # --- Mesh-stage scratch CBs (stage-1 / stage-2 receiver) ----------
-                    # Only allocated on the final core. In the stand-alone micro-op
-                    # these are tensor-backed by caller-supplied scores_scratch /
-                    # indices_scratch tensors; here we allocate them as plain L1
-                    # CBs for now. If/when the fused op gains scratch-tensor
-                    # parameters they can be swapped to cb_descriptor_from_sharded_tensor.
-                    if mesh_rows > 1 or mesh_cols > 1:
-                        cbs_list.append(
-                            ttnn.CBDescriptor(
-                                total_size=sampling_total_mesh_stage_tiles * sampling_bf16_tile_size,
-                                core_ranges=sampling_final_core_crs,
-                                format_descriptors=[
-                                    ttnn.CBFormatDescriptor(
-                                        buffer_index=sampling_mesh_stage_scores_cb,
-                                        data_format=ttnn.bfloat16,
-                                        page_size=sampling_bf16_tile_size,
-                                    )
-                                ],
-                            )
+                    # caller-supplied scores_scratch_tensor / indices_scratch_tensor:
+                    # remote stage-1/stage-2 senders write directly into that L1
+                    # region via NOC, and the BRISC writer in sampling.hpp only
+                    # bumps the CB write pointer (cb_reserve_back/cb_push_back
+                    # without an actual NOC write into the CB) so the LLK top-K
+                    # consumer on TRISC sees tiles ready to merge. The CB's L1
+                    # backing must therefore be the same physical address as the
+                    # scratch tensor; otherwise UNPACK reads uninitialised L1.
+                    if (mesh_rows > 1 or mesh_cols > 1) and not skip_ccl:
+                        # Per-device CB total_size MUST equal the number of pages
+                        # the device pushes/pops per iteration so the FIFO wraps
+                        # cleanly between iterations. Otherwise the CB read
+                        # pointer drifts and TRISC's LLK reads stale L1.
+                        #
+                        # Stage-1-only receivers (target_row, non-target_col):
+                        #   push/pop stage1_mesh_tiles per iter.
+                        # Final receiver (target_row, target_col):
+                        #   push/pop stage1_mesh_tiles + stage2_mesh_tiles per iter.
+                        # Non-stage1-receiver devices never push/pop here — the CB
+                        # is still aliased onto the scratch tensor harmlessly
+                        # (cb_descriptor_from_sharded_tensor doesn't allocate).
+                        device_mesh_tiles = sampling_stage1_mesh_tiles
+                        if argmax_stage2_receiver:
+                            device_mesh_tiles += sampling_stage2_mesh_tiles
+
+                        mesh_scores_cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                            sampling_mesh_stage_scores_cb,
+                            scores_scratch_tensors_per_device[device_idx],
+                            address_offset=0,
+                            total_size=device_mesh_tiles * sampling_bf16_tile_size,
                         )
-                        cbs_list.append(
-                            ttnn.CBDescriptor(
-                                total_size=sampling_total_mesh_stage_tiles * sampling_uint32_tile_size,
-                                core_ranges=sampling_final_core_crs,
-                                format_descriptors=[
-                                    ttnn.CBFormatDescriptor(
-                                        buffer_index=sampling_mesh_stage_indices_cb,
-                                        data_format=ttnn.uint32,
-                                        page_size=sampling_uint32_tile_size,
-                                    )
-                                ],
+                        mesh_scores_cb_desc.format_descriptors = [
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=sampling_mesh_stage_scores_cb,
+                                data_format=ttnn.bfloat16,
+                                page_size=sampling_bf16_tile_size,
+                                tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
                             )
+                        ]
+                        cbs_list.append(mesh_scores_cb_desc)
+
+                        mesh_indices_cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                            sampling_mesh_stage_indices_cb,
+                            indices_scratch_tensors_per_device[device_idx],
+                            address_offset=0,
+                            total_size=device_mesh_tiles * sampling_uint32_tile_size,
                         )
+                        mesh_indices_cb_desc.format_descriptors = [
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=sampling_mesh_stage_indices_cb,
+                                data_format=ttnn.uint32,
+                                page_size=sampling_uint32_tile_size,
+                                tile=ttnn.TileDescriptor(ttnn.Tile([32, 32])),
+                            )
+                        ]
+                        cbs_list.append(mesh_indices_cb_desc)
 
                     # --- Deferred socket output CB (final core, same page/role
                     # as the old argmax_socket_cb) ------------------------------------
