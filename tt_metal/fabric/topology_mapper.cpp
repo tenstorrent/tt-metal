@@ -1655,7 +1655,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Diagnostic: log physical adjacency so we can understand what the hardware looks like
     if (physical_adjacency_matrix.contains(MeshId{0})) {
         const auto& padj = physical_adjacency_matrix.at(MeshId{0});
-        log_warning(
+        log_info(
             tt::LogFabric,
             "TopologyMapper: physical adjacency for {} chips:",
             total_number_of_chips);
@@ -1665,7 +1665,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                 if (!neighbors_str.empty()) neighbors_str += ", ";
                 neighbors_str += std::to_string(n.get());
             }
-            log_warning(
+            log_info(
                 tt::LogFabric,
                 "  chip {} -> [{}]",
                 asic_id.get(),
@@ -1681,7 +1681,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             if (!shapes_str.empty()) shapes_str += ", ";
             shapes_str += std::to_string(s[0]) + "x" + std::to_string(s[1]);
         }
-        log_warning(tt::LogFabric, "TopologyMapper: will try shapes: [{}]", shapes_str);
+        log_info(tt::LogFabric, "TopologyMapper: will try shapes: [{}]", shapes_str);
     }
 
     // FIX K: Compute MMIO chip ASIC IDs upfront so we can detect when topology degradation
@@ -1732,7 +1732,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
         }
 
-        log_warning(
+        log_info(
             tt::LogFabric,
             "TopologyMapper: trying shape {}x{} ({} nodes) for {} physical chips",
             mesh_shape[0],
