@@ -146,7 +146,7 @@ subcontext_id_to_rank_bindings:
    | Variable | Meaning |
    |----------|--------|
    | `TT_RUN_SUBCONTEXT_ID` | Same as the key in **`subcontext_id_to_rank_bindings`** for that process's overlay — which YAML defines mesh env |
-   | `TT_RUN_SUBCONTEXT_SIZES` | Comma-separated sizes of every sub-context in id order (e.g. `2,2`); same string on all ranks |
+   | `TT_RUN_SUBCONTEXT_SIZE` | Number of ranks in this sub-context |
    | `TT_MESH_ID`, … | From the overlay row where **`rank:` == `distributed_context_get_rank()`** after init |
 
    **Metal note:** Heterogeneous `FabricConfig` across ranks is only valid if the runtime allows it for your topology (same PSD, different logical fabric mode per sub-context). If not, validation should fail at launch or document the supported matrix.
@@ -357,7 +357,7 @@ void inter_context_barrier();
 
 #### Implementation logic
 
-**Cached launch metadata:** At init, record **`subcontext_count`**, per-id **`subcontext_size`**, and this process’s **`subcontext_id`** from the same source **`tt-run` uses** (e.g. **`TT_RUN_SUBCONTEXT_ID`** + **`TT_RUN_SUBCONTEXT_SIZES`**). Implement **`subcontext_sizes()`** and **`local_to_world_rank`** from that cache so every rank can translate arbitrary peers without per-rank size env beyond the shared **`TT_RUN_SUBCONTEXT_SIZES`** string.
+**Cached launch metadata:** At init, record **`subcontext_count`**, per-id **`subcontext_size`**, and this process’s **`subcontext_id`** from the same source **`tt-run` uses** (env and/or merged YAML). Implement **`subcontext_sizes()`** and **`local_to_world_rank`** from that cache — do not require each rank to know only its own **`TT_RUN_SUBCONTEXT_SIZE`** when translating arbitrary peers.
 
 **`local_to_world_rank`:** Sub-context `0` ranks map to world `[0, n_0)`, sub-context `1` to `[n_0, n_0+n_1)`, etc., with **`n_i = subcontext_size(i)`**.
 
@@ -471,15 +471,15 @@ TEST(SubContextTest, BarrierScoping) {
 ### How to run
 
 ```bash
-mpirun -np 2 -x TT_RUN_SUBCONTEXT_ID=0 -x TT_RUN_SUBCONTEXT_SIZES=2,2 ./test_sub_context : \
-       -np 2 -x TT_RUN_SUBCONTEXT_ID=1 -x TT_RUN_SUBCONTEXT_SIZES=2,2 ./test_sub_context
+mpirun -np 2 -x TT_RUN_SUBCONTEXT_ID=0 -x TT_RUN_SUBCONTEXT_SIZE=2 ./test_sub_context : \
+       -np 2 -x TT_RUN_SUBCONTEXT_ID=1 -x TT_RUN_SUBCONTEXT_SIZE=2 ./test_sub_context
 ```
 
 Or using Open MPI's multi-app syntax with `appfile.txt`:
 
 ```
--np 2 -x TT_RUN_SUBCONTEXT_ID=0 -x TT_RUN_SUBCONTEXT_SIZES=2,2 ./test_sub_context
--np 2 -x TT_RUN_SUBCONTEXT_ID=1 -x TT_RUN_SUBCONTEXT_SIZES=2,2 ./test_sub_context
+-np 2 -x TT_RUN_SUBCONTEXT_ID=0 -x TT_RUN_SUBCONTEXT_SIZE=2 ./test_sub_context
+-np 2 -x TT_RUN_SUBCONTEXT_ID=1 -x TT_RUN_SUBCONTEXT_SIZE=2 ./test_sub_context
 ```
 
 ---
@@ -642,7 +642,7 @@ TEST(SubContextTest, PrefillDecodeDisaggregated) {
    - Tag each row with **`subcontext_id`** = map key and **`subcontext_size`** = `n_id` for that overlay.
 3. In `get_rank_environment`, when overlay metadata exists, inject:
    - `TT_RUN_SUBCONTEXT_ID` = string form of the map key
-   - `TT_RUN_SUBCONTEXT_SIZES` = comma-separated `n_id` for each sub-context in key order (same on every rank)
+   - `TT_RUN_SUBCONTEXT_SIZE` = `str(n_id)` for that overlay
    - Per-row mesh env from the overlay row whose **`rank:`** matches context rank
 4. **Interaction with `--rank-binding`:** either accept **only** the mapping for multi-overlay jobs, or define explicit precedence; single-overlay runs can keep one `--rank-binding` with no mapping.
 
