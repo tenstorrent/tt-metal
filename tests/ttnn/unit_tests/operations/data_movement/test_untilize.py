@@ -2922,3 +2922,71 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
 
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
+@pytest.mark.parametrize("use_multicore", [True, False])
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [
+        [1, 1, 32, 512],  # 16 tiles wide (exceeds 4-tile DEST limit for 32-bit types)
+        [1, 1, 32, 4704],  # 4704 elements = 147 tiles wide; issue #34072 used 4704 tiles (150,528 elements)
+    ],
+)
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_untilize_uint32_large_width(device, use_multicore, tensor_shape, input_buffer_type):
+    """
+    Regression test for issue #34072: UINT32 untilize corruption for large tensors.
+
+    UINT32 uses 32-bit DEST accumulation mode, which reduces the effective DEST register
+    capacity from 8 to 4 tiles in half-sync mode. For widths that exceed this limit, the
+    untilize kernel block-splits the width dimension and invokes pack_untilize_block on
+    each chunk instead of processing the entire row in a single DEST transaction.
+    """
+    torch.manual_seed(42)
+
+    torch_tensor = torch.randint(0, 1000, tensor_shape, dtype=torch.int32)
+
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_buffer_type)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    tile_tensor = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    untilized = ttnn.untilize(tile_tensor, memory_config=output_memory_config, use_multicore=use_multicore)
+    result = ttnn.to_torch(untilized)
+
+    assert_equal(torch_tensor, result)
+
+
+@pytest.mark.parametrize("use_multicore", [True, False])
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [
+        [1, 1, 32, 512],  # 16 tiles wide (exceeds 4-tile DEST limit for 32-bit types)
+        [1, 1, 32, 4704],  # 4704 elements = 147 tiles wide; issue #34072 used 4704 tiles (150,528 elements)
+    ],
+)
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_untilize_float32_large_width(device, use_multicore, tensor_shape, input_buffer_type):
+    """
+    Regression test for FLOAT32 untilize with large widths.
+
+    FLOAT32 uses 32-bit DEST accumulation mode, which reduces the effective DEST register
+    capacity from 8 to 4 tiles in half-sync mode. For widths that exceed this limit, the
+    untilize kernel block-splits the width dimension and invokes pack_untilize_block on
+    each chunk instead of processing the entire row in a single DEST transaction.
+    """
+    torch.manual_seed(42)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
+
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_buffer_type)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    tile_tensor = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    untilized = ttnn.untilize(tile_tensor, memory_config=output_memory_config, use_multicore=use_multicore)
+    result = ttnn.to_torch(untilized)
+
+    assert_with_pcc(torch_tensor, result, 0.9999)
