@@ -7,6 +7,7 @@
 #include "risc_common.h"
 #include "noc.h"
 #include "noc_nonblocking_api.h"
+#include "experimental/drisc_mode.h"
 #include "internal/firmware_common.h"
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
@@ -56,6 +57,11 @@ int main() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     risc_init();
+
+    // NIU_CFG_0 persists across program runs (only cleared on chip reset: tt-smi -r).
+    // Force NOC2AXI on every boot so the starting mode is deterministic
+    // regardless of what prior runs left in the register.
+    experimental::drisc_set_noc2axi_mode_all();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {

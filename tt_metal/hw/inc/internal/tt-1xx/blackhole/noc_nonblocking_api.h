@@ -186,6 +186,11 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     return *ptr;
 }
 
+inline __attribute__((always_inline)) void NOC_CFG_WRITE_REG(uint32_t noc, uint32_t reg_id, uint32_t val) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
+    *(volatile uint32_t*)offset = val;
+}
+
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }

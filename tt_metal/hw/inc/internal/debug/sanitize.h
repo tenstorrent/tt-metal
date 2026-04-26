@@ -227,7 +227,28 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     return DebugSanitizeOK;
 }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_DRISC)
+inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) {
+    if (addr + len <= addr) {
+        return DebugSanitizeNocAddrZeroLength;
+    }
+    if (addr < MEM_DRISC_L1_BASE) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+    if (addr + len > MEM_DRISC_L1_BASE + MEM_DRISC_L1_SIZE) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < MEM_DRISC_MAILBOX_END)) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
+    return DebugSanitizeOK;
+}
+#endif
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
 // Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
 // circular buffer stays within that buffer's allocated region.  Only runs on
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
@@ -255,7 +276,7 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     // Address is not inside any known CB; other checks will validate it.
     return DebugSanitizeOK;
 }
-#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC
 
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last
@@ -511,9 +532,11 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
-        // Local addr needs to be checked depending on whether we're on eth or tensix.
+        // Local addr needs to be checked depending on core type.
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#elif defined(COMPILE_FOR_DRISC)
+        uint16_t return_code = debug_valid_drisc_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #endif
@@ -533,7 +556,8 @@ void debug_sanitize_noc_and_worker_addr(
         }
     }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
     // Check local L1 address against CB bounds (both read and write directions).
     debug_sanitize_post_addr_and_hang(
         noc_id,
@@ -568,6 +592,8 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #if defined(COMPILE_FOR_ERISC)
     constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
+#elif defined(COMPILE_FOR_DRISC)
+    constexpr uint64_t l1_overflow_addr = MEM_DRISC_L1_SIZE;
 #else
     constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
