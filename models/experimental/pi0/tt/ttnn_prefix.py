@@ -190,10 +190,6 @@ class PrefixEmbeddingTTNN:
         # Create zeros mask directly on device (no host transfer needed)
         prefix_att_masks = self.prefix_att_masks
 
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
-
         return prefix_embs, prefix_pad_masks, prefix_att_masks
 
 
