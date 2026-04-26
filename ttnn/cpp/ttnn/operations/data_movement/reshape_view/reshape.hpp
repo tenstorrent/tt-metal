@@ -31,13 +31,15 @@ ttnn::Tensor PerformView(
 }  // namespace operations::data_movement
 
 // Free function declarations with default parameters
+// `skip_padding_fill`: if true, `pad_value` is ignored and tile padding is left as-is.
 ttnn::Tensor reshape(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
 
 ttnn::Tensor reshape(
     const ttnn::Tensor& input_tensor,
@@ -46,7 +48,8 @@ ttnn::Tensor reshape(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
 
 ttnn::Tensor reshape(
     const ttnn::Tensor& input_tensor,
@@ -54,6 +57,7 @@ ttnn::Tensor reshape(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    bool skip_padding_fill = false);
 
 }  // namespace ttnn

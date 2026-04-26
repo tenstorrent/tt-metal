@@ -26,8 +26,10 @@ ttnn::Tensor reshape_shape_vector_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const ttnn::TileReshapeMapMode reshape_tile_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::reshape(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool skip_padding_fill) {
+    return ttnn::reshape(
+        input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids, skip_padding_fill);
 }
 
 void bind_reshape_view_operation(nb::module_& mod) {
@@ -43,8 +45,9 @@ void bind_reshape_view_operation(nb::module_& mod) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
-                * :attr:`reshape_map_mode` (TileReshapeMapMode): Advanced option. Set to RECREATE to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE.
-                * :attr:`sub_core_grid` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+                * :attr:`reshape_tile_mode` (TileReshapeMapMode): Advanced option. Set to RECREATE to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE.
+                * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+                * :attr:`skip_padding_fill` (bool): If False, ``pad_value`` is applied to tile padding lanes. If True, ``pad_value`` is ignored and tile padding is left as-is. Default is False.
 
 
             Returns:
@@ -63,14 +66,16 @@ void bind_reshape_view_operation(nb::module_& mod) {
                 const std::optional<MemoryConfig>&,
                 const std::optional<PadValue>&,
                 TileReshapeMapMode,
-                const std::optional<CoreRangeSet>&>(&ttnn::reshape),
+                const std::optional<CoreRangeSet>&,
+                bool>(&ttnn::reshape),
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("skip_padding_fill") = false),
 
         // Overload 2: logical_shape and padded_shape (ttnn::Shape, ttnn::Shape)
         ttnn::overload_t(
@@ -81,7 +86,8 @@ void bind_reshape_view_operation(nb::module_& mod) {
                 const std::optional<MemoryConfig>&,
                 const std::optional<PadValue>&,
                 TileReshapeMapMode,
-                const std::optional<CoreRangeSet>&>(&ttnn::reshape),
+                const std::optional<CoreRangeSet>&,
+                bool>(&ttnn::reshape),
             nb::arg("input_tensor"),
             nb::arg("logical_shape"),
             nb::arg("padded_shape"),
@@ -89,7 +95,8 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("skip_padding_fill") = false),
 
         // Overload 3: shape vector (SmallVector<int32_t>)
         ttnn::overload_t(
@@ -99,8 +106,9 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("pad_value") = nb::none(),
-            nb::arg("recreate_mapping_tensor") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("skip_padding_fill") = false));
 }
 
 }  // namespace detail

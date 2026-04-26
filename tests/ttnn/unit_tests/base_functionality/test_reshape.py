@@ -572,8 +572,8 @@ def test_reshape_subgrid(device, input_shape, output_shape, layout, memory_confi
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-@pytest.mark.parametrize("recreate_mapping_tensor", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
-def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
+@pytest.mark.parametrize("reshape_tile_mode", (ttnn.TileReshapeMapMode.CACHE, ttnn.TileReshapeMapMode.RECREATE))
+def test_reshape_tile_program_cache(device, reshape_tile_mode):
     for input_shape, output_shape in ((1, 8, 8), (1, 16, 4)), ((16, 1, 5), (4, 2, 10)):
         for _ in range(3):
             torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -582,7 +582,7 @@ def test_reshape_tile_program_cache(device, recreate_mapping_tensor):
             input_tensor = ttnn.from_torch(
                 torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
             )
-            ttnn_output = ttnn.reshape(input_tensor, output_shape, recreate_mapping_tensor=recreate_mapping_tensor)
+            ttnn_output = ttnn.reshape(input_tensor, output_shape, reshape_tile_mode=reshape_tile_mode)
 
             output = ttnn.to_torch(ttnn_output)
             assert_with_pcc(torch_result, output, 0.9999)
