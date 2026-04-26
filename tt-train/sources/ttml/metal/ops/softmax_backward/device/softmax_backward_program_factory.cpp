@@ -148,7 +148,8 @@ static void get_tensor_properties(
     num_rows = num_outer_dims * height_tiles;
     input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
     output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    intermed_data_format = tt::DataFormat::Float16_b;
+    // y*grad and reduction tiles use the same format as activations (BFLOAT16 or FLOAT32 today).
+    intermed_data_format = input_data_format;
     input_tile_size = tile_size(input_data_format);
     output_tile_size = tile_size(output_data_format);
     intermed_tile_size = tile_size(intermed_data_format);
@@ -257,7 +258,8 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
         width_tiles,
         tiles_per_block};
 
-    std::map<std::string, std::string> compute_defines = {{"BROADCAST_TYPE", "BroadcastType::COL"}};
+    std::map<std::string, std::string> compute_defines = {
+        {"BROADCAST_TYPE", "BroadcastType::COL"}, {"FP32_DEST_ACC_EN", "1"}};
     const ComputeConfig wconf = precise(compute_compile_time_args, compute_defines);
 
     auto reader_kernel_id =
