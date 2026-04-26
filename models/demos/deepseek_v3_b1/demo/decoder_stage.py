@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, crea
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
 from models.demos.deepseek_v3_b1.utils import (
@@ -721,6 +721,7 @@ class DecoderStage(StageKind):
         forward_metadata: bool = True,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        host_loopback: bool = False,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -745,6 +746,7 @@ class DecoderStage(StageKind):
         self._forward_metadata = forward_metadata
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
+        self._host_loopback = host_loopback
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -790,6 +792,9 @@ class DecoderStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            loopback=LoopbackConfig.host_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
+            if self._host_loopback
+            else LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -980,6 +985,7 @@ class MoEDecoderStage(DecoderStage):
         forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        host_loopback: bool = False,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -996,6 +1002,7 @@ class MoEDecoderStage(DecoderStage):
             forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            host_loopback=host_loopback,
         )
 
 
@@ -1019,6 +1026,7 @@ class DenseDecoderStage(DecoderStage):
         forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        host_loopback: bool = False,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -1035,4 +1043,5 @@ class DenseDecoderStage(DecoderStage):
             forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            host_loopback=host_loopback,
         )

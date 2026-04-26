@@ -159,8 +159,13 @@ def test_linear_fp32_acc_l1(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
-
+        bias_t = ttnn.from_torch(
+            bias.reshape(bias_shape),
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        )
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
@@ -376,7 +381,13 @@ def test_matmul_1d_fp32_input_output(
 
         in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+        bias_t = ttnn.from_torch(
+            bias.reshape(bias_shape),
+            dtype=weights_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=interleaved_mem_config,
+        )
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -701,8 +712,13 @@ def test_sharded_matmul_2d(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
-
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
@@ -788,7 +804,13 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
     # Generate the tensor
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
 
     if in0_sharded:
         in0_t = ttnn.interleaved_to_sharded(
@@ -1055,8 +1077,13 @@ def test_sharded_matmul_1d_in0(
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
-
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
@@ -1129,7 +1156,13 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
 
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype)[0]
+    bias_t = ttnn.from_torch(
+        bias.reshape(bias_shape),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=interleaved_mem_config,
+    )
 
     output_mem_config = sharded_mem_config
 

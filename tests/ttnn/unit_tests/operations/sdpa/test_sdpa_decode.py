@@ -192,6 +192,35 @@ def test_sdpa_decode_paged_attention(
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bfp8",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    [
+        [32, 32, 8, 2048, 128, (10, 11)],
+    ],
+    ids=["blackhole_b32_nkv8"],
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_kv_head_core_divisibility(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
+    """Regression test for github.com/tenstorrent/tt-metal/issues/40978.
+
+    When floor(num_cores_available / B) yields a value that makes ceil(num_kv_heads / uncapped)
+    a non-divisor of num_kv_heads, the old core allocation produced inconsistent counts causing
+    a TT_FATAL crash at output core indexing.
+    """
+    run_test_sdpa_decode_single_iter(
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor=True, sharded_in=False, sharded_out=False
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
         [ttnn.bfloat8_b, ttnn.bfloat8_b],
     ],
     ids=[

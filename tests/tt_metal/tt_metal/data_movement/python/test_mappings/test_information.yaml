@@ -855,3 +855,99 @@ tests:
 
   911:
     name: "Quasar IDMA - 1D Strided"
+
+  1012:
+    name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1013:
+    name: "1D Matmul Test 1013 - 3x2 K=3 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1023:
+    name: "1D Matmul Test 1023 - 2x4 K=2 (K<C) Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1024:
+    name: "1D Matmul Test 1024 - 2x3 K=3 (K==C) Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1025:
+    name: "1D Matmul Test 1025 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1026:
+    name: "1D Matmul Test 1026 - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1027:
+    name: "1D Matmul Test 1027 - 4x4 K=8 Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1028:
+    name: "1D Matmul Test 1028 - 4x4 K=8 Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1112:
+    name: "1D V2 Matmul Test 1112 - 2x2 K=2 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1113:
+    name: "1D V2 Matmul Test 1113 - 3x2 K=3 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1123:
+    name: "1D V2 Matmul Test 1123 - 2x4 K=2 (K<C) Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1124:
+    name: "1D V2 Matmul Test 1124 - 2x3 K=3 (K==C) Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1125:
+    name: "1D V2 Matmul Test 1125 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1126:
+    name: "1D V2 Matmul Test 1126 - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1127:
+    name: "1D V2 Matmul Test 1127 - 4x4 K=8 Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1128:
+    name: "1D V2 Matmul Test 1128 - 4x4 K=8 Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1212:
+    name: "2D Matmul Test 1212 - 2x2 K=2 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1213:
+    name: "2D Matmul Test 1213 - 3x2 K=3 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1223:
+    name: "2D Matmul Test 1223 - 2x4 K=2 (K<C) Subblock C Sweep"
+    bandwidth_mode: "combined"
+
+  1224:
+    name: "2D Matmul Test 1224 - 2x3 K=3 (K==C) Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1225:
+    name: "2D Matmul Test 1225 - 2x3 K=5 (K not div C) Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1226:
+    name: "2D Matmul Test 1226 - 4x4 K=4 Subblock K Sweep"
+    bandwidth_mode: "combined"
+
+  1227:
+    name: "2D Matmul Test 1227 - 4x4 K=8 Subblock R Sweep"
+    bandwidth_mode: "combined"
+
+  1228:
+    name: "2D Matmul Test 1228 - 4x4 K=8 Subblock C Sweep"
+    bandwidth_mode: "combined"

@@ -29,7 +29,8 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
     tt::DataFormat expert_mask_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
     tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df =
+        (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
     tt::DataFormat value_cb_data_format = tt::DataFormat::Float16_b;
 
@@ -166,9 +167,7 @@ MoeProgramFactory::cached_program_t MoeProgramFactory::create(
             expert_mask_buffer->address(),
         });
 
-    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
-    std::vector<uint32_t> writer_compile_time_args = {out_cb_index, Ht, k, packed_identity_scalar};
+    std::vector<uint32_t> writer_compile_time_args = {out_cb_index, Ht, k};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

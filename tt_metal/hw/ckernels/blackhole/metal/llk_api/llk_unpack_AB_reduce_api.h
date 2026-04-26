@@ -29,7 +29,7 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, enforce_fp32_accumulation>(tensor_shape);
 }
 
-template <PoolType pool_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce(
     const std::uint32_t operandA,
     const std::uint32_t operandB,

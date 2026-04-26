@@ -504,7 +504,7 @@ def test_unload_weight_from_lazy_state_dict_evicts_stacked_alias_cache(tmp_path:
 
     load_weight(expert_key, target_tensor)
     assert expert_key in state_dict._cache
-    assert stacked_key in state_dict._cache
+    assert stacked_key not in state_dict._cache
 
     unload_weight(expert_key, target_tensor)
     assert target_tensor.numel() == 0

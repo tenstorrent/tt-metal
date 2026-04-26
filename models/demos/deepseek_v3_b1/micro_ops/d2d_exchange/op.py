@@ -144,7 +144,6 @@ def _build_exchange_program(
         compile_time_args=kernel_ct_args,
         config=ttnn.WriterConfigDescriptor(),
     )
-
     program = ttnn.ProgramDescriptor(
         kernels=[exchange_kernel],
         semaphores=[],
@@ -635,17 +634,13 @@ class SocketInterface:
 
     def run(self):
         entries = self.build_programs()
-
         dummy_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device
         )
-
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for device_coord, program in entries:
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = program
-
-        io_tensors = [dummy_tensor, dummy_tensor]
-        return ttnn.generic_op(io_tensors, mesh_program_descriptor)
+        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def terminate(self, sync_devices):
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)

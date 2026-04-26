@@ -316,7 +316,13 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
+@pytest.mark.parametrize("explicit_output_mem_config", [True, False])
+def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op, explicit_output_mem_config):
+    # To reduce the number of tests, we only test sum and var with explicit output mem_config.
+    # This exercises both known code paths where this could make a meaningful difference.
+    if explicit_output_mem_config and op not in ("sum", "var"):
+        pytest.skip("explicit output mem_config only tested for sum and var")
+
     torch.manual_seed(0)
     dim = -2
     input_shape, shard_shape, end_x, end_y = shapes
@@ -344,7 +350,10 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
         layout=layout,
         memory_config=memory_config,
     )
-    op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
+    if explicit_output_mem_config:
+        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim, memory_config=memory_config)
+    else:
+        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
 
     # Verify output is sharded with correct properties (doc: "Output sharding will mirror the input")
     output_mem_config = op_output_tensor.memory_config()
@@ -389,25 +398,46 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
     assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
-# Test that generic reduction ops work correctly with Width and Height sharding.
+# Test that generic reduction ops work correctly with Width, Height, and Block sharding.
 @pytest.mark.parametrize(
-    "input_shape, shard_2d_shape, end_x, end_y, memory_layout",
+    "input_shape, shard_2d_shape, end_x, end_y, memory_layout, dim",
     [
         # HEIGHT_SHARDED: each core gets a horizontal slice (some rows, full width)
-        ([8, 8, 32, 32], [1024, 32], 1, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        ([4, 4, 64, 64], [512, 64], 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([8, 8, 32, 32], [1024, 32], 1, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, -2),
+        ([4, 4, 64, 64], [512, 64], 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, -2),
         # WIDTH_SHARDED: each core gets a vertical slice (full height, some columns)
-        ([8, 8, 32, 128], [2048, 32], 3, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        ([4, 4, 64, 256], [1024, 32], 7, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([8, 8, 32, 128], [2048, 32], 3, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED, -2),
+        ([4, 4, 64, 256], [1024, 32], 7, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED, -2),
+        # BLOCK_SHARDED: both height and width split across a 2D grid
+        ([4, 4, 64, 64], [512, 32], 1, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED, -2),
+        # Also test W reduction case to validate shard-shape recomputation when
+        # the reduced output width becomes one tile.
+        ([4, 4, 64, 64], [512, 32], 1, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED, -1),
     ],
 )
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y, memory_layout, keepdim, layout, op):
-    torch.manual_seed(0)
-    dim = -2
+@pytest.mark.parametrize("explicit_output_mem_config", [True, False])
+def test_generic_ops_wh_block_shard(
+    device,
+    input_shape,
+    shard_2d_shape,
+    end_x,
+    end_y,
+    memory_layout,
+    dim,
+    keepdim,
+    layout,
+    op,
+    explicit_output_mem_config,
+):
+    # To reduce the number of tests, we only test sum and var with explicit output mem_config.
+    # This exercises both known code paths where this could make a meaningful difference.
+    if explicit_output_mem_config and op not in ("sum", "var"):
+        pytest.skip("explicit output mem_config only tested for sum and var")
 
+    torch.manual_seed(0)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
         shard_2d_shape,
@@ -434,7 +464,10 @@ def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y,
         layout=layout,
         memory_config=memory_config,
     )
-    op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
+    if explicit_output_mem_config:
+        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim, memory_config=memory_config)
+    else:
+        op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
 
     # Verify output is sharded with correct properties (doc: "Output sharding will mirror the input")
     output_mem_config = op_output_tensor.memory_config()
@@ -486,10 +519,21 @@ def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y,
         # Height is split across cores, width stays full
         expected_shard_h = (output_2d_height + num_cores - 1) // num_cores
         expected_shard_w = output_2d_width
+    elif memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        # Height split across grid rows, width split across grid columns
+        num_rows = end_y + 1
+        num_cols = end_x + 1
+        expected_shard_h = (output_2d_height + num_rows - 1) // num_rows
+        expected_shard_w = (output_2d_width + num_cols - 1) // num_cols
     else:
         # Width is split across cores, height stays full
         expected_shard_h = output_2d_height
         expected_shard_w = (output_2d_width + num_cores - 1) // num_cores
+
+    # The output is always TILE layout, so each per-core shard must contain
+    # whole tiles. Round up both shard dimensions to tile boundaries.
+    expected_shard_h = round_up_to_tile(expected_shard_h)
+    expected_shard_w = round_up_to_tile(expected_shard_w)
 
     actual_shard_shape = list(output_shard_spec.shape)
     assert actual_shard_shape == [expected_shard_h, expected_shard_w], (

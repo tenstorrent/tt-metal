@@ -1228,10 +1228,13 @@ ALWI void matmul_blocks(
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
                 cb_wait_front(zero_cb, 1);
+                reconfig_data_format(zero_cb, mask_cb);
                 add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
+                reconfig_data_format(in1_cb, in0_cb);
+                mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();

@@ -51,6 +51,11 @@ Replace <test_file_name> with the specific test script you want to execute, e.g.
 pytest
 ```
 
+### Running on the ttsim functional simulator
+
+See [TTSIM.md](TTSIM.md) for running the LLK suite on
+[ttsim](https://github.com/tenstorrent/ttsim) — no silicon required.
+
 ---
 
 ## Logging

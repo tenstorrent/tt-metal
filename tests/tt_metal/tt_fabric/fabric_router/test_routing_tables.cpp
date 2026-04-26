@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <unordered_set>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -24,6 +25,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <fmt/format.h>
 
 namespace {
 
@@ -1314,5 +1316,876 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
 
     // Clean up
     std::filesystem::remove_all(temp_dir);
+}
+
+namespace {
+
+struct Sp5BlitzPipelineStage {
+    std::size_t stage_index;
+    MeshCoordinate entry_node_coord;
+    MeshCoordinate exit_node_coord;
+};
+
+// Split out of TEST_F to satisfy clang-tidy readability-function-cognitive-complexity for TestBody.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity) -- consolidated pipeline validation checks
+void validate_sp5_blitz_decode_pipeline_stages(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::MeshGraph& mesh_graph,
+    const std::vector<MeshId>& mesh_ids,
+    const std::vector<Sp5BlitzPipelineStage>& stages) {
+    const auto num_meshes = mesh_ids.size();
+
+    auto coord_str = [](const MeshCoordinate& c) { return fmt::format("({}, {})", c[0], c[1]); };
+
+    ASSERT_EQ(stages.size(), num_meshes + 1) << "Expected " << (num_meshes + 1) << " stages (num_meshes=" << num_meshes
+                                             << " + 1 loopback), got " << stages.size();
+
+    // 1. No stage has identical entry and exit coords
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        EXPECT_NE(s.entry_node_coord, s.exit_node_coord)
+            << "Stage [" << i << "] (stage_index=" << s.stage_index << ") has identical entry and exit coords "
+            << coord_str(s.entry_node_coord);
+    }
+
+    // 2. No coord is reused across stages
+    std::set<std::pair<std::size_t, std::pair<uint32_t, uint32_t>>> used_coords;
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        auto entry_key = std::make_pair(s.stage_index, std::make_pair(s.entry_node_coord[0], s.entry_node_coord[1]));
+        auto exit_key = std::make_pair(s.stage_index, std::make_pair(s.exit_node_coord[0], s.exit_node_coord[1]));
+        EXPECT_TRUE(used_coords.insert(entry_key).second)
+            << "Stage [" << i << "] entry coord " << coord_str(s.entry_node_coord) << " (stage_index=" << s.stage_index
+            << ") overlaps with a previous stage";
+        EXPECT_TRUE(used_coords.insert(exit_key).second)
+            << "Stage [" << i << "] exit coord " << coord_str(s.exit_node_coord) << " (stage_index=" << s.stage_index
+            << ") overlaps with a previous stage";
+    }
+
+    // 2b. Entry/exit fabric nodes chosen for the pipeline are not reused across stages.
+    std::unordered_set<FabricNodeId> used_fabric_nodes;
+    used_fabric_nodes.reserve(stages.size() * 2);
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        MeshId mesh_id{static_cast<uint32_t>(s.stage_index)};
+        FabricNodeId entry_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.entry_node_coord));
+        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
+        EXPECT_TRUE(used_fabric_nodes.insert(entry_fn).second)
+            << "Stage [" << i << "] entry fabric node " << entry_fn << " is reused across stages";
+        EXPECT_TRUE(used_fabric_nodes.insert(exit_fn).second)
+            << "Stage [" << i << "] exit fabric node " << exit_fn << " is reused across stages";
+    }
+
+    // 3a. Each stage entry and exit must have at least one active fabric ethernet channel (none empty).
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& s = stages[i];
+        MeshId mesh_id{static_cast<uint32_t>(s.stage_index)};
+        FabricNodeId entry_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.entry_node_coord));
+        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
+        EXPECT_FALSE(control_plane.get_active_fabric_eth_channels(entry_fn).empty())
+            << "Stage [" << i << "] entry fabric node " << entry_fn << " has no active fabric ethernet channels";
+        EXPECT_FALSE(control_plane.get_active_fabric_eth_channels(exit_fn).empty())
+            << "Stage [" << i << "] exit fabric node " << exit_fn << " has no active fabric ethernet channels";
+    }
+
+    // 3. Consecutive inter-mesh stages are physically connected
+    for (std::size_t i = 0; i < stages.size() - 1; i++) {
+        const auto& curr = stages[i];
+        const auto& next = stages[i + 1];
+
+        auto curr_mesh_id = MeshId{static_cast<uint32_t>(curr.stage_index)};
+        auto next_mesh_id = MeshId{static_cast<uint32_t>(next.stage_index)};
+
+        if (curr_mesh_id == next_mesh_id) {
+            continue;
+        }
+
+        auto exit_chip_id = mesh_graph.coordinate_to_chip(curr_mesh_id, curr.exit_node_coord);
+        auto entry_chip_id = mesh_graph.coordinate_to_chip(next_mesh_id, next.entry_node_coord);
+        FabricNodeId exit_fn(curr_mesh_id, exit_chip_id);
+        FabricNodeId entry_fn(next_mesh_id, entry_chip_id);
+
+        auto pairs =
+            control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(curr_mesh_id, next_mesh_id);
+
+        bool found = false;
+        for (const auto& [exit_node, peer_node] : pairs) {
+            if (exit_node == exit_fn && peer_node == entry_fn) {
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << "Stages [" << i << "]->[" << (i + 1) << "]: exit (M" << *curr_mesh_id << "D"
+                           << exit_chip_id << ") coord " << coord_str(curr.exit_node_coord)
+                           << " is not physically connected to entry (M" << *next_mesh_id << "D" << entry_chip_id
+                           << ") coord " << coord_str(next.entry_node_coord);
+    }
+
+    using EthDir = tt::tt_fabric::eth_chan_directions;
+    auto is_z_eth_dir = [](EthDir d) { return d == EthDir::Z; };
+    auto is_nesw_eth_dir = [](EthDir d) {
+        return d == EthDir::NORTH || d == EthDir::SOUTH || d == EthDir::EAST || d == EthDir::WEST;
+    };
+    auto eth_dirs_match_kind = [&](EthDir a, EthDir b) {
+        return (is_z_eth_dir(a) && is_z_eth_dir(b)) || (is_nesw_eth_dir(a) && is_nesw_eth_dir(b));
+    };
+    auto eth_chan_dir_cstr = [](EthDir d) -> const char* {
+        switch (d) {
+            case EthDir::EAST: return "EAST";
+            case EthDir::WEST: return "WEST";
+            case EthDir::NORTH: return "NORTH";
+            case EthDir::SOUTH: return "SOUTH";
+            case EthDir::Z: return "Z";
+            default: return "UNKNOWN";
+        }
+    };
+
+    // 3b. Stage exit -> next stage entry (full ring): Z-Z or NESW-NESW on each fabric hop.
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& stage = stages[i];
+        const std::size_t next_i = (i + 1) % stages.size();
+        const auto& next_stage = stages[next_i];
+
+        MeshId mesh_id{static_cast<uint32_t>(stage.stage_index)};
+        MeshId next_mesh_id{static_cast<uint32_t>(next_stage.stage_index)};
+        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, stage.exit_node_coord));
+        FabricNodeId next_entry_fn(
+            next_mesh_id, mesh_graph.coordinate_to_chip(next_mesh_id, next_stage.entry_node_coord));
+
+        bool saw_hop = false;
+        for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+            if (peer_fn != next_entry_fn) {
+                continue;
+            }
+            saw_hop = true;
+            EthDir dst_dir = control_plane.get_eth_chan_direction(peer_fn, static_cast<int>(peer_chan));
+            EXPECT_TRUE(eth_dirs_match_kind(src_dir, dst_dir))
+                << "Stages [" << i << "] exit -> [" << next_i << "] entry: ethernet direction mismatch " << exit_fn
+                << " -> " << next_entry_fn << " (src_chan=" << static_cast<int>(src_chan)
+                << " src_dir=" << static_cast<int>(src_dir) << ", peer_chan=" << static_cast<int>(peer_chan)
+                << " dst_dir=" << static_cast<int>(dst_dir) << ")";
+        }
+        EXPECT_TRUE(saw_hop) << "Stages [" << i << "] exit " << exit_fn << " has no fabric ethernet hop to stage ["
+                             << next_i << "] entry " << next_entry_fn;
+    }
+
+    // 4. Loopback stage must differ from stage 0
+    const auto& stage_0 = stages[0];
+    const auto& loopback = stages.back();
+    EXPECT_TRUE(
+        loopback.entry_node_coord != stage_0.entry_node_coord || loopback.exit_node_coord != stage_0.exit_node_coord)
+        << "Loopback stage has identical entry/exit as stage 0: entry=" << coord_str(loopback.entry_node_coord)
+        << ", exit=" << coord_str(loopback.exit_node_coord);
+
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+
+    auto psd_has_direct_eth_link = [&](const FabricNodeId& a, const FabricNodeId& b) {
+        auto asic_a = topology_mapper.get_asic_id_from_fabric_node_id(a);
+        auto asic_b = topology_mapper.get_asic_id_from_fabric_node_id(b);
+        if (!psd.get_eth_connections(asic_a, asic_b).empty()) {
+            return true;
+        }
+        return !psd.get_eth_connections(asic_b, asic_a).empty();
+    };
+
+    // Every control-plane inter-mesh (exit, entry) pair: PSD shows a direct eth edge, and port directions match (Z-Z or
+    // NESW-NESW) on each mapped hop.
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        for (std::size_t j = 0; j < num_meshes; j++) {
+            if (i == j) {
+                continue;
+            }
+            MeshId src_mesh = mesh_ids[i];
+            MeshId dst_mesh = mesh_ids[j];
+            auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+            for (const auto& [exit_fn, entry_fn] : pairs) {
+                EXPECT_TRUE(psd_has_direct_eth_link(exit_fn, entry_fn))
+                    << "PhysicalSystemDescriptor: no direct ethernet edge between ASICs for exit " << exit_fn
+                    << " and entry " << entry_fn;
+
+                bool saw_exit_to_entry_hop = false;
+                for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                    auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                    if (peer_fn != entry_fn) {
+                        continue;
+                    }
+                    saw_exit_to_entry_hop = true;
+                    EthDir dst_dir = control_plane.get_eth_chan_direction(peer_fn, static_cast<int>(peer_chan));
+                    EXPECT_TRUE(eth_dirs_match_kind(src_dir, dst_dir))
+                        << "Inter-mesh direction mismatch for exit " << exit_fn << " -> entry " << entry_fn
+                        << " (src_chan=" << static_cast<int>(src_chan) << " src_dir=" << static_cast<int>(src_dir)
+                        << ", peer_chan=" << static_cast<int>(peer_chan) << " dst_dir=" << static_cast<int>(dst_dir)
+                        << ")";
+                }
+                EXPECT_TRUE(saw_exit_to_entry_hop)
+                    << "No active fabric ethernet channel maps exit " << exit_fn << " to entry " << entry_fn;
+            }
+        }
+    }
+
+    // Pipeline ring: each stage exit must be PSD-adjacent to the next stage entry (includes intra-mesh loopback).
+    for (std::size_t i = 0; i < stages.size(); i++) {
+        const auto& stage = stages[i];
+        MeshId mesh_id{static_cast<uint32_t>(stage.stage_index)};
+        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, stage.exit_node_coord));
+
+        const std::size_t next_i = (i + 1) % stages.size();
+        const auto& next_stage = stages[next_i];
+        MeshId next_mesh_id{static_cast<uint32_t>(next_stage.stage_index)};
+        FabricNodeId next_entry_fn(
+            next_mesh_id, mesh_graph.coordinate_to_chip(next_mesh_id, next_stage.entry_node_coord));
+
+        EXPECT_TRUE(psd_has_direct_eth_link(exit_fn, next_entry_fn))
+            << "Stage [" << i << "] exit " << exit_fn << " -> stage [" << next_i << "] entry " << next_entry_fn
+            << " has no direct PSD ethernet edge";
+    }
+
+    // Inter-mesh link counts: symmetric between mesh directions; every MGD-declared pair must have at least one
+    // channel.
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        for (std::size_t j = i + 1; j < num_meshes; j++) {
+            std::size_t n_ij =
+                control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[i], mesh_ids[j])
+                    .size();
+            std::size_t n_ji =
+                control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(mesh_ids[j], mesh_ids[i])
+                    .size();
+            EXPECT_EQ(n_ij, n_ji) << "Asymmetric inter-mesh pair count between M" << *mesh_ids[i] << " and M"
+                                  << *mesh_ids[j] << " (" << n_ij << " vs " << n_ji << ")";
+        }
+    }
+
+    const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+
+    if (!requested_intermesh_ports.empty()) {
+        for (const auto& [src_u, dst_map] : requested_intermesh_ports) {
+            for (const auto& kv : dst_map) {
+                std::uint32_t dst_u = kv.first;
+                std::size_t actual =
+                    control_plane
+                        .get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{src_u}, MeshId{dst_u})
+                        .size();
+                EXPECT_GT(actual, 0u) << "No inter-mesh channels from M" << src_u << " to M" << dst_u
+                                      << " (strict MGD declares this link)";
+            }
+        }
+    } else {
+        for (const auto& [src_u, dst_map] : requested_intermesh_connections) {
+            for (const auto& kv : dst_map) {
+                std::uint32_t dst_u = kv.first;
+                std::size_t actual =
+                    control_plane
+                        .get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{src_u}, MeshId{dst_u})
+                        .size();
+                EXPECT_GT(actual, 0u) << "No inter-mesh channels from M" << src_u << " to M" << dst_u
+                                      << " (relaxed MGD declares this link)";
+            }
+        }
+    }
+
+    // ===== Comprehensive inter-mesh router configuration validation =====
+    //
+    // The following checks catch the class of bugs where the controller's Z-port
+    // promotion/demotion and the host-side reconciliation disagree on which physical
+    // ethernet channel should carry each inter-mesh connection.
+
+    // (A) Per-chip Z-direction uniqueness: a chip may only use the Z direction toward
+    //     ONE neighbor mesh. If find_available_z_port steals a Z port from mesh pair A
+    //     for mesh pair B, mesh pair A gets dropped by the can_chip_use_z_for_mesh
+    //     safety check. But if reconciliation doesn't fix the mapping, the router ends
+    //     up on mesh pair A's cable while the controller thinks it's on mesh pair B's.
+    //     Verify that per chip, all Z-direction inter-mesh channels go to the same mesh.
+    {
+        // map: (mesh_id, chip_id) -> set of neighbor mesh_ids reached via Z
+        std::map<std::pair<uint32_t, ChipId>, std::set<uint32_t>> chip_z_neighbors;
+
+        for (std::size_t i = 0; i < num_meshes; i++) {
+            for (std::size_t j = 0; j < num_meshes; j++) {
+                if (i == j) {
+                    continue;
+                }
+                MeshId src_mesh = mesh_ids[i];
+                MeshId dst_mesh = mesh_ids[j];
+                auto pairs =
+                    control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+                for (const auto& [exit_fn, entry_fn] : pairs) {
+                    for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                        auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                        if (peer_fn != entry_fn) {
+                            continue;
+                        }
+                        if (src_dir == EthDir::Z) {
+                            chip_z_neighbors[{*src_mesh, exit_fn.chip_id}].insert(*dst_mesh);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (const auto& [chip_key, neighbor_meshes] : chip_z_neighbors) {
+            EXPECT_LE(neighbor_meshes.size(), 1u)
+                << "Chip " << chip_key.second << " in mesh " << chip_key.first
+                << " has Z-direction connections to multiple neighbor meshes: " <<
+                [&]() {
+                    std::string s;
+                    for (auto m : neighbor_meshes) {
+                        if (!s.empty()) {
+                            s += ", ";
+                        }
+                        s += "M" + std::to_string(m);
+                    }
+                    return s;
+                }()
+                << ". This violates the one-Z-neighbor-per-chip invariant and indicates "
+                   "a bug in Z-port promotion/reconciliation.";
+        }
+    }
+
+    // (B) Per-mesh-pair channel count: every MGD-declared connection should have at
+    //     least the requested number of channels. Dropped connections (from unresolved
+    //     Z/non-Z mismatches or stolen-port fallout) reduce this count.
+    if (!requested_intermesh_ports.empty()) {
+        for (const auto& [src_u, dst_map] : requested_intermesh_ports) {
+            for (const auto& kv : dst_map) {
+                std::uint32_t dst_u = kv.first;
+                std::size_t actual =
+                    control_plane
+                        .get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{src_u}, MeshId{dst_u})
+                        .size();
+                std::size_t requested = 0;
+                for (const auto& port : kv.second) {
+                    requested += std::get<2>(port);
+                }
+                EXPECT_GE(actual, requested)
+                    << "Mesh pair M" << src_u << " -> M" << dst_u << " has " << actual
+                    << " inter-mesh channels but MGD requests " << requested
+                    << ". Connections may have been dropped during Z/non-Z mismatch resolution.";
+            }
+        }
+    } else {
+        // RELAXED mode: the MGD channel count is a best-effort target, not a hard
+        // requirement.  The physical topology may have fewer cables than requested.
+        // Only verify that at least one channel exists per declared pair.
+        for (const auto& [src_u, dst_map] : requested_intermesh_connections) {
+            for (const auto& kv : dst_map) {
+                std::uint32_t dst_u = kv.first;
+                std::size_t actual =
+                    control_plane
+                        .get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{src_u}, MeshId{dst_u})
+                        .size();
+                EXPECT_GT(actual, 0u) << "Mesh pair M" << src_u << " -> M" << dst_u
+                                      << " has 0 inter-mesh channels (relaxed MGD declares this link)";
+            }
+        }
+    }
+
+    // (C) Router symmetry: for every inter-mesh (exit, entry) pair, both sides must
+    //     have active router channels on the matching physical ethernet channels.
+    //     This is the core check for the stolen-Z-port bug: if find_available_z_port
+    //     steals a Z port_id from mesh pair A for mesh pair B, and reconciliation
+    //     doesn't fix the mapping, the exit side has a router on mesh pair A's cable
+    //     (whose peer was dropped) while mesh pair B's cable has no router (but the
+    //     peer expects one). Both sides hang at STARTED.
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        for (std::size_t j = 0; j < num_meshes; j++) {
+            if (i == j) {
+                continue;
+            }
+            MeshId src_mesh = mesh_ids[i];
+            MeshId dst_mesh = mesh_ids[j];
+            auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+            for (const auto& [exit_fn, entry_fn] : pairs) {
+                bool exit_has_channel_to_entry = false;
+                for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                    auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                    if (peer_fn != entry_fn) {
+                        continue;
+                    }
+                    exit_has_channel_to_entry = true;
+
+                    // (C1) Peer must have a matching active router on the same channel
+                    auto entry_channels = control_plane.get_active_fabric_eth_channels(entry_fn);
+                    bool entry_has_matching_channel = false;
+                    for (const auto& [entry_chan, entry_dir] : entry_channels) {
+                        if (entry_chan == peer_chan) {
+                            entry_has_matching_channel = true;
+                            break;
+                        }
+                    }
+                    EXPECT_TRUE(entry_has_matching_channel)
+                        << "Router symmetry violation: exit " << exit_fn << " chan=" << static_cast<int>(src_chan)
+                        << " connects to entry " << entry_fn << " chan=" << static_cast<int>(peer_chan)
+                        << ", but entry has no active router on that channel. "
+                        << "This would cause the ERISC handshake to hang at STARTED.";
+
+                    // (C2) Direction kinds must match (both Z or both NESW)
+                    EthDir entry_dir_val = control_plane.get_eth_chan_direction(entry_fn, static_cast<int>(peer_chan));
+                    EXPECT_TRUE(eth_dirs_match_kind(src_dir, entry_dir_val))
+                        << "Router direction mismatch: exit " << exit_fn << " chan=" << static_cast<int>(src_chan)
+                        << " dir=" << eth_chan_dir_cstr(src_dir) << " -> entry " << entry_fn
+                        << " chan=" << static_cast<int>(peer_chan) << " dir=" << eth_chan_dir_cstr(entry_dir_val);
+                }
+                EXPECT_TRUE(exit_has_channel_to_entry)
+                    << "Exit " << exit_fn << " has no active channel connecting to entry " << entry_fn
+                    << " (inter-mesh pair M" << *src_mesh << " -> M" << *dst_mesh << ")";
+            }
+        }
+    }
+
+    // (D) Physical cable verification: for every inter-mesh (exit, entry) pair with
+    //     an active router channel, verify that the PSD confirms a direct ethernet
+    //     connection from that specific exit ASIC channel to the entry ASIC. After the
+    //     intermesh_chan_to_peer_ redesign, get_connected_mesh_chip_chan_ids returns the
+    //     PHYSICAL peer channel for inter-mesh links (sourced from PSD), so we now also
+    //     check the (src_chan, peer_chan) pair exactly matches a PSD cable. This is the
+    //     core check that catches the multi-peer cabling bug (e.g. M19D2 -> {M18D3,
+    //     M18D5}) that motivated the redesign: a chip with multiple distinct peer ASICs
+    //     in the same dest mesh used to silently collapse to connected_chip_ids[0].
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        for (std::size_t j = 0; j < num_meshes; j++) {
+            if (i == j) {
+                continue;
+            }
+            MeshId src_mesh = mesh_ids[i];
+            MeshId dst_mesh = mesh_ids[j];
+            auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+            for (const auto& [exit_fn, entry_fn] : pairs) {
+                auto exit_asic = topology_mapper.get_asic_id_from_fabric_node_id(exit_fn);
+                auto entry_asic = topology_mapper.get_asic_id_from_fabric_node_id(entry_fn);
+                auto eth_conns = psd.get_eth_connections(exit_asic, entry_asic);
+
+                for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                    auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                    if (peer_fn != entry_fn) {
+                        continue;
+                    }
+
+                    // src_chan on exit ASIC must have a physical cable to entry ASIC
+                    bool psd_has_cable_from_src_chan = false;
+                    bool psd_has_exact_pair = false;
+                    for (const auto& conn : eth_conns) {
+                        if (conn.src_chan == src_chan) {
+                            psd_has_cable_from_src_chan = true;
+                            if (conn.dst_chan == peer_chan) {
+                                psd_has_exact_pair = true;
+                                break;
+                            }
+                        }
+                    }
+                    EXPECT_TRUE(psd_has_cable_from_src_chan)
+                        << "Physical cable mismatch: exit " << exit_fn << " chan=" << static_cast<int>(src_chan)
+                        << " has a router that routes toward entry " << entry_fn
+                        << ", but PSD has no ethernet cable from ASIC " << exit_asic
+                        << " chan=" << static_cast<int>(src_chan) << " to ASIC " << entry_asic << " (PSD has "
+                        << eth_conns.size() << " cables between these ASICs)"
+                        << ". The reconciliation likely mapped this port to a channel that physically "
+                        << "connects to a different ASIC (stolen Z port_id bug).";
+                    EXPECT_TRUE(psd_has_exact_pair)
+                        << "Per-cable channel mismatch: exit " << exit_fn << " chan=" << static_cast<int>(src_chan)
+                        << " -> entry " << entry_fn << " chan=" << static_cast<int>(peer_chan)
+                        << ", but PSD has no cable matching this exact (src_chan, dst_chan) pair "
+                        << "between ASICs " << exit_asic << " and " << entry_asic
+                        << ". intermesh_chan_to_peer_ disagrees with PSD on the physical cable identity.";
+                }
+            }
+        }
+    }
+
+    // (F) Reverse-lookup symmetry for inter-mesh hops: get_connected_mesh_chip_chan_ids
+    //     must round-trip. If exit_fn:src_chan -> entry_fn:peer_chan, then querying
+    //     entry_fn:peer_chan must return exit_fn:src_chan. The redesign places this
+    //     invariant in intermesh_chan_to_peer_ which is populated symmetrically for
+    //     both endpoints of each PSD cable; an asymmetric entry indicates that the
+    //     clear-and-rebuild in convert_port_descriptors_to_intermesh_connections lost
+    //     one side of a cable.
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        for (std::size_t j = 0; j < num_meshes; j++) {
+            if (i == j) {
+                continue;
+            }
+            MeshId src_mesh = mesh_ids[i];
+            MeshId dst_mesh = mesh_ids[j];
+            auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+            for (const auto& [exit_fn, entry_fn] : pairs) {
+                for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                    auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                    if (peer_fn != entry_fn) {
+                        continue;
+                    }
+                    auto [reverse_fn, reverse_chan] =
+                        control_plane.get_connected_mesh_chip_chan_ids(peer_fn, peer_chan);
+                    EXPECT_EQ(reverse_fn, exit_fn) << "Inter-mesh reverse-lookup peer mismatch: " << exit_fn
+                                                   << " chan=" << static_cast<int>(src_chan) << " -> " << peer_fn
+                                                   << " chan=" << static_cast<int>(peer_chan) << " but reverse returns "
+                                                   << reverse_fn << " chan=" << static_cast<int>(reverse_chan)
+                                                   << ". intermesh_chan_to_peer_ entries are not symmetric.";
+                    EXPECT_EQ(reverse_chan, src_chan)
+                        << "Inter-mesh reverse-lookup channel mismatch: " << exit_fn
+                        << " chan=" << static_cast<int>(src_chan) << " -> " << peer_fn
+                        << " chan=" << static_cast<int>(peer_chan) << " but reverse returns " << reverse_fn
+                        << " chan=" << static_cast<int>(reverse_chan)
+                        << ". A PSD cable should round-trip through intermesh_chan_to_peer_.";
+                }
+            }
+        }
+    }
+
+    // (G) No double-claim of physical (ASIC, chan) endpoints across inter-mesh routes:
+    //     Each side of a PSD cable is a single physical resource. If two distinct
+    //     logical (exit_fn, peer_fn) attributions both resolve the SAME (asic, chan)
+    //     to different peers, that physical channel has been double-booked and one
+    //     of the routes will silently misroute. We iterate every exit chip exactly
+    //     once and walk its active channels; for each inter-mesh channel we record
+    //     the resolved peer keyed by physical (asic, chan). The first sighting
+    //     defines the owner; later sightings must agree.
+    {
+        std::map<std::pair<tt::tt_metal::AsicID, chan_id_t>, std::pair<FabricNodeId, chan_id_t>> exit_chan_owner;
+        std::map<std::pair<tt::tt_metal::AsicID, chan_id_t>, std::pair<FabricNodeId, chan_id_t>> entry_chan_owner;
+        for (std::size_t i = 0; i < num_meshes; i++) {
+            MeshId src_mesh = mesh_ids[i];
+            auto coord_range = mesh_graph.get_coord_range(src_mesh);
+            for (const auto& src_coord : coord_range) {
+                FabricNodeId exit_fn(src_mesh, mesh_graph.coordinate_to_chip(src_mesh, src_coord));
+                auto exit_asic = topology_mapper.get_asic_id_from_fabric_node_id(exit_fn);
+                for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                    auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                    if (peer_fn.mesh_id == src_mesh) {
+                        continue;  // intra-mesh, not relevant here
+                    }
+                    auto peer_asic = topology_mapper.get_asic_id_from_fabric_node_id(peer_fn);
+                    auto exit_key = std::make_pair(exit_asic, src_chan);
+                    auto entry_key = std::make_pair(peer_asic, peer_chan);
+                    auto exit_value = std::make_pair(peer_fn, peer_chan);
+                    auto entry_value = std::make_pair(exit_fn, src_chan);
+
+                    auto [exit_it, exit_inserted] = exit_chan_owner.try_emplace(exit_key, exit_value);
+                    if (!exit_inserted) {
+                        EXPECT_EQ(exit_it->second, exit_value)
+                            << "Double-claimed exit channel: ASIC " << exit_asic
+                            << " chan=" << static_cast<int>(src_chan) << " on " << exit_fn << " resolves to peer "
+                            << peer_fn << " chan=" << static_cast<int>(peer_chan)
+                            << " but was previously bound to peer " << exit_it->second.first
+                            << " chan=" << static_cast<int>(exit_it->second.second)
+                            << ". intermesh_chan_to_peer_ has inconsistent entries for this physical channel.";
+                    }
+                    auto [entry_it, entry_inserted] = entry_chan_owner.try_emplace(entry_key, entry_value);
+                    if (!entry_inserted) {
+                        EXPECT_EQ(entry_it->second, entry_value)
+                            << "Double-claimed entry channel: ASIC " << peer_asic
+                            << " chan=" << static_cast<int>(peer_chan) << " on " << peer_fn << " is the peer of "
+                            << exit_fn << " chan=" << static_cast<int>(src_chan) << " but was previously claimed by "
+                            << entry_it->second.first << " chan=" << static_cast<int>(entry_it->second.second)
+                            << ". A physical channel can only terminate one inter-mesh route.";
+                    }
+                }
+            }
+        }
+    }
+
+    // (H) Multi-peer cabling explicit coverage: this is the exact scenario that
+    //     motivated the connection_hash + intermesh_chan_to_peer_ redesign. Find
+    //     every (exit_fn, dst_mesh) where PSD shows cables to >= 2 distinct peer
+    //     ASICs in dst_mesh, and verify that:
+    //       - the control plane reports >= 2 distinct (exit_fn, entry_fn) pairs
+    //       - per-channel routing distributes to all peer ASICs (no silent
+    //         collapse to a single connected_chip_ids[0])
+    //       - each per-channel hop's (src_chan, peer_chan) matches a PSD cable
+    //         to the SAME peer ASIC the routing reports.
+    {
+        for (std::size_t i = 0; i < num_meshes; i++) {
+            MeshId src_mesh = mesh_ids[i];
+            auto coord_range_src = mesh_graph.get_coord_range(src_mesh);
+            for (const auto& src_coord : coord_range_src) {
+                FabricNodeId exit_fn(src_mesh, mesh_graph.coordinate_to_chip(src_mesh, src_coord));
+                auto exit_asic = topology_mapper.get_asic_id_from_fabric_node_id(exit_fn);
+                for (std::size_t j = 0; j < num_meshes; j++) {
+                    if (i == j) {
+                        continue;
+                    }
+                    MeshId dst_mesh = mesh_ids[j];
+                    // Enumerate distinct peer ASICs in dst_mesh that are physically
+                    // cabled to exit_fn per PSD.
+                    std::set<tt::tt_metal::AsicID> psd_peer_asics;
+                    auto coord_range_dst = mesh_graph.get_coord_range(dst_mesh);
+                    for (const auto& dst_coord : coord_range_dst) {
+                        FabricNodeId candidate(dst_mesh, mesh_graph.coordinate_to_chip(dst_mesh, dst_coord));
+                        auto candidate_asic = topology_mapper.get_asic_id_from_fabric_node_id(candidate);
+                        if (!psd.get_eth_connections(exit_asic, candidate_asic).empty()) {
+                            psd_peer_asics.insert(candidate_asic);
+                        }
+                    }
+                    if (psd_peer_asics.size() < 2) {
+                        continue;  // not a multi-peer chip for this dst_mesh
+                    }
+
+                    auto pairs =
+                        control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+                    std::set<tt::tt_metal::AsicID> control_plane_peer_asics_for_exit;
+                    for (const auto& [p_exit, p_entry] : pairs) {
+                        if (p_exit != exit_fn) {
+                            continue;
+                        }
+                        control_plane_peer_asics_for_exit.insert(
+                            topology_mapper.get_asic_id_from_fabric_node_id(p_entry));
+                    }
+                    EXPECT_EQ(control_plane_peer_asics_for_exit, psd_peer_asics)
+                        << "Multi-peer cabling not fully represented in control plane: exit " << exit_fn
+                        << " has PSD cables to " << psd_peer_asics.size() << " distinct ASICs in M" << *dst_mesh
+                        << ", but control plane only knows about " << control_plane_peer_asics_for_exit.size()
+                        << " of them. The lossy connected_chip_ids[0] fallback may have collapsed peers.";
+
+                    // Per-channel routing must distribute across all PSD peers and
+                    // each (src_chan, peer_chan) must match a PSD cable to the
+                    // reported peer ASIC.
+                    std::set<tt::tt_metal::AsicID> peer_asics_via_routing;
+                    for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                        auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                        if (peer_fn.mesh_id != dst_mesh) {
+                            continue;
+                        }
+                        auto routed_peer_asic = topology_mapper.get_asic_id_from_fabric_node_id(peer_fn);
+                        peer_asics_via_routing.insert(routed_peer_asic);
+                        bool psd_confirms = false;
+                        for (const auto& conn : psd.get_eth_connections(exit_asic, routed_peer_asic)) {
+                            if (conn.src_chan == src_chan && conn.dst_chan == peer_chan) {
+                                psd_confirms = true;
+                                break;
+                            }
+                        }
+                        EXPECT_TRUE(psd_confirms)
+                            << "Multi-peer per-channel routing mismatch: exit " << exit_fn
+                            << " chan=" << static_cast<int>(src_chan) << " -> " << peer_fn
+                            << " chan=" << static_cast<int>(peer_chan)
+                            << " but PSD has no cable matching that exact (src_chan, dst_chan) pair "
+                            << "between ASICs " << exit_asic << " and " << routed_peer_asic
+                            << ". A different peer ASIC may have stolen this channel.";
+                    }
+                    EXPECT_EQ(peer_asics_via_routing, psd_peer_asics)
+                        << "Per-channel routing does not cover all PSD peer ASICs for exit " << exit_fn << " in M"
+                        << *dst_mesh << " (routing reaches " << peer_asics_via_routing.size() << " of "
+                        << psd_peer_asics.size() << " peers). intermesh_chan_to_peer_ may be incomplete.";
+                }
+            }
+        }
+    }
+
+    // (I) Routing-table forwarding is ready for every inter-mesh hop. The decode
+    //     pipeline ultimately relies on get_forwarding_direction / get_fabric_route
+    //     (driven by inter_mesh_routing_tables_ / intra_mesh_routing_tables_) to
+    //     push packets across a hop; if the pair is in the control plane but the
+    //     routing table is missing the entry, sockets will handshake but packets
+    //     will never arrive. Runs on all ranks: forwarding-direction is derived
+    //     from mesh_graph and is globally valid; get_fabric_route is local-only
+    //     (uses per-chip routing tables on this host) so we gate it on locality.
+    {
+        auto local_meshes = control_plane.get_local_mesh_id_bindings();
+        std::set<MeshId> local_mesh_set(local_meshes.begin(), local_meshes.end());
+        for (std::size_t i = 0; i < num_meshes; i++) {
+            for (std::size_t j = 0; j < num_meshes; j++) {
+                if (i == j) {
+                    continue;
+                }
+                MeshId src_mesh = mesh_ids[i];
+                MeshId dst_mesh = mesh_ids[j];
+                auto pairs =
+                    control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+                for (const auto& [exit_fn, entry_fn] : pairs) {
+                    auto fwd_dir = control_plane.get_forwarding_direction(exit_fn, entry_fn);
+                    EXPECT_TRUE(fwd_dir.has_value())
+                        << "Routing table has no forwarding direction from " << exit_fn << " (M" << *src_mesh << ") to "
+                        << entry_fn << " (M" << *dst_mesh
+                        << "). A decode-pipeline socket between these nodes would handshake but never deliver.";
+
+                    // Local src only: validate channels carry an end-to-end route whose
+                    // final hop lands on entry_fn.
+                    if (!local_mesh_set.contains(exit_fn.mesh_id)) {
+                        continue;
+                    }
+                    auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(exit_fn, entry_fn);
+                    EXPECT_FALSE(fwd_chans.empty())
+                        << "No forwarding eth channels from " << exit_fn << " to " << entry_fn
+                        << " despite the control plane listing them as an inter-mesh pair. "
+                        << "get_forwarding_eth_chans_to_chip would return empty, socket send would fail.";
+                    for (chan_id_t fwd_chan : fwd_chans) {
+                        auto route = control_plane.get_fabric_route(exit_fn, entry_fn, fwd_chan);
+                        EXPECT_FALSE(route.empty())
+                            << "get_fabric_route returned no route: " << exit_fn
+                            << " chan=" << static_cast<int>(fwd_chan) << " -> " << entry_fn
+                            << ". The forwarding channel is advertised but routing tables cannot resolve an "
+                            << "end-to-end path.";
+                        if (!route.empty()) {
+                            EXPECT_EQ(route.back().first, entry_fn)
+                                << "Route from " << exit_fn << " chan=" << static_cast<int>(fwd_chan)
+                                << " claims destination " << entry_fn << " but terminates at " << route.back().first
+                                << ". Routing table hop sequence is inconsistent.";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // (E) No orphaned inter-mesh routers: every active router channel on an exit node
+    //     that connects to a peer in a different mesh must appear in the
+    //     intermesh_exit_peer_fabric_node_id_pairs. If an exit node has a router
+    //     channel to a remote mesh but the pair isn't tracked, the peer side won't
+    //     know about it and may not have a matching router.
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        MeshId src_mesh = mesh_ids[i];
+        auto exit_node_ids = control_plane.get_exit_fabric_node_ids_between_meshes(src_mesh, src_mesh);
+        // Get all exit nodes for all neighbor meshes
+        std::set<FabricNodeId> all_exit_nodes;
+        for (std::size_t j = 0; j < num_meshes; j++) {
+            if (i == j) {
+                continue;
+            }
+            MeshId dst_mesh = mesh_ids[j];
+            auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, dst_mesh);
+            for (const auto& [exit_fn, entry_fn] : pairs) {
+                all_exit_nodes.insert(exit_fn);
+            }
+        }
+
+        for (const auto& exit_fn : all_exit_nodes) {
+            for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
+                auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
+                if (peer_fn.mesh_id == src_mesh) {
+                    continue;  // Intra-mesh, not relevant
+                }
+                // This inter-mesh channel must be tracked in the pairs
+                MeshId peer_mesh = peer_fn.mesh_id;
+                auto pairs =
+                    control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src_mesh, peer_mesh);
+                bool found_in_pairs = false;
+                for (const auto& [p_exit, p_entry] : pairs) {
+                    if (p_exit == exit_fn && p_entry == peer_fn) {
+                        found_in_pairs = true;
+                        break;
+                    }
+                }
+                EXPECT_TRUE(found_in_pairs)
+                    << "Orphaned inter-mesh router: exit " << exit_fn << " chan=" << static_cast<int>(src_chan)
+                    << " connects to " << peer_fn << " (M" << *peer_mesh
+                    << "), but this pair is not in intermesh_exit_peer_fabric_node_id_pairs. "
+                    << "The peer may not have a matching router.";
+            }
+        }
+    }
+}
+
+}  // namespace
+
+TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    const auto num_meshes = mesh_ids.size();
+
+    ASSERT_GE(num_meshes, 2u) << "Pipeline builder requires at least 2 meshes";
+
+    auto fn_to_coord = [&](const FabricNodeId& fn) { return mesh_graph.chip_to_coordinate(fn.mesh_id, fn.chip_id); };
+
+    // --- build_pipeline_from_topology ---
+    std::set<FabricNodeId> used_nodes;
+
+    // Select one inter-mesh pair per hop, avoiding collisions.
+    // hop[i] connects mesh_ids[i] -> mesh_ids[(i+1) % N].
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> hops;
+    hops.reserve(num_meshes);
+    for (std::size_t i = 0; i < num_meshes; i++) {
+        auto pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+            mesh_ids[i], mesh_ids[(i + 1) % num_meshes]);
+        ASSERT_FALSE(pairs.empty()) << "No inter-mesh connection from mesh " << *mesh_ids[i] << " to mesh "
+                                    << *mesh_ids[(i + 1) % num_meshes];
+
+        bool found = false;
+        for (const auto& pair : pairs) {
+            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
+                continue;
+            }
+            hops.push_back(pair);
+            used_nodes.insert(pair.first);
+            used_nodes.insert(pair.second);
+            found = true;
+            break;
+        }
+        ASSERT_TRUE(found) << "No non-colliding inter-mesh pair from mesh " << *mesh_ids[i] << " to mesh "
+                           << *mesh_ids[(i + 1) % num_meshes] << " (all " << pairs.size()
+                           << " candidate pairs overlap with already-claimed nodes)";
+    }
+
+    // Find two unclaimed nodes on mesh_0 for stage 0 entry and loopback exit.
+    // We need a pair that has a direct intra-mesh ethernet link between them
+    // (loopback_exit -> stage_0_entry). Prefer non-Z direction links.
+    auto mesh_0_coord_range = mesh_graph.get_coord_range(mesh_ids[0]);
+    std::vector<FabricNodeId> unclaimed_mesh_0_nodes;
+    for (const auto& coord : mesh_0_coord_range) {
+        auto chip_id = mesh_graph.coordinate_to_chip(mesh_ids[0], coord);
+        FabricNodeId fn(mesh_ids[0], chip_id);
+        if (!used_nodes.contains(fn)) {
+            unclaimed_mesh_0_nodes.push_back(fn);
+        }
+    }
+    ASSERT_GE(unclaimed_mesh_0_nodes.size(), 2u)
+        << "Need at least 2 unclaimed nodes on mesh " << *mesh_ids[0] << " for stage 0 entry and loopback exit, found "
+        << unclaimed_mesh_0_nodes.size();
+
+    std::optional<FabricNodeId> stage_0_entry_fn;
+    std::optional<FabricNodeId> loopback_exit_fn;
+    bool found_non_z_pair = false;
+
+    for (std::size_t a = 0; a < unclaimed_mesh_0_nodes.size() && !found_non_z_pair; a++) {
+        auto fn_a = unclaimed_mesh_0_nodes[a];
+        auto channels_a = control_plane.get_active_fabric_eth_channels(fn_a);
+        for (const auto& [chan_id, direction] : channels_a) {
+            auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(fn_a, chan_id);
+            if (peer_fn.mesh_id != mesh_ids[0]) {
+                continue;
+            }
+            bool peer_unclaimed = !used_nodes.contains(peer_fn) &&
+                                  std::find(unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end(), peer_fn) !=
+                                      unclaimed_mesh_0_nodes.end();
+            if (!peer_unclaimed) {
+                continue;
+            }
+            bool is_non_z = (direction != tt::tt_fabric::eth_chan_directions::Z);
+            if (!loopback_exit_fn.has_value() || (is_non_z && !found_non_z_pair)) {
+                loopback_exit_fn = fn_a;
+                stage_0_entry_fn = peer_fn;
+                found_non_z_pair = is_non_z;
+            }
+        }
+    }
+
+    ASSERT_TRUE(loopback_exit_fn.has_value()) << "Could not find a directly-connected unclaimed pair on mesh "
+                                              << *mesh_ids[0] << " for loopback exit -> stage 0 entry";
+
+    std::vector<Sp5BlitzPipelineStage> stages;
+    stages.reserve(num_meshes + 1);
+
+    stages.push_back(
+        {static_cast<std::size_t>(*mesh_ids[0]), fn_to_coord(*stage_0_entry_fn), fn_to_coord(hops[0].first)});
+
+    for (std::size_t i = 1; i < num_meshes; i++) {
+        stages.push_back(
+            {static_cast<std::size_t>(*mesh_ids[i]), fn_to_coord(hops[i - 1].second), fn_to_coord(hops[i].first)});
+    }
+
+    stages.push_back(
+        {static_cast<std::size_t>(*mesh_ids[0]),
+         fn_to_coord(hops[num_meshes - 1].second),
+         fn_to_coord(*loopback_exit_fn)});
+
+    validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
 }
 }  // namespace tt::tt_fabric::fabric_router_tests

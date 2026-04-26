@@ -237,38 +237,65 @@ def main():
         )
 
     if options.perf_counter_groups:
-        # Map counter group names to bit positions (from perf_counters.hpp)
+        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
         counter_group_bits = {
-            "fpu": 0,  # PROFILE_PERF_COUNTERS_FPU    (1 << 0)
-            "pack": 1,  # PROFILE_PERF_COUNTERS_PACK   (1 << 1)
-            "unpack": 2,  # PROFILE_PERF_COUNTERS_UNPACK (1 << 2)
-            "l1_0": 3,  # PROFILE_PERF_COUNTERS_L1_0   (1 << 3)
-            "l1_1": 4,  # PROFILE_PERF_COUNTERS_L1_1   (1 << 4)
-            "instrn": 5,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
+            "fpu": 0,
+            "pack": 1,
+            "unpack": 2,
+            "l1_0": 3,
+            "l1_1": 4,
+            "instrn": 5,
+            "l1_2": 6,
+            "l1_3": 7,
+            "l1_4": 8,
         }
 
         bitfield = 0
         for group in options.perf_counter_groups:
             group_lower = group.lower()
             if group_lower == "all":
-                # Enable all counter groups (excluding L1 banks since they conflict;
-                # user must explicitly pick l1_0 or l1_1)
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5)  # fpu|pack|unpack|instrn
+                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
                 break
             elif group_lower in counter_group_bits:
                 bitfield |= 1 << counter_group_bits[group_lower]
             else:
                 logger.warning(
-                    f"Unknown counter group '{group}'. " f"Valid groups: fpu, pack, unpack, l1_0, l1_1, instrn, all"
+                    f"Unknown counter group '{group}'. "
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
-        # Validate L1 bank mutual exclusion
-        if (bitfield & (1 << 3)) and (bitfield & (1 << 4)):
-            raise ValueError(
-                "L1 bank 0 (l1_0) and L1 bank 1 (l1_1) cannot be enabled simultaneously. "
-                "They share the same hardware registers (selected via MUX_CTRL bit 4). "
-                "Please choose one: l1_0 or l1_1."
+        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
+
+        # Reject BH-only groups on non-BH architectures.
+        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
+        requested_groups = {group.lower() for group in options.perf_counter_groups}
+        requested_bh_only = sorted(requested_groups & bh_only_groups)
+        if requested_bh_only:
+            declared_arch = next(
+                (
+                    os.environ.get(env_var)
+                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
+                    if os.environ.get(env_var)
+                ),
+                None,
             )
+            if declared_arch is None:
+                try:
+                    import ttnn
+
+                    device = ttnn.open_device(device_id=0)
+                    declared_arch = str(device.arch()).split(".")[-1]
+                    ttnn.close_device(device)
+                except Exception:
+                    logger.debug("Failed to detect device arch via ttnn")
+            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
+            if not is_blackhole:
+                arch_desc = declared_arch if declared_arch is not None else "undeclared"
+                raise ValueError(
+                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
+                    f"but device arch is {arch_desc}."
+                )
 
         if bitfield > 0:
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)

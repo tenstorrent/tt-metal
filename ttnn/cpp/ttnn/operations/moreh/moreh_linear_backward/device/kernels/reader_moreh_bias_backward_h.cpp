@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 void kernel_main() {
     ArgFetcher arg_fetcher;
@@ -16,13 +16,13 @@ void kernel_main() {
     const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
-    constexpr uint32_t scaler = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_scaler = 1;
     constexpr uint32_t cb_id_mask_h_w = 2;
 
-    generate_reduce_scaler(cb_id_scaler, scaler);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     if (do_mask_h || do_mask_w) {
         generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
