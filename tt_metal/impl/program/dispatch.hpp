@@ -26,6 +26,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
+class Device;
 class IDevice;
 class Program;
 class Semaphore;
@@ -115,7 +116,7 @@ uint32_t finalize_kernel_bins(
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence);
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id);
 
 void initialize_worker_config_buf_mgr(
     const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start);
@@ -154,7 +155,10 @@ void update_traced_program_dispatch_commands(
     std::pair<bool, int> unicast_go_signal_update = {false, -1});
 
 TraceNode create_trace_node(
-    detail::ProgramImpl& program, IDevice* device, uint32_t num_workers, bool use_prefetcher_cache);
+    detail::ProgramImpl& program,
+    distributed::MeshDevice* mesh_device,
+    uint32_t num_workers,
+    bool use_prefetcher_cache);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
@@ -175,25 +179,21 @@ void reset_config_buf_mgrs_and_expected_workers(
     uint32_t worker_l1_unreserved_start);
 
 void reset_worker_dispatch_state_on_device(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state);
 
-void set_num_worker_sems_on_dispatch(
-    IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
+void set_num_worker_sems_on_dispatch(SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
-    tt::tt_metal::IDevice* device,
-    tt::tt_metal::SubDeviceId sub_device_id,
-    uint32_t num_expected_workers,
-    uint8_t cq_id);
+    Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id);
 
 //
 // Get the expected number of workers completed values for the given Program to run on the sub device.
@@ -203,7 +203,7 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
 
 void set_core_go_message_mapping_on_device(
-    IDevice* device,
+    Device* device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id);
