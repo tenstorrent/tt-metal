@@ -667,7 +667,7 @@ def tokenize_prompt_to_isl(
         (input_ids, attention_mask, tokens): input_ids and attention_mask are [1, max_isl] tensors;
         tokens is a list of token strings (only when debug=True, else None).
     """
-    tokenizer.padding_side = "right"
+    tokenizer.padding_side = "right"  # to move under conftest and tokenizer fixture/creation
     inputs = tokenizer(
         prompt_text,
         return_tensors="pt",  # return PyTorch tensors

@@ -25,17 +25,14 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
-)
+
 
 class TtPrefillTransformer(LightweightModule):
     """
@@ -214,7 +211,7 @@ class TtPrefillTransformer(LightweightModule):
         )
 
         self.is_balanced = is_balanced
-        if (is_balanced):
+        if is_balanced:
             self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
@@ -233,6 +230,7 @@ class TtPrefillTransformer(LightweightModule):
         self,
         token_ids: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
+        number_of_non_padded_tokens: int,  # update docs
         return_intermediates: bool = False,
         read_profiler: bool = False,
         temperature: float | list[float] = 0.0,
@@ -284,27 +282,28 @@ class TtPrefillTransformer(LightweightModule):
             intermediates["norm"] = self._to_host(h)
 
         # LM Head: compute logits and sample first token
-        global_token_id = self.seq_len - 1  # Last token; assuming padding front/left
+        if number_of_non_padded_tokens is not None:
+            global_token_id = number_of_non_padded_tokens - 1  # Last non-padded token for back/right padding
+        else:
+            global_token_id = self.seq_len - 1  # Last token for front/left padding
+
         logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
 
         logits_host = self.lm_head.logit_to_host(logits)
+        first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
 
         if return_intermediates:
-            intermediates["lm_head"] = logits_host.clone() # uh need better workaround for this
+            intermediates["lm_head"] = logits_host
 
         # reorder tensors if needed
-        # this is before first tokens are being selected? 
-        # logits_host cloned to avoid confusion; for now we order returned ones, but sample on the oriignal. 
         if return_intermediates and self.is_balanced:
             for key, tensor in intermediates.items():
-                if isinstance(tensor, torch.Tensor): 
+                if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     tensor = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
+                    # lm_head is balancing aware; and will only bring tiles (from each chip); to figure out what to do about it. needs partial pcc check
                 else:
                     logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
-
-
-        first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
 
         # Handle temperature as float or list
         temperatures = temperature if isinstance(temperature, list) else [temperature]
@@ -315,6 +314,7 @@ class TtPrefillTransformer(LightweightModule):
             token_id, token_prob, top5 = self._sample_token(first_token_logits.clone(), temp)
             sweep_results.append(
                 {
+                    "number_of_non_padded_tokens": number_of_non_padded_tokens,
                     "token_id": token_id,
                     "probability": token_prob,
                     "temperature": temp,

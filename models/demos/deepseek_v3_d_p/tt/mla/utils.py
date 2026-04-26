@@ -44,6 +44,8 @@ def reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], seq_dim:
         end = start + chunk_size
         if seq_dim == 2:
             chunks.append(tensor[:, :, start:end, :])
+        elif seq_dim == -2:
+            chunks.append(tensor[..., start:end, :])
         else:
             raise NotImplementedError(f"Reordering for seq_dim={seq_dim} not implemented")
 

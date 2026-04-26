@@ -249,7 +249,7 @@ def test_prefill_transformer(
             f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}, last 10 tokens: {token_ids[0, -10:].tolist()}"
         )
 
-    number_of_non_padded_tokens = attention_mask.sum().item()
+    number_of_non_padded_tokens = attention_mask.sum().item()  # should be returned by tokenize..
     logger.info(f"Number of non-padded tokens is: {number_of_non_padded_tokens}")
 
     # --- Build HF model and/or extract weights based on cache state ---
@@ -401,6 +401,7 @@ def test_prefill_transformer(
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
+            number_of_non_padded_tokens=number_of_non_padded_tokens,
             return_intermediates=pcc_validation,
             read_profiler=True,
             temperature=temperature,
