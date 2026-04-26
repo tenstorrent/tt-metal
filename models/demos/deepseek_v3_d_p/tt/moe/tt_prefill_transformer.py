@@ -5,12 +5,10 @@
 """
 TtPrefillTransformer — multi-layer prefill model for DeepSeek V3.
 
-Composes: embed -> [block x N] -> norm
+Composes: embed -> [block x N] -> norm -> lm_head -> sample
 
 Equivalent to the reference Transformer class (models/demos/deepseek_v3/reference/deepseek/model.py:419)
 but targeting the TT prefill path with SP+TP parallelism.
-
-No LM head — returns hidden states after final norm.
 """
 
 import os
@@ -28,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
@@ -36,15 +35,12 @@ class TtPrefillTransformer(LightweightModule):
     """
     Multi-layer prefill transformer for DeepSeek V3.
 
-    Architecture: embed -> [TtPrefillBlock x num_layers] -> norm
+    Architecture: embed -> [TtPrefillBlock x num_layers] -> norm -> lm_head -> sample
 
     State dict keys:
         embed_weight:   torch.Tensor [vocab_size, emb_dim]
         norm_weight:    torch.Tensor [emb_dim]
         layers:         list[dict] — per-layer state dicts for TtPrefillBlock
-
-    Note: LM head (ColumnParallelLinear output projection) is not implemented yet.
-    TODO: Add LM head after https://github.com/tenstorrent/tt-metal/pull/41275 lands.
     """
 
     @staticmethod
@@ -88,6 +84,10 @@ class TtPrefillTransformer(LightweightModule):
 
         # Final norm
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
+            return False
+
+        # LM head
+        if not TtLMHead.check_cache_complete(cache_path):
             return False
 
         logger.info(f"TTNN cache complete at {cache_path} ({num_layers} layers)")
@@ -192,6 +192,18 @@ class TtPrefillTransformer(LightweightModule):
         # --- RoPE (computed once, reused across all layers) ---
         self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
 
+        # --- LM Head ---
+        self.lm_head = TtLMHead(
+            mesh_device=mesh_device,
+            emb_dim=config.hidden_size,
+            vocab_size=config.vocab_size,
+            torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
+            num_links=num_links,
+            topology=topology,
+            is_balanced=is_balanced,
+            weight_cache_path=weight_cache_path,
+        )
+
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
     def _to_host(self, tt_tensor):
@@ -210,9 +222,10 @@ class TtPrefillTransformer(LightweightModule):
         kvpe_cache: ttnn.Tensor,
         return_intermediates: bool = False,
         read_profiler: bool = False,
+        temperature: float | list[float] = 0.0,
     ):
         """
-        Forward pass: embed -> [block x N] -> norm.
+        Forward pass: embed -> [block x N] -> norm -> lm_head.
 
         Args:
             token_ids: [1, 1, seq_len_per_chip] uint32, SP-sharded
@@ -220,22 +233,26 @@ class TtPrefillTransformer(LightweightModule):
                         each layer writes to its own slot via cache_layer_idx
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
+            temperature: Temperature for sampling. Can be a single float or list of floats.
+                        If list, returns first temperature result but stores all in intermediates.
 
         Returns:
-            If return_intermediates=False:
-                tt_output: [1, 1, seq_per_chip, emb_dim/tp] TILE_LAYOUT
-            If return_intermediates=True:
-                (tt_output, intermediates)
+            Tuple of (first_token_id, first_token_prob, intermediates_dict or None)
+            - first_token_id: sampled token ID (for first temperature if list provided)
+            - first_token_prob: probability of sampled token (for first temperature if list provided)
+            - intermediates: dict with keys like "embed", "layer_0", "norm", "lm_head", "first_token"
+                            where "first_token" is a list of results for each temperature
+                            (None if return_intermediates=False)
         """
         rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
-        intermediates = [] if return_intermediates else None
+        intermediates = {} if return_intermediates else None
 
         h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
         h = ttnn.unsqueeze_to_4D(h)  # [1, 1, seq_per_chip, emb_dim/tp]
 
         if return_intermediates:
             ttnn.synchronize_device(self.mesh_device)
-            intermediates.append(("embed", self._to_host(h)))
+            intermediates["embed"] = self._to_host(h)
 
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
@@ -243,7 +260,7 @@ class TtPrefillTransformer(LightweightModule):
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
-                intermediates.append((f"layer_{i}", self._to_host(h)))
+                intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
 
@@ -251,6 +268,89 @@ class TtPrefillTransformer(LightweightModule):
 
         if return_intermediates:
             ttnn.synchronize_device(self.mesh_device)
-            intermediates.append(("norm", self._to_host(h)))
-            return h, intermediates
-        return h
+            intermediates["norm"] = self._to_host(h)
+
+        # LM Head: compute logits and sample first token
+        global_token_id = self.seq_len - 1  # Last token; assuming padding front/left
+        logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
+
+        logits_host = self.lm_head.logit_to_host(logits)
+        assert (
+            logits_host.shape[-1] == self.lm_head.vocab_size
+        ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
+        first_token_logits = self.lm_head.select_first_token(logits_host, device_id, token_offset)
+
+        # Handle temperature as float or list
+        temperatures = temperature if isinstance(temperature, list) else [temperature]
+
+        # Sample for all temperatures
+        sweep_results = []
+        for temp in temperatures:
+            token_id, token_prob, top5 = self._sample_token(first_token_logits.clone(), temp)
+            sweep_results.append(
+                {
+                    "token_id": token_id,
+                    "probability": token_prob,
+                    "temperature": temp,
+                    "device_id": device_id,
+                    "token_offset": token_offset,
+                    "top5": top5,
+                }
+            )
+
+        # Return values are for first temperature
+        first_token_id = sweep_results[0]["token_id"]
+        first_token_prob = sweep_results[0]["probability"]
+
+        logger.debug(f"[TtPrefillTransformer.forward] {logits.shape}")
+        logger.debug(f"[TtPrefillTransformer.forward] {logits_host.shape}")
+        logger.debug(f"[TtPrefillTransformer.forward] {first_token_logits.shape}")
+        logger.debug(
+            f"[TtPrefillTransformer.forward] {first_token_id=}, {first_token_prob=:.4f} {device_id=}, {token_offset=}"
+        )
+
+        if return_intermediates:
+            intermediates["lm_head"] = logits_host
+            intermediates["first_token"] = sweep_results
+
+        return first_token_id, first_token_prob, intermediates
+
+    def _sample_token(self, logits: torch.Tensor, temperature: float = 1.0) -> tuple[int, float, list]:
+        """
+        Sample token from logits with temperature scaling.
+
+        Uses Gumbel-softmax trick for sampling (same as DeepSeek reference).
+        https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/generate.py
+
+        Args:
+            logits: Logits tensor for a single token position
+            temperature: Temperature for scaling (0.0 = argmax)
+
+        Returns:
+            Tuple of (sampled_token_id, probability, top5_list)
+            where top5_list is [{token_id, probability}, ...]
+        """
+        probs = torch.softmax(logits.float(), dim=-1)
+
+        # Get top-5 tokens (unscaled)
+        top5_probs, top5_ids = torch.topk(probs.flatten(), k=5)
+        top5 = [{"token_id": tid.item(), "probability": tprob.item()} for tid, tprob in zip(top5_ids, top5_probs)]
+
+        if temperature <= 0:
+            # Deterministic argmax — no Gumbel noise
+            sampled_id = probs.argmax(dim=-1)
+            prob = probs.flatten()[sampled_id.item()].item()
+            return sampled_id.item(), prob, top5
+
+        logits = logits / temperature
+        probs = torch.softmax(logits.float(), dim=-1)
+
+        # Recompute top-5 with temperature-scaled probs
+        top5_probs, top5_ids = torch.topk(probs.flatten(), k=5)
+        top5 = [{"token_id": tid.item(), "probability": tprob.item()} for tid, tprob in zip(top5_ids, top5_probs)]
+
+        # Gumbel-softmax trick for sampling (use non-in-place to preserve probs)
+        gumbel = probs / torch.empty_like(probs).exponential_(1)
+        sampled_id = gumbel.argmax(dim=-1)
+        prob = probs.flatten()[sampled_id.item()].item()
+        return sampled_id.item(), prob, top5
