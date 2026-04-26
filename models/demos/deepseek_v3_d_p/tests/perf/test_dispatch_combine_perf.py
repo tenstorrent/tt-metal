@@ -206,11 +206,7 @@ def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filt
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
     if layout != "tile":
         model_name += f"_{layout}"
-    # Only the combine worker has a layout parametrize (tile / row_major);
-    # dispatch has no such axis, so adding "and tile" would match nothing.
-    k_filter = f"perf_no_pcc and {worker_id} and random"
-    if op == "combine":
-        k_filter += f" and {layout}"
+    k_filter = f"perf_no_pcc and {worker_id} and random and {layout}"
     return (
         f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
@@ -230,8 +226,8 @@ def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filt
 
 # CI set (BH LoudBox pipeline): keep small.
 _DISPATCH_PERF_PARAMS = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, 3_759_572, ""),
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 2_630_604, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, 4_108_262, ""),
+    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, ""),
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
@@ -250,8 +246,8 @@ _DISPATCH_PERF_PARAMS_FULL = [
     for topo, nlinks, expected in [
         ("linear", 1, 6_564_151),
         ("linear", 2, 3_907_070),
-        ("ring", 1, 4_329_141),
-        ("ring", 2, 2_640_502),
+        ("ring", 1, 5_392_448),
+        ("ring", 2, 3_690_830),
     ]
 ]
 _COMBINE_PERF_PARAMS_FULL = [
@@ -262,7 +258,7 @@ _COMBINE_PERF_PARAMS_FULL = [
         ("linear", 1, 5_767_986),
         ("linear", 2, 4_136_638),
         ("ring", 1, 4_968_952),
-        ("ring", 2, 2_975_783),
+        ("ring", 2, 3_136_810),
     ]
 ] + [
     _perf_param(
