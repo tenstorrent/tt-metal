@@ -4,6 +4,7 @@
 
 #include "padded_slice_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -37,6 +38,35 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.padded_shape().rank() == args.padded_slice_start.rank() &&
             args.padded_slice_start.rank() == args.padded_slice_end.rank(),
         "Padded slice start, end and input tensor must all have the same rank");
+
+    // Fail loudly on TILE-layout invariant violations. A 4D view over a flat (1,1,NHW,C) tile tensor
+    // (e.g. conv2d_DRAM reshaping to (N,H,W,C)) can produce a view whose padded_shape[-2] is not
+    // TILE_HEIGHT-aligned. The tile kernel computes tile-index arithmetic from that 4D shape, which
+    // silently diverges from the underlying flat buffer layout and returns corrupted data. Safe
+    // only when every slice boundary along the -2 axis lands on a TILE_HEIGHT multiple.
+    if (input_tensor_a.layout() == Layout::TILE) {
+        const auto& padded = input_tensor_a.padded_shape();
+        const auto rank = padded.rank();
+        TT_FATAL(
+            padded[rank - 1] % tt::constants::TILE_WIDTH == 0,
+            "padded_slice: TILE input requires padded_shape[-1] ({}) to be a multiple of TILE_WIDTH ({}).",
+            padded[rank - 1],
+            tt::constants::TILE_WIDTH);
+        if (padded[rank - 2] % tt::constants::TILE_HEIGHT != 0) {
+            const auto start_h = args.padded_slice_start[rank - 2];
+            const auto end_h = args.padded_slice_end[rank - 2];
+            TT_FATAL(
+                start_h % tt::constants::TILE_HEIGHT == 0 && end_h % tt::constants::TILE_HEIGHT == 0,
+                "padded_slice: TILE input with non-tile-aligned padded_shape[-2] ({}) requires slice bounds "
+                "along axis -2 to be multiples of TILE_HEIGHT ({}). Got start={}, end={}. This typically "
+                "indicates a 4D view over a flat tile tensor where the inner-height axis is not tile-aligned; "
+                "the kernel's tile arithmetic silently diverges from the underlying buffer layout.",
+                padded[rank - 2],
+                tt::constants::TILE_HEIGHT,
+                start_h,
+                end_h);
+        }
+    }
     for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
         TT_FATAL(
             args.padded_slice_start[i] < input_tensor_a.padded_shape()[i],

@@ -136,6 +136,15 @@ static uint32_t compute_L1_usage_for_slice_config(
 // In this case, slicing along height is preferred to avoid this constraint.
 static Op2DSliceConfig::SliceType best_guess_slice_type(
     uint32_t input_height, uint32_t input_width, Layout output_layout) {
+    if (output_layout == Layout::TILE && input_width % tt::constants::TILE_HEIGHT != 0) {
+        // Height slicing preserves the full non-aligned width in every slice.  The input tensor
+        // in conv2d_DRAM is reshaped from a flat (1,1,NHW,C) TILE layout to a 4D (N,H,W,C)
+        // view.  When W is not a multiple of TILE_HEIGHT the 4D view's tile structure does not
+        // match the underlying flat tile arrangement.  padded_slice operating on such a tensor
+        // produces incorrect data.  Width slicing avoids this because each width sub-slice is
+        // rounded to tile boundaries.
+        return Op2DSliceConfig::SliceType::DRAM_WIDTH;
+    }
     if (output_layout == Layout::ROW_MAJOR) {
         float threshold_ratio = 3.0;
         if (input_height > input_width * threshold_ratio) {

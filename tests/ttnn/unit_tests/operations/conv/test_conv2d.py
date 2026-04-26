@@ -193,6 +193,10 @@ SliceWidth = ttnn.Conv2dDRAMSliceWidth
         (2, 64,   64,   384,   64,     ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
         (1, 4,    32,   1024,  1024,   ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.LoFi  ),
         (1, 2904, 2904,   48,    48,   ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.HiFi4 ),
+        # Regression for PR #41798: DRAM-sliced conv2d with TILE output and input_width not tile-aligned (44 % 32 != 0).
+        # Mirrors the BEVDepth ASPP dilated-conv shape (1x512x16x44 with dilation=12). Before the fix,
+        # best_guess_slice_type picked DRAM_HEIGHT and padded_slice silently corrupted tiles (PCC ~= 0).
+        (1, 512,  512,    16,    44,   ttnn.bfloat8_b, (3, 3), (1, 1), (12, 12), (12, 12), 32, ttnn.MathFidelity.LoFi  ),
     )
     # fmt: on
 )
