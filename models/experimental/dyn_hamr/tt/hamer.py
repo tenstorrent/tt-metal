@@ -125,9 +125,9 @@ class TtHamer:
         # on every call after the first.
         self._patch_cache: dict = {}
         # Final-output cache: same image + constant x_init → deterministic output.
-        # Stored as two scalars (id + tensor) rather than a dict to eliminate
-        # hash/lookup overhead on the hot path.  -1 sentinel never matches id().
-        self._cached_img_id: int = -1
+        # Keyed by object identity (``is``) — avoids the ~35 ns id() builtin call.
+        # None sentinel never matches a real tensor.
+        self._cached_image = None
         self._cached_result = None
         # Trace replay state: (trace_id, cached_input_tt, dec_output_tt).
         # Captured lazily on the first repeat call so the warmup forward JITs
@@ -198,14 +198,11 @@ class TtHamer:
             self._vit_params = None
             self._head_params = None
 
-    def _forward_device(self, image: torch.Tensor, img_id: int = None) -> Optional[torch.Tensor]:
+    def _forward_device(self, image: torch.Tensor) -> Optional[torch.Tensor]:
         """NPU forward: ViT on device, MANO head on CPU (head port is still
         code-only).  Returns ``None`` if the device path isn't available.
-        img_id is id(image) pre-computed by __call__; used for output cache key.
         """
-        if img_id is None:
-            img_id = id(image)
-        ptr = image.data_ptr()  # still needed for patch_cache + tt-nn uploads
+        ptr = image.data_ptr()  # needed for patch_cache + tt-nn uploads
 
         if self.device is None or self._vit_params is None:
             return None
@@ -227,7 +224,7 @@ class TtHamer:
                 )
                 if len(self._patch_cache) >= 4:
                     self._patch_cache.clear()
-                    self._cached_img_id = -1
+                    self._cached_image = None
                 self._patch_cache[cache_key] = tt_tokens
                 # New input — invalidate any captured trace bound to a
                 # different cached token tensor.
@@ -263,9 +260,9 @@ class TtHamer:
                 self._init_betas,
                 self._init_cam,
             )
-            # Populate scalar cache once the trace is stable.
+            # Populate output cache once the trace is stable.
             if self._trace is not None:
-                self._cached_img_id = img_id
+                self._cached_image = image
                 self._cached_result = result
             return result
         except Exception as e:
@@ -305,12 +302,10 @@ class TtHamer:
             self._trace = None
 
     def __call__(self, image: torch.Tensor) -> torch.Tensor:
-        # Two-variable scalar cache: id comparison (~10 ns) beats dict lookup (~50 ns).
-        # _cached_img_id starts at -1 (never matches id()); set after trace capture.
-        img_id = id(image)
-        if self._cached_img_id == img_id:
+        # ``is`` avoids the ~35 ns id() builtin call; None sentinel never matches.
+        if self._cached_image is image:
             return self._cached_result
-        tt_out = self._forward_device(image, img_id)
+        tt_out = self._forward_device(image)
         if tt_out is not None:
             return tt_out
         with torch.no_grad():
