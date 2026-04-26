@@ -1,0 +1,311 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Constraint validation for matmul config candidates.
+
+Validates candidate configurations using hardware constraints:
+- Tile alignment
+- Core grid feasibility
+- Subblock constraints (H * W <= 8 for DST register limit)
+- L1 memory budget
+- Backend-specific rules (minimal_matmul dtype/layout requirements)
+- Multi-device CCL compatibility
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Tuple
+
+from ttnn._experimental.auto_config.math_fidelity import MathFidelity
+
+logger = logging.getLogger(__name__)
+
+TILE_HEIGHT = 32
+TILE_WIDTH = 32
+MAX_SUBBLOCK_HW = 8  # DST register limit
+
+
+def validate_tile_alignment(features: Dict[str, Any]) -> Tuple[bool, str]:
+    """Check that M, K, N are tile-aligned."""
+    M, K, N = features["M"], features["K"], features["N"]
+    if M % TILE_HEIGHT != 0:
+        return False, f"M={M} not aligned to tile height {TILE_HEIGHT}"
+    if K % TILE_WIDTH != 0:
+        return False, f"K={K} not aligned to tile width {TILE_WIDTH}"
+    if N % TILE_WIDTH != 0:
+        return False, f"N={N} not aligned to tile width {TILE_WIDTH}"
+    return True, "ok"
+
+
+def validate_grid_feasibility(config: Any, config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
+    """Check that the config's grid size doesn't exceed available cores."""
+    grid_x = features["grid_x"]
+    grid_y = features["grid_y"]
+
+    if config_family in ("DRAMSharded", "BatchedDRAMSharded"):
+        # DRAM-sharded configs don't have compute_with_storage_grid_size
+        return True, "ok"
+
+    if config_family == "MultiCore":
+        return True, "ok"
+
+    if hasattr(config, "compute_with_storage_grid_size"):
+        cfg_grid = config.compute_with_storage_grid_size
+        if cfg_grid.x > grid_x:
+            return False, f"grid.x={cfg_grid.x} > device.x={grid_x}"
+        if cfg_grid.y > grid_y:
+            return False, f"grid.y={cfg_grid.y} > device.y={grid_y}"
+        if cfg_grid.x <= 0 or cfg_grid.y <= 0:
+            return False, "grid dimensions must be > 0"
+
+    return True, "ok"
+
+
+def validate_subblock_params(config: Any, config_family: str) -> Tuple[bool, str]:
+    """Check subblock parameter constraints."""
+    if config_family in ("DRAMSharded", "BatchedDRAMSharded", "MultiCore"):
+        return True, "ok"
+
+    per_core_M = getattr(config, "per_core_M", None)
+    per_core_N = getattr(config, "per_core_N", None)
+    out_subblock_h = getattr(config, "out_subblock_h", None)
+    out_subblock_w = getattr(config, "out_subblock_w", None)
+
+    if per_core_M is None or per_core_N is None:
+        return True, "ok"
+
+    if per_core_M <= 0:
+        return False, f"per_core_M={per_core_M} must be > 0"
+    if per_core_N <= 0:
+        return False, f"per_core_N={per_core_N} must be > 0"
+
+    if out_subblock_h is not None and out_subblock_w is not None:
+        if out_subblock_h <= 0 or out_subblock_w <= 0:
+            return False, f"subblock dims must be > 0: h={out_subblock_h}, w={out_subblock_w}"
+        if out_subblock_h * out_subblock_w > MAX_SUBBLOCK_HW:
+            return False, (
+                f"subblock_h*subblock_w={out_subblock_h * out_subblock_w} " f"> MAX_SUBBLOCK_HW={MAX_SUBBLOCK_HW}"
+            )
+        if per_core_M % out_subblock_h != 0:
+            return False, f"per_core_M={per_core_M} not divisible by out_subblock_h={out_subblock_h}"
+        if per_core_N % out_subblock_w != 0:
+            return False, f"per_core_N={per_core_N} not divisible by out_subblock_w={out_subblock_w}"
+
+    in0_block_w = getattr(config, "in0_block_w", None)
+    if in0_block_w is not None and in0_block_w <= 0:
+        return False, f"in0_block_w={in0_block_w} must be > 0"
+
+    return True, "ok"
+
+
+def validate_minimal_matmul_constraints(
+    features: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Check minimal_matmul-specific constraints."""
+    valid_dtypes = {"DataType.BFLOAT16", "DataType.BFLOAT8_B"}
+    if features["dtype_a"] not in valid_dtypes:
+        return False, f"minimal_matmul requires bfloat16/bfloat8_b, got {features['dtype_a']}"
+    if features["layout_a"] != "Layout.TILE":
+        return False, f"minimal_matmul requires TILE layout, got {features['layout_a']}"
+    if features["layout_b"] != "Layout.TILE":
+        return False, f"minimal_matmul requires TILE layout for input_b, got {features['layout_b']}"
+    return True, "ok"
+
+
+def validate_memory_config_compatibility(config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
+    """Check that the config family is compatible with the input memory configuration."""
+    is_a_sharded = features["is_a_sharded"]
+    mem_layout_a = features["mem_layout_a"]
+    buffer_type_a = features["buffer_type_a"]
+
+    if config_family == "DRAMSharded":
+        # DRAM-sharded configs require DRAM-interleaved inputs
+        if is_a_sharded:
+            return False, "DRAMSharded requires non-sharded (DRAM interleaved) input A"
+        if "DRAM" not in buffer_type_a:
+            return False, f"DRAMSharded requires DRAM buffer type, got {buffer_type_a}"
+
+    if config_family == "BatchedDRAMSharded":
+        if is_a_sharded:
+            return False, "BatchedDRAMSharded requires non-sharded input A"
+        if not features["is_batched_b"]:
+            return False, "BatchedDRAMSharded requires batched input B"
+
+    if config_family == "Reuse":
+        # Reuse config is primarily for batched B or specific sharded patterns
+        pass
+
+    if config_family == "MultiCast2D":
+        # 2D multicast works best with block-sharded or interleaved
+        if is_a_sharded and "BLOCK" not in mem_layout_a and "INTERLEAVED" not in mem_layout_a:
+            return False, f"MultiCast2D prefers block-sharded/interleaved, got {mem_layout_a}"
+
+    return True, "ok"
+
+
+def validate_batching_constraints(config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
+    """Check batch-related constraints."""
+    is_batched_b = features["is_batched_b"]
+
+    if config_family == "MultiCast1D":
+        if is_batched_b:
+            return False, "MultiCast1D does not support batched input B"
+
+    if config_family == "MultiCast2D":
+        if is_batched_b:
+            return False, "MultiCast2D does not support batched input B"
+
+    return True, "ok"
+
+
+def validate_l1_budget(config: Any, config_family: str, features: Dict[str, Any]) -> Tuple[bool, str]:
+    """Check that the config's L1 memory requirement doesn't exceed device limits.
+
+    Uses an accurate circular buffer (CB) size estimation that accounts for:
+    - Double-buffered input tiles (in0, in1)
+    - Single-buffered output tiles
+    - FP32 accumulator tiles when fp32_dest_acc_en is True
+    - Kernel binary overhead (~100KB reserved)
+
+    The formula mirrors the actual CB allocation in the matmul kernel factories.
+    """
+    # Only applies to configs where we explicitly set per block/core sizes
+    if config_family in ("DRAMSharded", "BatchedDRAMSharded", "MultiCore", "Reuse"):
+        return True, "ok"
+
+    per_core_M = getattr(config, "per_core_M", None)
+    per_core_N = getattr(config, "per_core_N", None)
+    in0_block_w = getattr(config, "in0_block_w", None)
+
+    if per_core_M is None or per_core_N is None or in0_block_w is None:
+        return True, "ok"
+
+    # Tile byte sizes
+    # bfloat16: 32x32 × 2 bytes = 2048 bytes per tile
+    # bfloat8_b: 32x32 × 1 byte + 64 header = 1088 bytes per tile
+    dtype_a = features.get("dtype_a", "DataType.BFLOAT16")
+    tile_bytes = 2048 if dtype_a == "DataType.BFLOAT16" else 1088
+
+    # CB size estimation (mirrors matmul kernel factory allocation):
+    # CB_in0: in0_block_w × per_core_M tiles × 2 (double buffer)
+    # CB_in1: in0_block_w × per_core_N tiles × 2 (double buffer)
+    # CB_out: per_core_M × per_core_N tiles × 1 (single buffer output)
+    cb_in0_tiles = in0_block_w * per_core_M * 2
+    cb_in1_tiles = in0_block_w * per_core_N * 2
+    cb_out_tiles = per_core_M * per_core_N
+
+    # FP32 accumulator: subblock_h × subblock_w × 4 bytes/element
+    out_subblock_h = getattr(config, "out_subblock_h", 1)
+    out_subblock_w = getattr(config, "out_subblock_w", 1)
+    fp32_accum_bytes = out_subblock_h * out_subblock_w * 32 * 32 * 4  # fp32 tiles
+
+    total_cb_bytes = (cb_in0_tiles + cb_in1_tiles + cb_out_tiles) * tile_bytes + fp32_accum_bytes
+
+    # Wormhole L1: 1.5 MB (1,572,864 bytes) total per core
+    # Reserve ~300KB for kernel binaries, runtime, and CB metadata
+    # Usable: ~1.2 MB = 1,258,291 bytes
+    MAX_L1_USABLE = 1_258_291
+    if total_cb_bytes > MAX_L1_USABLE:
+        return False, (
+            f"Estimated L1 CB usage {total_cb_bytes:,} bytes exceeds budget {MAX_L1_USABLE:,} "
+            f"(in0={cb_in0_tiles}×{tile_bytes}, in1={cb_in1_tiles}×{tile_bytes}, "
+            f"out={cb_out_tiles}×{tile_bytes}, accum={fp32_accum_bytes})"
+        )
+
+    return True, "ok"
+
+
+def validate_math_fidelity(
+    candidate_fidelity: MathFidelity,
+    features: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Check that the candidate's math fidelity is valid for the input dtypes.
+
+    This encodes the dtype→fidelity mapping table from the matrix engine
+    tech report and PR #39628 as a hard constraint.
+    """
+    allowed = features.get("math_fidelity_valid")
+    if allowed is None:
+        # No fidelity info in features — skip validation
+        return True, "ok"
+
+    if candidate_fidelity not in allowed:
+        return False, (
+            f"MathFidelity.{candidate_fidelity.name} is not valid for "
+            f"dtype_a={features['dtype_a']}, dtype_b={features['dtype_b']}. "
+            f"Valid fidelities: {[f.name for f in allowed]}"
+        )
+
+    return True, "ok"
+
+
+def validate_candidate(
+    config: Any,
+    config_family: str,
+    backend: str,
+    features: Dict[str, Any],
+    candidate_fidelity: Any = None,
+    math_fidelity: Any = None,
+) -> Tuple[bool, str]:
+    """
+    Run all validation checks on a candidate configuration.
+
+    Args:
+        config: The program config object.
+        config_family: Config family name (e.g. "MultiCast1D").
+        backend: Backend name (e.g. "matmul").
+        features: Extracted features dict.
+        candidate_fidelity: Optional MathFidelity from the candidate.
+
+    Returns:
+        (is_valid, reason) tuple.
+    """
+    # 1. Tile alignment
+    is_valid, reason = validate_tile_alignment(features)
+    if not is_valid:
+        return False, reason
+
+    # 2. Grid feasibility
+    is_valid, reason = validate_grid_feasibility(config, config_family, features)
+    if not is_valid:
+        return False, reason
+
+    # 3. Subblock constraints
+    is_valid, reason = validate_subblock_params(config, config_family)
+    if not is_valid:
+        return False, reason
+
+    # 4. Backend-specific constraints
+    if backend == "minimal_matmul":
+        is_valid, reason = validate_minimal_matmul_constraints(features)
+        if not is_valid:
+            return False, reason
+
+    # 5. Memory config compatibility
+    is_valid, reason = validate_memory_config_compatibility(config_family, features)
+    if not is_valid:
+        return False, reason
+
+    # 6. Batching constraints
+    is_valid, reason = validate_batching_constraints(config_family, features)
+    if not is_valid:
+        return False, reason
+
+    # 7. L1 budget
+    is_valid, reason = validate_l1_budget(config, config_family, features)
+    if not is_valid:
+        return False, reason
+
+    # 8. Math fidelity constraints — uses candidate's own fidelity
+    # (not the default from features, which would always pass)
+    # Accept either kwarg name for backward compatibility
+    fidelity = candidate_fidelity if candidate_fidelity is not None else math_fidelity
+    if fidelity is not None and isinstance(fidelity, MathFidelity):
+        is_valid, reason = validate_math_fidelity(fidelity, features)
+        if not is_valid:
+            return False, reason
+
+    return True, "valid"

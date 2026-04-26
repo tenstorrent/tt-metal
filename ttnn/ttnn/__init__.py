@@ -450,6 +450,8 @@ from ttnn.operations.matmul import (
     create_matmul_attributes,
 )
 
+from ttnn._experimental.auto_config import matmul_auto
+
 from ttnn.operations.normalization import (
     SoftmaxProgramConfig,
     SoftmaxDefaultProgramConfig,
