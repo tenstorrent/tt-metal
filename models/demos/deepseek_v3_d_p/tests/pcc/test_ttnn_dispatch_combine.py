@@ -540,7 +540,7 @@ def test_ttnn_dispatch_combine_overflow(
     hang. After the fix, dispatch should complete (tokens silently dropped).
     """
     seq_len_per_chip = 256
-    emb_dim = 128
+    emb_dim = 256
     num_routed_experts = 16
     num_experts_per_tok = 2
     capacity_factor = 1
