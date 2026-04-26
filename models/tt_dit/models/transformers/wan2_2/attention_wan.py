@@ -232,6 +232,7 @@ class WanAttention(Module):
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
         parallel_config=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
@@ -276,6 +277,7 @@ class WanAttention(Module):
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
             )[0]
         else:
             M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
@@ -291,6 +293,7 @@ class WanAttention(Module):
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
                 compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                dtype=dtype,
             )
         return output
 
@@ -357,12 +360,28 @@ class WanAttention(Module):
             )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # Norm spatial before splitting heads
+        # Fuse SDPA input dtype into norm+RoPE kernel to avoid separate Q/K typecasts.
+        # Only for self-attn with ring SDPA; cross-attn (_sdpa_input_dtype not set) gets None.
+        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
+        norm_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
+
+        # Norm spatial before splitting heads (+ optional fused output dtype cast)
         q_BHNE = self.norm_q(
-            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            q_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_dtype,
         )
         k_BHNE = self.norm_k(
-            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            k_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_dtype,
         )
 
         def create_heads(inp):
@@ -376,25 +395,29 @@ class WanAttention(Module):
 
         v_BHNE = create_heads(v_1BNF)
 
-        # Rope
-
         if prompt_1BLP is None:
             # Self attention
-            if self.parallel_config.sequence_parallel.factor > 1:
+            if use_ring_sdpa:
+                # Q and K already cast by norm kernel; only V needs explicit typecast
+                if sdpa_input_dtype is not None:
+                    if v_BHNE.dtype != sdpa_input_dtype:
+                        v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
+                dummy = self.dummy_joint_input  # pre-cast at init by apply_quant_config
+
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy,
+                        dummy,
+                        dummy,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
                         persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
                         ),
                         joint_strategy="rear",
                         logical_n=N,
@@ -412,19 +435,21 @@ class WanAttention(Module):
                         num_workers_per_link=5,
                         num_buffers_per_channel=32,
                     )
+                    if spatial_BHNE.dtype != ttnn.bfloat16:
+                        spatial_BHNE = ttnn.typecast(spatial_BHNE, ttnn.bfloat16)
                 else:
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,
                         v_BHNE,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
-                        self.dummy_joint_input,
+                        dummy,
+                        dummy,
+                        dummy,
                         persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                         ),
                         persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
                         ),
                         joint_strategy="rear",
                         logical_n=N,
@@ -442,6 +467,8 @@ class WanAttention(Module):
                         ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                         use_column_major_ccl=True,
                     )
+                    if spatial_BHNE.dtype != ttnn.bfloat16:
+                        spatial_BHNE = ttnn.typecast(spatial_BHNE, ttnn.bfloat16)
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                     q_BHNE,
