@@ -115,9 +115,11 @@ TRACEABLE_DECODE_ATTENTION_MODES = (
 DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE = TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
 TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE = "ttnn.slice(kv_cache_fixed_window)"
 TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE = "ttnn.transformer.paged_scaled_dot_product_attention_decode"
+TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE = "selected_rows_dense_attention"
 TRACEABLE_DECODE_ATTENTION_READ_APIS = (
     TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
     TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
+    TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
 )
 DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API = TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE
 TRACEABLE_DECODE_PAGED_SDPA_BLOCK_SIZE = 32
@@ -236,6 +238,8 @@ class TtTraceableDecodeSubpath:
         cur_pos_tensor=None,
         paged_k_cache=None,
         paged_v_cache=None,
+        selected_row_idxs_tensor=None,
+        selected_row_positions: Sequence[int] | None = None,
         paged_sdpa_block_size: int = TRACEABLE_DECODE_PAGED_SDPA_BLOCK_SIZE,
         attention_cache_window_index: int | None = None,
         rope_position_index: int | None = None,
@@ -291,6 +295,18 @@ class TtTraceableDecodeSubpath:
             self.cur_pos_tensor = None
             self.paged_k_cache = None
             self.paged_v_cache = None
+        if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+            if selected_row_idxs_tensor is None:
+                raise ValueError("selected_row_idxs_tensor is required for selected-row dense attention")
+            if selected_row_positions is None:
+                raise ValueError("selected_row_positions is required for selected-row dense attention")
+            self.selected_row_positions = tuple(int(value) for value in selected_row_positions)
+            if not self.selected_row_positions:
+                raise ValueError("selected-row dense attention requires at least one selected row")
+            self.selected_row_idxs_tensor = selected_row_idxs_tensor
+        else:
+            self.selected_row_positions = ()
+            self.selected_row_idxs_tensor = None
         self.route_plan = route_plan
         self.static_token_rows = _route_plan_static_token_rows(route_plan)
         self.attention = TtAttentionProjection(
@@ -418,6 +434,30 @@ class TtTraceableDecodeSubpath:
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.dense_attention_sink = (
+            _to_tt_dense_attention_sink(
+                weights.attn_sink,
+                token_rows=self.static_token_rows,
+                config=config,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+            if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
+            else None
+        )
+        if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+            self.selected_key_rope_cos, self.selected_key_rope_sin = _to_tt_rope_position_tensors(
+                config,
+                layer=self.layer,
+                positions=self.selected_row_positions,
+                device=device,
+                dtype=dtype,
+                memory_config=memory_config,
+            )
+        else:
+            self.selected_key_rope_cos = None
+            self.selected_key_rope_sin = None
         if self.rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR:
             self.rope_cos_table, self.rope_sin_table, self.rope_trans_mat = _to_tt_rope_embedding_tables(
                 config,
@@ -547,6 +587,14 @@ class TtTraceableDecodeSubpath:
                 (1, 1, self.attention_cache_window_index + int(hidden_states.shape[-2]), self.kv_output_dim),
                 memory_config=self.memory_config,
             )
+        elif self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+            attention_cache_window = _ttnn_select_cache_rows(
+                self.kv_cache,
+                selected_row_idxs=self.selected_row_idxs_tensor,
+                cache_len=self.cache_len,
+                head_dim=int(self.config.head_dim),
+                memory_config=self.memory_config,
+            )
         if self.attention_read_api != TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
             if self.rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR:
                 rope_cos, rope_sin = _ttnn_gather_rope_tensors(
@@ -573,6 +621,21 @@ class TtTraceableDecodeSubpath:
                 attention_sink=self.attention_sink,
                 block_size=self.paged_sdpa_block_size,
                 device=self.device,
+                memory_config=self.memory_config,
+            )
+        elif self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+            attention_intermediates = _ttnn_selected_rows_dense_attention(
+                q_output=q_output,
+                selected_attention_cache_window=attention_cache_window,
+                attention_mode=self.attention_mode,
+                config=self.config,
+                q_head_norm=self.q_head_norm,
+                query_rope_cos=rope_cos,
+                query_rope_sin=rope_sin,
+                key_rope_cos=self.selected_key_rope_cos,
+                key_rope_sin=self.selected_key_rope_sin,
+                rope_trans_mat=self.rope_trans_mat,
+                attention_sink_logits=self.dense_attention_sink,
                 memory_config=self.memory_config,
             )
         else:
@@ -677,10 +740,15 @@ class TtTraceableDecodeSubpath:
             "combined_ffn_output": combined_ffn_output,
             "residual_output": residual_output,
         }
-        if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE:
+        if self.attention_read_api in (
+            TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
+            TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
+        ):
             outputs["kv_cache"] = self.kv_cache
         if attention_cache_window is not None:
             outputs["attention_cache_window"] = attention_cache_window
+        if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+            outputs["selected_attention_cache_window"] = attention_cache_window
         if self.attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
             outputs["paged_k_cache"] = self.paged_k_cache
             outputs["paged_v_cache"] = self.paged_v_cache
@@ -771,6 +839,18 @@ def run_traceable_decode_subpath_smoke(
         if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
         else attention_window_indices
     )
+    selected_cache_rows_by_step = (
+        _preflight_selected_cache_rows_by_step(
+            snapshot_dir=snapshot_dir,
+            config=config,
+            layer=layer,
+            positions=cache_update_indices,
+            weights=weights,
+            activations=activations,
+        )
+        if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
+        else {}
+    )
 
     route_plans: list[TraceableDecodeRoutePlan] = []
     preliminary_cache = kv_cache_initial
@@ -787,6 +867,7 @@ def run_traceable_decode_subpath_smoke(
             rope_position_index=rope_position_indices[step],
             attention_mode=attention_mode,
             attention_read_api=attention_read_api,
+            selected_cache_rows=selected_cache_rows_by_step.get(step),
             route_plan=None,
         )
         route_plans.append(
@@ -843,6 +924,7 @@ def run_traceable_decode_subpath_smoke(
             rope_position_index=rope_position_indices[step],
             attention_mode=attention_mode,
             attention_read_api=attention_read_api,
+            selected_cache_rows=selected_cache_rows_by_step.get(step),
             route_plan=route_plan,
         )
         references.append(reference)
@@ -859,6 +941,7 @@ def run_traceable_decode_subpath_smoke(
             rope_position_index=rope_position_indices[step],
             attention_mode=attention_mode,
             attention_read_api=attention_read_api,
+            selected_cache_rows=selected_cache_rows_by_step.get(step),
             route_plan=route_plan,
         )
         replay_references.append(replay_reference)
@@ -892,6 +975,7 @@ def run_traceable_decode_subpath_smoke(
         rope_position_api=rope_position_api,
         attention_window_indices=attention_window_indices,
         rope_position_indices=rope_position_indices,
+        selected_cache_rows_by_step=selected_cache_rows_by_step,
         max_tensors=max_tensors,
         max_bytes=max_bytes,
         trace_region_size=trace_region_size,
@@ -944,6 +1028,7 @@ def run_traceable_decode_subpath_smoke(
         rope_position_api=rope_position_api,
         attention_window_index=static_attention_index,
         rope_position_indices=rope_position_indices,
+        selected_cache_rows_by_step=selected_cache_rows_by_step,
     )
     result["mode"] = "ttnn-trace"
     result["device_id"] = int(device_id)
@@ -1196,6 +1281,7 @@ def build_torch_traceable_decode_subpath_reference(
     rope_position_index: int | None = None,
     attention_mode: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_MODE,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    selected_cache_rows: Sequence[int] | None = None,
     route_plan: TraceableDecodeRoutePlan | None = None,
 ) -> dict[str, torch.Tensor]:
     _validate_activation(activation, hidden_size=int(config.hidden_size))
@@ -1209,6 +1295,12 @@ def build_torch_traceable_decode_subpath_reference(
         )
     else:
         _validate_kv_cache_initial(kv_cache_initial, cache_len=cache_len, kv_output_dim=_kv_output_dim(config))
+    if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        selected_cache_rows = _validate_selected_cache_rows(
+            selected_cache_rows,
+            cache_len=cache_len,
+            attention_read_api=attention_read_api,
+        )
     _validate_attention_read_api_combination(
         attention_read_api=attention_read_api,
         attention_mode=attention_mode,
@@ -1268,6 +1360,18 @@ def build_torch_traceable_decode_subpath_reference(
             layer=layer,
             start_pos=rope_position_index,
             block_size=TRACEABLE_DECODE_PAGED_SDPA_BLOCK_SIZE,
+        )
+    elif attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        attention_cache_window = kv_cache[:, :, list(selected_cache_rows), :].contiguous()
+        attention_intermediates = _torch_selected_rows_dense_attention(
+            q_output=q_output,
+            selected_attention_cache_window=attention_cache_window,
+            selected_row_positions=selected_cache_rows,
+            attn_sink=weights.attn_sink,
+            attention_mode=attention_mode,
+            config=config,
+            layer=layer,
+            start_pos=rope_position_index,
         )
     else:
         attention_cache_window = kv_cache[
@@ -1389,6 +1493,8 @@ def build_torch_traceable_decode_subpath_reference(
     else:
         result["kv_cache"] = kv_cache
         result["attention_cache_window"] = attention_cache_window
+        if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+            result["selected_attention_cache_window"] = attention_cache_window
     return result
 
 
@@ -1707,6 +1813,7 @@ def _run_ttnn_traceable_decode_subpath(
     rope_position_api: str,
     attention_window_index: int,
     rope_position_indices: Sequence[int],
+    selected_cache_rows_by_step: Mapping[int, Sequence[int]],
 ) -> tuple[list[dict[str, torch.Tensor]], dict[str, Any]]:
     if not route_plans:
         raise ValueError("at least one route plan is required")
@@ -1734,6 +1841,7 @@ def _run_ttnn_traceable_decode_subpath(
     try:
         allocated_trace_count = 0
         uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+        uses_selected_rows_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
         paged_sdpa_batch = int(activations[0].shape[-2])
         page_table = (
             _identity_page_table(
@@ -1812,6 +1920,24 @@ def _run_ttnn_traceable_decode_subpath(
                 if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
                 else None
             )
+            selected_rows = (
+                _validate_selected_cache_rows(
+                    selected_cache_rows_by_step.get(0),
+                    cache_len=cache_len,
+                    attention_read_api=attention_read_api,
+                )
+                if uses_selected_rows_read
+                else None
+            )
+            selected_row_idxs_tensor = (
+                _to_tt_selected_row_idxs_tensor(
+                    selected_rows,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if uses_selected_rows_read
+                else None
+            )
             module = TtTraceableDecodeSubpath(
                 device=device,
                 weights=weights,
@@ -1829,6 +1955,8 @@ def _run_ttnn_traceable_decode_subpath(
                 cur_pos_tensor=cur_pos_tensor,
                 paged_k_cache=paged_k_cache,
                 paged_v_cache=paged_v_cache,
+                selected_row_idxs_tensor=selected_row_idxs_tensor,
+                selected_row_positions=selected_rows,
                 paged_sdpa_block_size=TRACEABLE_DECODE_PAGED_SDPA_BLOCK_SIZE,
                 attention_cache_window_index=int(attention_window_index),
                 rope_position_index=int(rope_position_indices[0]),
@@ -1933,9 +2061,14 @@ def _run_ttnn_traceable_decode_subpath(
                 "dynamic_cache_read_current_position": uses_paged_sdpa_read,
                 "cache_read_window_status": "replay_mutable_device_cur_pos_tensor"
                 if uses_paged_sdpa_read
+                else "static_selected_row_ids_device_tensor"
+                if uses_selected_rows_read
                 else "static_single_capture_initial_position",
                 "attention_read_api": attention_read_api,
                 "cur_pos_tensor_dynamic": uses_paged_sdpa_read,
+                "selected_row_ids_static_host_preflight": uses_selected_rows_read,
+                "selected_row_compaction_in_trace": uses_selected_rows_read,
+                "selected_rows_consumed_by_attention": uses_selected_rows_read,
                 "cache_rows_pages_read_per_step": [
                     {
                         "step": step,
@@ -1976,6 +2109,24 @@ def _run_ttnn_traceable_decode_subpath(
                 if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
                 else None
             )
+            selected_rows = (
+                _validate_selected_cache_rows(
+                    selected_cache_rows_by_step.get(step),
+                    cache_len=cache_len,
+                    attention_read_api=attention_read_api,
+                )
+                if uses_selected_rows_read
+                else None
+            )
+            selected_row_idxs_tensor = (
+                _to_tt_selected_row_idxs_tensor(
+                    selected_rows,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if uses_selected_rows_read
+                else None
+            )
             module = TtTraceableDecodeSubpath(
                 device=device,
                 weights=weights,
@@ -1988,6 +2139,8 @@ def _run_ttnn_traceable_decode_subpath(
                 rope_position_api=rope_position_api,
                 rope_position_idxs_tensor=rope_position_idxs_tensor,
                 attention_read_api=attention_read_api,
+                selected_row_idxs_tensor=selected_row_idxs_tensor,
+                selected_row_positions=selected_rows,
                 attention_cache_window_index=int(cache_update_index),
                 rope_position_index=int(rope_position_index),
                 initial_kv_cache=None,
@@ -2064,8 +2217,13 @@ def _run_ttnn_traceable_decode_subpath(
             "cache_update_index_kind": "static_host_argument_per_trace_capture",
             "cache_read_window_dynamic": False,
             "dynamic_cache_read_current_position": False,
-            "cache_read_window_status": "static_per_trace_capture",
+            "cache_read_window_status": "static_selected_row_ids_device_tensor"
+            if uses_selected_rows_read
+            else "static_per_trace_capture",
             "attention_read_api": attention_read_api,
+            "selected_row_ids_static_host_preflight": uses_selected_rows_read,
+            "selected_row_compaction_in_trace": uses_selected_rows_read,
+            "selected_rows_consumed_by_attention": uses_selected_rows_read,
             "rope_position_dynamic": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
             "rope_position_kind": "replay_mutable_device_tensor"
             if rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
@@ -2167,8 +2325,29 @@ def _copy_rope_position_idxs_to_device(start_pos: int, *, seq_len: int, tt_rope_
     ttnn.copy_host_to_device_tensor(host_tensor, tt_rope_position_idxs)
 
 
+def _to_tt_selected_row_idxs_tensor(
+    selected_rows: Sequence[int],
+    *,
+    device,
+    memory_config,
+):
+    return ttnn.from_torch(
+        _selected_row_idx_values(selected_rows),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
 def _rope_position_idx_values(start_pos: int, *, seq_len: int) -> torch.Tensor:
     return torch.arange(int(start_pos), int(start_pos) + int(seq_len), dtype=torch.int32).reshape(1, int(seq_len))
+
+
+def _selected_row_idx_values(selected_rows: Sequence[int]) -> torch.Tensor:
+    if not selected_rows:
+        raise ValueError("selected_rows must contain at least one row")
+    return torch.tensor([int(value) for value in selected_rows], dtype=torch.int32).reshape(1, len(selected_rows))
 
 
 def _cache_position_values(position: int, *, batch: int) -> torch.Tensor:
@@ -2314,6 +2493,7 @@ def _base_result(
     rope_position_api: str,
     attention_window_indices: Sequence[int],
     rope_position_indices: Sequence[int],
+    selected_cache_rows_by_step: Mapping[int, Sequence[int]],
     max_tensors: int,
     max_bytes: int,
     trace_region_size: int,
@@ -2340,6 +2520,7 @@ def _base_result(
     uses_device_update_index = cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
     uses_device_rope_position = rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    uses_selected_rows_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
     update_index_source = "device_tensor" if uses_device_update_index else "host_scalar"
     update_index_kind = (
         "replay_mutable_device_tensor" if uses_device_update_index else "static_host_argument_per_trace_capture"
@@ -2347,6 +2528,8 @@ def _base_result(
     cache_read_window_status = (
         "replay_mutable_device_cur_pos_tensor"
         if uses_paged_sdpa_read
+        else "static_selected_row_ids_device_tensor"
+        if uses_selected_rows_read
         else ("static_single_capture_initial_position" if uses_device_update_index else "static_per_trace_capture")
     )
     rope_position_status = (
@@ -2374,21 +2557,31 @@ def _base_result(
         cache_update_api=cache_update_api,
         rope_position_api=rope_position_api,
         uses_paged_sdpa_read=uses_paged_sdpa_read,
+        uses_selected_rows_read=uses_selected_rows_read,
+        selected_cache_rows_by_step=selected_cache_rows_by_step,
     )
     excluded_from_trace = [
         "true separate DeepSeek V-channel/sparse value semantics; this slice creates explicit K and V cache tensors "
         "from one fused KV projection",
-        "dynamic sparse indexer top-k and per-token cache gather",
+        (
+            "dynamic sparse indexer top-k inside trace; selected-row dense attention consumes a static "
+            "host-preflight selected row list"
+            if uses_selected_rows_read
+            else "dynamic sparse indexer top-k and per-token cache gather"
+        ),
         (
             "DeepSeek sparse indexer selected-row semantics; paged SDPA dense attention reads contiguous page-table "
             "rows up to cur_pos_tensor while applying the loaded attention sink"
             if uses_paged_sdpa_read
+            else "compressed-KV sparse cache update/read; selected rows are compacted from the existing projected "
+            "K/V cache tensor rather than a real compressed-KV cache"
+            if uses_selected_rows_read
             else "DeepSeek sparse attention-sink/indexer semantics; fixed-window dense softmax uses contiguous cache rows"
         ),
         "dynamic MoE expert dispatch; selected expert modules are statically instantiated from a host preflight plan",
         "embedding and logits",
     ]
-    if not uses_paged_sdpa_read:
+    if not uses_paged_sdpa_read and not uses_selected_rows_read:
         excluded_from_trace.insert(4, "dynamic cache read-window advancement beyond the fixed traced window")
     if not uses_device_rope_position:
         excluded_from_trace.insert(4, "dynamic RoPE position advancement beyond the fixed traced window")
@@ -2407,6 +2600,8 @@ def _base_result(
             4,
             "routed experts outside the configured top-k prefix when topk_prefix_limit is less than full top-k",
         )
+    first_step_selected_rows = sparse_attention_summary["selected_cache_rows"].get("first_step_runtime_rows")
+    first_step_selected_count = None if first_step_selected_rows is None else len(first_step_selected_rows)
     return {
         "schema_version": REAL_TRACEABLE_DECODE_SMOKE_SCHEMA_VERSION,
         "mode": "unexecuted",
@@ -2554,6 +2749,8 @@ def _base_result(
             cache_update_api=cache_update_api,
             rope_position_index=int(rope_position_indices[0]),
             rope_position_api=rope_position_api,
+            selected_rows=first_step_selected_rows,
+            selected_rows_count=first_step_selected_count,
         ),
         "attention_path_by_step": [
             _attention_path_summary(
@@ -2567,6 +2764,12 @@ def _base_result(
                 cache_update_api=cache_update_api,
                 rope_position_index=int(rope_position_indices[step]),
                 rope_position_api=rope_position_api,
+                selected_rows=sparse_attention_summary["selected_cache_rows"]["per_step"][step].get("runtime_rows"),
+                selected_rows_count=(
+                    None
+                    if sparse_attention_summary["selected_cache_rows"]["per_step"][step].get("runtime_rows") is None
+                    else len(sparse_attention_summary["selected_cache_rows"]["per_step"][step]["runtime_rows"])
+                ),
             )
             for step in range(len(cache_update_indices))
         ],
@@ -2581,9 +2784,13 @@ def _base_result(
         "attention_sink_status": sparse_attention_summary["attention_sink_status"],
         "traceability_flags": {
             "attention_mode": attention_mode,
-            "kv_source": "device_resident_paged_cache_ready_fused_kv_projection_cache"
-            if uses_paged_sdpa_read
-            else "device_resident_compressed_kv_projection_cache_window",
+            "kv_source": (
+                "device_resident_paged_cache_ready_fused_kv_projection_cache"
+                if uses_paged_sdpa_read
+                else "device_resident_static_selected_rows_projected_kv_cache"
+                if uses_selected_rows_read
+                else "device_resident_compressed_kv_projection_cache_window"
+            ),
             "kv_split_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "true_kv_split_in_trace": False,
             "true_separate_v_channel_in_trace": False,
@@ -2591,7 +2798,10 @@ def _base_result(
             "attention_output_inverse_rope_in_trace": uses_paged_sdpa_read,
             "compressed_kv_cache_in_trace": False,
             "sparse_indexer_in_trace": False,
-            "attention_sink_in_trace": uses_paged_sdpa_read,
+            "selected_rows_consumed_by_attention": uses_selected_rows_read,
+            "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+            "selected_row_compaction_in_trace": uses_selected_rows_read,
+            "attention_sink_in_trace": uses_paged_sdpa_read or uses_selected_rows_read,
             "rope_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "qk_scores_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
             "softmax_in_trace": attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
@@ -2676,6 +2886,10 @@ def _base_result(
                 "DeepSeek sparse/indexer selected-row semantics, any separate value-channel semantics beyond the HF "
                 "fused KV vector, dynamic MoE dispatch, embeddings, and logits are still outside this trace slice"
                 if uses_paged_sdpa_read
+                else "selected-row dense attention consumes static host-preflight row ids and gathers from the "
+                "projected K/V cache, but dynamic in-trace indexer generation, compressed-KV sparse cache "
+                "update/read, dynamic MoE dispatch, embeddings, and logits remain outside this slice"
+                if uses_selected_rows_read
                 else "cache write, cache read/current position, and RoPE/attention position are not all dynamic under one "
                 "captured trace"
             ),
@@ -2707,6 +2921,7 @@ def _base_result(
             cache_update_api=cache_update_api,
             rope_position_api=rope_position_api,
             attention_read_api=attention_read_api,
+            selected_rows_by_step=sparse_attention_summary["selected_cache_rows"]["per_step"],
         ),
         "selected_source_keys": [item.source_key for item in metadata],
         "loaded_tensors": [_metadata_summary(item) for item in metadata],
@@ -2838,9 +3053,25 @@ def _base_result(
                 "location": "before trace capture",
                 "description": (
                     "the real layer attention sink tensor is uploaded once; the paged SDPA decode path consumes it "
-                    "inside the protected trace, while the fixed-slice path only reports it as loaded"
+                    "inside the protected trace, the selected-row dense path consumes a dense sink-logit tensor "
+                    "inside the protected trace, and the fixed-slice path only reports it as loaded"
                 ),
             },
+            *(
+                [
+                    {
+                        "name": "selected_row_ids_host_to_device",
+                        "location": "before trace capture",
+                        "description": (
+                            "real learned-indexer selected row ids are materialized by host preflight and uploaded "
+                            "as a static device tensor; protected TTNN embedding ops use that tensor to compact "
+                            "K/V cache rows"
+                        ),
+                    }
+                ]
+                if uses_selected_rows_read
+                else []
+            ),
             *(
                 [
                     {
@@ -2929,6 +3160,7 @@ def _base_result(
             "router_decode_row_mask_host_to_device",
             "kv_cache_seed_host_to_device",
             "attention_sink_host_to_device",
+            *(["selected_row_ids_host_to_device"] if uses_selected_rows_read else []),
             *(
                 ["paged_sdpa_page_table_host_to_device", "paged_sdpa_cur_pos_host_to_device"]
                 if uses_paged_sdpa_read
@@ -3008,11 +3240,13 @@ def _decode_steps_detail(
     cache_update_api: str,
     rope_position_api: str,
     attention_read_api: str = DEFAULT_TRACEABLE_DECODE_ATTENTION_READ_API,
+    selected_rows_by_step: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
     attention_read_api = _validate_attention_read_api(attention_read_api)
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    uses_selected_rows_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
     update_index_kind = (
         "replay_mutable_device_tensor"
         if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR
@@ -3044,6 +3278,7 @@ def _decode_steps_detail(
         position = int(cache_update_index)
         window_start = int(attention_window_index)
         rope_position = int(rope_position_index)
+        selected_row_detail = None if selected_rows_by_step is None else selected_rows_by_step[step]
         details.append(
             {
                 "step": step,
@@ -3057,6 +3292,12 @@ def _decode_steps_detail(
                 "cache_update_index_kind": update_index_kind,
                 "cache_rows_updated": [position],
                 "cache_window_rows": [window_start, window_start + int(seq_len)],
+                "selected_cache_rows": None if selected_row_detail is None else selected_row_detail.get("runtime_rows"),
+                "selected_rows_consumed_by_attention": uses_selected_rows_read,
+                "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+                "compact_window_shape": None
+                if selected_row_detail is None
+                else selected_row_detail.get("compact_window_shape"),
                 "cache_rows_read": _cache_rows_read_for_position(position) if uses_paged_sdpa_read else None,
                 "cache_pages_read": _cache_pages_read_for_identity_table(
                     position,
@@ -3072,13 +3313,23 @@ def _decode_steps_detail(
                 "kv_source": (
                     "paged_cache_ready_fused_kv_projection_reused_for_explicit_k_and_v"
                     if uses_paged_sdpa_read
+                    else "selected_rows_projected_kv_cache_reused_for_explicit_k_and_v"
+                    if uses_selected_rows_read
                     else "fixed_window_projected_kv_cache"
                 ),
                 "true_separate_v_channel": False,
-                "compressed_kv_status": "not_integrated" if uses_paged_sdpa_read else "projected_kv_cache_only",
-                "sparse_indexer_status": "not_integrated",
+                "compressed_kv_status": "not_integrated"
+                if uses_paged_sdpa_read
+                else "selected_rows_use_projected_kv_cache_not_compressed_kv_cache"
+                if uses_selected_rows_read
+                else "projected_kv_cache_only",
+                "sparse_indexer_status": "static_host_preflight_rows_consumed"
+                if uses_selected_rows_read
+                else "not_integrated",
                 "attention_sink_status": "used_in_paged_sdpa_decode"
                 if uses_paged_sdpa_read
+                else "used_in_selected_rows_dense_attention"
+                if uses_selected_rows_read
                 else "loaded_not_integrated_in_fixed_slice_attention",
                 "rope_position_index": rope_position,
                 "rope_position_rows": [rope_position, rope_position + int(seq_len)],
@@ -3127,9 +3378,13 @@ def _decode_steps_detail(
                     "paged_attention_output_heads"
                     if uses_paged_sdpa_read
                     else (
-                        "attention_context_heads"
-                        if attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
-                        else "expanded_attention_cache"
+                        "selected_attention_cache_window"
+                        if uses_selected_rows_read
+                        else (
+                            "attention_context_heads"
+                            if attention_mode == TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE
+                            else "expanded_attention_cache"
+                        )
                     ),
                     "attention_output",
                     "attention_projected",
@@ -3320,6 +3575,34 @@ def _to_tt_attention_sink(
     )
 
 
+def _to_tt_dense_attention_sink(
+    attn_sink: torch.Tensor,
+    *,
+    token_rows: int,
+    config: DeepSeekV4FlashConfig,
+    device,
+    dtype,
+    memory_config,
+):
+    if attn_sink.ndim != 1 or tuple(attn_sink.shape) != (int(config.num_attention_heads),):
+        raise ValueError(
+            f"attention sink must have shape {(int(config.num_attention_heads),)}, got {tuple(attn_sink.shape)}"
+        )
+    sink = (
+        attn_sink.reshape(1, int(config.num_attention_heads), 1, 1)
+        .expand(1, int(config.num_attention_heads), int(token_rows), 1)
+        .contiguous()
+        .to(torch.bfloat16)
+    )
+    return ttnn.from_torch(
+        sink,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+
+
 def _ttnn_router_path(
     ffn_norm_output,
     *,
@@ -3481,6 +3764,34 @@ def _to_tt_rope_tensors(
     )
 
 
+def _to_tt_rope_position_tensors(
+    config: DeepSeekV4FlashConfig,
+    *,
+    layer: int,
+    positions: Sequence[int],
+    device,
+    dtype,
+    memory_config,
+):
+    cos, sin = _torch_rope_cos_sin_for_positions(config, layer=layer, positions=positions)
+    return (
+        ttnn.from_torch(
+            cos,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+        ttnn.from_torch(
+            sin,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        ),
+    )
+
+
 def _torch_rope_cos_sin(
     config: DeepSeekV4FlashConfig,
     *,
@@ -3495,6 +3806,24 @@ def _torch_rope_cos_sin(
     )[int(start_pos) : int(start_pos) + int(seq_len)]
     cos = torch.stack((freqs.real, freqs.real), dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
     sin = torch.stack((freqs.imag, freqs.imag), dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos.contiguous().to(torch.bfloat16), sin.contiguous().to(torch.bfloat16)
+
+
+def _torch_rope_cos_sin_for_positions(
+    config: DeepSeekV4FlashConfig,
+    *,
+    layer: int,
+    positions: Sequence[int],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if not positions:
+        raise ValueError("positions must contain at least one row")
+    max_position = max(int(value) for value in positions)
+    if max_position < 0:
+        raise ValueError(f"RoPE positions must be non-negative, got {positions}")
+    freqs = precompute_deepseek_v4_rope_frequencies(config, layer=layer, seq_len=max_position + 1)
+    selected_freqs = freqs[torch.tensor([int(value) for value in positions], dtype=torch.long)]
+    cos = torch.stack((selected_freqs.real, selected_freqs.real), dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack((selected_freqs.imag, selected_freqs.imag), dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
     return cos.contiguous().to(torch.bfloat16), sin.contiguous().to(torch.bfloat16)
 
 
@@ -3737,6 +4066,150 @@ def _sum_ttnn_tensors(tensors, *, memory_config):
     return result
 
 
+def _ttnn_select_cache_rows(
+    kv_cache,
+    *,
+    selected_row_idxs,
+    cache_len: int,
+    head_dim: int,
+    memory_config,
+):
+    kv_cache_table = ttnn.reshape(kv_cache, (int(cache_len), int(head_dim)))
+    selected_rows = ttnn.embedding(
+        selected_row_idxs,
+        kv_cache_table,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+    return ttnn.unsqueeze_to_4D(selected_rows)
+
+
+def _ttnn_selected_rows_dense_attention(
+    *,
+    q_output,
+    selected_attention_cache_window,
+    attention_mode: str,
+    config: DeepSeekV4FlashConfig,
+    q_head_norm,
+    query_rope_cos,
+    query_rope_sin,
+    key_rope_cos,
+    key_rope_sin,
+    rope_trans_mat,
+    attention_sink_logits,
+    memory_config,
+) -> dict[str, object]:
+    attention_mode = _validate_attention_mode(attention_mode)
+    if attention_mode != TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE:
+        raise ValueError(f"selected-row dense attention requires {TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE!r}")
+    _validate_qk_softmax_attention_config(config)
+    token_count = int(q_output.shape[-2])
+    selected_count = int(selected_attention_cache_window.shape[-2])
+    num_heads = int(config.num_attention_heads)
+    head_dim = int(config.head_dim)
+    rope_dim = int(config.qk_rope_head_dim)
+    nope_dim = head_dim - rope_dim
+    attention_output_dim = num_heads * head_dim
+    if selected_count <= 0:
+        raise ValueError("selected-row dense attention requires at least one selected cache row")
+    if int(q_output.shape[-1]) != attention_output_dim:
+        raise ValueError(f"q_output width must be {attention_output_dim}, got {q_output.shape[-1]}")
+    if int(selected_attention_cache_window.shape[-1]) != head_dim:
+        raise ValueError(
+            f"selected attention cache window width must be {head_dim}, "
+            f"got {selected_attention_cache_window.shape[-1]}"
+        )
+
+    q_heads_token_major = ttnn.reshape(q_output, (1, token_count, num_heads, head_dim))
+    q_heads_pre_norm = ttnn.transpose(q_heads_token_major, 1, 2, memory_config=memory_config)
+    q_heads_norm = ttnn.rms_norm(
+        q_heads_pre_norm,
+        weight=q_head_norm,
+        epsilon=float(config.rms_norm_eps),
+        memory_config=memory_config,
+    )
+    q_nope = ttnn.slice(
+        q_heads_norm,
+        (0, 0, 0, 0),
+        (1, num_heads, token_count, nope_dim),
+        memory_config=memory_config,
+    )
+    q_rope = ttnn.slice(
+        q_heads_norm,
+        (0, 0, 0, nope_dim),
+        (1, num_heads, token_count, head_dim),
+        memory_config=memory_config,
+    )
+    q_rope_rotated = ttnn.experimental.rotary_embedding_llama(
+        q_rope,
+        query_rope_cos,
+        query_rope_sin,
+        rope_trans_mat,
+        is_decode_mode=False,
+        memory_config=memory_config,
+    )
+    q_heads = ttnn.concat([q_nope, q_rope_rotated], dim=-1, memory_config=memory_config)
+
+    key_cache_nope = ttnn.slice(
+        selected_attention_cache_window,
+        (0, 0, 0, 0),
+        (1, 1, selected_count, nope_dim),
+        memory_config=memory_config,
+    )
+    key_cache_rope = ttnn.slice(
+        selected_attention_cache_window,
+        (0, 0, 0, nope_dim),
+        (1, 1, selected_count, head_dim),
+        memory_config=memory_config,
+    )
+    key_cache_rope_rotated = ttnn.experimental.rotary_embedding_llama(
+        key_cache_rope,
+        key_rope_cos,
+        key_rope_sin,
+        rope_trans_mat,
+        is_decode_mode=False,
+        memory_config=memory_config,
+    )
+    key_cache = ttnn.concat([key_cache_nope, key_cache_rope_rotated], dim=-1, memory_config=memory_config)
+    key_heads = ttnn.repeat(key_cache, ttnn.Shape([1, num_heads, 1, 1]))
+    value_heads = ttnn.repeat(selected_attention_cache_window, ttnn.Shape([1, num_heads, 1, 1]))
+    key_heads_transposed = ttnn.transpose(key_heads, -2, -1, memory_config=memory_config)
+    qk_scores = ttnn.matmul(q_heads, key_heads_transposed, memory_config=memory_config)
+    qk_scores = ttnn.mul(qk_scores, 1.0 / math.sqrt(float(head_dim)), memory_config=memory_config)
+    attention_scores_with_sink = ttnn.concat([qk_scores, attention_sink_logits], dim=-1, memory_config=memory_config)
+    attention_probs_with_sink = ttnn.softmax(attention_scores_with_sink, dim=-1, memory_config=memory_config)
+    attention_probs = ttnn.slice(
+        attention_probs_with_sink,
+        (0, 0, 0, 0),
+        (1, num_heads, token_count, selected_count),
+        memory_config=memory_config,
+    )
+    attention_context_heads = ttnn.matmul(attention_probs, value_heads, memory_config=memory_config)
+    attention_context_token_major = ttnn.transpose(attention_context_heads, 1, 2, memory_config=memory_config)
+    attention_output = ttnn.reshape(attention_context_token_major, (1, 1, token_count, attention_output_dim))
+    return {
+        "attention_q_heads_pre_norm": q_heads_pre_norm,
+        "attention_q_heads_norm": q_heads_norm,
+        "attention_q_nope": q_nope,
+        "attention_q_rope": q_rope,
+        "attention_q_rope_rotated": q_rope_rotated,
+        "attention_q_heads": q_heads,
+        "attention_key_cache_nope": key_cache_nope,
+        "attention_key_cache_rope": key_cache_rope,
+        "attention_key_cache_rope_rotated": key_cache_rope_rotated,
+        "attention_key_cache": key_cache,
+        "attention_key_heads": key_heads,
+        "attention_value_heads": value_heads,
+        "qk_scores": qk_scores,
+        "attention_sink_logits": attention_sink_logits,
+        "attention_scores_with_sink": attention_scores_with_sink,
+        "attention_probs_with_sink": attention_probs_with_sink,
+        "attention_probs": attention_probs,
+        "attention_context_heads": attention_context_heads,
+        "attention_output": attention_output,
+    }
+
+
 def _ttnn_fixed_window_attention(
     *,
     q_output,
@@ -3929,6 +4402,101 @@ def _torch_fixed_window_attention(
         "attention_key_heads": key_heads.to(torch.bfloat16),
         "attention_value_heads": value_heads.to(torch.bfloat16),
         "qk_scores": qk_scores,
+        "attention_probs": attention_probs,
+        "attention_context_heads": attention_context_heads,
+        "attention_output": attention_output,
+    }
+
+
+def _torch_selected_rows_dense_attention(
+    *,
+    q_output: torch.Tensor,
+    selected_attention_cache_window: torch.Tensor,
+    selected_row_positions: Sequence[int],
+    attn_sink: torch.Tensor,
+    attention_mode: str,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    start_pos: int,
+) -> dict[str, torch.Tensor]:
+    attention_mode = _validate_attention_mode(attention_mode)
+    if attention_mode != TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE:
+        raise ValueError(f"selected-row dense attention requires {TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE!r}")
+    _validate_qk_softmax_attention_config(config)
+    batch_size, _, token_count, attention_output_dim = q_output.shape
+    num_heads = int(config.num_attention_heads)
+    head_dim = int(config.head_dim)
+    rope_dim = int(config.qk_rope_head_dim)
+    nope_dim = head_dim - rope_dim
+    selected_count = len(selected_row_positions)
+    expected_output_dim = num_heads * head_dim
+    if int(attention_output_dim) != expected_output_dim:
+        raise ValueError(f"q_output width must be {expected_output_dim}, got {attention_output_dim}")
+    if tuple(selected_attention_cache_window.shape) != (batch_size, 1, selected_count, head_dim):
+        raise ValueError(
+            "selected_attention_cache_window must have shape "
+            f"{(batch_size, 1, selected_count, head_dim)}, got {tuple(selected_attention_cache_window.shape)}"
+        )
+
+    query_freqs_cis = precompute_deepseek_v4_rope_frequencies(
+        config,
+        layer=layer,
+        seq_len=int(start_pos) + int(token_count),
+    )[int(start_pos) : int(start_pos) + int(token_count)]
+    q_heads_token_major_pre_norm = q_output[:, 0].reshape(batch_size, token_count, num_heads, head_dim).contiguous()
+    q_heads_token_major = rms_norm(
+        q_heads_token_major_pre_norm,
+        torch.ones(head_dim, dtype=torch.bfloat16),
+        eps=float(config.rms_norm_eps),
+    )
+    q_nope_token_major, q_rope_token_major = q_heads_token_major.split([nope_dim, rope_dim], dim=-1)
+    q_rope_rotated_token_major = apply_deepseek_v4_rotary(q_rope_token_major.contiguous(), query_freqs_cis)
+    q_heads = torch.cat([q_nope_token_major, q_rope_rotated_token_major], dim=-1).transpose(1, 2).contiguous()
+
+    selected_freqs_cis = precompute_deepseek_v4_rope_frequencies(
+        config,
+        layer=layer,
+        seq_len=max(int(value) for value in selected_row_positions) + 1,
+    )[torch.tensor([int(value) for value in selected_row_positions], dtype=torch.long)]
+    key_cache_projection = selected_attention_cache_window[:, 0].contiguous()
+    key_cache_nope, key_cache_rope = key_cache_projection.split([nope_dim, rope_dim], dim=-1)
+    key_cache_rope_rotated = apply_deepseek_v4_rotary(key_cache_rope.contiguous(), selected_freqs_cis)
+    key_cache = torch.cat([key_cache_nope, key_cache_rope_rotated], dim=-1).contiguous()
+    key_heads = key_cache.unsqueeze(1).repeat(1, num_heads, 1, 1).contiguous()
+    value_heads = selected_attention_cache_window.repeat(1, num_heads, 1, 1).contiguous()
+    qk_scores = torch.matmul(q_heads.float(), key_heads.transpose(-2, -1).float())
+    qk_scores = (qk_scores * (1.0 / math.sqrt(float(head_dim)))).to(torch.bfloat16)
+    attention_sink_logits = (
+        attn_sink.reshape(1, num_heads, 1, 1).expand(batch_size, num_heads, token_count, 1).contiguous()
+    )
+    attention_scores_with_sink = torch.cat([qk_scores.float(), attention_sink_logits.float()], dim=-1).to(
+        torch.bfloat16
+    )
+    attention_probs_with_sink = torch.softmax(attention_scores_with_sink.float(), dim=-1).to(torch.bfloat16)
+    attention_probs = attention_probs_with_sink[..., :selected_count].contiguous()
+    attention_context_heads = torch.matmul(attention_probs.float(), value_heads.float()).to(torch.bfloat16)
+    attention_output = (
+        attention_context_heads.transpose(1, 2)
+        .reshape(batch_size, 1, token_count, attention_output_dim)
+        .to(torch.bfloat16)
+    )
+    return {
+        "attention_q_heads_pre_norm": q_heads_token_major_pre_norm.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_heads_norm": q_heads_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_nope": q_nope_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_rope": q_rope_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_rope_rotated": q_rope_rotated_token_major.transpose(1, 2).contiguous().to(torch.bfloat16),
+        "attention_q_heads": q_heads.to(torch.bfloat16),
+        "attention_key_cache_nope": key_cache_nope.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_cache_rope": key_cache_rope.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_cache_rope_rotated": key_cache_rope_rotated.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_cache": key_cache.unsqueeze(1).contiguous().to(torch.bfloat16),
+        "attention_key_heads": key_heads.to(torch.bfloat16),
+        "attention_value_heads": value_heads.to(torch.bfloat16),
+        "qk_scores": qk_scores,
+        "attention_sink_logits": attention_sink_logits.to(torch.bfloat16),
+        "attention_scores_with_sink": attention_scores_with_sink,
+        "attention_probs_with_sink": attention_probs_with_sink,
         "attention_probs": attention_probs,
         "attention_context_heads": attention_context_heads,
         "attention_output": attention_output,
@@ -4289,6 +4857,13 @@ def _validate_attention_read_api_combination(
     attention_mode = _validate_attention_mode(attention_mode)
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
+    if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        if attention_mode != TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE:
+            raise ValueError(
+                f"{TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE!r} requires "
+                f"attention_mode={TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE!r}"
+            )
+        return
     if attention_read_api != TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE:
         return
     if attention_mode != TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE:
@@ -4306,6 +4881,25 @@ def _validate_attention_read_api_combination(
             f"{TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE!r} requires "
             f"rope_position_api={TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR!r}"
         )
+
+
+def _validate_selected_cache_rows(
+    selected_cache_rows: Sequence[int] | None,
+    *,
+    cache_len: int,
+    attention_read_api: str,
+) -> tuple[int, ...]:
+    if attention_read_api != TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        return ()
+    if selected_cache_rows is None:
+        raise ValueError(f"{TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE!r} requires selected_cache_rows")
+    rows = tuple(int(value) for value in selected_cache_rows)
+    if not rows:
+        raise ValueError(f"{TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE!r} requires at least one row")
+    invalid = [row for row in rows if row < 0 or row >= int(cache_len)]
+    if invalid:
+        raise ValueError(f"selected cache rows {invalid} are outside cache_len {cache_len}")
+    return rows
 
 
 def _validate_cache_update_api(cache_update_api: str) -> str:
@@ -4390,6 +4984,14 @@ def _traceable_decode_common_ops(
         )
     if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE:
         ops.append("ttnn.slice(kv_cache_fixed_window)")
+    if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        ops.extend(
+            [
+                "ttnn.reshape(kv_cache_to_embedding_table)",
+                "ttnn.embedding(selected_row_idxs,kv_cache_table)",
+                "ttnn.unsqueeze_to_4D(selected_kv_window)",
+            ]
+        )
     return ops
 
 
@@ -4439,6 +5041,26 @@ def _traceable_decode_attention_ops(
                 "ttnn.experimental.rotary_embedding_llama(paged_sdpa_output_rope,inverse)",
                 "ttnn.concat(paged_sdpa_output_nope,paged_sdpa_output_rope_unrotated)",
                 "ttnn.reshape(paged_sdpa_output_to_attention_output)",
+            ]
+        )
+        return ops
+    if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        ops.extend(
+            [
+                "ttnn.slice(selected_kv_window_to_k_nope/k_rope)",
+                "ttnn.experimental.rotary_embedding_llama(selected_k_rope_static_rows)",
+                "ttnn.concat(selected_k_nope,selected_k_rope_rotated)",
+                "ttnn.repeat(selected_k_cache_to_attention_heads)",
+                "ttnn.repeat(selected_v_cache_to_attention_heads)",
+                "ttnn.transpose(selected_k_heads_to_k_heads_transposed)",
+                "ttnn.matmul(q_heads,selected_k_heads_transposed)",
+                "ttnn.mul(selected_qk_scores,1/sqrt(head_dim))",
+                "ttnn.concat(selected_qk_scores,attention_sink_logits)",
+                "ttnn.softmax(selected_scores_with_sink)",
+                "ttnn.slice(selected_attention_probs_drop_sink)",
+                "ttnn.matmul(selected_attention_probs,selected_value_heads)",
+                "ttnn.transpose(selected_context_heads_to_token_major)",
+                "ttnn.reshape(selected_context_heads_to_attention_output)",
             ]
         )
         return ops
@@ -4600,6 +5222,25 @@ def _traceable_decode_reference_ops(
             "torch.apply_deepseek_v4_rotary(attention_output_rope,inverse)",
             "torch.reshape(paged_attention_output_to_attention_output)",
         ]
+    elif attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE:
+        attention_ops = [
+            "torch.index_select(kv_cache,static_selected_rows)",
+            "torch.reshape(q_output_to_q_heads)",
+            "torch.rms_norm_reference(q_heads)",
+            "torch.split(q_nope/q_rope)",
+            "torch.apply_deepseek_v4_rotary(q_rope)",
+            "torch.split(selected_k_nope/selected_k_rope)",
+            "torch.apply_deepseek_v4_rotary(selected_k_rope_static_rows)",
+            "torch.repeat(selected_k_cache_to_attention_heads)",
+            "torch.repeat(selected_v_cache_to_attention_heads)",
+            "torch.matmul(q_heads,selected_k_heads_transposed)",
+            "torch.mul(selected_qk_scores,1/sqrt(head_dim))",
+            "torch.concat(selected_qk_scores,attention_sink_logits)",
+            "torch.softmax(selected_scores_with_sink)",
+            "torch.slice(drop_sink_probability_column)",
+            "torch.matmul(selected_attention_probs,selected_value_heads)",
+            "torch.reshape(selected_context_to_attention_output)",
+        ]
     else:
         attention_ops = (
             [
@@ -4686,6 +5327,7 @@ def _position_dependent_decode_inventory(
     rope_position_api = _validate_rope_position_api(rope_position_api)
     attention_read_api = _validate_attention_read_api(attention_read_api)
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    uses_selected_rows_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
     return {
         "dynamic_cache_write": {
             "status": "used" if cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR else "available",
@@ -4739,14 +5381,27 @@ def _position_dependent_decode_inventory(
                 "replay across cur_pos_tensor values and read different paged cache rows"
             ),
         },
+        "selected_row_dense_attention": {
+            "status": "used" if uses_selected_rows_read else "available_not_integrated",
+            "api": "ttnn.embedding(selected_row_idxs, kv_cache_table) + TTNN matmul/softmax/value attention",
+            "row_id_source": "static_host_preflight" if uses_selected_rows_read else None,
+            "selected_rows_dynamic_in_trace": False,
+            "current_module_path": uses_selected_rows_read,
+            "attention_sink": "manual sink logit concatenated before ttnn.softmax" if uses_selected_rows_read else None,
+            "next_step": (
+                "produce selected rows on device from the learned indexer and gather from a real compressed-KV cache"
+            ),
+        },
         "static_bound_ops_remaining": [
             *(
                 []
-                if uses_paged_sdpa_read
+                if uses_paged_sdpa_read or uses_selected_rows_read
                 else ["ttnn.slice(kv_cache_fixed_window) start/end are Python arguments in this module path"]
             ),
             "static routed expert module dispatch is still selected by host preflight",
-            "DeepSeek sparse indexer/sink semantics are not represented by the dense paged SDPA attention path"
+            "selected row ids are static host preflight rather than produced by a protected TTNN indexer"
+            if uses_selected_rows_read
+            else "DeepSeek sparse indexer/sink semantics are not represented by the dense paged SDPA attention path"
             if uses_paged_sdpa_read
             else "DeepSeek sparse indexer/sink semantics are not represented by the fixed-window dense attention path",
         ],
@@ -4760,6 +5415,7 @@ def _deepseek_attention_reference_inventory(
     attention_read_api: str,
 ) -> dict[str, Any]:
     attention_read_api = _validate_attention_read_api(attention_read_api)
+    uses_selected_rows_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
     hidden = int(config.hidden_size)
     q_rank = int(config.q_lora_rank)
     heads = int(config.num_attention_heads)
@@ -4813,6 +5469,8 @@ def _deepseek_attention_reference_inventory(
             "trace_status": (
                 "explicit paged K and V cache tensors are populated from the same cache-ready fused KV rows"
                 if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+                else "selected rows are gathered from the projected K/V cache and reused as the value channel"
+                if uses_selected_rows_read
                 else "fixed-window path still uses the projected KV cache as the value source"
             ),
             "post_attention_inverse_rope": attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
@@ -4867,6 +5525,8 @@ def _deepseek_attention_reference_inventory(
             "expected_shape": [heads],
             "trace_status": "integrated_in_paged_sdpa_decode"
             if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+            else "integrated_in_selected_rows_dense_attention"
+            if uses_selected_rows_read
             else "loaded_not_integrated_in_fixed_slice_attention",
             "ttnn_decode_layout": [_padded_attention_heads(heads), ttnn.TILE_SIZE],
             "ttnn_scaling_note": (
@@ -4878,6 +5538,9 @@ def _deepseek_attention_reference_inventory(
             "replace contiguous paged SDPA rows with sparse/indexer-selected row lists; attention sink is already "
             "wired into the paged SDPA decode path"
             if attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+            else "move selected-row ids from static host preflight into protected trace indexer generation and wire "
+            "real compressed-KV cache update/read"
+            if uses_selected_rows_read
             else "replace fixed-window dense softmax with sparse/indexer-selected row lists and attn_sink semantics"
         ),
     }
@@ -4896,6 +5559,8 @@ def _sparse_attention_semantics_summary(
     cache_update_api: str,
     rope_position_api: str,
     uses_paged_sdpa_read: bool,
+    uses_selected_rows_read: bool,
+    selected_cache_rows_by_step: Mapping[int, Sequence[int]],
 ) -> dict[str, Any]:
     compress_ratio = int(config.compress_ratios[int(layer)])
     tensor_inventory = _sparse_attention_tensor_inventory(snapshot_dir, config=config, layer=layer)
@@ -4906,7 +5571,11 @@ def _sparse_attention_semantics_summary(
     if indexer_expected and indexer_missing:
         sparse_indexer_status = "expected_indexer_tensors_missing"
     elif indexer_expected:
-        sparse_indexer_status = "real_indexer_topk_materialized_outside_trace_not_consumed_by_attention"
+        sparse_indexer_status = (
+            "real_indexer_topk_materialized_outside_trace_consumed_by_selected_rows_dense_attention"
+            if uses_selected_rows_read
+            else "real_indexer_topk_materialized_outside_trace_not_consumed_by_attention"
+        )
     elif compress_ratio > 0:
         sparse_indexer_status = f"not_expected_for_compress_ratio_{compress_ratio}; hf_uses_reference_compress_topk"
     else:
@@ -4921,14 +5590,24 @@ def _sparse_attention_semantics_summary(
         activations=activations,
         route_plans=route_plans,
         uses_paged_sdpa_read=uses_paged_sdpa_read,
+        uses_selected_rows_read=uses_selected_rows_read,
+        selected_cache_rows_by_step=selected_cache_rows_by_step,
     )
     attention_sink_status = (
-        "used_in_paged_sdpa_decode" if uses_paged_sdpa_read else "loaded_not_integrated_in_fixed_slice_attention"
+        "used_in_paged_sdpa_decode"
+        if uses_paged_sdpa_read
+        else "used_in_selected_rows_dense_attention"
+        if uses_selected_rows_read
+        else "loaded_not_integrated_in_fixed_slice_attention"
     )
     return {
-        "status": "real_indexer_rows_materialized_attention_read_blocked"
-        if uses_paged_sdpa_read
-        else "real_indexer_rows_materialized_fixed_slice_attention_blocked",
+        "status": (
+            "real_indexer_rows_materialized_attention_read_blocked"
+            if uses_paged_sdpa_read
+            else "real_indexer_rows_consumed_by_selected_rows_dense_attention"
+            if uses_selected_rows_read
+            else "real_indexer_rows_materialized_fixed_slice_attention_blocked"
+        ),
         "hf_reference_locations": {
             "attention_forward": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:501",
             "indexer_topk": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/model.py:381",
@@ -4941,21 +5620,25 @@ def _sparse_attention_semantics_summary(
         "index_topk": int(config.index_topk),
         "sparse_indexer_status": sparse_indexer_status,
         "selected_cache_rows": selected_rows,
-        "real_indexer_selected_rows_consumed_by_attention": False,
+        "real_indexer_selected_rows_consumed_by_attention": bool(selected_rows["selected_rows_consumed_by_attention"]),
         "attention_sink_status": attention_sink_status,
         "attention_sink": {
             "key": f"layers.{layer}.attn.attn_sink",
             "metadata": tensor_inventory["metadata_by_key"].get(f"layers.{layer}.attn.attn_sink"),
-            "in_trace": uses_paged_sdpa_read,
+            "in_trace": uses_paged_sdpa_read or uses_selected_rows_read,
             "ttnn_decode_shape": [_padded_attention_heads(int(config.num_attention_heads)), ttnn.TILE_SIZE]
             if uses_paged_sdpa_read
             else None,
             "ttnn_api": "ttnn.transformer.paged_scaled_dot_product_attention_decode(..., attention_sink=...)"
             if uses_paged_sdpa_read
+            else "ttnn.concat(qk_scores, attention_sink_logits) -> ttnn.softmax -> ttnn.slice(selected_probs)"
+            if uses_selected_rows_read
             else None,
             "scaling_note": (
                 "uploaded as attn_sink / head_dim**-0.5 because TTNN SDPA decode scales sink logits internally"
                 if uses_paged_sdpa_read
+                else "unscaled sink logits are concatenated to selected-row QK scores before softmax"
+                if uses_selected_rows_read
                 else "not consumed by the fixed-slice softmax path"
             ),
         },
@@ -4967,8 +5650,16 @@ def _sparse_attention_semantics_summary(
         "dynamic_cache_write": cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
         "dynamic_rope": rope_position_api == TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
         "dynamic_current_position": uses_paged_sdpa_read,
-        "k_v_source": "fused_cache_ready_kv_reuse" if uses_paged_sdpa_read else "projected_kv_cache_reuse",
-        "selected_row_attention_blocker": {
+        "k_v_source": (
+            "fused_cache_ready_kv_reuse"
+            if uses_paged_sdpa_read
+            else "selected_rows_from_projected_kv_cache_reuse"
+            if uses_selected_rows_read
+            else "projected_kv_cache_reuse"
+        ),
+        "selected_row_attention_blocker": None
+        if uses_selected_rows_read
+        else {
             "ttnn_api": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
             "ttnn_api_location": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.hpp:29",
             "selected_rows_consumed_by_attention": False,
@@ -5006,15 +5697,30 @@ def _sparse_attention_semantics_summary(
             ),
             "evidence": selected_rows["attention_read_blocker"],
         },
+        "selected_row_attention_proof": selected_rows["selected_row_attention_proof"],
         "smallest_next_step": (
-            "add a selected-row attention bridge: materialize learned indexer topk rows into a traceable device "
+            "move learned indexer top-k generation into the protected trace and replace the projected-cache "
+            "selected rows with the real compressed-KV sparse cache update/read path"
+            if uses_selected_rows_read
+            else "add a selected-row attention bridge: materialize learned indexer topk rows into a traceable device "
             "index/page-table representation, gather the corresponding cache-ready K/V rows, then feed only those "
             "rows plus attention_sink into a TTNN sparse decode attention kernel"
         ),
         "limitations": [
             "learned indexer top-k rows are materialized only by a host preflight probe, not by the protected trace",
-            "compressed-KV cache rows are not produced or updated by this paged path",
-            "paged SDPA still reads a contiguous cur_pos/page-table prefix rather than HF sparse_attn topk_idxs rows",
+            (
+                "selected rows are compacted from the projected K/V cache seed; the real compressed-KV sparse cache "
+                "update/read path is not implemented"
+                if uses_selected_rows_read
+                else "compressed-KV cache rows are not produced or updated by this paged path"
+            ),
+            *(
+                []
+                if uses_selected_rows_read
+                else [
+                    "paged SDPA still reads a contiguous cur_pos/page-table prefix rather than HF sparse_attn topk_idxs rows"
+                ]
+            ),
         ],
     }
 
@@ -5075,6 +5781,8 @@ def _sparse_selected_cache_rows_summary(
     activations: Sequence[torch.Tensor],
     route_plans: Sequence[TraceableDecodeRoutePlan],
     uses_paged_sdpa_read: bool,
+    uses_selected_rows_read: bool,
+    selected_cache_rows_by_step: Mapping[int, Sequence[int]],
 ) -> dict[str, Any]:
     compress_ratio = int(config.compress_ratios[int(layer)])
     real_indexer_rows = _real_indexer_selected_rows_by_step(
@@ -5093,10 +5801,23 @@ def _sparse_selected_cache_rows_summary(
             position=int(position),
             real_indexer_selection=real_indexer_rows.get(step),
             uses_paged_sdpa_read=uses_paged_sdpa_read,
+            uses_selected_rows_read=uses_selected_rows_read,
         )
         for step, position in enumerate(positions)
     ]
+    if uses_selected_rows_read:
+        for step, rows in selected_cache_rows_by_step.items():
+            if step < len(per_step):
+                materialized_rows = per_step[step]["runtime_rows"]
+                if materialized_rows is not None and [int(value) for value in rows] != materialized_rows:
+                    raise ValueError(
+                        f"selected row preflight mismatch at step {step}: "
+                        f"{[int(value) for value in rows]} != {materialized_rows}"
+                    )
     derived_from_real_indexer = any(bool(step.get("derived_from_real_indexer", False)) for step in per_step)
+    selected_rows_consumed = bool(
+        uses_selected_rows_read and per_step and per_step[0].get("selected_rows_consumed_by_attention", False)
+    )
     return {
         "source": (
             "hf_window_topk_plus_reference_compress_topk"
@@ -5109,15 +5830,61 @@ def _sparse_selected_cache_rows_summary(
         "real_indexer_topk_executed_outside_trace": derived_from_real_indexer,
         "first_step_topk_shape": per_step[0]["runtime_topk_shape"] if per_step else None,
         "first_step_runtime_rows": per_step[0]["runtime_rows"] if per_step else None,
-        "selected_rows_consumed_by_attention": False,
-        "attention_read_blocker": _selected_row_attention_blocker_summary(
+        "selected_rows_consumed_by_attention": selected_rows_consumed,
+        "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+        "compact_window_shape": per_step[0]["compact_window_shape"] if per_step else None,
+        "attention_read_blocker": None
+        if uses_selected_rows_read
+        else _selected_row_attention_blocker_summary(
             config=config,
             layer=layer,
             first_step=per_step[0] if per_step else None,
             uses_paged_sdpa_read=uses_paged_sdpa_read,
         ),
+        "selected_row_attention_proof": _selected_row_attention_proof_summary(per_step[0] if per_step else None)
+        if uses_selected_rows_read
+        else None,
         "per_step": per_step,
     }
+
+
+def _preflight_selected_cache_rows_by_step(
+    *,
+    snapshot_dir: Path,
+    config: DeepSeekV4FlashConfig,
+    layer: int,
+    positions: Sequence[int],
+    weights: TraceableDecodeWeights,
+    activations: Sequence[torch.Tensor],
+) -> dict[int, tuple[int, ...]]:
+    real_indexer_rows = _real_indexer_selected_rows_by_step(
+        snapshot_dir=snapshot_dir,
+        config=config,
+        layer=layer,
+        positions=positions,
+        weights=weights,
+        activations=activations,
+        route_plans=None,
+    )
+    selected_rows_by_step: dict[int, tuple[int, ...]] = {}
+    for step, position in enumerate(positions):
+        row_detail = _sparse_selected_cache_rows_for_position(
+            config=config,
+            layer=layer,
+            position=int(position),
+            real_indexer_selection=real_indexer_rows.get(step),
+            uses_paged_sdpa_read=False,
+            uses_selected_rows_read=True,
+        )
+        runtime_rows = row_detail["runtime_rows"]
+        if runtime_rows is None:
+            reason = row_detail["compressed_rows_source"]
+            raise RuntimeError(
+                f"{TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE} requires materialized selected rows "
+                f"for step {step} at position {int(position)}; source/status: {reason}"
+            )
+        selected_rows_by_step[step] = tuple(int(value) for value in runtime_rows)
+    return selected_rows_by_step
 
 
 def _sparse_selected_cache_rows_for_position(
@@ -5127,6 +5894,7 @@ def _sparse_selected_cache_rows_for_position(
     position: int,
     real_indexer_selection: Mapping[str, Any] | None,
     uses_paged_sdpa_read: bool,
+    uses_selected_rows_read: bool = False,
 ) -> dict[str, Any]:
     compress_ratio = int(config.compress_ratios[int(layer)])
     window_topk = window_topk_indices(int(config.sliding_window), 1, 1, int(position)).to(torch.int32)
@@ -5169,6 +5937,8 @@ def _sparse_selected_cache_rows_for_position(
             "learned indexer selected rows require indexer compressor/cache tensors and a TTNN selected-row "
             "attention API"
         )
+    elif uses_selected_rows_read:
+        blocker = None
     else:
         blocker = (
             "selected rows are reported but do not drive attention because this slice lacks a TTNN gather-to-SDPA "
@@ -5190,8 +5960,13 @@ def _sparse_selected_cache_rows_for_position(
         "runtime_topk_shape": [1, 1, int(window_topk.shape[-1]) + compressed_topk_width],
         "runtime_rows": runtime_rows,
         "paged_sdpa_dense_rows": _cache_rows_read_for_position(int(position)) if uses_paged_sdpa_read else None,
-        "rows_drive_attention_in_trace": False,
-        "selected_rows_consumed_by_attention": False,
+        "compact_window_shape": [1, 1, len(runtime_rows), int(config.head_dim)] if runtime_rows is not None else None,
+        "rows_drive_attention_in_trace": uses_selected_rows_read and runtime_rows is not None,
+        "selected_rows_consumed_by_attention": uses_selected_rows_read and runtime_rows is not None,
+        "selected_row_ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+        "kv_row_compaction": "ttnn.embedding(selected_row_idxs, kv_cache_table)"
+        if uses_selected_rows_read and runtime_rows is not None
+        else None,
         "blocker": blocker,
     }
 
@@ -5204,7 +5979,7 @@ def _real_indexer_selected_rows_by_step(
     positions: Sequence[int],
     weights: TraceableDecodeWeights,
     activations: Sequence[torch.Tensor],
-    route_plans: Sequence[TraceableDecodeRoutePlan],
+    route_plans: Sequence[TraceableDecodeRoutePlan] | None,
 ) -> dict[int, dict[str, Any]]:
     compress_ratio = int(config.compress_ratios[int(layer)])
     if compress_ratio != 4:
@@ -5245,7 +6020,7 @@ def _real_indexer_selected_rows_by_step(
     results: dict[int, dict[str, Any]] = {}
     for step, position in enumerate(positions):
         activation = activations[min(step, len(activations) - 1)]
-        route_plan = route_plans[min(step, len(route_plans) - 1)]
+        route_plan = None if route_plans is None else route_plans[min(step, len(route_plans) - 1)]
         try:
             results[step] = _real_indexer_selected_rows_for_step(
                 indexer_weights=indexer_weights,
@@ -5254,7 +6029,7 @@ def _real_indexer_selected_rows_by_step(
                 layer=layer,
                 activation=activation,
                 position=int(position),
-                decode_token_index=int(route_plan.decode_token_index),
+                decode_token_index=0 if route_plan is None else int(route_plan.decode_token_index),
             )
         except Exception as exc:
             results[step] = {
@@ -5414,6 +6189,30 @@ def _selected_row_attention_blocker_summary(
     }
 
 
+def _selected_row_attention_proof_summary(first_step: Mapping[str, Any] | None) -> dict[str, Any]:
+    selected_rows = None if first_step is None else first_step.get("runtime_rows")
+    compact_shape = None if first_step is None else first_step.get("compact_window_shape")
+    return {
+        "selected_rows_consumed_by_attention": bool(selected_rows),
+        "selected_row_ids_source": "static_host_preflight",
+        "selected_rows": selected_rows,
+        "compact_window_shape": compact_shape,
+        "kv_row_compaction": "ttnn.embedding(selected_row_idxs, kv_cache_table)",
+        "attention_compute": [
+            "ttnn.matmul(q_heads, selected_key_heads^T)",
+            "ttnn.concat(qk_scores, attention_sink_logits)",
+            "ttnn.softmax(scores_with_sink)",
+            "ttnn.slice(drop_sink_probability_column)",
+            "ttnn.matmul(attention_probs, selected_value_heads)",
+        ],
+        "kv_source": "device_resident_projected_kv_cache",
+        "limitations": [
+            "selected row ids are not produced by the protected trace",
+            "compressed rows are read from the current projected K/V cache tensor, not a real compressed-KV cache",
+        ],
+    }
+
+
 def _valid_int_values(values: torch.Tensor) -> list[int]:
     return [int(value) for value in values.reshape(-1).tolist() if int(value) >= 0]
 
@@ -5430,12 +6229,15 @@ def _attention_path_summary(
     cache_update_api: str = DEFAULT_TRACEABLE_DECODE_CACHE_UPDATE_API,
     rope_position_index: int | None = None,
     rope_position_api: str = DEFAULT_TRACEABLE_DECODE_ROPE_POSITION_API,
+    selected_rows: Sequence[int] | None = None,
+    selected_rows_count: int | None = None,
 ) -> dict[str, Any]:
     attention_mode = _validate_attention_mode(attention_mode)
     attention_read_api = _validate_attention_read_api(attention_read_api)
     cache_update_api = _validate_cache_update_api(cache_update_api)
     rope_position_api = _validate_rope_position_api(rope_position_api)
     uses_paged_sdpa_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE
+    uses_selected_rows_read = attention_read_api == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
     width_repeat_factor = _attention_cache_repeat_factor(config)
     head_repeat_factor = _attention_head_repeat_factor(config)
     window_start = int(cache_update_index)
@@ -5460,9 +6262,13 @@ def _attention_path_summary(
         "cache_write_index_dynamic": cache_update_api == TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
         "cache_read_window_dynamic": uses_paged_sdpa_read,
         "dynamic_cache_read_current_position": uses_paged_sdpa_read,
-        "cache_read_window_position_source": "mutable_device_cur_pos_tensor"
-        if uses_paged_sdpa_read
-        else "static_python_slice_bounds",
+        "cache_read_window_position_source": (
+            "mutable_device_cur_pos_tensor"
+            if uses_paged_sdpa_read
+            else "static_host_preflight_selected_row_ids_device_tensor"
+            if uses_selected_rows_read
+            else "static_python_slice_bounds"
+        ),
         "cache_window": {
             "start": 0 if uses_paged_sdpa_read else window_start,
             "end_exclusive": cache_write_index + 1 if uses_paged_sdpa_read else window_end,
@@ -5471,6 +6277,18 @@ def _attention_path_summary(
             "logical_decode_row": int(cache_update_index),
             "updated_row_is_first_window_row": not uses_paged_sdpa_read,
             "static_padding_rows": 0 if uses_paged_sdpa_read else max(int(seq_len) - 1, 0),
+        },
+        "selected_rows": {
+            "consumed_by_attention": uses_selected_rows_read,
+            "ids": None if selected_rows is None else [int(value) for value in selected_rows],
+            "ids_source": "static_host_preflight" if uses_selected_rows_read else None,
+            "topk_shape": [1, 1, int(selected_rows_count)] if selected_rows_count is not None else None,
+            "compact_window_shape": [1, 1, int(selected_rows_count), int(config.head_dim)]
+            if selected_rows_count is not None
+            else None,
+            "kv_compaction_op": "ttnn.embedding(selected_row_idxs, kv_cache_table)"
+            if uses_selected_rows_read
+            else None,
         },
         "cache_expand": {
             "kv_output_dim": _kv_output_dim(config),
@@ -5482,6 +6300,8 @@ def _attention_path_summary(
             "op": (
                 "ttnn.transformer.paged_scaled_dot_product_attention_decode(..., cur_pos_tensor=...)"
                 if uses_paged_sdpa_read
+                else "ttnn.embedding(selected_row_idxs, kv_cache_table)"
+                if uses_selected_rows_read
                 else (
                     "ttnn.repeat(..., Shape([1, num_attention_heads, 1, 1]))"
                     if qk_mode
@@ -5492,9 +6312,13 @@ def _attention_path_summary(
         "kv_source": {
             "key_source": "paged_deepseek_v4_cache_ready_kv_projection_cache"
             if uses_paged_sdpa_read
+            else "static_selected_rows_projected_kv_cache"
+            if uses_selected_rows_read
             else "compressed_kv_projection_cache_window_split_nope_rope_with_rope_rotated",
             "value_source": "paged_deepseek_v4_cache_ready_kv_projection_cache_reused_as_value_channel"
             if uses_paged_sdpa_read
+            else "static_selected_rows_projected_kv_cache"
+            if uses_selected_rows_read
             else "compressed_kv_projection_cache_window",
             "key_value_share_same_cache_slice": True,
             "key_value_identical_in_trace": uses_paged_sdpa_read if qk_mode else True,
@@ -5503,6 +6327,8 @@ def _attention_path_summary(
             "kv_split_kind": (
                 "device_resident_paged_k_and_v_caches_from_deepseek_v4_cache_ready_fused_kv_projection"
                 if uses_paged_sdpa_read
+                else "device_resident_compact_selected_rows_from_single_projected_kv_cache"
+                if uses_selected_rows_read
                 else "device_resident_explicit_key_and_value_from_single_compressed_cache_window"
                 if qk_mode
                 else "none_legacy_q_plus_kv_blend"
@@ -5516,7 +6342,13 @@ def _attention_path_summary(
                 if uses_paged_sdpa_read
                 else "fixed-window bridge uses the same projected KV cache window for value reduction"
             ),
-            "v_channel_kind": "fused_cache_ready_kv_reuse" if uses_paged_sdpa_read else "projected_kv_cache_reuse",
+            "v_channel_kind": (
+                "fused_cache_ready_kv_reuse"
+                if uses_paged_sdpa_read
+                else "selected_projected_kv_cache_reuse"
+                if uses_selected_rows_read
+                else "projected_kv_cache_reuse"
+            ),
             "true_kv_split_blocker": (
                 "DeepSeek V4 Flash HF attention exposes one wkv projection and sparse_attn consumes that same "
                 "cache-ready vector for score and value; this trace does not implement a separate value projection "
@@ -5526,9 +6358,13 @@ def _attention_path_summary(
             "head_repeat_factor": head_repeat_factor,
             "k_cache_layout": "[num_blocks, num_key_value_heads, block_size, head_dim]"
             if uses_paged_sdpa_read
+            else "[batch, 1, selected_rows, head_dim]"
+            if uses_selected_rows_read
             else "[batch, 1, seq_len, head_dim]",
             "v_cache_layout": "[num_blocks, num_key_value_heads, block_size, head_dim]"
             if uses_paged_sdpa_read
+            else "[batch, num_attention_heads, selected_rows, head_dim]"
+            if uses_selected_rows_read
             else "[batch, num_attention_heads, seq_len, head_dim]",
         },
         "rope": {
@@ -5553,49 +6389,62 @@ def _attention_path_summary(
             else "DeepSeek V4 Flash base RoPE frequencies",
             "status": "traceable_q_and_cache_ready_kv_rope_with_paged_sdpa_dense_cache"
             if uses_paged_sdpa_read
+            else "traceable_q_rope_and_static_selected_k_rope_dense_attention"
+            if uses_selected_rows_read
             else ("traceable_q_and_k_rope_fixed_window" if qk_mode else "not_used_in_legacy_blend_mode"),
         },
         "sparse_compressed_tokens": {
-            "contributed": False if uses_paged_sdpa_read else True,
+            "contributed": True if uses_selected_rows_read else (False if uses_paged_sdpa_read else True),
             "source": "not integrated; real indexer row ids are reported outside trace, but paged SDPA reads contiguous rows through cur_pos_tensor"
             if uses_paged_sdpa_read
+            else "real indexer row ids are consumed by selected-row dense attention, but compacted from the projected K/V cache rather than a real compressed-KV cache"
+            if uses_selected_rows_read
             else "device-resident compressed K/V cache window with row 0 updated from real wkv/kv_norm projection",
-            "real_sparse_indexer_selected_tokens": False,
+            "real_sparse_indexer_selected_tokens": uses_selected_rows_read,
             "real_sparse_indexer_selected_rows_materialized_outside_trace": int(config.compress_ratios[int(layer)])
             == 4,
             "compressed_kv_status": (
                 "not_integrated_in_traceable_paged_sdpa_path"
                 if uses_paged_sdpa_read
+                else "selected_rows_dense_attention_uses_projected_kv_cache_not_compressed_kv_cache"
+                if uses_selected_rows_read
                 else "single_projected_kv_cache_width_only"
             ),
         },
         "compressed_token_contribution": {
-            "contributed": False if uses_paged_sdpa_read else True,
+            "contributed": True if uses_selected_rows_read else (False if uses_paged_sdpa_read else True),
             "source": "not integrated; compressor/indexer-selected compressed row ids are reported but not read by paged SDPA"
             if uses_paged_sdpa_read
+            else "real indexer-selected row ids drive compact selected-row attention over the projected K/V cache"
+            if uses_selected_rows_read
             else "device-resident compressed K/V cache window",
             "updated_row_from_real_kv_projection": True,
-            "sliding_window_rows_contributed": uses_paged_sdpa_read,
+            "sliding_window_rows_contributed": uses_paged_sdpa_read or uses_selected_rows_read,
         },
         "softmax": {
             "qk_scores_in_trace": qk_mode,
-            "fixed_window_softmax_in_trace": qk_mode and not uses_paged_sdpa_read,
+            "fixed_window_softmax_in_trace": qk_mode and not uses_paged_sdpa_read and not uses_selected_rows_read,
+            "selected_rows_dense_attention_in_trace": uses_selected_rows_read,
             "paged_sdpa_decode_in_trace": uses_paged_sdpa_read,
-            "attention_sink_softmax_in_trace": uses_paged_sdpa_read,
+            "attention_sink_softmax_in_trace": uses_paged_sdpa_read or uses_selected_rows_read,
             "value_reduction_in_trace": qk_mode,
             "context_in_trace": qk_mode,
         },
         "attention_sink": {
             "status": "used_in_paged_sdpa_decode"
             if uses_paged_sdpa_read
+            else "used_in_selected_rows_dense_attention"
+            if uses_selected_rows_read
             else "loaded_not_integrated_in_fixed_slice_attention",
             "hf_reference": "/proj_sw/user_dev/moconnor/deepseek_v4_flash_hf/inference/kernel.py:346",
             "ttnn_api": (
                 "ttnn.transformer.paged_scaled_dot_product_attention_decode(..., attention_sink=...)"
                 if uses_paged_sdpa_read
+                else "ttnn.concat(qk_scores, attention_sink_logits) -> ttnn.softmax"
+                if uses_selected_rows_read
                 else None
             ),
-            "in_trace": uses_paged_sdpa_read,
+            "in_trace": uses_paged_sdpa_read or uses_selected_rows_read,
             "shape": [int(config.num_attention_heads)],
             "ttnn_decode_shape": [_padded_attention_heads(int(config.num_attention_heads)), ttnn.TILE_SIZE]
             if uses_paged_sdpa_read
@@ -5603,7 +6452,9 @@ def _attention_path_summary(
         },
         "qk_scores": {
             "produced_in_trace": qk_mode and not uses_paged_sdpa_read,
-            "shape": [1, int(config.num_attention_heads), int(seq_len), int(seq_len)]
+            "shape": [1, int(config.num_attention_heads), int(seq_len), int(selected_rows_count)]
+            if qk_mode and uses_selected_rows_read and selected_rows_count is not None
+            else [1, int(config.num_attention_heads), int(seq_len), int(seq_len)]
             if qk_mode and not uses_paged_sdpa_read
             else None,
             "scale": f"1/sqrt(head_dim={int(config.head_dim)})" if qk_mode else None,
@@ -5615,18 +6466,30 @@ def _attention_path_summary(
             "value_source": (
                 "paged cache-ready fused kv projection cache read by paged SDPA decode, then inverse-RoPEd"
                 if uses_paged_sdpa_read
+                else "compact selected projected K/V cache rows"
+                if uses_selected_rows_read
                 else "unrotated_compressed_kv_projection_cache_window_repeated_across_attention_heads"
                 if qk_mode
                 else "expanded_kv_cache_window_blended_with_q_output"
             ),
         },
         "exact_sparse_attention_blockers": [
-            "dynamic per-token top-k cache gather is still represented by host fallback helpers",
+            "dynamic per-token top-k generation is still represented by host preflight helpers"
+            if uses_selected_rows_read
+            else "dynamic per-token top-k cache gather is still represented by host fallback helpers",
             "true separate V projection/channel is not in this trace slice; K and V are explicit tensors but both "
             "derive from the DeepSeek V4 fused KV projection/cache-ready vector",
+            *(
+                [
+                    "real compressed-KV sparse cache update/read is not implemented; selected rows are gathered "
+                    "from the projected K/V cache tensor"
+                ]
+                if uses_selected_rows_read
+                else []
+            ),
         ],
     }
-    if not uses_paged_sdpa_read:
+    if not uses_paged_sdpa_read and not uses_selected_rows_read:
         summary["exact_sparse_attention_blockers"].append(
             "attention-sink semantics over [selected cache rows + sink] are not in the fixed-window protected path"
         )

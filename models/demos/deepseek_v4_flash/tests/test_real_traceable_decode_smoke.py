@@ -21,6 +21,7 @@ from models.demos.deepseek_v4_flash.real_traceable_decode_smoke import (
     TRACEABLE_DECODE_ATTENTION_QK_SOFTMAX_MODE,
     TRACEABLE_DECODE_ATTENTION_READ_FIXED_SLICE,
     TRACEABLE_DECODE_ATTENTION_READ_PAGED_SDPA_DECODE,
+    TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
     TRACEABLE_DECODE_CACHE_UPDATE_DEVICE_TENSOR,
     TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
     TRACEABLE_DECODE_ROPE_POSITION_DEVICE_TENSOR,
@@ -607,6 +608,57 @@ def test_cpu_traceable_decode_subpath_can_report_paged_sdpa_read_probe(tmp_path:
     )
 
 
+def test_cpu_traceable_decode_subpath_can_report_selected_rows_dense_attention(tmp_path: Path) -> None:
+    snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=3,
+        seq_len=4,
+        max_bytes=24 * 1024,
+        routed_topk_prefix=1,
+        cpu_only=True,
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
+    )
+
+    assert result["passed"] is True
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
+    assert result["sparse_attention"]["status"] == "real_indexer_rows_consumed_by_selected_rows_dense_attention"
+    assert result["sparse_attention"]["sparse_indexer_status"] == (
+        "real_indexer_topk_materialized_outside_trace_consumed_by_selected_rows_dense_attention"
+    )
+    assert result["sparse_attention"]["selected_cache_rows"]["derived_from_real_indexer"] is True
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_rows_consumed_by_attention"] is True
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_row_ids_source"] == "static_host_preflight"
+    assert result["sparse_attention"]["selected_cache_rows"]["first_step_runtime_rows"] == [0, 1, 2, 3, 4, 8]
+    assert result["sparse_attention"]["selected_cache_rows"]["compact_window_shape"] == [1, 1, 6, 8]
+    assert result["sparse_attention"]["selected_cache_rows"]["per_step"][0]["rows_drive_attention_in_trace"] is True
+    assert result["sparse_attention"]["selected_row_attention_blocker"] is None
+    assert result["sparse_attention"]["selected_row_attention_proof"]["selected_rows_consumed_by_attention"] is True
+    assert result["sparse_attention"]["attention_sink_status"] == "used_in_selected_rows_dense_attention"
+    assert result["sparse_attention"]["attention_sink"]["in_trace"] is True
+    assert result["sparse_attention"]["k_v_source"] == "selected_rows_from_projected_kv_cache_reuse"
+    assert result["attention_path"]["selected_rows"]["consumed_by_attention"] is True
+    assert result["attention_path"]["selected_rows"]["ids"] == [0, 1, 2, 3, 4, 8]
+    assert result["attention_path"]["selected_rows"]["compact_window_shape"] == [1, 1, 6, 8]
+    assert result["attention_path"]["softmax"]["selected_rows_dense_attention_in_trace"] is True
+    assert result["attention_path"]["softmax"]["attention_sink_softmax_in_trace"] is True
+    assert result["attention_path"]["qk_scores"]["shape"] == [1, 4, 4, 6]
+    assert result["traceability_flags"]["selected_rows_consumed_by_attention"] is True
+    assert result["traceability_flags"]["selected_row_compaction_in_trace"] is True
+    assert result["traceability_flags"]["selected_row_ids_source"] == "static_host_preflight"
+    assert result["traceability_flags"]["attention_sink_in_trace"] is True
+    assert result["reference"]["selected_attention_cache_window"]["shape"] == [1, 1, 6, 8]
+    assert result["reference"]["qk_scores"]["shape"] == [1, 4, 4, 6]
+    assert result["reference"]["attention_scores_with_sink"]["shape"] == [1, 4, 4, 7]
+    assert result["reference"]["attention_probs"]["shape"] == [1, 4, 4, 6]
+    assert result["decode_steps_detail"][0]["selected_cache_rows"] == [0, 1, 2, 3, 4, 8]
+    assert result["decode_steps_detail"][0]["selected_rows_consumed_by_attention"] is True
+    assert result["decode_steps_detail"][0]["compact_window_shape"] == [1, 1, 6, 8]
+    assert "ttnn.embedding(selected_row_idxs,kv_cache_table)" in result["traceable_decode_scope"]["inside_trace"]
+    assert "ttnn.concat(selected_qk_scores,attention_sink_logits)" in result["traceable_decode_scope"]["inside_trace"]
+
+
 def test_cpu_traceable_decode_subpath_can_report_legacy_attention_mode(tmp_path: Path) -> None:
     snapshot = generate_tiny_hf_checkpoint(tmp_path / "hf", num_hidden_layers=4, num_routed_experts=4)
 
@@ -956,6 +1008,40 @@ def test_traceable_decode_subpath_gated_galaxy_paged_sdpa_read_single_capture_re
         assert step["accuracy"]["attention_output"]["passed"] is True
         assert step["accuracy"]["combined_ffn_output"]["passed"] is True
         assert step["accuracy"]["residual_output"]["passed"] is True
+
+
+def test_traceable_decode_subpath_gated_galaxy_selected_rows_dense_attention() -> None:
+    if os.environ.get("DSV4_FLASH_TRACEABLE_DECODE", "0") != "1":
+        pytest.skip("Set DSV4_FLASH_TRACEABLE_DECODE=1 to run the Galaxy selected-row attention smoke")
+
+    snapshot = Path(os.environ.get("DSV4_FLASH_REAL_SNAPSHOT_DIR", str(REAL_SNAPSHOT_DIR)))
+    if not snapshot.is_dir():
+        pytest.fail(f"Real DeepSeek V4 Flash snapshot is missing: {snapshot}")
+
+    result = run_traceable_decode_subpath_smoke(
+        snapshot,
+        layer=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_LAYER", "3")),
+        seq_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_SEQ_LEN", "32")),
+        cache_len=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_CACHE_LEN", str(96))),
+        decode_steps=1,
+        device_id=int(os.environ.get("TTNN_DEVICE_ID", "0")),
+        trace_region_size=int(os.environ.get("DSV4_FLASH_TRACEABLE_DECODE_TRACE_REGION_SIZE", str(64 * 1024 * 1024))),
+        attention_read_api=TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE,
+        cache_update_api=TRACEABLE_DECODE_CACHE_UPDATE_HOST_SCALAR,
+        rope_position_api=TRACEABLE_DECODE_ROPE_POSITION_STATIC,
+    )
+
+    assert result["passed"], json.dumps(result["accuracy_by_step"], indent=2, sort_keys=True)
+    assert result["attention_read_api"] == TRACEABLE_DECODE_ATTENTION_READ_SELECTED_ROWS_DENSE
+    assert result["sparse_attention"]["selected_cache_rows"]["selected_rows_consumed_by_attention"] is True
+    assert result["trace_capture"]["selected_row_compaction_in_trace"] is True
+    assert result["traceability_flags"]["selected_row_ids_source"] == "static_host_preflight"
+    assert result["attention_path"]["softmax"]["selected_rows_dense_attention_in_trace"] is True
+    assert "ttnn.embedding(selected_row_idxs,kv_cache_table)" in result["trace_capture"]["traced_operations"]
+    assert result["accuracy"]["selected_attention_cache_window"]["passed"] is True
+    assert result["accuracy"]["attention_output"]["passed"] is True
+    assert result["accuracy"]["combined_ffn_output"]["passed"] is True
+    assert result["accuracy"]["residual_output"]["passed"] is True
 
 
 def test_paged_sdpa_decode_gated_galaxy_current_position_single_capture_replay() -> None:
