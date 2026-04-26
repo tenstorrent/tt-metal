@@ -14,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
+#include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -379,6 +380,13 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
 }
 
+namespace {
+tt::tt_metal::experimental::noc_estimator::Architecture to_noc_arch(tt::ARCH arch) {
+    using namespace tt::tt_metal::experimental::noc_estimator;
+    return (arch == tt::ARCH::BLACKHOLE) ? Architecture::BLACKHOLE : Architecture::WORMHOLE_B0;
+}
+}  // namespace
+
 /**
  * Calculates NOC transfer rate for L1 local transfers using empirical data.
  *
@@ -388,33 +396,45 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
  * - Constant peak rate for larger transfers
  */
 static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
-    // Minimum NOC transfer size that was benchmarked
+    using namespace tt::tt_metal::experimental::noc_estimator;
+    try {
+        NocEstimatorParams params;
+        params.arch = to_noc_arch(arch);
+        params.mechanism = NocMechanism::UNICAST;
+        params.pattern = NocPattern::ONE_TO_ONE;
+        params.memory = MemoryType::L1;
+        params.loopback = true;
+        params.transaction_size_bytes = std::max(transfer_size_bytes, 64u);
+        params.num_transactions = 64;
+
+        auto estimate = estimate_noc_performance(params);
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
+    } catch (const std::runtime_error&) {
+        // Legacy fallback: linear interpolation
+    }
+
     const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
 
-    // Architecture-specific performance characteristics
     struct NocPerformanceParams {
         uint32_t linear_growth_threshold_bytes;
-        float min_rate_gbps;   // Transfer rate at minimum size
-        float peak_rate_gbps;  // Maximum achievable transfer rate
+        float min_rate_gbps;
+        float peak_rate_gbps;
     };
 
-    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    NocPerformanceParams perf_params = {0, 0.0f, 0.0f};
     switch (arch) {
-        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
+        case tt::ARCH::BLACKHOLE: perf_params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
+        case tt::ARCH::WORMHOLE_B0: perf_params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
         default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
     }
 
-    // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
-        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
-
-    // Calculate transfer rate using linear interpolation
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, perf_params.linear_growth_threshold_bytes);
     const float rate_increase_per_byte =
-        (params.peak_rate_gbps - params.min_rate_gbps) /
-        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
-
-    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
+        (perf_params.peak_rate_gbps - perf_params.min_rate_gbps) /
+        static_cast<float>(perf_params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+    return perf_params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for DRAM transfers using empirical data.
@@ -425,33 +445,44 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
  * - Constant peak rate for larger transfers
  */
 static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
-    // Minimum NOC transfer size that was benchmarked
+    using namespace tt::tt_metal::experimental::noc_estimator;
+    try {
+        NocEstimatorParams params;
+        params.arch = to_noc_arch(arch);
+        params.mechanism = NocMechanism::UNICAST;
+        params.pattern = NocPattern::ONE_FROM_ALL;
+        params.memory = MemoryType::DRAM_INTERLEAVED;
+        params.transaction_size_bytes = std::max(transfer_size_bytes, 64u);
+        params.num_transactions = 64;
+
+        auto estimate = estimate_noc_performance(params);
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
+    } catch (const std::runtime_error&) {
+        // Legacy fallback: linear interpolation
+    }
+
     const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
 
-    // Architecture-specific performance characteristics
     struct NocPerformanceParams {
         uint32_t linear_growth_threshold_bytes;
-        float min_rate_gbps;   // Transfer rate at minimum size
-        float peak_rate_gbps;  // Maximum achievable transfer rate
+        float min_rate_gbps;
+        float peak_rate_gbps;
     };
 
-    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    NocPerformanceParams perf_params = {0, 0.0f, 0.0f};
     switch (arch) {
-        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
+        case tt::ARCH::BLACKHOLE: perf_params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
+        case tt::ARCH::WORMHOLE_B0: perf_params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
         default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
     }
 
-    // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
-        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
-
-    // Calculate transfer rate using linear interpolation
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, perf_params.linear_growth_threshold_bytes);
     const float rate_increase_per_byte =
-        (params.peak_rate_gbps - params.min_rate_gbps) /
-        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
-
-    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
+        (perf_params.peak_rate_gbps - perf_params.min_rate_gbps) /
+        static_cast<float>(perf_params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+    return perf_params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for multicast L1-linked transfers using empirical data.
@@ -462,35 +493,47 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
  * - Constant peak rate for larger transfers
  */
 static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
-    // Minimum NOC transfer size that was benchmarked
+    using namespace tt::tt_metal::experimental::noc_estimator;
+    try {
+        NocEstimatorParams params;
+        params.arch = to_noc_arch(arch);
+        params.mechanism = NocMechanism::MULTICAST_LINKED;
+        params.pattern = NocPattern::ONE_TO_ALL;
+        params.memory = MemoryType::L1;
+        params.transaction_size_bytes = std::max(transfer_size_bytes, 64u);
+        params.num_transactions = 64;
+        params.num_subordinates = 8;
+
+        auto estimate = estimate_noc_performance(params);
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
+    } catch (const std::runtime_error&) {
+        // Legacy fallback: linear interpolation
+    }
+
     const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
 
-    // Architecture-specific performance characteristics
     struct NocPerformanceParams {
         uint32_t linear_growth_threshold_bytes;
-        float min_rate_gbps;   // Transfer rate at minimum size
-        float peak_rate_gbps;  // Maximum achievable transfer rate
+        float min_rate_gbps;
+        float peak_rate_gbps;
     };
 
     // NOLINTBEGIN(modernize-use-std-numbers)
-    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    NocPerformanceParams perf_params = {0, 0.0f, 0.0f};
     switch (arch) {
-        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
+        case tt::ARCH::BLACKHOLE: perf_params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
+        case tt::ARCH::WORMHOLE_B0: perf_params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
     }
     // NOLINTEND(modernize-use-std-numbers)
 
-    // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
-        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
-
-    // Calculate transfer rate using linear interpolation
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, perf_params.linear_growth_threshold_bytes);
     const float rate_increase_per_byte =
-        (params.peak_rate_gbps - params.min_rate_gbps) /
-        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
-
-    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
+        (perf_params.peak_rate_gbps - perf_params.min_rate_gbps) /
+        static_cast<float>(perf_params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+    return perf_params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Determines if split reader optimization is supported for the given configuration.
