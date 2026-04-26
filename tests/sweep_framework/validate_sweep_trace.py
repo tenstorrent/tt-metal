@@ -400,28 +400,23 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             norm_sweep = normalize(sweep_args)
 
             if norm_master == norm_sweep:
-                if sweep_config_hash and sweep_config_hash != source_hash:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="hash_mismatch",
-                            sweep_config_hash=sweep_config_hash,
-                        )
+                # Arguments match after normalization — report as match.
+                # The config_hash may legitimately differ when the master trace
+                # and sweep trace were captured on meshes with different topology
+                # layouts (e.g. 1D [32] vs 2D [4,8]).  Since topology-dependent
+                # fields (distribution_shape, mesh_device_shape, placement) are
+                # stripped during argument normalization, matching normalized
+                # args confirms semantic equivalence regardless of hash.
+                report.results.append(
+                    ConfigResult(
+                        config_hash=source_hash,
+                        op_name=op_name,
+                        master_config_id=master_cid,
+                        sweep_config_id=sweep_cid,
+                        status="match",
+                        sweep_config_hash=sweep_config_hash,
                     )
-                else:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="match",
-                            sweep_config_hash=sweep_config_hash,
-                        )
-                    )
+                )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
