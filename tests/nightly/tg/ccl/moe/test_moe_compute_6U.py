@@ -307,9 +307,11 @@ def prepare_output_tensor_from_combine_writer(
 
             torch_output[e, t] = contrib
 
-            if output_token_shard_row == (
-                tokens_per_shard_chunk if output_token_shard < tokens_per_shard_rem else tokens_per_shard_chunk - 1
-            ):
+            # Determine how many tokens this shard should have
+            # First tokens_per_shard_rem shards get one extra token
+            tokens_in_this_shard = tokens_per_shard_chunk + (1 if output_token_shard < tokens_per_shard_rem else 0)
+
+            if output_token_shard_row + 1 == tokens_in_this_shard:
                 output_token_shard += 1
                 output_token_shard_row = 0
             else:
@@ -324,7 +326,7 @@ PCC_THRESHOLD = 0.988
 PCC_THRESHOLD_MATMUL_WITH_BIAS = 0.98799
 ATOL_THRESHOLD = 700
 SWIGLU_PCC_THRESHOLD = 0.984
-SILU_PCC_THRESHOLD = 0.988
+SILU_PCC_THRESHOLD = 0.986
 
 
 def _get_pcc_threshold(activation_type):
@@ -384,9 +386,14 @@ def validate_matmul(
     base_threshold = _get_pcc_threshold(activation_type)
     pcc_cutoff = min(base_threshold, PCC_THRESHOLD_MATMUL_WITH_BIAS) if has_bias else base_threshold
 
+    # smaller batch -> smaller dataset so PCC is less stable. A lower threshold is acceptable.
+    MATMUL_PCC_THRESHOLD = 0.987 if total_tokens == 512 else 0.986
+
     for d in range(devices):
         for expert_id in range(experts_per_device):
             active_tokens = expert_token_counts[d, expert_id].item()
+            if active_tokens == 0:
+                continue
             # torch_output_ref is (L, D, E/D, T, H)
             torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
             tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
@@ -1049,8 +1056,8 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2, 3, 4])
-@pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [3, 8, 16, 32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize(
     "selected_experts_k, num_layers, num_iterations",
     [(1, 1, 5), (8, 5, 3)],

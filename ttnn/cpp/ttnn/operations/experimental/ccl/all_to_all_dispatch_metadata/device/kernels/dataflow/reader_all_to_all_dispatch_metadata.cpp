@@ -88,6 +88,10 @@ void kernel_main() {
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
+    if (token_start_idx == token_end_idx) {
+        return;
+    }
+
     // Read the expert mapping table - new format: [devices, experts]
     // Each page is one device's view of the mapping. Read only the source device's page.
     // Page index = linearized_mesh_coord (source device index)
