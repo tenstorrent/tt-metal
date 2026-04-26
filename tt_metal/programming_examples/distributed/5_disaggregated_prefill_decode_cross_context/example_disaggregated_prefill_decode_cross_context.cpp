@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Disaggregated prefill/decode: 1 MPI rank in sub-context 0 (prefill, FABRIC_1D) and 64 ranks in
-// sub-context 1 (decode stages, FABRIC_2D). Cross-sub-context traffic is only prefill local rank 0
-// → decode local rank 0.
+// Disaggregated prefill/decode: sub-context 0 = decode (64 ranks, Blitz, FABRIC_2D); sub-context 1 =
+// prefill (1 rank, BH Galaxy, FABRIC_1D). Matches aisle_*
+// disaggregated_prefill_decode_host_2_host_rank_bindings_mapping.yaml. Cross-sub-context traffic is only prefill local
+// rank 0 → decode local rank 0.
 //
 // Build: `cmake --build build --target example_disaggregated_prefill_decode_cross_context` (ENABLE_DISTRIBUTED).
 //
@@ -33,8 +34,8 @@ constexpr int kTagInterKv = 20;
 constexpr int kPrefillSubcontextSize = 1;
 constexpr int kDecodeSubcontextSize = 64;
 
-const tt::tt_metal::distributed::multihost::SubcontextId kPrefillSubctx{0};
-const tt::tt_metal::distributed::multihost::SubcontextId kDecodeSubctx{1};
+const tt::tt_metal::distributed::multihost::SubcontextId kDecodeSubctx{0};
+const tt::tt_metal::distributed::multihost::SubcontextId kPrefillSubctx{1};
 
 tt::stl::Span<std::byte> as_byte_span(std::vector<float>& v) {
     return {reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(float)};
@@ -137,19 +138,19 @@ int main(int argc, char** argv) {
     const int sub_size = std::stoi(std::string(sub_size_env));
 
     if (sub_id == 0) {
-        if (sub_size != kPrefillSubcontextSize || local_size != kPrefillSubcontextSize) {
-            std::cerr << "Prefill sub-context: expected size " << kPrefillSubcontextSize
-                      << ", got sub_size=" << sub_size << " local_size=" << local_size << "\n";
-            return 1;
-        }
-        run_prefill_one_process_to_decode_rank0();
-    } else if (sub_id == 1) {
         if (sub_size != kDecodeSubcontextSize || local_size != kDecodeSubcontextSize) {
             std::cerr << "Decode sub-context: expected size " << kDecodeSubcontextSize << ", got sub_size=" << sub_size
                       << " local_size=" << local_size << "\n";
             return 1;
         }
         run_decode_stages_recv_prefill_at_rank0_only();
+    } else if (sub_id == 1) {
+        if (sub_size != kPrefillSubcontextSize || local_size != kPrefillSubcontextSize) {
+            std::cerr << "Prefill sub-context: expected size " << kPrefillSubcontextSize
+                      << ", got sub_size=" << sub_size << " local_size=" << local_size << "\n";
+            return 1;
+        }
+        run_prefill_one_process_to_decode_rank0();
     } else {
         std::cerr << "Unexpected TT_RUN_SUBCONTEXT_ID " << sub_id << "\n";
         return 1;
