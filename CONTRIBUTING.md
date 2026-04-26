@@ -8,6 +8,7 @@ Table of Contents
   - [Machine setup](#machine-setup)
   - [Developing tt-metal](#developing-tt-metal)
     - [Setting logger level](#setting-logger-level)
+    - [Enabling VSCode autocomplete for ttnn](#enabling-vscode-autocomplete-for-ttnn)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
   - [Tests in tt-metal](#tests-in-tt-metal)
     - [Running post-commit regressions](#running-post-commit-regressions)
@@ -104,6 +105,33 @@ This hook performs the following actions:
 This process ensures that all TTNN examples remain synchronized and up-to-date in both formats. **Important:** Always make changes directly to the `.ipynb` notebook files—not the generated Python scripts. Any manual changes made to the Python files will be overwritten the next time the notebook is updated. Python files are considered read-only exports for users or CI pipelines that prefer `.py` formats.
 
 Both the Jupyter notebooks and the exported Python files are tested as part of the CI workflows to ensure correctness and stability.
+
+### Enabling VSCode autocomplete for ttnn
+
+VSCode autocomplete for ttnn operations (like `ttnn.add`, `ttnn.matmul`, etc.) works
+automatically when you install ttnn via pip - type stubs are shipped with the package.
+
+**For development builds**, generate stubs after building ttnn:
+
+```bash
+# Option 1: Python script
+source python_env/bin/activate
+python scripts/build_scripts/create_stubs.py
+
+# Option 2: CMake target
+cmake --build build --target ttnn_stubs
+```
+
+Then configure VSCode by adding the following to `.vscode/settings.json`:
+```json
+{
+    "python.analysis.stubPath": "${workspaceFolder}/ttnn/ttnn",
+    "python.analysis.extraPaths": ["${workspaceFolder}/ttnn"],
+    "python.defaultInterpreterPath": "${workspaceFolder}/python_env/bin/python"
+}
+```
+
+Reload VSCode to enable autocomplete.
 
 ### Building and viewing the documentation locally
 
