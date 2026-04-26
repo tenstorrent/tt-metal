@@ -362,6 +362,20 @@ void SystemMemoryManager::reset(const uint8_t cq_id) {
     // rd_ptr to the limit sentinel (base + N*entry_size) when the dispatch kernel
     // is reloaded, so the host counter must also start at 0 to stay consistent.
     this->prefetch_q_in_flight[cq_id] = 0;
+    // Also reset prefetch_q_dev_fences to the sentinel. Without this, a stale
+    // fences value from the prior session causes count_consumed(stale, sentinel)
+    // to return a non-zero fictitious count the first time refresh_in_flight()
+    // reads the freshly-reinitialized firmware fence (sentinel). That off-by-one
+    // error allows the host to write one extra entry past queue capacity, giving
+    // firmware garbage data and causing it to hang (N300 dispatch timeout).
+    {
+        auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
+        const uint32_t prefetch_q_base =
+            ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        this->prefetch_q_dev_fences[cq_id] =
+            prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
+                                  sizeof(DispatchSettings::prefetch_q_entry_type);
+    }
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {
