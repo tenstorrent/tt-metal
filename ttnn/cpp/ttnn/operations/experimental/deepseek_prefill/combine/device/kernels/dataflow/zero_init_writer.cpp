@@ -13,6 +13,10 @@
 // the untilized rows to the sender's receive buffer, and signals the sender that data has
 // landed. The loop exits when compute pushes ROUTE_INFO_SENTINEL onto cb_stop_signal_id.
 //
+// INIT_ZEROS=0: skip the zero-init prelude (buffer fill, zero_pages, sender-sem signalling)
+// and run only the IS_TILE_LAYOUT send path. Launched unconditionally for TILE_LAYOUT so the
+// send path always has a drainer for cb_untilize_id / cb_stop_signal_id.
+//
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -33,6 +37,8 @@ void kernel_main() {
     // ===== Runtime args =====
     uint32_t rt_args_idx = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
+
+#if INIT_ZEROS
     uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -48,9 +54,11 @@ void kernel_main() {
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
         sender_sem_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zi_done_sem_l1_offset);
     }
+#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
+#if INIT_ZEROS
     fill_zero_buffer(cb_zero_buffer_id);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
 
@@ -62,6 +70,7 @@ void kernel_main() {
     }
 
     noc_async_atomic_barrier();
+#endif
 
 #if IS_TILE_LAYOUT
     // ===== Untilized-data send path (moved from reader_untilize.cpp steps 3-7) =====
