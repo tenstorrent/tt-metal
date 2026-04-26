@@ -1,48 +1,38 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) Auto Issue Creation"
 
 on:
   workflow_dispatch:
+    inputs:
+      create-issues:
+        description: "Create GitHub issues for deterministic failures"
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository to create issues in"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to analyze workflow data from"
+        type: string
+        default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum issues to create (0 = unlimited, useful for testing)"
+        type: number
+        default: 0
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  cursor-cli-smoke-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+  auto-issues:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-ci.yaml@main
+    with:
+      create-issues: ${{ inputs.create-issues }}
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+      max-issues: ${{ fromJSON(inputs.max-issues) }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
