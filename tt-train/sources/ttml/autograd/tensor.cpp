@@ -164,4 +164,8 @@ uint32_t Tensor::get_rank() const {
     return get_shape().rank();
 }
 
+void Tensor::deallocate_storage() {
+    m_value.deallocate_storage();
+}
+
 }  // namespace ttml::autograd

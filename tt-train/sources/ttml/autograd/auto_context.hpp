@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <hostdevcommon/common_values.hpp>
 #include <memory>
 #include <random>
 
@@ -101,7 +102,8 @@ public:
 
     void open_device(
         const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
-        const std::vector<int>& device_ids = std::vector<int>{});
+        const std::vector<int>& device_ids = std::vector<int>{},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     void close_device();
 

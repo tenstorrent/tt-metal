@@ -14,6 +14,7 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,  // intermediate from fw
-    const ttnn::Tensor& dL_dout_tensor);
+    const ttnn::Tensor& dL_dout_tensor,
+    uint32_t max_num_cores = 0U);
 
 }  // namespace ttml::metal

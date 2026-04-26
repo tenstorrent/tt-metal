@@ -48,6 +48,9 @@ public:
 
     bool is_grad_initialized() const;
 
+    /// Frees device storage for the tensor value (not the gradient buffer).
+    void deallocate_storage();
+
 private:
     void try_init_grad(bool init_ones = false);
 };
