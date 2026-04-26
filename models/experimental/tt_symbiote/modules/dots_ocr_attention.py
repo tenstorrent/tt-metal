@@ -167,7 +167,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             TTNNDotsOCRAttention._shared_rotary_setups[setup_key] = BailingRotarySetup(
                 device=self.device,
                 head_dim=self.head_dim,
-                max_seq_len=min(getattr(config, "max_position_embeddings", 8192), 2048),
+                max_seq_len=131072,
                 rope_theta=config.rope_theta,
                 partial_rotary_factor=1.0,
                 rope_convention="half_half",
