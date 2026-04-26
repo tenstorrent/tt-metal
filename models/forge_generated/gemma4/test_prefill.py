@@ -41,8 +41,7 @@ def test_prefill_pcc(mesh_device):
         mesh_device,
         is_decode=False,
     )
-    out = model(input_list)
-    logits = out[-1]
+    logits = model(input_list)
 
     logits_host = ttnn.from_device(logits)
     logits_torch = ttnn.to_torch(

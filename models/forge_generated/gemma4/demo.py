@@ -90,8 +90,7 @@ def run(prompt: str) -> tuple[int, str]:
         device,
         is_decode=False,
     )
-    out = model(input_list)
-    logits = out[-1]
+    logits = model(input_list)
 
     logits_host = ttnn.from_device(logits)
     logits_torch = ttnn.to_torch(
