@@ -150,7 +150,7 @@ void kernel_main() {
                     return;
                 }
                 write_page++;
-                dst_noc_addr = get_noc_addr(write_page, d);
+                dst_noc_addr = d.get_noc_addr(write_page);
                 if constexpr (!can_be_clean) {
                     end_to_write = 0;
                     write_offset = dst_noc_addr & OFFSET_16;
@@ -173,7 +173,7 @@ void kernel_main() {
                 read_offset = read_offset + writable;
                 write_page++;
                 dst_noc_addr_offset = 0;
-                dst_noc_addr = get_noc_addr(write_page, d);
+                dst_noc_addr = d.get_noc_addr(write_page);
                 if constexpr (!can_be_clean) {
                     end_to_write = 0;
                     write_offset = dst_noc_addr & OFFSET_16;
