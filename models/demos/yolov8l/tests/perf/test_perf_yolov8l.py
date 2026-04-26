@@ -13,19 +13,19 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "name_suffix,batch_size,resolution,expected_perf,test_selector,op_support_count",
     [
-        # [
-        #     "b1_640",
-        #     1,
-        #     640,
-        #     0.0,
-        #     "test_yolov8l and 640 and not dp_batch8 and not test_yolov8l_640 and not test_yolov8l_1280",
-        #     12000,
-        # ],
+        [
+            "b1_640",
+            1,
+            640,
+            50.0,
+            "test_yolov8l and 640 and not dp_batch8 and not test_yolov8l_640 and not test_yolov8l_1280",
+            12000,
+        ],
         [
             "b1_1280",
             1,
             1280,
-            14.9,
+            20.0,
             "models/demos/yolov8l/tests/pcc/test_yolov8l.py::test_yolov8l[1280-l1_1280_for_all_res-True]",
             12000,
         ],
