@@ -897,7 +897,9 @@ class DecoderStage(StageKind):
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         persistent_next_iter_semaphore = (
-            ttnn.create_global_semaphore(mesh_device, available_cores, 1) if self._persistent_mode else None
+            ttnn.create_global_semaphore(mesh_device, available_cores, 1)
+            if self._persistent_mode
+            else None  # TODO: (GR) change to 0
         )
 
         if self._is_moe:

@@ -86,7 +86,7 @@ struct ReduceToOneB1 {
         uint32_t totalNumWorkers = 0,
         uint32_t aggOutputSizeBytes = 0,
         uint32_t persistentFabricRtArgBase = 0,
-        uint32_t persistentFabricSignalEnable = 0,
+        uint32_t isReducePersistentFabricCore = 0,
         uint32_t forwardMetadataSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
@@ -108,7 +108,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
         static constexpr bool enable_downstream_socket = enableDownstreamSocket;
         static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
-        static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
+        static constexpr uint32_t is_reduce_persistent_fabric_core = isReducePersistentFabricCore;
         static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
     };
 
@@ -160,8 +160,6 @@ struct ReduceToOneB1 {
         uint32_t persistent_enable;   // 1 if this core should send the persistent signal
         uint32_t persistent_dst_noc_x;     // Bcast sender physical NOC x on entry device
         uint32_t persistent_dst_noc_y;     // Bcast sender physical NOC y on entry device
-        uint32_t persistent_dst_mesh_id;   // Entry device fabric mesh id
-        uint32_t persistent_dst_chip_id;   // Entry device fabric chip id
         uint32_t persistent_dst_sem_addr;  // persistent_next_iter_semaphore address on entry device
     };
 
@@ -259,41 +257,14 @@ struct ReduceToOneB1 {
             if constexpr (CTArgs::is_fabric_core) {
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
                     // Root1
-                    if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
-                        // TODO: (GR) here
-
-                        // Persistent fabric core: wait for aggregator signal, then send
-                        // cross-device atomic inc to bcast sender on entry device.
-                        // Persistent args start after the worker sem addrs.
+                    if constexpr (CTArgs::is_reduce_persistent_fabric_core == 1) {
+                        // Persistent fabric core: wait for aggregator signal
                         size_t p_idx = CTArgs::fabric_rt_arg_base + CTArgs::num_workers;
                         uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
-                        uint32_t dst_noc_x = get_arg_val<uint32_t>(p_idx++);
-                        uint32_t dst_noc_y = get_arg_val<uint32_t>(p_idx++);
-                        uint32_t dst_mesh_id = get_arg_val<uint32_t>(p_idx++);
-                        uint32_t dst_chip_id = get_arg_val<uint32_t>(p_idx++);
-                        uint32_t dst_sem_addr = get_arg_val<uint32_t>(p_idx++);
-
                         volatile tt_l1_ptr uint32_t* wait_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
-                        constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
-                        PacketHeaderPool::reset();
-                        auto route_id = PacketHeaderPool::allocate_header_n(1);
-                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
-                        set_unicast_route(
-                            hdr, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
-                        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr), 1});
-
-                        auto sender =
-                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
-                                p_idx);
-                        sender.open();
-                        sender.wait_for_empty_write_slot();
                         noc_semaphore_wait_min(wait_sem_ptr, 1);
                         unified_kernels::semaphore_dec(wait_sem_ptr);
-                        sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
-                        sender.close();
-                        noc_async_full_barrier();
                     }
                 } else {
                     // Non-Root1

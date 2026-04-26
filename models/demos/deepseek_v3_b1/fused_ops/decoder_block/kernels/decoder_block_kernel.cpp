@@ -58,6 +58,7 @@
 #include "../../../unified_kernels/residual_add.hpp"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../../unified_kernels/reduce_to_one_b1.hpp"
+#include "../../../unified_kernels/pipeline_stage_sync.hpp"
 #endif
 
 #include "../../../metadata/metadata.hpp"
@@ -1508,6 +1509,20 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 1),
                 get_common_arg_val<uint32_t>(get_named_compile_time_arg_val("reduce_ncrisc_common_rt_arg_base") + 2),
             };
+
+            // TODO: (GR)
+            // PipelineStageSync
+            // using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::ReaderCTArgs<
+            //     get_named_compile_time_arg_val("run_stalling_logic_on_ncrisc"),
+            //     get_named_compile_time_arg_val("run_signalling_logic_on_ncrisc"),
+            //     get_named_compile_time_arg_val("is_intermediate_signaller"),
+            //     get_named_compile_time_arg_val("is_signalling_to_intermediate_signaller"),
+            //     get_named_compile_time_arg_val("signalling_core_noc_x_addr"),
+            //     get_named_compile_time_arg_val("signalling_core_noc_y_addr"),
+            //     get_named_compile_time_arg_val("stalling_core_noc_x_addr"),
+            //     get_named_compile_time_arg_val("stalling_core_noc_y_addr"),
+            //     get_named_compile_time_arg_val("semaphore_l1_addr"),
+            //     get_named_compile_time_arg_val("fabric_arg_base")>;
 #endif
         } routed;
 
@@ -1776,11 +1791,25 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
                 get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
+                get_named_compile_time_arg_val("is_reduce_persistent_fabric_core"),
                 get_named_compile_time_arg_val("reduce_forward_metadata_size_bytes")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
+
+            // TODO: (GR)
+            // PipelineStageSync
+            // using PipelineStageSyncCTArgs = deepseek_b1_ops::PipelineStageSync::WriterCTArgs<
+            //     get_named_compile_time_arg_val("run_stalling_logic_on_brisc"),
+            //     get_named_compile_time_arg_val("run_signalling_logic_on_brisc"),
+            //     get_named_compile_time_arg_val("is_intermediate_signaller"),
+            //     get_named_compile_time_arg_val("is_signalling_to_intermediate_signaller"),
+            //     get_named_compile_time_arg_val("signalling_core_noc_x_addr"),
+            //     get_named_compile_time_arg_val("signalling_core_noc_y_addr"),
+            //     get_named_compile_time_arg_val("stalling_core_noc_x_addr"),
+            //     get_named_compile_time_arg_val("stalling_core_noc_y_addr"),
+            //     get_named_compile_time_arg_val("semaphore_l1_addr"),
+            //     get_named_compile_time_arg_val("fabric_arg_base")>;
 #endif
         } routed;
 
@@ -1917,9 +1946,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_enable
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_x
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_sem_addr
         };
     }
 #endif
@@ -2946,11 +2973,17 @@ void kernel_main() {
             deepseek_b1_ops::ReduceToOneB1::Op<Moe::Routed::ReduceToOneCTArgs, is_reduce_core, true> reduce_op;
             reduce_op(moe.routed.reduce_rt_args);
         }
-#endif
+
+        // TODO: (GR)
+        // {
+        //     DeviceZoneScopedN("PIPELINE_STAGE_SYNC");
+        //     // IsReduceCore includes both worker cores and fabric cores
+        //     deepseek_b1_ops::PipelineStageSync::Op<Moe::Routed::PipelineStageSyncCTArgs> pipeline_stage_sync_op;
+        //     pipeline_stage_sync_op();
+        // }
 
         // Reduce fabric cores signal sender core that fabric sends are done.
         // Sender core NCRISC waits before starting next iteration.
-#ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_reduce_fabric_core) {
             constexpr uint32_t sync_sem_addr = get_named_compile_time_arg_val("reduce_sync_sem_addr");
@@ -2980,20 +3013,11 @@ void kernel_main() {
     }
 
     constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
-    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
     uint32_t iteration = 0;
     while (true) {
-        // DPRINT << "ITERATION: " << iteration << ENDL();
-#if defined(COMPILE_FOR_BRISC)
-        if constexpr (persistent_mode) {
-            constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
-            if constexpr (is_bcast_root && Core::is_sender_core) {
-                auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
-                noc_semaphore_wait(next_iter_sem, 1);
-                noc_semaphore_set(next_iter_sem, 0);
-            }
-        }
-#endif
+        // TODO: (GR) remove
+        DPRINT << iteration << ENDL();
+
         {
             DeviceZoneScopedN("MLA_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);

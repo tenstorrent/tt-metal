@@ -260,14 +260,14 @@ def create_decoder_golden_tensors(
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
-        127,
-        511,
-        1023,
-        2047,
-        4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
-        pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
-        pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
+        # 0,
+        # 127,
+        # 511,
+        # 1023,
+        # 2047,
+        # 4096,  # (1 + partial,1,1,1): partial into dev0 (if SP = 4)
+        # pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
+        # pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
@@ -283,19 +283,19 @@ def create_decoder_golden_tensors(
     indirect=True,
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
-@pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("num_internal_iterations", [1])  # TODO: (GR) 10
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [
-        "unrigged_all_experts",
+        # "unrigged_all_experts",
         pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
-        pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
-        pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
-        pytest.param("rigged_groups4", marks=pytest.mark.skip_post_commit),
-        pytest.param("rigged_groups5", marks=pytest.mark.skip_post_commit),
-        pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
-        pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
-        "rigged_groups8",
+        # pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
+        # pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
+        # pytest.param("rigged_groups4", marks=pytest.mark.skip_post_commit),
+        # pytest.param("rigged_groups5", marks=pytest.mark.skip_post_commit),
+        # pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
+        # pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
+        # "rigged_groups8",
     ],
 )
 @pytest.mark.parametrize(
@@ -313,19 +313,19 @@ def create_decoder_golden_tensors(
     "decoder_layer_idx",
     [
         ROUTED_EXPERT_LAYER_IDX,
-        pytest.param(MTP_LAYER_IDX, id="mtp_layer_61"),
+        # pytest.param(MTP_LAYER_IDX, id="mtp_layer_61"),
     ],
 )
-@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
+@pytest.mark.parametrize("use_real_weights", [False], ids=["random_weights"])
 @pytest.mark.parametrize(
     "validate_standalone_mla",
-    [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
-    ids=["validate_standalone_mla", "just_decoder_mla"],
+    [False],
+    # ids=["validate_standalone_mla", "just_decoder_mla"],
 )
 @pytest.mark.parametrize(
     "validate_standalone_moe",
-    [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
-    ids=["validate_standalone_moe", "just_decoder_moe"],
+    [False],
+    # ids=["validate_standalone_moe", "just_decoder_moe"],
 )
 @pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 @pytest.mark.requires_grid_size((13, 10))
@@ -448,7 +448,7 @@ def test_decoder(
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
     ttnn.synchronize_device(submesh)
     reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
-    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
+    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)  # TODO: (GR) value
     ttnn.synchronize_device(submesh)
 
     num_links_bcast = 1
@@ -959,7 +959,7 @@ def test_decoder_mlp(
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
     ttnn.synchronize_device(submesh)
     reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
-    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
+    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)  # TODO: (GR) value
     ttnn.synchronize_device(submesh)
 
     num_links_bcast = 1

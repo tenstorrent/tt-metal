@@ -699,9 +699,7 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_enable
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_x
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_sem_addr
         };
     }
 #endif
@@ -951,6 +949,7 @@ void kernel_main() {
 
     auto moe_body = [&]() {
 #if defined(COMPILE_FOR_BRISC) && defined(ENABLE_BCAST)
+        // TODO: (GR) remove
         if constexpr (persistent_mode != 0) {
             constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
             if constexpr (is_bcast_sender && Core::is_sender_core) {
