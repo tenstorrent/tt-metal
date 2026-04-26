@@ -57,16 +57,23 @@ struct handshake_info_t {
 
 FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     uint32_t handshake_register_address, uint16_t my_mesh_id, uint8_t my_device_id) {
-    // FIX AG: Flush any stale ETH TX queue state left by the previous firmware run.
-    // ERISC soft-reset (TERMINATE protocol) halts the RISCV core but does NOT reset
-    // ETH hardware peripherals. If the prior ERISC was terminated while an ETH TX was
-    // in-flight (e.g., during READY_FOR_TRAFFIC routing), ETH_TXQ_STATUS[CMD_ONGOING]
-    // remains set. The new firmware's first eth_send_packet() call then spins forever
-    // in eth_txq_is_busy(), deadlocking the handshake at STARTED.
-    // Writing ETH_TXQ_CMD_FLUSH aborts the stale transfer before we begin handshaking.
-    eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
-    eth_txq_reg_read(0, ETH_TXQ_CMD);  // dummy read (matches eth_txq_is_busy pattern)
-    while (eth_txq_is_busy()) {}        // wait for flush to complete
+    // FIX AH: Flush stale ETH TX queue state, but only when the queue is actually busy.
+    // ERISC soft-reset halts the RISCV core but does NOT reset ETH MAC/DMA hardware.
+    // If the prior firmware was terminated while an ETH TX was in-flight, ETH_TXQ_CMD
+    // remains non-zero, causing the next eth_send_packet() to spin forever on
+    // eth_txq_is_busy(). ETH_TXQ_CMD_FLUSH aborts that stale transfer.
+    //
+    // CRITICAL: On Wormhole, eth_txq_is_busy() = (ETH_TXQ_CMD != 0).
+    // Writing ETH_TXQ_CMD_FLUSH=0x8 to an already-idle queue (ETH_TXQ_CMD==0) may NOT
+    // auto-clear the register (HW does not self-clear for a no-op flush). The subsequent
+    // while(eth_txq_is_busy()){} would then spin forever — observed as both local ERISC
+    // and peer ERISC hanging at STARTED. Guard the flush to skip it when the queue is
+    // already idle (ETH_TXQ_CMD==0): nothing to abort, no hang risk.
+    if (eth_txq_is_busy()) {
+        eth_txq_reg_write(0, ETH_TXQ_CMD, ETH_TXQ_CMD_FLUSH);
+        eth_txq_reg_read(0, ETH_TXQ_CMD);  // dummy read (matches eth_txq_is_busy pattern)
+        while (eth_txq_is_busy()) {}        // wait for flush to complete
+    }
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
