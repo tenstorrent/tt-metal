@@ -896,17 +896,14 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
         pytest.param(
             frozenset([1]),
             id="sram_expert_1",
-            marks=pytest.mark.xfail(
-                reason="SRAM expert kernel path not yet implemented: mul_num_experts hardcoded to 8", strict=False
-            ),
+            marks=pytest.mark.xfail(reason="SRAM fused expert path is still under integration", strict=False),
         ),
     ],
 )
-@pytest.mark.parametrize("hot_expert_ids", [None, [1]], ids=["no_hot", "hot_skip_1"])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
-    bh_2d_mesh_device, sram_expert_ids, hot_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+    bh_2d_mesh_device, sram_expert_ids, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
@@ -964,13 +961,14 @@ def test_moe_fused_with_reduce(
 
     if sram_expert_ids:
         # Mark SRAM experts in gate_indices tensor by setting bit 15 (0x8000).
-        # The tensor is (16, 16) uint16 where element [k % 16, k // 16] == k (global expert id).
+        # The tensor is (16, 16) uint16 where element [k % 16, k // 16] normally stores
+        # k (global expert id). SRAM entries store compact slots, matching encode_expert_indices().
         # The gate kernel reads from this tensor and writes the matching value to gate_output_indices,
         # so the SRAM flag propagates to the index used by the DRAM matmul reader.
         indices = torch.arange(256, dtype=torch.int32).reshape(16, 16)
         gate_indices_torch = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
-        for expert_id in sram_expert_ids:
-            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | expert_id
+        for slot, expert_id in enumerate(sorted(sram_expert_ids)):
+            gate_indices_torch[expert_id % 16, expert_id // 16] = 0x8000 | slot
         r = r._replace(
             ttnn_gate_indices=ttnn.from_torch(
                 gate_indices_torch,
@@ -1138,7 +1136,7 @@ def test_moe_fused_with_reduce(
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
-        hot_expert_ids=hot_expert_ids,
+        sram_expert_ids=sorted(sram_expert_ids),
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1148,7 +1146,12 @@ def test_moe_fused_with_reduce(
     device_gate_indices = ttnn.to_torch(ttnn_result_indices, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     _ = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
-    tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)
+    sram_slot_to_expert = {slot: expert_id for slot, expert_id in enumerate(sorted(sram_expert_ids))}
+    tt_top8_raw = device_gate_indices[0].flatten()[:8].to(torch.int64)
+    tt_top8 = torch.tensor(
+        [sram_slot_to_expert[int(raw & 0x7FFF)] if int(raw) & 0x8000 else int(raw) for raw in tt_top8_raw],
+        dtype=torch.int64,
+    )
     tt_top8_sorted = torch.sort(tt_top8).values
     expected_top8_sorted = torch.sort(torch.tensor(expected_expert_ids, dtype=torch.int64)).values
     assert torch.equal(tt_top8_sorted, expected_top8_sorted), (
@@ -1175,20 +1178,6 @@ def test_moe_fused_with_reduce(
         gate_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.expert_weights_dict.items()}
         up_dict_d = {e: w[:, :, :, gate_slice_start:gate_slice_end] for e, w in r.up_proj_weights_dict.items()}
         down_dict_d = {e: w[:, :, down_slice_start:down_slice_end, :] for e, w in r.down_proj_weights_dict.items()}
-
-        # SRAM experts are skipped by the DRAM matmul reader — zero their weights in the golden
-        # so the expected output matches what the kernel actually computes.
-        if sram_expert_ids:
-            gate_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in gate_dict_d.items()}
-            up_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in up_dict_d.items()}
-            down_dict_d = {e: (torch.zeros_like(w) if e in sram_expert_ids else w) for e, w in down_dict_d.items()}
-        # Hot experts are skipped by the DRAM matmul reader (Phase 2 chunk 1A) — zero their
-        # weights in the golden so the expected output matches what the cold kernel computes.
-        if hot_expert_ids:
-            _hot = set(hot_expert_ids)
-            gate_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in gate_dict_d.items()}
-            up_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in up_dict_d.items()}
-            down_dict_d = {e: (torch.zeros_like(w) if e in _hot else w) for e, w in down_dict_d.items()}
 
         _, _, device_expected = MoeOp.golden(
             r.torch_input,

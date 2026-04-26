@@ -109,14 +109,7 @@ struct MatmulExpertCompressedDRAM {
         uint32_t num_subblocks_k_local_,
         // Dedicated global sem for K-reduction (passed as address). PACK on the reducer
         // polls it; NCRISC on senders increments. Separate from pipeline_sem (ring protocol).
-        uint32_t partial_sem_addr_,
-        // Hot experts: skip raw_idx that matches any hot_expert_N when num_hot_experts > 0.
-        // Defaults to 0 (no hot experts) so callers that don't pass these compile unchanged.
-        uint32_t num_hot_experts_ = 0,
-        uint32_t hot_expert_0_ = 0,
-        uint32_t hot_expert_1_ = 0,
-        uint32_t hot_expert_2_ = 0,
-        uint32_t hot_expert_3_ = 0>
+        uint32_t partial_sem_addr_>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -165,11 +158,6 @@ struct MatmulExpertCompressedDRAM {
         // Only meaningful inside `if constexpr (inner_dim_reduction)` scope.
         static constexpr bool is_sender = !is_reducer;
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
-        static constexpr uint32_t num_hot_experts = num_hot_experts_;
-        static constexpr uint32_t hot_expert_0 = hot_expert_0_;
-        static constexpr uint32_t hot_expert_1 = hot_expert_1_;
-        static constexpr uint32_t hot_expert_2 = hot_expert_2_;
-        static constexpr uint32_t hot_expert_3 = hot_expert_3_;
     };
 
     template <
@@ -204,13 +192,7 @@ struct MatmulExpertCompressedDRAM {
         // the post-reduction silu fast-path (tile shape = [silu_tile_h, tile_w]).
         // silu_tile_h is pre-padded by op.py to a valid face_r_dim ∈ {2,4,8,16}.
         uint32_t cb_out_silu_,
-        uint32_t silu_tile_h_,
-        // Hot experts: same as ReaderCTArgs.
-        uint32_t num_hot_experts_ = 0,
-        uint32_t hot_expert_0_ = 0,
-        uint32_t hot_expert_1_ = 0,
-        uint32_t hot_expert_2_ = 0,
-        uint32_t hot_expert_3_ = 0>
+        uint32_t silu_tile_h_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -248,11 +230,6 @@ struct MatmulExpertCompressedDRAM {
         static constexpr uint32_t partial_sem_addr = partial_sem_addr_;
         static constexpr uint32_t cb_out_silu = cb_out_silu_;
         static constexpr uint32_t silu_tile_h = silu_tile_h_;
-        static constexpr uint32_t num_hot_experts = num_hot_experts_;
-        static constexpr uint32_t hot_expert_0 = hot_expert_0_;
-        static constexpr uint32_t hot_expert_1 = hot_expert_1_;
-        static constexpr uint32_t hot_expert_2 = hot_expert_2_;
-        static constexpr uint32_t hot_expert_3 = hot_expert_3_;
     };
 
     struct WriterCTArgs {};
@@ -351,26 +328,6 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t raw_idx = static_cast<uint32_t>(index_ptr[exp_i + CTArgs::index_offset]);
                 if (is_sram_expert(raw_idx)) {
                     continue;  // bit15=1 → SRAM expert, skip
-                }
-                if constexpr (CTArgs::num_hot_experts >= 1) {
-                    if (raw_idx == CTArgs::hot_expert_0) {
-                        continue;
-                    }
-                }
-                if constexpr (CTArgs::num_hot_experts >= 2) {
-                    if (raw_idx == CTArgs::hot_expert_1) {
-                        continue;
-                    }
-                }
-                if constexpr (CTArgs::num_hot_experts >= 3) {
-                    if (raw_idx == CTArgs::hot_expert_2) {
-                        continue;
-                    }
-                }
-                if constexpr (CTArgs::num_hot_experts >= 4) {
-                    if (raw_idx == CTArgs::hot_expert_3) {
-                        continue;
-                    }
                 }
                 uint32_t expert_idx = raw_idx;  // bit15=0, raw value is global expert ID
                 // For K-split, expert_offsets already points at this K-slice's start (set in op.py).
@@ -594,28 +551,7 @@ struct MatmulExpertCompressedDRAM {
                     }));
                     MATH(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
                     PACK(raw_idx_i = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-                    bool is_hot_skip = false;
-                    if constexpr (CTArgs::num_hot_experts >= 1) {
-                        if (raw_idx_i == CTArgs::hot_expert_0) {
-                            is_hot_skip = true;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 2) {
-                        if (raw_idx_i == CTArgs::hot_expert_1) {
-                            is_hot_skip = true;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 3) {
-                        if (raw_idx_i == CTArgs::hot_expert_2) {
-                            is_hot_skip = true;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 4) {
-                        if (raw_idx_i == CTArgs::hot_expert_3) {
-                            is_hot_skip = true;
-                        }
-                    }
-                    if (!(is_sram_expert(raw_idx_i)) && !is_hot_skip) {
+                    if (!(is_sram_expert(raw_idx_i))) {
                         num_dram_experts++;
                     }
                 }
@@ -634,27 +570,6 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
-                    if constexpr (CTArgs::num_hot_experts >= 1) {
-                        if (raw_idx == CTArgs::hot_expert_0) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 2) {
-                        if (raw_idx == CTArgs::hot_expert_1) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 3) {
-                        if (raw_idx == CTArgs::hot_expert_2) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 4) {
-                        if (raw_idx == CTArgs::hot_expert_3) {
-                            continue;
-                        }
-                    }
-
                     cb_reserve_back(CTArgs::cb_out, CTArgs::per_core_n);
 
                     if (dram_idx == 0) {
@@ -757,27 +672,6 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
-                    if constexpr (CTArgs::num_hot_experts >= 1) {
-                        if (raw_idx == CTArgs::hot_expert_0) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 2) {
-                        if (raw_idx == CTArgs::hot_expert_1) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 3) {
-                        if (raw_idx == CTArgs::hot_expert_2) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 4) {
-                        if (raw_idx == CTArgs::hot_expert_3) {
-                            continue;
-                        }
-                    }
-
                     UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
@@ -930,27 +824,6 @@ struct MatmulExpertCompressedDRAM {
                     if (is_sram_expert(raw_idx)) {
                         continue;
                     }
-                    if constexpr (CTArgs::num_hot_experts >= 1) {
-                        if (raw_idx == CTArgs::hot_expert_0) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 2) {
-                        if (raw_idx == CTArgs::hot_expert_1) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 3) {
-                        if (raw_idx == CTArgs::hot_expert_2) {
-                            continue;
-                        }
-                    }
-                    if constexpr (CTArgs::num_hot_experts >= 4) {
-                        if (raw_idx == CTArgs::hot_expert_3) {
-                            continue;
-                        }
-                    }
-
                     UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1)));
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(

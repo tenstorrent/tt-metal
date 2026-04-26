@@ -20,12 +20,19 @@
 //   5.  Mcast Index (routed, sender → compute cores)
 //  5b.  Mcast Expert Scale (routed, sender → gate_proj cores)
 //  5c.  Gated Reduce (shared, sender core): SiLU(sum(gate)) * sum(up)
-//   6.  gate_proj DRAM MM+SiLU (routed, 8 DRAM cores)
-//   7.  up_proj DRAM MM (routed, 8 DRAM cores)
-//   8.  Fused mul (routed, 8 DRAM cores)
-//   9.  down_proj Gather (routed, gate_proj → sender)
-//  10.  down_proj Mcast (routed, sender → gate_proj)
-//  11.  down_proj DRAM MM (routed, 8 DRAM cores)
+//  6a.  gate_proj SRAM MM (routed, 64 SRAM gate cores — hot experts)
+//   6.  gate_proj DRAM MM+SiLU (routed, 8 DRAM cores — cold experts)
+//  7a.  up_proj SRAM MM (routed, 64 SRAM up cores — hot experts)
+//   7.  up_proj DRAM MM (routed, 8 DRAM cores — cold experts)
+//  6c.  SRAM gate gather (routed, 64 SRAM gate cores → gated_reduce_core)
+//  7c.  SRAM up gather (routed, 64 SRAM up cores → gated_reduce_core)
+//   8.  Fused mul (routed cold, 8 DRAM cores)
+// 10a.  SRAM Routed Gated Reduce (gated_reduce_core, hot path: Σ_hot SiLU(g)·u·s)
+// 10b.  SRAM Routed Down Mcast (sender → sram_down compute cores)
+// 11a.  down_proj Gather (cold gate_proj cores → sender)
+// 11b.  down_proj Mcast (sender → gate_proj cores)
+// 12a.  SRAM down_proj MM (sram_down compute cores, hot experts)
+// 12b.  down_proj DRAM MM (routed, 8 DRAM cores, cold experts)
 // 11b.  Down Mcast (shared, sender → 112 cores): gated reduce output [1, K_down]
 // 11c.  Down Proj Matmul (shared, 112 cores): SRAM matmul [1,K_down] x [K_down,N_per_core]
 // 11d.  Residual Add (shared, 112 cores): matmul_out + shard(residual)
@@ -52,11 +59,13 @@
 #endif
 #include "../../unified_kernels/rmsnorm.hpp"
 #include "../../unified_kernels/matmul_expert_compressed_dram.hpp"
+#include "../../unified_kernels/matmul_expert_compressed_sram.hpp"
 #include "../../unified_kernels/eltwise_mul.hpp"
 #include "../../unified_kernels/eltwise_add.hpp"
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../unified_kernels/gated_reduce.hpp"
 #include "../../unified_kernels/residual_add.hpp"
+#include "api/debug/dprint.h"
 #ifdef ENABLE_REDUCE_TO_ONE
 #include "../../unified_kernels/reduce_to_one_b1.hpp"
 #endif
@@ -74,6 +83,14 @@ struct Core {
     struct Routed {
         static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
         static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
+        // SRAM (hot) expert compute cores — 64 each, disjoint from gate_proj_core (DRAM cold).
+        static constexpr bool is_sram_gate_compute_core =
+            get_named_compile_time_arg_val("is_sram_gate_compute_core") == 1;
+        static constexpr bool is_sram_up_compute_core = get_named_compile_time_arg_val("is_sram_up_compute_core") == 1;
+        // SRAM down_proj compute cores — receive sram_routed_down_mcast output and run
+        // MatmulExpertCompressedSRAM for hot experts (step 12a).
+        static constexpr bool is_sram_down_compute_core =
+            get_named_compile_time_arg_val("is_sram_down_compute_core") == 1;
     };
     struct Shared {
         static constexpr bool is_compute_core = get_named_compile_time_arg_val("is_shared_compute_core") == 1;
@@ -84,8 +101,9 @@ struct Core {
             get_named_compile_time_arg_val("is_shared_mcast_receiver_core") == 1;
     };
     // Combined: cores that receive the input mcast
-    static constexpr bool is_input_mcast_receiver =
-        Routed::is_gate_mm_core || Routed::is_gate_proj_core || Shared::is_compute_core;
+    static constexpr bool is_input_mcast_receiver = Routed::is_gate_mm_core || Routed::is_gate_proj_core ||
+                                                    Routed::is_sram_gate_compute_core ||
+                                                    Routed::is_sram_up_compute_core || Shared::is_compute_core;
 
     // Reduce-to-one core roles
     static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
@@ -93,6 +111,7 @@ struct Core {
 };
 
 void kernel_main() {
+    DPRINT << "KSTART" << ENDL();
 #if defined(RECONFIG_MOE_CBS)
     {
         constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
@@ -179,12 +198,22 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_k_parallel_per_bank"),
                 get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
-                get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
-                get_named_compile_time_arg_val("num_hot_experts"),
-                get_named_compile_time_arg_val("hot_expert_0"),
-                get_named_compile_time_arg_val("hot_expert_1"),
-                get_named_compile_time_arg_val("hot_expert_2"),
-                get_named_compile_time_arg_val("hot_expert_3")>;
+                get_named_compile_time_arg_val("gate_proj_partial_sem_addr")>;
+
+            // SRAM gate_proj (hot experts) — runs on is_sram_gate_compute_core (64 cores)
+            using SRAMGateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("sram_gate_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_gate_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_gate_proj_out_w"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_in0_num_pages"),
+                get_named_compile_time_arg_val("sram_gate_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_gate_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_gate_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_gate_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_gate_proj_k_offset")>;
 
             // up_proj DRAM Matmul Expert Compressed (reader) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
@@ -223,12 +252,72 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_k_parallel_per_bank"),
                 get_named_compile_time_arg_val("up_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
-                get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
-                get_named_compile_time_arg_val("num_hot_experts"),
-                get_named_compile_time_arg_val("hot_expert_0"),
-                get_named_compile_time_arg_val("hot_expert_1"),
-                get_named_compile_time_arg_val("hot_expert_2"),
-                get_named_compile_time_arg_val("hot_expert_3")>;
+                get_named_compile_time_arg_val("up_proj_partial_sem_addr")>;
+
+            // SRAM up_proj (hot experts) — runs on is_sram_up_compute_core (64 cores)
+            using SRAMUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("sram_up_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_up_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_up_proj_out_w"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_in0_num_pages"),
+                get_named_compile_time_arg_val("sram_up_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_up_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_up_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_up_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_up_proj_k_offset")>;
+
+            // SRAM down_proj (hot experts) — runs on is_sram_down_compute_core
+            // cb_in0 = sram_routed_down_mcast_dst_cb (output of step 10b mcast)
+            using SRAMDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("sram_down_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_down_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_down_proj_out_w"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_in0_num_pages"),
+                get_named_compile_time_arg_val("sram_down_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_down_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_down_proj_k_offset")>;
+
+            // SRAM gate gather (receiver) — 64 sram_gate cores → is_shared_gated_reduce_core
+            deepseek_b1_ops::MoeGather::ReceiverArgs sram_ag_args{
+                get_named_compile_time_arg_val("sram_ag_noc0_num_senders"),
+                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("sram_ag_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_ag_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_ag_dst_cb"),
+                get_named_compile_time_arg_val("sram_ag_dst_num_pages"),
+            };
+
+            // SRAM up gather (receiver) — 64 sram_up cores → is_shared_gated_reduce_core
+            deepseek_b1_ops::MoeGather::ReceiverArgs sram_bg_args{
+                get_named_compile_time_arg_val("sram_bg_noc0_num_senders"),
+                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("sram_bg_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_bg_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_bg_dst_cb"),
+                get_named_compile_time_arg_val("sram_bg_dst_num_pages"),
+            };
+
+            // SRAM Routed Gated Reduce (reader — no-op for NCRISC)
+            using SRAMRoutedGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
+            deepseek_b1_ops::GatedReduce::ReaderArgs sram_routed_gated_reduce_args{};
+
+            // SRAM Routed Down Mcast — receiver (mcast SRAM gated reduce output → 112 down_proj cores)
+            using SRAMRoutedDownMcastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
+            deepseek_b1_ops::Mcast::DMArgs sram_routed_down_mcast_args{
+                .sender = {},
+                .receiver = {
+                    get_named_compile_time_arg_val("sram_routed_down_mcast_data_receiver_semaphore_addr"),
+                    get_named_compile_time_arg_val("sram_routed_down_mcast_dst_cb"),
+                    get_named_compile_time_arg_val("sram_routed_down_mcast_dst_num_pages"),
+                }};
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -283,12 +372,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_k_parallel_per_bank"),
                 get_named_compile_time_arg_val("down_proj_k_slice_idx"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
-                get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
-                get_named_compile_time_arg_val("num_hot_experts"),
-                get_named_compile_time_arg_val("hot_expert_0"),
-                get_named_compile_time_arg_val("hot_expert_1"),
-                get_named_compile_time_arg_val("hot_expert_2"),
-                get_named_compile_time_arg_val("hot_expert_3")>;
+                get_named_compile_time_arg_val("down_proj_partial_sem_addr")>;
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -425,6 +509,23 @@ void kernel_main() {
             // pre-loading it would fill CB capacity and deadlock gate_proj at expert 7.
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
+            // 3-way add: register add_cb_in2 (alias to sram_down_proj_cb_out) when active.
+            // The 32x32 view alias has 1 page; cb_wait_front on the producer
+            // (sram_down_proj_cb_out) drives readiness in TRISC.
+            if constexpr (get_named_compile_time_arg_val("add_has_third_input") == 1) {
+                unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("add_cb_in2"), 1);
+            }
+        }
+
+        // SRAM hot-expert weights pre-loaded in L1 (WIDTH_SHARDED / HEIGHT_SHARDED).
+        if constexpr (Core::Routed::is_sram_gate_compute_core) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_gate_proj_cb_in1"), 1);
+        }
+        if constexpr (Core::Routed::is_sram_up_compute_core) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_up_proj_cb_in1"), 1);
+        }
+        if constexpr (Core::Routed::is_sram_down_compute_core) {
+            unified_kernels::setup_sharded_buffer(get_named_compile_time_arg_val("sram_down_proj_cb_in1"), 1);
         }
     };
 #ifndef RECONFIG_MOE_CBS
@@ -535,6 +636,74 @@ void kernel_main() {
             // DRAM Matmul Expert Compressed (writer — empty, BRISC is no-op)
             using GateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::WriterCTArgs;
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::WriterCTArgs;
+
+            // SRAM Matmul Expert Compressed (writer — empty, BRISC is no-op)
+            using SRAMGateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
+            using SRAMUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
+            using SRAMDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
+
+            // SRAM gate gather (sender) — 64 sram_gate cores → is_shared_gated_reduce_core
+            deepseek_b1_ops::MoeGather::SenderArgs sram_ag_args{
+                get_named_compile_time_arg_val("sram_ag_dest_noc_x"),
+                get_named_compile_time_arg_val("sram_ag_dest_noc_y"),
+                get_named_compile_time_arg_val("sram_ag_data_size_bytes"),
+                get_named_compile_time_arg_val("sram_ag_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_ag_src_cb"),
+                get_named_compile_time_arg_val("sram_ag_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,  // row_major (unused with UsePerCoreSenderIdx)
+                get_named_compile_time_arg_val("sram_ag_receiver_data_addr"),
+                get_named_compile_time_arg_val("sram_ag_sender_idx"),
+                get_named_compile_time_arg_val("sram_ag_num_experts"),
+                get_named_compile_time_arg_val("sram_ag_src_page_size"),
+                get_named_compile_time_arg_val("sram_ag_expert_dst_stride"),
+            };
+
+            // SRAM up gather (sender) — 64 sram_up cores → is_shared_gated_reduce_core
+            deepseek_b1_ops::MoeGather::SenderArgs sram_bg_args{
+                get_named_compile_time_arg_val("sram_bg_dest_noc_x"),
+                get_named_compile_time_arg_val("sram_bg_dest_noc_y"),
+                get_named_compile_time_arg_val("sram_bg_data_size_bytes"),
+                get_named_compile_time_arg_val("sram_bg_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_bg_src_cb"),
+                get_named_compile_time_arg_val("sram_bg_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_named_compile_time_arg_val("sram_bg_receiver_data_addr"),
+                get_named_compile_time_arg_val("sram_bg_sender_idx"),
+                get_named_compile_time_arg_val("sram_bg_num_experts"),
+                get_named_compile_time_arg_val("sram_bg_src_page_size"),
+                get_named_compile_time_arg_val("sram_bg_expert_dst_stride"),
+            };
+
+            // SRAM Routed Gated Reduce (writer — no-op for BRISC)
+            using SRAMRoutedGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
+            deepseek_b1_ops::GatedReduce::WriterArgs sram_routed_gated_reduce_args{};
+
+            // SRAM Routed Down Mcast — sender (full grid, persistent sender — same noc grid as Routed::McastCTArgs)
+            using SRAMRoutedDownMcastCTArgs = Routed::McastCTArgs;
+            deepseek_b1_ops::Mcast::DMArgs sram_routed_down_mcast_args{
+                .sender =
+                    {
+                        get_named_compile_time_arg_val("moe_mcast_dest_noc_start_x"),
+                        get_named_compile_time_arg_val("moe_mcast_dest_noc_start_y"),
+                        get_named_compile_time_arg_val("moe_mcast_dest_noc_end_x"),
+                        get_named_compile_time_arg_val("moe_mcast_dest_noc_end_y"),
+                        get_named_compile_time_arg_val("sram_routed_down_mcast_data_sender_semaphore_addr"),
+                        get_named_compile_time_arg_val("sram_routed_down_mcast_data_receiver_semaphore_addr"),
+                        get_named_compile_time_arg_val("sram_routed_down_mcast_data_size_bytes"),
+                        get_named_compile_time_arg_val("sram_routed_down_mcast_src_cb"),
+                        get_named_compile_time_arg_val("sram_routed_down_mcast_src_num_pages"),
+                        get_read_ptr(get_named_compile_time_arg_val("sram_routed_down_mcast_src_cb")),
+                        get_write_ptr(get_named_compile_time_arg_val("sram_routed_down_mcast_dst_cb")),
+                    },
+                .receiver = {}};
 
             // Eltwise Mul (writer)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
@@ -868,12 +1037,26 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("gate_proj_cb_out_silu"),
-                get_named_compile_time_arg_val("gate_proj_silu_tile_h"),
-                get_named_compile_time_arg_val("num_hot_experts"),
-                get_named_compile_time_arg_val("hot_expert_0"),
-                get_named_compile_time_arg_val("hot_expert_1"),
-                get_named_compile_time_arg_val("hot_expert_2"),
-                get_named_compile_time_arg_val("hot_expert_3")>;
+                get_named_compile_time_arg_val("gate_proj_silu_tile_h")>;
+
+            // SRAM gate_proj (compute) — runs on is_sram_gate_compute_core (64 cores)
+            using SRAMGateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_gate_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_gate_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_gate_proj_out_w"),
+                get_named_compile_time_arg_val("sram_gate_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_gate_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_gate_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_gate_proj_base_addrs_l1_addr"),
+                get_named_compile_time_arg_val("sram_gate_proj_meta_words_per_expert"),
+                get_named_compile_time_arg_val("sram_gate_proj_in0_page_size"),
+                get_named_compile_time_arg_val("sram_gate_proj_accum_experts"),
+                get_named_compile_time_arg_val("sram_gate_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_gate_proj_k_offset"),
+                get_named_compile_time_arg_val("sram_gate_proj_cb_out_silu")>;
 
             // up_proj DRAM Matmul Expert Compressed (compute) — shares weight CB with gate_proj
             using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
@@ -904,12 +1087,65 @@ void kernel_main() {
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("up_proj_cb_out_silu"),
-                get_named_compile_time_arg_val("up_proj_silu_tile_h"),
-                get_named_compile_time_arg_val("num_hot_experts"),
-                get_named_compile_time_arg_val("hot_expert_0"),
-                get_named_compile_time_arg_val("hot_expert_1"),
-                get_named_compile_time_arg_val("hot_expert_2"),
-                get_named_compile_time_arg_val("hot_expert_3")>;
+                get_named_compile_time_arg_val("up_proj_silu_tile_h")>;
+
+            // SRAM up_proj (compute) — runs on is_sram_up_compute_core (64 cores)
+            using SRAMUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_up_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_up_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_up_proj_out_w"),
+                get_named_compile_time_arg_val("sram_up_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_up_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_up_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_up_proj_base_addrs_l1_addr"),
+                get_named_compile_time_arg_val("sram_up_proj_meta_words_per_expert"),
+                get_named_compile_time_arg_val("sram_up_proj_in0_page_size"),
+                get_named_compile_time_arg_val("sram_up_proj_accum_experts"),
+                get_named_compile_time_arg_val("sram_up_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_up_proj_k_offset"),
+                get_named_compile_time_arg_val("sram_up_proj_cb_out_silu")>;
+
+            // SRAM down_proj (compute) — runs on is_sram_down_compute_core
+            using SRAMDownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_down_proj_cb_in0"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_in1"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_index"),
+                get_named_compile_time_arg_val("sram_down_proj_num_tiles_k"),
+                get_named_compile_time_arg_val("sram_down_proj_out_w"),
+                get_named_compile_time_arg_val("sram_down_proj_fmt_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_num_active_experts"),
+                get_named_compile_time_arg_val("sram_down_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_base_addrs_l1_addr"),
+                get_named_compile_time_arg_val("sram_down_proj_meta_words_per_expert"),
+                get_named_compile_time_arg_val("sram_down_proj_in0_page_size"),
+                get_named_compile_time_arg_val("sram_down_proj_accum_experts"),
+                get_named_compile_time_arg_val("sram_down_proj_k_per_core"),
+                get_named_compile_time_arg_val("sram_down_proj_k_offset"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out_silu")>;
+
+            // SRAM gate/up gather (compute — no-op)
+            deepseek_b1_ops::MoeGather::ComputeArgs sram_ag_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs sram_bg_args{};
+
+            // SRAM Routed Gated Reduce (compute) — emits one SiLU(gate_e) * up_e tile per SRAM expert.
+            using SRAMRoutedGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_tiles_per_k"),
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_k_num_tiles"),
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_num_experts")>;
+            deepseek_b1_ops::GatedReduce::ComputeArgs sram_routed_gated_reduce_args{
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_group1_cb"),
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_group2_cb"),
+                get_named_compile_time_arg_val("sram_routed_gated_reduce_intermed_cb"),
+                get_named_compile_time_arg_val("sram_routed_mcast_src_cb"),
+            };
+
+            // SRAM Routed Down Mcast (compute — no-op)
+            using SRAMRoutedDownMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
+            deepseek_b1_ops::Mcast::ComputeArgs sram_routed_down_mcast_args{};
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -961,14 +1197,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
                 get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
                 get_named_compile_time_arg_val("down_proj_cb_out_silu"),
-                get_named_compile_time_arg_val("down_proj_silu_tile_h"),
-                get_named_compile_time_arg_val("num_hot_experts"),
-                get_named_compile_time_arg_val("hot_expert_0"),
-                get_named_compile_time_arg_val("hot_expert_1"),
-                get_named_compile_time_arg_val("hot_expert_2"),
-                get_named_compile_time_arg_val("hot_expert_3")>;
+                get_named_compile_time_arg_val("down_proj_silu_tile_h")>;
 
             // Eltwise Add (compute)
+            // 3-way variant accumulates cb_in2 (sram_down_proj_cb_out) when add_has_third_input=1.
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
                 get_named_compile_time_arg_val("add_cb_in0"),
                 get_named_compile_time_arg_val("add_cb_in1"),
@@ -978,7 +1210,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_per_core_n"),  // cb_in0_wait_tiles
                 get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
                 get_named_compile_time_arg_val("add_sender_index"),
-                get_named_compile_time_arg_val("add_slice_size_bytes")>;
+                get_named_compile_time_arg_val("add_slice_size_bytes"),
+                get_named_compile_time_arg_val("add_cb_in2"),
+                get_named_compile_time_arg_val("sram_down_proj_cb_out"),  // cb_in2_wait (1x32 producer)
+                get_named_compile_time_arg_val("sram_down_proj_out_w")>;  // cb_in2_wait_tiles = producer pages
 
             // Residual Mcast (compute — no-op)
             using ResidualMcastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
@@ -1244,15 +1479,19 @@ void kernel_main() {
 #endif  // ENABLE_ROUTING
 
         // 3. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
-        //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
-        //     and up_proj (step 7, which pops it). So we only pop here on non-gate_proj cores.
+        //     CB 1 (act) is shared: on gate_proj cores DRAM up_proj (step 7) pops it.
+        //     On is_sram_gate_compute_core / is_sram_up_compute_core cores, SRAM matmul
+        //     (steps 6a/7a) needs cb_in0 still present, so don't pop here either.
+        //     For 1-iteration tests this leaks num_tiles_k pages on pure-SRAM cores; fixed
+        //     in chunk 2 by having SRAM matmul own the pop on its non-overlap cores.
         {
             DeviceZoneScopedN("SHARED_GU_MATMUL");
             deepseek_b1_ops::KNSlicedMatmul::Op<
                 Moe::Shared::GUMatmulCTArgs,
                 Core::Shared::is_compute_core,
-                !Core::Routed::is_gate_proj_core,  // pop_act
-                false>                             // pop_weights
+                !Core::Routed::is_gate_proj_core && !Core::Routed::is_sram_gate_compute_core &&
+                    !Core::Routed::is_sram_up_compute_core,  // pop_act
+                false>                                       // pop_weights
                 shared_gu_matmul;
             shared_gu_matmul(moe.shared.gu_matmul_args);
         }
@@ -1294,7 +1533,8 @@ void kernel_main() {
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
                 Core::is_mcast_grid_core,
-                Core::Routed::is_gate_proj_core,
+                Core::Routed::is_gate_proj_core || Core::Routed::is_sram_gate_compute_core ||
+                    Core::Routed::is_sram_up_compute_core,
                 true,
                 /*ReceiverOnBrisc=*/true>
                 index_mcast;
@@ -1337,6 +1577,23 @@ void kernel_main() {
             gated_reduce(moe.shared.gated_reduce_args);
         }
 
+        // 6a. SRAM gate_proj (hot experts): runs on 64 is_sram_gate_compute_core cores,
+        //     which OVERLAP with is_gate_proj_core. cb_in0/cb_index are shared with the
+        //     DRAM gate/up path — DRAM up is last consumer of cb_in0 — so SRAM must not pop.
+        //     cb_in1 is sram_gate_proj_cb_in1 (separate from DRAM); SRAM owns its lifecycle.
+        {
+            DeviceZoneScopedN("SRAM_GATE_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SRAMGateProjCTArgs,
+                Core::Routed::is_sram_gate_compute_core,
+                /*pop_in0=*/false,
+                /*pop_in1=*/true,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_gate_proj_mm;
+            sram_gate_proj_mm();
+        }
+
         // 6. gate_proj: DRAM Matmul Expert Compressed + SiLU (PopIn0=false: keep input for up_proj).
         //    ResetCBIn1=true so the kernel's SW write-ptr wrap aligns with the CB's
         //    physical wrap — required because GP and UP share cb_in1 back-to-back.
@@ -1347,6 +1604,22 @@ void kernel_main() {
                 Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, false, true, gp_cb_in1_addr>
                     gate_proj_mm;
             gate_proj_mm();
+        }
+
+        // 7a. SRAM up_proj (hot experts): runs on 64 is_sram_up_compute_core cores,
+        //     which OVERLAP with is_gate_proj_core (DRAM up is last in0 consumer there).
+        //     SRAM up must not pop cb_in0/cb_index for the same reason as SRAM gate.
+        {
+            DeviceZoneScopedN("SRAM_UP_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SRAMUpProjCTArgs,
+                Core::Routed::is_sram_up_compute_core,
+                /*pop_in0=*/false,
+                /*pop_in1=*/true,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_up_proj_mm;
+            sram_up_proj_mm();
         }
 
         // 7. up_proj: DRAM Matmul Expert Compressed (PopIn0=true: last consumer of gate input; PopIndex=false).
@@ -1360,12 +1633,41 @@ void kernel_main() {
             up_proj();
         }
 
+        DPRINT << "P6c" << ENDL();
+        // 6c. SRAM gate gather: 64 sram_gate cores → is_shared_gated_reduce_core.
+        //     Receiver pushes into sram_ag_dst_cb, consumed by step 7d (GatedReduce).
+        {
+            DeviceZoneScopedN("SRAM_GATE_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Routed::is_sram_gate_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                sram_gate_gather;
+            sram_gate_gather(moe.routed.sram_ag_args);
+        }
+
+        DPRINT << "P7c" << ENDL();
+        // 7c. SRAM up gather: 64 sram_up cores → is_shared_gated_reduce_core.
+        //     Receiver pushes into sram_bg_dst_cb, consumed by step 7d (GatedReduce).
+        {
+            DeviceZoneScopedN("SRAM_UP_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Routed::is_sram_up_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true>
+                sram_up_gather;
+            sram_up_gather(moe.routed.sram_bg_args);
+        }
+
         // 8. Mul: Element-wise multiply (up_proj * gate_proj * expert_scale)
         {
             DeviceZoneScopedN("MUL");
             deepseek_b1_ops::EltwiseMul::Op<Moe::Routed::MulCTArgs, Core::Routed::is_gate_proj_core> mul_op;
             mul_op();
         }
+        DPRINT << "P9" << ENDL();
 
         // 9. Shared: Down Mcast — broadcast gated reduce output [1, K_down] to all 130 cores
         //      Source is mcast_src_cb (CB 31) filled by gated reduce, pop_src=true
@@ -1380,6 +1682,7 @@ void kernel_main() {
                 shared_down_mcast;
             shared_down_mcast(moe.shared.down_mcast_args);
         }
+        DPRINT << "P9b" << ENDL();
 
         // 9b. Shared: Down Proj Matmul — SRAM matmul [1, K_down] x [K_down, N_per_core] on 112 cores
         {
@@ -1438,7 +1741,32 @@ void kernel_main() {
             shared_output_mcast(moe.shared.output_mcast_args);
         }
 
-        // 10. down_proj Gather: Gather fused output from gate_proj cores to sender core
+        // 10a. SRAM Routed Gated Reduce — runs on is_gated_reduce_core.
+        //      Reduces each SRAM expert independently and writes expert-major face tiles.
+        //      Consumes sram_ag_dst_cb / sram_bg_dst_cb, writes sram_routed_mcast_src_cb.
+        {
+            DeviceZoneScopedN("SRAM_ROUTED_GATED_REDUCE");
+            deepseek_b1_ops::GatedReduce::
+                Op<Moe::Routed::SRAMRoutedGatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
+                    sram_routed_gated_reduce;
+            sram_routed_gated_reduce(moe.routed.sram_routed_gated_reduce_args);
+        }
+
+        // 10b. SRAM Routed Down Mcast — sender → SRAM down compute cores.
+        //      Receivers (is_sram_down_compute_core) consume in step 12a SRAM_DOWN_PROJ.
+        {
+            DeviceZoneScopedN("SRAM_ROUTED_DOWN_MCAST");
+            deepseek_b1_ops::Mcast::Op<
+                Moe::Routed::SRAMRoutedDownMcastCTArgs,
+                Core::is_sender_core,
+                Core::is_mcast_grid_core,
+                Core::Routed::is_sram_down_compute_core,
+                true>
+                sram_routed_down_mcast;
+            sram_routed_down_mcast(moe.routed.sram_routed_down_mcast_args);
+        }
+
+        // 11a. down_proj Gather: gather cold-path mul output from gate_proj cores to sender core.
         {
             DeviceZoneScopedN("DOWN_PROJ_GATHER");
             deepseek_b1_ops::MoeGather::Op<Core::Routed::is_gate_proj_core, Core::is_sender_core, true, true>
@@ -1446,7 +1774,7 @@ void kernel_main() {
             down_proj_gather(moe.routed.down_proj_gather_args);
         }
 
-        // 11. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
+        // 11b. DRAM down_proj Mcast: broadcast gathered cold-path output back to gate_proj cores.
         {
             DeviceZoneScopedN("DOWN_PROJ_MCAST");
             deepseek_b1_ops::Mcast::Op<
@@ -1460,7 +1788,22 @@ void kernel_main() {
             down_proj_mcast(moe.routed.down_proj_mcast_args);
         }
 
-        // 12. down_proj: DRAM Matmul Expert Compressed (PopIndex=true: last consumer of expert index)
+        // 12a. SRAM down_proj: hot-expert SRAM matmul on is_sram_down_compute_core.
+        //      Reads sram_routed_down_mcast_dst_cb (from 10b), writes sram_down_proj_cb_out.
+        {
+            DeviceZoneScopedN("SRAM_DOWN_PROJ");
+            deepseek_b1_ops::MatmulExpertCompressedSRAM::Op<
+                Moe::Routed::SRAMDownProjCTArgs,
+                Core::Routed::is_sram_down_compute_core,
+                /*pop_in0=*/true,
+                /*pop_in1=*/true,
+                /*pop_index=*/false,
+                /*pop_out=*/false>
+                sram_down_proj_mm;
+            sram_down_proj_mm();
+        }
+
+        // 12b. DRAM down_proj: cold-expert matmul on gate_proj cores (PopIndex=true: last consumer).
         {
             DeviceZoneScopedN("DOWN_PROJ");
             deepseek_b1_ops::MatmulExpertCompressedDRAM::
@@ -1469,7 +1812,7 @@ void kernel_main() {
             down_proj();
         }
 
-        // 13. Eltwise Add: down_proj + shared_expert_output
+        // 13. Eltwise Add: down_proj + shared_expert_output  (+ sram_down_proj_cb_out when 3-way)
         {
             DeviceZoneScopedN("ELTWISE_ADD");
             constexpr bool add_pop_output =
@@ -1478,11 +1821,13 @@ void kernel_main() {
 #else
                 true;  // pop for looping
 #endif
+            constexpr bool add_has_third_input = get_named_compile_time_arg_val("add_has_third_input") == 1;
             deepseek_b1_ops::EltwiseAdd::Op<
                 Moe::Routed::AddCTArgs,
                 Core::Routed::is_gate_proj_core,
-                true,            // PopInputs
-                add_pop_output>  // PopOutput
+                true,                 // PopInputs
+                add_pop_output,       // PopOutput
+                add_has_third_input>  // Has3Inputs — 3-way add (DRAM down + shared + SRAM down)
                 add_op;
             add_op();
         }

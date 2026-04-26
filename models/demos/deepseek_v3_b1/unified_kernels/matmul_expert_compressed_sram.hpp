@@ -18,6 +18,7 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/compute_kernel_api.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
@@ -129,12 +130,12 @@ struct MatmulExpertCompressedSRAM {
             constexpr uint32_t num_tiles_k = CTArgs::num_tiles_k;
             constexpr uint32_t out_w = CTArgs::out_w;
             constexpr uint32_t fmt_l1_addr_base = CTArgs::fmt_l1_addr;
-            // k_for_mm: K tiles for the matmul loop (may be < num_tiles_k when K-sliced).
-            // Defaults to num_tiles_k when sram_k_per_core is not set by the caller.
-            constexpr uint32_t k_for_mm = CTArgs::sram_k_per_core;
+            // k_for_mm: K tiles for the matmul loop. Defaults to num_tiles_k when
+            // sram_k_per_core is not set by the caller.
+            constexpr uint32_t k_for_mm = (CTArgs::sram_k_per_core == 0) ? num_tiles_k : CTArgs::sram_k_per_core;
             constexpr uint32_t k_offset = CTArgs::sram_k_offset;
-            constexpr uint32_t total_tiles = k_for_mm * out_w;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
+            constexpr uint32_t max_output_tiles = num_active_experts * out_w;
 
             cb_wait_front(cb_in1, 1);
             cb_wait_front(cb_index, 1);
@@ -181,8 +182,8 @@ struct MatmulExpertCompressedSRAM {
                     }
                 }
 
+                cb_reserve_back(cb_out, out_w);
                 if (num_sram_experts > 0) {
-                    cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
                     uint32_t sram_idx = 0;
@@ -222,19 +223,31 @@ struct MatmulExpertCompressedSRAM {
                         pack_tile(w, cb_out, w);
                     }
                     tile_regs_release();
-                    cb_push_back(cb_out, out_w);
-
-                    if constexpr (pop_out) {
-                        cb_wait_front(cb_out, out_w);
-                        cb_pop_front(cb_out, out_w);
+                } else {
+                    fill_tile_init();
+                    tile_regs_acquire();
+                    for (uint32_t w = 0; w < out_w; w++) {
+                        fill_tile(w, 0.0f);
                     }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t w = 0; w < out_w; w++) {
+                        pack_tile(w, cb_out, w);
+                    }
+                    tile_regs_release();
+                }
+                cb_push_back(cb_out, out_w);
+
+                if constexpr (pop_out) {
+                    cb_wait_front(cb_out, out_w);
+                    cb_pop_front(cb_out, out_w);
                 }
             } else {
                 if constexpr (k_offset > 0) {
                     UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base + k_offset * in0_page_size); }));
                 }
 
-                uint32_t num_sram_experts_pushed = 0;
+                cb_reserve_back(cb_out, max_output_tiles);
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
                     uint32_t raw_idx = 0;
                     UNPACK(({
@@ -254,7 +267,6 @@ struct MatmulExpertCompressedSRAM {
 
                     UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in1, expert_base); }));
 
-                    cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
                     compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
@@ -262,25 +274,15 @@ struct MatmulExpertCompressedSRAM {
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t w = 0; w < out_w; w++) {
-                        pack_tile(w, cb_out, w);
+                        pack_tile(w, cb_out, exp_i * out_w + w);
                     }
                     tile_regs_release();
-                    cb_push_back(cb_out, out_w);
-                    num_sram_experts_pushed++;
                 }
-
-                // Pad total pushes to num_active_experts * out_w so CB push count
-                // is deterministic across invocations (independent of SRAM/DRAM split).
-                const uint32_t padding = (num_active_experts - num_sram_experts_pushed) * out_w;
-                if (padding > 0) {
-                    cb_reserve_back(cb_out, padding);
-                    cb_push_back(cb_out, padding);
-                }
+                cb_push_back(cb_out, max_output_tiles);
 
                 if constexpr (pop_out) {
-                    constexpr uint32_t max_push = num_active_experts * out_w;
-                    cb_wait_front(cb_out, max_push);
-                    cb_pop_front(cb_out, max_push);
+                    cb_wait_front(cb_out, max_output_tiles);
+                    cb_pop_front(cb_out, max_output_tiles);
                 }
             }
 
