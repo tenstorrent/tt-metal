@@ -8,6 +8,13 @@ set -eo pipefail
 
 run_profiling_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
+
+    # Cross-reference real-time profiler durations against device profiler
+    # on a full TG (8x4) mesh. This test was consolidated into the unified
+    # real-time profiler test suite (tests/ttnn/tracy/test_realtime_profiler.py)
+    # under the name test_cross_reference_tg; the old standalone file
+    # test_profiler_cross_reference_TG.py no longer exists.
+    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_realtime_profiler.py::test_cross_reference_tg --timeout 2400
 }
 
 main() {

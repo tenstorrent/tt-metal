@@ -4,6 +4,7 @@
 
 #include "nanobind/nb_autograd.hpp"
 
+#include <fmt/core.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
@@ -356,6 +357,29 @@ void py_module(nb::module_& m) {
         "Create an autograd Tensor from a tt::tt_metal::Tensor");
 
     m.def("create_tensor", []() -> TensorPtr { return create_tensor(); }, "Create an empty autograd Tensor");
+
+    // Register a Python atexit hook to close the AutoContext device while the
+    // Python interpreter is still alive. AutoContext is held in
+    // ttsl::Indestructible<AutoContext>, so its destructor is intentionally
+    // never run; without this hook the underlying MeshDevice (and its
+    // D2HSocket / NamedShm resources) would never be torn down, and the C++
+    // ShmResourceTracker atexit handler that runs after Python finalization
+    // would walk std::set<std::string> entries whose backing heap may already
+    // have been recycled, causing a use-after-free at process exit.
+    nb::module_::import_("atexit").attr("register")(nb::cpp_function([]() {
+        // Best-effort cleanup at process exit: log and swallow. We can't
+        // re-throw — Python's atexit machinery would translate it into an
+        // unraisable error and we still want subsequent atexit handlers
+        // (and the C++ ShmResourceTracker handler) to run.
+        try {
+            AutoContext::get_instance().close_device();
+        } catch (const std::exception& e) {
+            fmt::println(stderr, "[tt-train] AutoContext close_device() failed during Python atexit: {}", e.what());
+        } catch (...) {
+            fmt::println(
+                stderr, "[tt-train] AutoContext close_device() failed during Python atexit: unknown exception");
+        }
+    }));
 }
 
 }  // namespace ttml::nanobind::autograd

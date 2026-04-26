@@ -5,6 +5,7 @@
 
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include <map>
 #include <string>
 #include <variant>
@@ -97,6 +98,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+    static_config_.realtime_profiler_msg_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
 }
 
 void DispatchSKernel::GenerateDependentConfigs() {
@@ -177,8 +180,21 @@ void DispatchSKernel::CreateKernel() {
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
+        {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+
+    if (GetCoreType() == CoreType::WORKER) {
+        const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
+        std::map<std::string, std::string> compute_defines = {
+            {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
+            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
+            {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        };
+        tt::tt_metal::ComputeConfig compute_config;
+        compute_config.defines = compute_defines;
+        tt::tt_metal::CreateKernel(*program_, compute_kernel_path, logical_core_, compute_config);
+    }
 }
 
 void DispatchSKernel::ConfigureCore() {

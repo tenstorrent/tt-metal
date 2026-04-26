@@ -24,7 +24,7 @@ Owner:
 
 import os
 
-from triage import ScriptConfig, log_check_risc, run_script
+from triage import ScriptConfig, log_check_risc, log_warning_risc, run_script, verbose_skips_enabled
 from callstack_provider import run as get_callstack_provider, CallstackProvider, CallstacksData
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
@@ -45,11 +45,15 @@ def dump_callstacks(
 ) -> CallstacksData | None:
     try:
         if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
+            if verbose_skips_enabled():
+                log_warning_risc(risc_name, location, "skip: risc_enabled() = False")
             return None
         # Skip DONE cores unless --all-cores is specified
         if not show_all_cores:
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
+                if verbose_skips_enabled():
+                    log_warning_risc(risc_name, location, "skip: go_message = DONE (pass --all-cores to include)")
                 return None
         return callstack_provider.get_cached_callstacks(location, risc_name)
     except TimeoutDeviceRegisterError:
@@ -59,8 +63,16 @@ def dump_callstacks(
             risc_name,
             location,
             False,
-            f"[warning]Failed to dump callstacks: {e}[/]",
+            f"[warning]Failed to dump callstacks ({type(e).__name__}): {e}[/]",
         )
+        if verbose_skips_enabled():
+            import traceback
+
+            log_warning_risc(
+                risc_name,
+                location,
+                f"dump_callstacks traceback:\n{traceback.format_exc()}",
+            )
         return None
 
 
