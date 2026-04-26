@@ -295,9 +295,6 @@ def test_normal_mode_shows_real_addresses():
 def test_extract_resource_usage_per_core():
     """Test per-core resource usage extraction from graph trace"""
     with ttnn.manage_device(device_id=0) as device:
-        grid_size = device.compute_with_storage_grid_size()
-        interleaved_storage_cores = grid_size.x * grid_size.y
-
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
 
         # Create tensors with known sizes
@@ -319,7 +316,7 @@ def test_extract_resource_usage_per_core():
         captured_graph = ttnn.graph.end_graph_capture()
 
         # Test the new function
-        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores)
+        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph)
 
         # Verify the struct has correct attributes
         assert hasattr(usage, "peak_cb"), "PeakMemoryUsagePerCore should have peak_cb attribute"
@@ -344,7 +341,6 @@ def test_extract_resource_usage_per_core():
         assert usage.peak_total > 0, "Expected non-zero memory usage for add operation"
 
         print(f"\nPer-core resource usage:")
-        print(f"  Cores:      {interleaved_storage_cores}")
         print(f"  Peak CB:    {usage.peak_cb:,} bytes")
         print(f"  Peak L1:    {usage.peak_l1:,} bytes")
         print(f"  Peak Total: {usage.peak_total:,} bytes")
@@ -353,9 +349,6 @@ def test_extract_resource_usage_per_core():
 def test_extract_resource_usage_per_core_repr():
     """Test __repr__ and __str__ methods of PeakMemoryUsagePerCore"""
     with ttnn.manage_device(device_id=0) as device:
-        grid_size = device.compute_with_storage_grid_size()
-        interleaved_storage_cores = grid_size.x * grid_size.y
-
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
         input_tensor = ttnn.from_torch(
             torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
@@ -367,7 +360,7 @@ def test_extract_resource_usage_per_core_repr():
         ttnn.relu(input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
-        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores)
+        usage = ttnn.graph.extract_resource_usage_per_core(captured_graph)
 
         # Test __repr__ - should return a valid Python representation
         repr_str = repr(usage)
@@ -390,13 +383,10 @@ def test_extract_resource_usage_per_core_repr():
 
 def test_extract_resource_usage_per_core_empty():
     """Test per-core resource usage with empty trace"""
-    grid_size_x, grid_size_y = 8, 7  # Typical grid size
-    interleaved_storage_cores = grid_size_x * grid_size_y
-
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
     captured_graph = ttnn.graph.end_graph_capture()
 
-    usage = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores)
+    usage = ttnn.graph.extract_resource_usage_per_core(captured_graph)
 
     # Empty trace should have zero usage
     assert usage.peak_cb == 0, "Empty trace should have zero CB usage"
