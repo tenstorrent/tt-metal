@@ -299,6 +299,7 @@ class WanAttention(Module):
         spatial_1BND: ttnn.Tensor,
         N: int,
         prompt_1BLP: ttnn.Tensor | None = None,
+        cross_attn_mask: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         trans_mat: ttnn.Tensor | None = None,
@@ -308,6 +309,8 @@ class WanAttention(Module):
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
+        cross_attn_mask: (optional, cross-attn only) mask for SDPA, shape [B|1, nqh|1, Sq, Sk].
+            Must be TILE layout, bf16/bfp8/bfp4 dtype, on device in DRAM.
         rope_cos: fractured on SP, TP
         rope_sin: fractured on SP, TP
         trans_mat: replicated
@@ -458,6 +461,7 @@ class WanAttention(Module):
                 k_BHNE,
                 v_BHNE,
                 is_causal=False,
+                attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
