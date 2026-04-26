@@ -241,10 +241,10 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
 // Format client name for tile counter output.
 // DM clients show paired DMs (e.g., DM0/DM4) because DM0-3 and DM4-7 share tile counter groups.
 inline void fprintClientName(FILE* f, uint32_t client_id) {
-    if (client_id < NEO_0) {
-        fprintf(f, "DM%u/DM%u", client_id, client_id + NEO_0);
+    if (client_id < overlay::NEO_0) {
+        fprintf(f, "DM%u/DM%u", client_id, client_id + overlay::NEO_0);
     } else {
-        fprintf(f, "NEO_%u", client_id - NEO_0);
+        fprintf(f, "NEO_%u", client_id - overlay::NEO_0);
     }
 }
 }  // namespace tt::tt_metal

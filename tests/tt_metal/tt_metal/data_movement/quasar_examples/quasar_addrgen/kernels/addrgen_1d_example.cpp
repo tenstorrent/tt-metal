@@ -12,6 +12,8 @@
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 constexpr uint32_t src_base = 0x10000;
 constexpr uint64_t src_stride = 4096;  // 2 tiles × 2048 B — skips 1 tile between each access
 
