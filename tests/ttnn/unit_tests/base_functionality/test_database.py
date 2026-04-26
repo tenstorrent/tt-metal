@@ -220,43 +220,20 @@ def test_sample_data_for_visualizer(device):
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_error_details_saved(device):
-    torch.manual_seed(0)
+    @ttnn.register_python_operation(name="ttnn.mock_operation")
+    def mock_operation(input_tensor):
+        raise RuntimeError("Out of Memory: Not enough space to allocate L1 buffer")
 
     with ttnn.manage_config("enable_logging", True):
-        with pytest.raises(Exception):
-            # Get device memory information to calculate appropriate tensor sizes
-            device_info = ttnn._ttnn.reports.get_device_info(device)
-            l1_memory_per_core = device_info.worker_l1_size
-            num_cores = device_info.num_compute_cores
-            total_l1_memory = device_info.total_l1_memory
+        torch_input_tensor = torch.rand((32, 32), dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
-            # Calculate tensor size that should definitely exceed available L1 memory
-            # Use a tensor size that's larger than total L1 memory across all cores
-            bfloat16_size = 2  # bytes per bfloat16
-            target_memory_usage = int(total_l1_memory * 1.5)  # 150% of total L1 memory
-            elements_needed = target_memory_usage // bfloat16_size
+        with pytest.raises(RuntimeError):
+            mock_operation(input_tensor)
 
-            # Calculate dimensions for a square tensor with this many elements
-            # Ensure dimensions are multiples of 32 for TILE_LAYOUT compatibility
-            side_length = int((elements_needed**0.5))
-            side_length = ((side_length + 31) // 32) * 32  # Round up to nearest multiple of 32
-
-            # Try to create a tensor that should definitely exceed memory limits
-            huge_tensor = ttnn.from_torch(
-                torch.rand((side_length, side_length), dtype=torch.bfloat16),
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            ttnn.synchronize_device(device)
-
-            # If that somehow succeeds, try an operation that requires even more memory
-            result = ttnn.exp(huge_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.synchronize_device(device)
-
-            # Clean up if we somehow get here
-            ttnn.deallocate(huge_tensor)
-            ttnn.deallocate(result)
+        ttnn.deallocate(input_tensor)
 
     sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
     cursor = sqlite_connection.cursor()
@@ -270,7 +247,7 @@ def test_error_details_saved(device):
 
     error_record = error_records[0]
     assert error_record.operation_id is not None
-    assert error_record.operation_name == "ttnn.from_torch"
+    assert error_record.operation_name == "ttnn.mock_operation"
     assert error_record.error_type == "RuntimeError"
     assert "Out of Memory: Not enough space to allocate" in error_record.error_message
     assert error_record.stack_trace.startswith("Traceback (most recent call last):")
