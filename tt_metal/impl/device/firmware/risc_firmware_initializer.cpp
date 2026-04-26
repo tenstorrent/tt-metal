@@ -213,15 +213,18 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // New teardown order:
         //   Step 1: Detect relay_broken_non_mmio and any_teardown_timed_out.
         //   Step 2: If relay broken — hard-reset MMIO ETH channels via PCIe (no relay
-        //           needed) and sleep 500ms so ERISCs reboot to UMD base relay firmware
-        //           BEFORE we enter the assert_cores/l1_barrier loop.
-        //   Step 3: assert_cores/l1_barrier loop — skip relay-broken non-MMIO devices
-        //           (avoids 5s timeouts; they'll be reset in step 5 anyway).
-        //   Step 4: set_internal_routing_info_for_ethernet_cores.
-        //   Step 5: Hard-reset non-MMIO ETH channels via relay (now functional after
-        //           step 2) + sleep 200ms for non-MMIO ERISCs to reboot.
-        //           If only teardown timed out (no relay broken): reset MMIO ETH
-        //           channels here instead (same recovery as old FIX AB).
+        //           needed) and sleep 500ms so MMIO ERISCs reboot to base firmware.
+        //   Step 3: assert_cores/l1_barrier loop — skip ALL non-MMIO devices when any
+        //           relay is broken (all share the same MMIO relay path; even devices
+        //           not in relay_broken_non_mmio are unreachable and would timeout).
+        //   Step 4: set_internal_routing_info_for_ethernet_cores — skip when relay
+        //           broken (relay write, would timeout).
+        //   Step 5: Hard-reset MMIO ETH channels via PCIe when teardown timed out but
+        //           relay wasn't broken (no step 2 in that case).
+        //           Non-MMIO ETH channels with stale firmware are NOT reset here —
+        //           relay-based resets are unreliable (UMD relay protocol state is not
+        //           restored simply by rebooting MMIO ERISCs).  Stale non-MMIO ERISCs
+        //           are safely cleaned up by terminate_stale_erisc_routers on next init.
 
         // Step 1: scan device flags.
         std::unordered_set<tt::ChipId> relay_broken_non_mmio;
@@ -288,13 +291,16 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
         }
 
-        // Step 3: assert_cores / l1_barrier.  Skip relay-broken non-MMIO devices —
-        // they can't service relay reads and would each time out for 5s.
+        // Step 3: assert_cores / l1_barrier.  Skip ALL non-MMIO devices when any relay
+        // is broken — all non-MMIO devices share the same MMIO relay path.  If the
+        // MMIO ERISCs are running fabric firmware (stuck handshake state), every
+        // non-MMIO relay read/write will timeout for 5s.  We can't reach any non-MMIO
+        // device, not just the ones explicitly in relay_broken_non_mmio.
         for (tt::ChipId device_id : all_devices) {
-            if (!mmio_ids_set.count(device_id) && relay_broken_non_mmio.count(device_id)) {
+            if (!mmio_ids_set.count(device_id) && !relay_broken_non_mmio.empty()) {
                 log_info(
                     tt::LogAlways,
-                    "teardown: FIX AC — skipping assert_cores/l1_barrier for relay-broken non-MMIO device {}",
+                    "teardown: FIX AC — relay broken; skipping assert_cores/l1_barrier for non-MMIO device {}",
                     device_id);
                 continue;
             }
@@ -321,9 +327,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         }
 
         // Step 4: set internal routing to false to exit active ethernet FW.
+        // Skip when relay is broken — this call writes to non-MMIO devices via relay
+        // and will timeout for each unreachable chip.  Non-MMIO ERISCs with stale
+        // firmware are cleaned up by terminate_stale_erisc_routers on next init.
         // Wrapping in try/catch: wait_for_non_mmio_flush() can throw UmdException
         // which does not inherit from std::exception.
-        if (get_control_plane_) {
+        if (get_control_plane_ && relay_broken_non_mmio.empty()) {
             try {
                 cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
             } catch (const std::exception& e) {
@@ -337,79 +346,58 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     "teardown: set_internal_routing_info_for_ethernet_cores failed with unknown exception type "
                     "(likely UmdException<RuntimeError> from dead ERISC relay on remote chip)");
             }
+        } else if (!relay_broken_non_mmio.empty()) {
+            log_warning(
+                tt::LogAlways,
+                "teardown: FIX AC — skipping set_internal_routing_info_for_ethernet_cores (relay broken; "
+                "would timeout per non-MMIO device). Non-MMIO ERISCs handled by terminate_stale_erisc_routers "
+                "on next init.");
         }
 
-        // Step 5: ETH channel reset for non-MMIO relay-broken devices, and for
-        // teardown-timeout-only recovery.
-        if ((!relay_broken_non_mmio.empty() || any_teardown_timed_out) && get_control_plane_) {
-            if (!relay_broken_non_mmio.empty()) {
-                log_warning(
-                    tt::LogAlways,
-                    "teardown: FIX AC — hard-resetting active ETH channels on {} relay-broken non-MMIO "
-                    "device(s) via relay to restore base firmware for next process.",
-                    relay_broken_non_mmio.size());
-                for (const tt::ChipId non_mmio_id : relay_broken_non_mmio) {
-                    for (const auto& logical_core :
-                         this->get_control_plane_().get_active_ethernet_cores(non_mmio_id)) {
-                        CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                            non_mmio_id, logical_core, CoreType::ETH);
-                        try {
-                            // Relay-based write — MMIO ERISCs rebooted in step 2.
-                            cluster_.assert_risc_reset_at_core(
-                                tt_cxy_pair(non_mmio_id, virtual_core), tt::umd::RiscType::ALL);
-                            cluster_.deassert_risc_reset_at_core(
-                                tt_cxy_pair(non_mmio_id, virtual_core), tt::umd::RiscType::ALL);
-                            log_info(
-                                tt::LogAlways,
-                                "teardown: FIX AC — reset non-MMIO ETH core {} on device {}",
-                                virtual_core.str(),
-                                non_mmio_id);
-                        } catch (const std::exception& e) {
-                            log_warning(
-                                tt::LogAlways,
-                                "teardown: FIX AC non-MMIO reset of ETH core {} on device {} failed: {}",
-                                virtual_core.str(),
-                                non_mmio_id,
-                                e.what());
-                        } catch (...) {
-                        }
+        // Step 5: Hard-reset MMIO ETH channels when teardown timed out but relay wasn't
+        // broken.  (When relay was broken, MMIO ERISCs were already reset via PCIe in
+        // Step 2.)
+        //
+        // We no longer attempt relay-based resets of non-MMIO ETH channels here.
+        // After Step 2 resets the MMIO ERISCs, UMD hasn't re-initialized the relay
+        // protocol state — empirically, the relay is still unreachable even after the
+        // 500ms sleep, causing 5-second timeouts per non-MMIO ETH core (and for each
+        // device that wasn't explicitly in relay_broken_non_mmio but shares the relay
+        // path).  Non-MMIO ERISCs with stale firmware are safely cleaned up by
+        // terminate_stale_erisc_routers on the next process's init.
+        if (any_teardown_timed_out && relay_broken_non_mmio.empty() && get_control_plane_) {
+            // Relay path is intact (no non-MMIO relay broken), but teardown timed
+            // out — some ETH channels may have stale firmware state.  Reset MMIO
+            // channels now (relay_broken_non_mmio was empty so step 2 was skipped).
+            log_warning(
+                tt::LogAlways,
+                "teardown: FIX AC (timeout-only) — fabric_teardown_timed_out set, no relay broken. "
+                "Hard-resetting active ETH channels on MMIO devices via PCIe.");
+            for (const tt::ChipId mmio_id : mmio_ids_set) {
+                for (const auto& logical_core :
+                     this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {
+                    CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                        mmio_id, logical_core, CoreType::ETH);
+                    try {
+                        cluster_.assert_risc_reset_at_core(
+                            tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
+                        cluster_.deassert_risc_reset_at_core(
+                            tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogAlways,
+                            "teardown: FIX AC (timeout) reset of ETH core {} on MMIO device {} failed: {}",
+                            virtual_core.str(),
+                            mmio_id,
+                            e.what());
+                    } catch (...) {
                     }
                 }
             }
-            if (any_teardown_timed_out && relay_broken_non_mmio.empty()) {
-                // Relay path is intact (no non-MMIO relay broken), but teardown timed
-                // out — some ETH channels may have stale firmware state.  Reset MMIO
-                // channels now (relay_broken_non_mmio was empty so step 2 was skipped).
-                log_warning(
-                    tt::LogAlways,
-                    "teardown: FIX AC (timeout-only) — fabric_teardown_timed_out set, no relay broken. "
-                    "Hard-resetting active ETH channels on MMIO devices via PCIe.");
-                for (const tt::ChipId mmio_id : mmio_ids_set) {
-                    for (const auto& logical_core :
-                         this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {
-                        CoreCoord virtual_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-                            mmio_id, logical_core, CoreType::ETH);
-                        try {
-                            cluster_.assert_risc_reset_at_core(
-                                tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
-                            cluster_.deassert_risc_reset_at_core(
-                                tt_cxy_pair(mmio_id, virtual_core), tt::umd::RiscType::ALL);
-                        } catch (const std::exception& e) {
-                            log_warning(
-                                tt::LogAlways,
-                                "teardown: FIX AC (timeout) reset of ETH core {} on MMIO device {} failed: {}",
-                                virtual_core.str(),
-                                mmio_id,
-                                e.what());
-                        } catch (...) {
-                        }
-                    }
-                }
-            }
-            // Give non-MMIO ERISCs (and timeout-reset MMIO ERISCs) time to reboot
-            // before ~Cluster destroys the driver.
+            // Give timeout-reset MMIO ERISCs time to reboot before ~Cluster destroys
+            // the driver.
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            log_info(tt::LogAlways, "teardown: FIX AC — ETH channel reset complete.");
+            log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channel reset complete.");
         }
     }
 
