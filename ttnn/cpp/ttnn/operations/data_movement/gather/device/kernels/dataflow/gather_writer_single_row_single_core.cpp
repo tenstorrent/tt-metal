@@ -23,6 +23,9 @@ Reader:
 Writer:
     * Reads input tensor values from DRAM to L1.
     * Write output values from L1 to DRAM.
+
+Sharded buffers (legacy 2D or ND): each tile is one page; page_id is the linear tile index in the padded 4D tensor, and
+TensorAccessor resolves it for NoC reads/writes.
 */
 void kernel_main() {
     // Runtime args
