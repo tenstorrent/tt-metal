@@ -150,7 +150,6 @@ class Conv1d:
             output_layout = ttnn.TILE_LAYOUT
         else:
             output_layout = ttnn.ROW_MAJOR_LAYOUT
-
         self.configuration = ConvConfiguration(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -187,10 +186,10 @@ class Conv1d:
         self.torch_weight = state_dict[weight_key].detach().to(torch.float32).contiguous()
         bias = state_dict[bias_key] if bias_key in state_dict and state_dict[bias_key] is not None else None
         self.torch_bias = None if bias is None else bias.detach().to(torch.float32).contiguous()
-        self.weight_tensor = ttnn.from_torch(reshaped_weight, dtype=ttnn.bfloat16)
-        self.bias_tensor = None
+        self.weight = ttnn.from_torch(reshaped_weight, dtype=ttnn.bfloat16)
+        self.bias = None
         if bias is not None:
-            self.bias_tensor = ttnn.from_torch(
+            self.bias = ttnn.from_torch(
                 torch.reshape(bias, (1, 1, 1, -1)),
                 dtype=ttnn.bfloat16,
             )
@@ -203,10 +202,10 @@ class Conv1d:
         conv2d_config, slice_config, compute_config = get_conv_configs(
             input_tensor.shape, self.configuration, self.device
         )
-        out, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
+        output, [output_height, output_width], [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=ttnn.unsqueeze(input_tensor, dim=1),
-            weight_tensor=self.weight_tensor,
-            return_output_dim=False,
+            weight_tensor=self.weight,
+            return_output_dim=True,
             return_weights_and_bias=True,
             device=self.device,
             in_channels=self.configuration.in_channels,
@@ -219,15 +218,16 @@ class Conv1d:
             padding=[0, 0, self.configuration.padding[0], self.configuration.padding[1]],
             dilation=[1, self.configuration.dilation],
             groups=self.configuration.groups,
-            bias_tensor=self.bias_tensor,
+            bias_tensor=self.bias,
             dtype=self.configuration.dtype,
             conv_config=conv2d_config,
             compute_config=compute_config,
             slice_config=slice_config,
         )
-        if out.shape[2] > output_length_from_input_length(input_length, self.configuration):
-            out = out[:, :, : output_length_from_input_length(input_length, self.configuration), :]
-        return ttnn.squeeze(out, dim=1)
+        output = ttnn.reshape(output, (batch_size, output_height, output_width, self.configuration.out_channels))
+        if output.shape[2] > output_length_from_input_length(input_length, self.configuration):
+            output = output[:, :, : output_length_from_input_length(input_length, self.configuration), :]
+        return ttnn.squeeze(output, dim=1)
 
     def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
         # Compare TT Conv1d output against torch.nn.functional.conv1d reference.
@@ -256,9 +256,9 @@ class Conv1d:
         assert_with_pcc(torch_ref_nlc, tt_output_torch, pcc=0.99)
 
     def deallocate(self) -> None:
-        if self.weight_tensor is not None:
-            ttnn.deallocate(self.weight_tensor)
-            self.weight_tensor = None
-        if self.bias_tensor is not None:
-            ttnn.deallocate(self.bias_tensor)
-            self.bias_tensor = None
+        if self.weight is not None:
+            ttnn.deallocate(self.weight)
+            self.weight = None
+        if self.bias is not None:
+            ttnn.deallocate(self.bias)
+            self.bias = None

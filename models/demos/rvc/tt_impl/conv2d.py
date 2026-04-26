@@ -70,26 +70,10 @@ class Conv2d:
         base_key = f"{module_prefix}{key}"
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
-
-        reshaped_weight = state_dict[weight_key].reshape(
-            self.configuration.out_channels,
-            self.configuration.in_channels // self.configuration.groups,
-            self.configuration.kernel_size[0],
-            self.configuration.kernel_size[1],
+        self.weight = ttnn.from_torch(state_dict[weight_key], dtype=ttnn.bfloat16)
+        self.bias = (
+            ttnn.from_torch(state_dict[bias_key].reshape(1, 1, 1, -1), dtype=ttnn.bfloat16) if self.is_biased else None
         )
-        self.weight = ttnn.from_torch(
-            reshaped_weight, dtype=ttnn.bfloat16, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        if self.is_biased:
-            bias = state_dict[bias_key]
-            self.bias = ttnn.from_torch(
-                torch.reshape(bias, (1, 1, 1, -1)),
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            self.bias = None
 
     def __call__(self, input: ttnn.Tensor) -> ttnn.Tensor:
         if input.is_sharded():

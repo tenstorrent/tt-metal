@@ -163,10 +163,10 @@ class ConvTranspose1d:
         conv2d_config, slice_config, compute_config = get_conv_configs(
             input_tensor.shape, self.configuration, self.device
         )
-        out, [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
+        output, [output_height, output_width], [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
             input_tensor=ttnn.unsqueeze(input_tensor, dim=1),
             weight_tensor=self.weight_tensor,
-            return_output_dim=False,
+            return_output_dim=True,
             return_weights_and_bias=True,
             device=self.device,
             in_channels=self.configuration.in_channels,
@@ -185,4 +185,5 @@ class ConvTranspose1d:
             compute_config=compute_config,
             dram_slice_config=slice_config,
         )
-        return ttnn.squeeze(out, dim=1)
+        output = ttnn.reshape(output, (batch_size, output_height, output_width, self.configuration.out_channels))
+        return ttnn.squeeze(output, dim=1)

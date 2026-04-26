@@ -18,6 +18,7 @@ from scipy import signal
 
 import ttnn
 from models.demos.rvc.torch_impl.vc.pipeline import change_rms
+from models.demos.rvc.tt_impl.crepe import CrepePredictor
 from models.demos.rvc.tt_impl.rmvpe import RMVPEPitchAlgorithm
 from models.demos.rvc.tt_impl.vc.hubert import HubertModel
 from models.demos.rvc.tt_impl.vc.synthesizer import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
@@ -115,11 +116,11 @@ class Pipeline:
         self.speaker_id = speaker_id
         self.f0_up_key = f0_up_key
         self.f0_method = f0_method
-        # self.f0_method = F0Method.RMVPE
         self.index_rate = index_rate
         self.rms_mix_rate = rms_mix_rate
         self.protect = protect
         self._rmvpe_pitch_algorithm: RMVPEPitchAlgorithm | None = None
+        self._crepe_predictor: CrepePredictor | None = None
 
         if self.tt_device.get_num_devices() > 1:
             self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.tt_device, dim=0)
@@ -156,6 +157,12 @@ class Pipeline:
                 device=self.tt_device, sample_rate=self.sr, hop_size=self.window
             )
         return self._rmvpe_pitch_algorithm
+
+    def _get_crepe_predictor(self) -> CrepePredictor:
+        if self._crepe_predictor is None:
+            device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
+            self._crepe_predictor = CrepePredictor(device=self.tt_device)
+        return self._crepe_predictor
 
     def _get_f0(self, audio, num_frames):
         f0_min = 50
@@ -196,9 +203,6 @@ class Pipeline:
             f0 = torch.from_numpy(f0.astype(np.float32))
             f0 = f0.unsqueeze(0)
         elif self.f0_method is F0Method.HARVEST:
-            import time
-
-            start_time = time.time()
             audio_np = audio.detach().cpu().reshape(-1).numpy().astype(np.float64)
             frame_period = self.window / self.sr * 1000.0
             f0, _ = pw.harvest(
@@ -210,8 +214,14 @@ class Pipeline:
             )
             f0 = torch.from_numpy(f0.astype(np.float32))
             f0 = f0.unsqueeze(0)
-            end_time = time.time()
-            print(f"Harvest F0 extraction took {end_time - start_time:.2f} seconds.")
+        elif self.f0_method is F0Method.CREPE:
+            f0 = self._get_crepe_predictor().predict(
+                audio.to(torch.float32),
+                sample_rate=self.sr,
+                hop_length=self.window,
+                fmin=f0_min,
+                fmax=f0_max,
+            )
         elif self.f0_method is F0Method.RMVPE:
             f0 = self._get_rmvpe_pitch_algorithm().extract_pitch(audio)
         else:

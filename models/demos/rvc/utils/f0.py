@@ -11,6 +11,7 @@ class F0Method(str, Enum):
     RAPT = "rapt"
     DIO = "dio"
     HARVEST = "harvest"
+    CREPE = "crepe"
     RMVPE = "rmvpe"
 
     @classmethod
