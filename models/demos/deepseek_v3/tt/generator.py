@@ -2848,6 +2848,21 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
         logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
 
+    def warmup_model_decode(
+        self, kv_cache, enable_trace, max_batch_size, num_blocks, can_sample_on_device, non_greedy_decoding_on_device
+    ) -> None:
+        """
+        Intentionally skip decode warmup for DeepseekGenerator.
+
+        For DeepSeek running under vLLM trace mode, decode warmup can hang due to
+        interactions between trace capture and allocator behavior (see #40958).
+        As a workaround, we disable decode warmup here, which may increase
+        time-to-first-token (TTFT) but avoids the trace-capture/alloc hang.
+        """
+        logger.warning(
+            "Skipping decode warmup for DeepseekGenerator to avoid vLLM trace "
+            "capture/allocator hang (#40958). This may increase time-to-first-token (TTFT)."
+        )
     def get_kv_cache(self):
         assert self.model_state is not None, "Model state is not initialized"
 
