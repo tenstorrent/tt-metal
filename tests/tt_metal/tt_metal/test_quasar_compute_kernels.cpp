@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
@@ -67,7 +67,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
 }
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
@@ -115,7 +115,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
 }
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSingleCluster) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSingleCluster) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";

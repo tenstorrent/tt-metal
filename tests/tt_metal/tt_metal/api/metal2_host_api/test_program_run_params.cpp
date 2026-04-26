@@ -23,6 +23,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 #include "test_helpers.hpp"
 
@@ -49,7 +51,10 @@ using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
 class ProgramRunParamsTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        //  Configure global mock mode for Quasar
+        auto detected_arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (detected_arch != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Skipping Quasar-specific test on non-Quasar architecture";
+        }
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
     }
     void TearDown() override { experimental::disable_mock_mode(); }
