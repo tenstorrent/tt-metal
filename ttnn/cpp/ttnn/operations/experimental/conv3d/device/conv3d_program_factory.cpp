@@ -346,15 +346,22 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // On the worker core, it is a valid bit indicating the worker can continue.
     auto semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
 
-    // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune from
-    // conv3d_trid_pipeline_findings.md: the ring wins on DRAM-streaming shapes and loses on
-    // compute-bound shapes.  The discriminator is reader bytes per matmul tile op:
+    // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune (see
+    // conv3d_trid_pipeline_findings.md).  Two data-movement metrics gate the ring; both
+    // must clear their thresholds for the ring to engage:
     //
-    //   intensity = (T_shard * H_shard * W_shard * C_in_block_bytes) / (M_t * K_t * N_t)
+    //   1. Reader-vs-compute balance — bytes per matmul tile op:
+    //      intensity = T_shard * H_shard * W_shard * C_in_block_bytes / (M_t * K_t * N_t)
+    //      Below ~128 B/tile the kernel is compute-bound; ring overhead exceeds reader gain.
     //
-    // Above the cutoff, enable the ring (N_TRIDS=8).  Below, disable (N_TRIDS=0 → kernel
-    // takes the original issue-all + single-trailing-barrier path, all ring code is
-    // constexpr-elided).
+    //   2. Per-call gather burst size — reads per inner gather:
+    //      inner_burst = T_shard * W_shard
+    //      Below ~N_TRIDS reads each ring iteration trips a barrier-on-(i-N) before earlier
+    //      reads have had time to drain, so the ring is pure overhead.  Setting the floor
+    //      at N_TRIDS itself ensures at least one full ring cycle gets to amortize.
+    //
+    // When either threshold fails, gather_trids = 0 and all ring code in the kernel is
+    // constexpr-elided.
     const uint32_t k_T = operation_attributes.kernel_size[0];
     const uint32_t k_H = operation_attributes.kernel_size[1];
     const uint32_t k_W = operation_attributes.kernel_size[2];
@@ -364,10 +371,18 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     const uint64_t reader_bytes_per_block = static_cast<uint64_t>(T_shard) * H_shard * W_shard * C_in_block_bytes;
     const uint64_t matmul_tiles = static_cast<uint64_t>(matmul_M_t) * matmul_K_t * matmul_N_t;
     const uint64_t bytes_per_tile = matmul_tiles == 0 ? 0 : (reader_bytes_per_block / matmul_tiles);
+    const uint32_t inner_gather_burst = T_shard * W_shard;
     constexpr uint64_t kIntensityCutoff = 128;  // bytes per matmul tile op
-    constexpr uint32_t kRingDepthOn = 8;        // §6.2 sweep winner
-    const uint32_t gather_trids = (bytes_per_tile >= kIntensityCutoff) ? kRingDepthOn : 0u;
-    log_debug(tt::LogOp, "gather trid ring: bytes_per_tile={}, gather_trids={}", bytes_per_tile, gather_trids);
+    constexpr uint32_t kInnerBurstCutoff = 8;   // reads per inner gather (== kRingDepthOn)
+    constexpr uint32_t kRingDepthOn = 8;
+    const bool route_through_ring = (bytes_per_tile >= kIntensityCutoff) && (inner_gather_burst >= kInnerBurstCutoff);
+    const uint32_t gather_trids = route_through_ring ? kRingDepthOn : 0u;
+    log_debug(
+        tt::LogOp,
+        "gather trid ring: bytes_per_tile={}, inner_burst={}, gather_trids={}",
+        bytes_per_tile,
+        inner_gather_burst,
+        gather_trids);
 
     std::vector<uint32_t> reader_compile_time_args = {
         cb_vol2col_rm_id,
