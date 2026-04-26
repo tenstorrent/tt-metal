@@ -168,7 +168,8 @@ inline void init_fast_approx_exp_constants() {
 
 inline void fast_approx_exp(uint32_t dst_index) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + get_dest_buffer_base());
-    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 4, true>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    ckernel::sfpu::calculate_exponential<true, DST_ACCUM_MODE, true, 8, true>();
 }
 
 // TODO: Currently hardcodes the lregs used by red max
@@ -295,6 +296,7 @@ void compute_sdpa_chunk(
     for (uint32_t i = 0; i < chunk_size; i++) {
         // Wait for FPU that tile is ready (sem is non-zero)
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        // Each tile is 2 densely packed faces of 8x16, making it the same as a full 16x16 face
         PACK((fast_approx_exp(mm1_dst_offset + i * packed_tile_size)));
         PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
         // No stall since we waited on sfpu already

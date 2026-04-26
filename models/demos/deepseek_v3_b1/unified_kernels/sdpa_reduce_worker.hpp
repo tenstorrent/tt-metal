@@ -225,36 +225,32 @@ ALWI void sdpa_tail_streaming(
     uint32_t cb_l1,
     uint32_t cb_l2,
     uint32_t cb_l_out) {
-    constexpr bool dense = untilize;
+    constexpr bool dense = false;
     constexpr uint32_t total_size = num_l_chunks * block_size;
-    ckernel::sdpa_tail_ms_reduce<
-        SDPA_EXP_APPROX_MODE,
-        normalize,
-        untilize ? total_size : block_size,
-        scale_fp32,
-        vector_mode,
-        false,
-        dense>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
+    ckernel::sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode, false, dense>(
+        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
-    // TODO: Unit test perf seemed better if we operated on all chunks
-    // Retest in streaming context since unit test doesn't need to wait for input
+    bool acquire_regs = !normalize;
     if constexpr (untilize) {
-        custom_pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
-        cb_wait_front(cb_l1, total_size);
-        cb_wait_front(cb_l2, total_size);
+        custom_pack_untilize_dest_init<block_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
         cb_reserve_back(cb_l_out, total_size);
-        ckernel::sdpa_tail_l_block<total_size, 1, untilize, dense, false>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+            cb_wait_front(cb_l1, (chunk + 1) * block_size);
+            cb_wait_front(cb_l2, (chunk + 1) * block_size);
+            ckernel::sdpa_tail_l_block<block_size, num_l_chunks, untilize, dense, false>(
+                cb_l1, cb_l2, cb_l_out, chunk * block_size, chunk, acquire_regs);
+            acquire_regs = true;
+        }
         cb_push_back(cb_l_out, total_size);
         pack_untilize_uninit(cb_l_out);
     } else {
-        bool acquire_regs = !normalize;
         pack_block_contiguous_init(cb_l_out);
         for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
             cb_wait_front(cb_l1, (chunk + 1) * block_size);
             cb_wait_front(cb_l2, (chunk + 1) * block_size);
             cb_reserve_back(cb_l_out, block_size);
             uint32_t tile_index = chunk * block_size;
-            ckernel::sdpa_tail_l_block<block_size, 1, untilize, dense, false>(
+            ckernel::sdpa_tail_l_block<block_size, num_l_chunks, untilize, dense, false>(
                 cb_l1, cb_l2, cb_l_out, tile_index, 0, acquire_regs);
             acquire_regs = true;
             cb_push_back(cb_l_out, block_size);
