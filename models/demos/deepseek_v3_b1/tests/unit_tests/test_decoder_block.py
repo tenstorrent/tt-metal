@@ -149,15 +149,22 @@ def create_decoder_golden_tensors(
         golden_kv_b1,
         golden_kv_b2,
         golden_torch_o_proj_weights,
-        golden_torch_gamma,
-        golden_torch_rmsnorm2_gamma,
+        attn_norm,
+        q_norm,
         golden_torch_dkv_rmsnorm_gamma,
         ffn_norm,
     ) = get_layer_raw_tensors(state_dict, layer_idx)
 
+    # kv_norm is folded into kv_b1/kv_b2 (KV cache stores raw normalized c_kv without gamma).
+    # attn_norm and q_norm are passed as separate gammas to the golden.
+    # The actual kv_norm gamma is still passed to the golden function (unused by rmsnorm_no_gamma
+    # but kept for consistency with test_attention_block.py).
+    golden_kv_b1_folded = golden_kv_b1 * golden_torch_dkv_rmsnorm_gamma
+    golden_kv_b2_folded = golden_kv_b2 * golden_torch_dkv_rmsnorm_gamma.reshape(-1, 1)
+
     total_kv_heads = golden_kv_b1.shape[0] // QNOPE_HEAD_DIM
     kv_lora_rank = golden_kv_b1.shape[1]
-    golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
+    golden_torch_matmul3_weights = golden_kv_b1_folded.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
     golden_total_qnope_heads = total_kv_heads
     golden_total_qrope_heads = total_kv_heads
@@ -212,9 +219,7 @@ def create_decoder_golden_tensors(
 
     return {
         "golden_torch_input": d["torch_input"],
-        "golden_torch_gamma": golden_torch_gamma,
         "golden_torch_matmul_weights": golden_torch_matmul_weights,
-        "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
         "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
         "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
         "golden_torch_sin": d["torch_sin"],
@@ -224,7 +229,9 @@ def create_decoder_golden_tensors(
         "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
         "golden_torch_kv_cache": d["torch_kv_cache"],
         "golden_scale": d["scale"],
-        "golden_torch_kv_b2_proj_weights": golden_kv_b2,
+        "golden_torch_kv_b2_proj_weights": golden_kv_b2_folded,
+        "golden_attn_norm": attn_norm,
+        "golden_q_norm": q_norm,
         "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
         "golden_total_qnope_heads": golden_total_qnope_heads,
         "golden_total_qrope_heads": golden_total_qrope_heads,
@@ -704,9 +711,9 @@ def test_decoder(
 
     full_q, golden_new_kv, mla_output, moe_scores, moe_indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
-        d["golden_torch_gamma"],
+        d["golden_attn_norm"],
         d["golden_torch_matmul_weights"],
-        d["golden_torch_rmsnorm2_gamma"],
+        d["golden_q_norm"],
         d["golden_torch_matmul2_weights"],
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
@@ -1074,9 +1081,9 @@ def test_decoder_mlp(
 
     _full_q, golden_new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
-        d["golden_torch_gamma"],
+        d["golden_attn_norm"],
         d["golden_torch_matmul_weights"],
-        d["golden_torch_rmsnorm2_gamma"],
+        d["golden_q_norm"],
         d["golden_torch_matmul2_weights"],
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
@@ -1176,6 +1183,7 @@ def test_decoder_mlp(
     logger.info(f"MLP PCC (decoder vs golden): {pcc}")
     logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
     logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
+
     assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
 
     logger.info("✓ DecoderBlock MLP mesh test passed!")
