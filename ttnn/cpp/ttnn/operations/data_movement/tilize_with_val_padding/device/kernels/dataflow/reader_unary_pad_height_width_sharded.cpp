@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t num_input_rows = get_arg_val<uint32_t>(0);
@@ -18,15 +19,20 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t pad_cb = get_compile_time_arg_val(2);
 
-    cb_reserve_back(cb_id_in0, num_input_rows);
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    experimental::CircularBuffer cb_pad(pad_cb);
 
-    cb_reserve_back(cb_id_in1, num_padded_tiles_per_batch);
+    cb_in0.reserve_back(num_input_rows);
 
-    cb_reserve_back(pad_cb, 1);
+    cb_in1.reserve_back(num_padded_tiles_per_batch);
 
-    uint64_t read_noc_addr = get_noc_addr(get_read_ptr(cb_id_in0));
-    uint32_t write_addr = get_write_ptr(cb_id_in1);
-    uint32_t pad_addr = get_write_ptr(pad_cb);
+    cb_pad.reserve_back(1);
+
+    // Keep legacy NOC API for local L1 reads (sharded kernel)
+    uint64_t read_noc_addr = get_noc_addr(cb_in0.get_read_ptr());
+    uint32_t write_addr = cb_in1.get_write_ptr();
+    uint32_t pad_addr = cb_pad.get_write_ptr();
     uint64_t pad_noc_addr = get_noc_addr(pad_addr);
 
     noc_async_read(read_noc_addr, write_addr, input_block_size);
@@ -41,11 +47,11 @@ void kernel_main() {
         write_addr += input_width_bytes;
     }
     noc_async_read_barrier();
-    cb_push_back(cb_id_in1, num_padded_tiles_per_batch);
+    cb_in1.push_back(num_padded_tiles_per_batch);
 
     for (uint32_t b = 1; b < num_batches; ++b) {
-        cb_reserve_back(cb_id_in1, num_padded_tiles_per_batch);
-        write_addr = get_write_ptr(cb_id_in1);
+        cb_in1.reserve_back(num_padded_tiles_per_batch);
+        write_addr = cb_in1.get_write_ptr();
         noc_async_read(read_noc_addr, write_addr, input_block_size);
         read_noc_addr += input_block_size;
         write_addr += input_block_size;
@@ -54,6 +60,6 @@ void kernel_main() {
             write_addr += input_width_bytes;
         }
         noc_async_read_barrier();
-        cb_push_back(cb_id_in1, num_padded_tiles_per_batch);
+        cb_in1.push_back(num_padded_tiles_per_batch);
     }
 }

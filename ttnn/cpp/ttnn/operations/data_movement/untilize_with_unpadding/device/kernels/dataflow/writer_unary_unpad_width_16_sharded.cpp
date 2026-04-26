@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 // Special case writer for unpad width 16 tensors
 // Skip untilize and just copy f0 and f2 from input tiles to output tiles
@@ -17,19 +18,23 @@ void kernel_main() {
     constexpr uint32_t tile_size_in_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t quarter_tile_size_in_bytes = tile_size_in_bytes / 4;
 
+    experimental::CircularBuffer cb_untilize_out(cb_id_untilize_out);
+    experimental::CircularBuffer cb_out(cb_id_out);
+
     const uint32_t batches_of_8 = num_padded_tiles_per_core / 8;
     const uint32_t remaining_tiles = num_padded_tiles_per_core % 8;
 
-    cb_reserve_back(cb_id_out, num_unpadded_output_rows);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_out);
+    cb_out.reserve_back(num_unpadded_output_rows);
+    uint32_t l1_write_addr = cb_out.get_write_ptr();
 
     static_assert(quarter_tile_size_in_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the get_noc_addr, addr is ignored
+    // Keep legacy NOC API for local L1 operations (sharded kernel)
     noc_async_read_one_packet_set_state(get_noc_addr(l1_write_addr), quarter_tile_size_in_bytes);
 
     for (uint32_t i = 0; i < batches_of_8; i++) {
-        cb_wait_front(cb_id_untilize_out, 8);
-        uint64_t noc_l1_read_addr = get_noc_addr(get_read_ptr(cb_id_untilize_out));
+        cb_untilize_out.wait_front(8);
+        uint64_t noc_l1_read_addr = get_noc_addr(cb_untilize_out.get_read_ptr());
 
         for (uint32_t j = 0; j < 8; j++) {
             noc_async_read_one_packet_with_state<true>(noc_l1_read_addr, l1_write_addr);
@@ -42,11 +47,11 @@ void kernel_main() {
         }
 
         noc_async_read_barrier();
-        cb_pop_front(cb_id_untilize_out, 8);
+        cb_untilize_out.pop_front(8);
     }
 
-    cb_wait_front(cb_id_untilize_out, remaining_tiles);
-    uint64_t noc_l1_read_addr = get_noc_addr(get_read_ptr(cb_id_untilize_out));
+    cb_untilize_out.wait_front(remaining_tiles);
+    uint64_t noc_l1_read_addr = get_noc_addr(cb_untilize_out.get_read_ptr());
     for (uint32_t i = 0; i < remaining_tiles; i++) {
         noc_async_read_one_packet_with_state<true>(noc_l1_read_addr, l1_write_addr);
         noc_l1_read_addr += 2 * quarter_tile_size_in_bytes;
@@ -57,7 +62,7 @@ void kernel_main() {
         l1_write_addr += quarter_tile_size_in_bytes;
     }
     noc_async_read_barrier();
-    cb_pop_front(cb_id_untilize_out, remaining_tiles);
+    cb_untilize_out.pop_front(remaining_tiles);
 
-    cb_push_back(cb_id_out, num_unpadded_output_rows);
+    cb_out.push_back(num_unpadded_output_rows);
 }
