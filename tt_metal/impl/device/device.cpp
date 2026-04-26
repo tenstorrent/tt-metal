@@ -1686,6 +1686,174 @@ void Device::launch_eth_cores_for_quiesce() {
         this->id());
 }
 
+// FIX AF (#42429): Poll this device's ETH channels until all show a non-zero
+// edm_status (STARTED or beyond), or until timeout_ms elapses.  Callers in
+// mesh_device.cpp's Pass 1c use this to guarantee that SENDER ERISCs on the
+// just-launched non-MMIO device have written EDMStatus::STARTED — meaning they
+// have exited early firmware init and are in (or entering) the handshake loop —
+// before the next non-MMIO device is launched.  Without this barrier, both
+// non-MMIO devices can enter their handshake simultaneously, causing the
+// SENDER↔SENDER deadlock at STARTED that FIX AE attempted (but failed) to fix.
+void Device::wait_for_eth_cores_launched(uint32_t timeout_ms) {
+    // Skip for MMIO devices (their ETH channels are directly PCIe-accessible and
+    // always fast; no ordering concern with non-MMIO peers in Pass 1c).
+    // Skip for non-MMIO devices with a broken relay path (launch was skipped too).
+    if (this->is_mmio_capable() || (fabric_relay_path_broken_ && !this->is_mmio_capable())) {
+        log_info(
+            tt::LogMetal,
+            "wait_for_eth_cores_launched: Device {} — skipping (mmio={}, relay_broken={}).",
+            this->id(),
+            this->is_mmio_capable(),
+            static_cast<bool>(fabric_relay_path_broken_));
+        return;
+    }
+    if (!fabric_program_) {
+        log_warning(
+            tt::LogMetal,
+            "wait_for_eth_cores_launched: Device {} — fabric_program_ is null, nothing to poll.",
+            this->id());
+        return;
+    }
+
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_ctx = fabric_context.get_builder_context();
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    const auto& hal = env_impl.get_hal();
+
+    const auto [erisc_sync_addr, unused_expected] =
+        builder_ctx.get_fabric_router_sync_address_and_status();
+
+    // Collect all ETH logical cores from the fabric program.
+    struct ChanInfo {
+        CoreCoord logical_core;
+    };
+    std::vector<ChanInfo> eth_cores;
+    std::vector<std::vector<CoreCoord>> logical_cores_used = fabric_program_->impl().logical_cores();
+    for (uint32_t pct_idx = 0; pct_idx < logical_cores_used.size(); pct_idx++) {
+        if (hal.get_core_type(pct_idx) != CoreType::ETH) {
+            continue;
+        }
+        for (const auto& lc : logical_cores_used[pct_idx]) {
+            eth_cores.push_back({lc});
+        }
+    }
+    if (eth_cores.empty()) {
+        log_info(
+            tt::LogMetal,
+            "wait_for_eth_cores_launched: Device {} — no ETH cores in fabric program, done.",
+            this->id());
+        return;
+    }
+
+    log_info(
+        tt::LogMetal,
+        "wait_for_eth_cores_launched: Device {} — polling {} ETH channel(s) for STARTED "
+        "(timeout={}ms, edm_status_addr=0x{:08x}).",
+        this->id(),
+        eth_cores.size(),
+        timeout_ms,
+        erisc_sync_addr);
+
+    // pending[i] = index into eth_cores that hasn't shown non-zero status yet.
+    std::vector<size_t> pending;
+    pending.reserve(eth_cores.size());
+    for (size_t i = 0; i < eth_cores.size(); i++) {
+        pending.push_back(i);
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    int64_t last_log_ms = -1;
+    constexpr uint32_t kLogIntervalMs = 100;
+
+    while (!pending.empty()) {
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start)
+                .count();
+        if (elapsed_ms > static_cast<int64_t>(timeout_ms)) {
+            log_warning(
+                tt::LogMetal,
+                "wait_for_eth_cores_launched: Device {} — timeout ({}ms) reached with {} "
+                "channel(s) still at 0x0 (not yet STARTED). Proceeding anyway.",
+                this->id(),
+                elapsed_ms,
+                pending.size());
+            break;
+        }
+
+        std::vector<size_t> still_pending;
+        for (size_t idx : pending) {
+            std::vector<uint32_t> buf(1, 0U);
+            try {
+                detail::ReadFromDeviceL1(
+                    this,
+                    eth_cores[idx].logical_core,
+                    erisc_sync_addr,
+                    4,
+                    buf,
+                    CoreType::ETH);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "wait_for_eth_cores_launched: Device {} ETH logical ({},{}) read threw: {}",
+                    this->id(),
+                    eth_cores[idx].logical_core.x,
+                    eth_cores[idx].logical_core.y,
+                    e.what());
+                // Treat read failure as "not yet started" and move on.
+                still_pending.push_back(idx);
+                continue;
+            }
+            if (buf[0] != 0U) {
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_eth_cores_launched: Device {} ETH logical ({},{}) reached "
+                    "edm_status=0x{:08x} ({}) after {}ms.",
+                    this->id(),
+                    eth_cores[idx].logical_core.x,
+                    eth_cores[idx].logical_core.y,
+                    buf[0],
+                    edm_status_str(buf[0]),
+                    elapsed_ms);
+            } else {
+                still_pending.push_back(idx);
+            }
+        }
+        pending = std::move(still_pending);
+
+        if (!pending.empty()) {
+            const auto now_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count();
+            if (now_ms / kLogIntervalMs > last_log_ms / static_cast<int64_t>(kLogIntervalMs)) {
+                last_log_ms = now_ms;
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_eth_cores_launched: Device {} — {}ms elapsed, "
+                    "{}/{} channel(s) still at 0x0 (not yet STARTED).",
+                    this->id(),
+                    now_ms,
+                    pending.size(),
+                    eth_cores.size());
+            }
+        }
+    }
+
+    const auto total_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count();
+    log_info(
+        tt::LogMetal,
+        "wait_for_eth_cores_launched: Device {} — done in {}ms ({}/{} channels confirmed STARTED).",
+        this->id(),
+        total_ms,
+        eth_cores.size() - pending.size(),
+        eth_cores.size());
+}
+
 bool Device::phase5b_erisc_health_check(
     const std::set<std::pair<tt::tt_fabric::chan_id_t, tt::tt_fabric::eth_chan_directions>>& active_channels,
     const metal_SocDescriptor& soc_desc_p5,

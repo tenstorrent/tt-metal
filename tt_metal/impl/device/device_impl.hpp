@@ -180,6 +180,13 @@ public:
     // Must be called after quiesce_and_restart_fabric_workers(defer_eth_launch=true).
     // No-op if no ETH launch is pending (e.g. Phase 3 was skipped due to relay broken).
     void launch_eth_cores_for_quiesce();
+    // FIX AF (#42429): After launch_eth_cores_for_quiesce(), poll this device's ETH channels
+    // until all show a non-zero edm_status (i.e. STARTED or beyond), or until timeout_ms
+    // elapses.  Called between successive non-MMIO device launches in Pass 1c to ensure the
+    // previous device's SENDER ERISCs are past Object Setup and in the handshake loop before
+    // the next device (whose channels peer with this device) begins executing.
+    // No-op for MMIO devices and for non-MMIO devices with a broken relay path.
+    void wait_for_eth_cores_launched(uint32_t timeout_ms = 500);
     void wait_for_fabric_workers_ready();
     // Called by FabricFirmwareInitializer when this device is placed in mmio_dead_peer_devices_.
     void set_fabric_is_mmio_dead_peer_device(bool v) { fabric_is_mmio_dead_peer_device_ = v; }

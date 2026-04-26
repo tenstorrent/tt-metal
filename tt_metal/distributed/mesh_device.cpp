@@ -1615,11 +1615,12 @@ void MeshDeviceImpl::quiesce_internal() {
     //   Pass 1b: MMIO devices only — ETH write_launch_msg (fast, direct PCIe, ~1ms/channel).
     //            MMIO peer ERISCs are running and reach STARTED before non-MMIO ERISCs start.
     //            When non-MMIO ERISCs initiate handshake, MMIO peers respond immediately.
-    //   Pass 1c: Non-MMIO devices only — ETH write_launch_msg (slow, via UMD relay, sequen-
-    //            tial).  The ~200ms relay write time per channel creates ~200ms timing gap
-    //            between peer channels on successive non-MMIO devices (e.g. Device 4 chan 6
-    //            starts ~200ms before Device 5 chan 6).  Device 4's ERISC has time to reach
-    //            STARTED and enter "polling for peer" state before Device 5 initiates.
+    //   Pass 1c: Non-MMIO devices only — ETH write_launch_msg (via UMD relay, sequential).
+    //            After launching each device, poll its ETH channels until all show
+    //            EDMStatus::STARTED (FIX AF).  This ensures SENDER ERISCs are past Object
+    //            Setup and in the handshake loop before the next device's RECEIVER launches.
+    //            (FIX AE assumed ~200ms relay latency for the gap, but that assumption was
+    //            violated in practice when Device 0 was in base_umd mode: relay was <1ms.)
     //
     // ORDERING in all passes: non-MMIO first, MMIO last — same as original Pass 1.
     // NOTE: iterate get_devices() directly (not submesh_ loop) so global MMIO-last ordering
@@ -1647,15 +1648,26 @@ void MeshDeviceImpl::quiesce_internal() {
     }
     log_info(tt::LogMetal, "quiesce_internal: Pass 1b complete — starting Pass 1c (non-MMIO ETH launch)");
 
-    // Pass 1c: ETH write_launch_msg for non-MMIO devices (slow, via UMD relay, sequential).
-    // The relay write latency (~200ms/channel) creates sufficient timing asymmetry between
-    // successive non-MMIO devices' peer channels to avoid simultaneous handshake deadlock.
+    // Pass 1c: ETH write_launch_msg for non-MMIO devices, one device at a time.
+    //
+    // FIX AF (#42429): After launching each non-MMIO device's ETH channels, poll until all
+    // its channels show a non-zero edm_status (EDMStatus::STARTED or beyond) before launching
+    // the next non-MMIO device.  This guarantees that the SENDER ERISCs on the first device
+    // (e.g. Device 4 chans 6,7) have written EDMStatus::STARTED and are in (or past) Object
+    // Setup — i.e. about to enter the handshake loop — before Device 5's RECEIVER ERISCs
+    // start executing.  Without this barrier:
+    //   • FIX AE assumed ~200ms relay latency to create a natural timing gap, but the relay
+    //     was <1ms in the failing run (Device 0 in base_umd mode), so both SENDER and RECEIVER
+    //     launched within ~2ms and hit the simultaneous-handshake deadlock anyway.
+    //   • By explicitly waiting for STARTED we remove the relay-latency assumption entirely.
     for (auto* idev : get_fabric_quiesce_restart_order(get_devices())) {
         auto* dev = dynamic_cast<Device*>(idev);
         if (dev && !dev->is_mmio_capable()) {
             log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} (non-MMIO) launch_eth_cores_for_quiesce", dev->id());
             dev->launch_eth_cores_for_quiesce();
-            log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} done", dev->id());
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} done, waiting for STARTED before next device", dev->id());
+            dev->wait_for_eth_cores_launched();
+            log_info(tt::LogMetal, "quiesce_internal: Pass 1c — Device {} ETH channels STARTED confirmed", dev->id());
         }
     }
     log_info(tt::LogMetal, "quiesce_internal: Pass 1 complete (1a+1b+1c) — all devices relaunched, starting Pass 2 (handshake wait)");
