@@ -16,6 +16,7 @@ namespace tt::tt_metal {
 
 std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
     const std::vector<uint32_t>& non_worker_rows,
+    const std::vector<uint32_t>& non_worker_cols,
     const std::vector<CoreCoord>& dram_interface_workers,
     uint32_t num_dram_banks,
     uint32_t max_worker_y_physical,
@@ -96,12 +97,20 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
             if (std::find(non_worker_rows.begin(), non_worker_rows.end(), y) != non_worker_rows.end() ||
                 std::count(group_y.begin(), group_y.end(), y) >= 2) {
                 auto shift_coord_based_on_harvesting = [&](int start, int end, int step) {
+                    auto clamp_x_to_valid_col = [&]() {
+                        while (std::find(non_worker_cols.begin(), non_worker_cols.end(), coord.x) !=
+                                   non_worker_cols.end() &&
+                               coord.x > 0) {
+                            coord.x--;
+                        }
+                    };
                     bool found_new_row = false;
                     for (int j = start; step > 0 ? j <= end : j >= end; j += step) {
                         if (std::find(non_worker_rows.begin(), non_worker_rows.end(), j) == non_worker_rows.end() &&
                             std::count(group_y.begin(), group_y.end(), j) == 0) {
                             coord.y = j;
                             coord.x += x_step;
+                            clamp_x_to_valid_col();
                             x_step--;
                             found_new_row = true;
                             break;
@@ -112,6 +121,7 @@ std::vector<CoreCoord> reassign_dram_interface_cores_for_wormhole(
                             if (std::find(non_worker_rows.begin(), non_worker_rows.end(), j) == non_worker_rows.end()) {
                                 coord.y = j;
                                 coord.x += x_step;
+                                clamp_x_to_valid_col();
                                 x_step--;
                                 found_new_row = true;
                                 break;
@@ -169,7 +179,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     std::vector<uint32_t> non_worker_cols;
     uint32_t max_worker_y_physical = 0;
     uint32_t min_worker_y_physical = std::numeric_limits<uint32_t>::max();
-    // For WH, rows are harvested. Track them here.
+    // For WH, rows are harvested. Track non-worker rows and non-worker columns (e.g. dispatch columns).
     if (arch == ARCH::WORMHOLE_B0) {
         for (int y_coord = 0; y_coord < full_grid_size_y; ++y_coord) {
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
@@ -177,6 +187,11 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             }
             max_worker_y_physical = std::max<uint32_t>(y_coord, max_worker_y_physical);
             min_worker_y_physical = std::min<uint32_t>(y_coord, min_worker_y_physical);
+        }
+        for (int x_coord = 0; x_coord < full_grid_size_x; ++x_coord) {
+            if (std::find(worker_phy_x.begin(), worker_phy_x.end(), x_coord) == worker_phy_x.end()) {
+                non_worker_cols.push_back(x_coord);
+            }
         }
     }
     std::vector<CoreCoord> dram_interface_workers;
@@ -197,13 +212,23 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
         } else {
             dram_core_y = dram_core.y;
         }
-        dram_interface_workers.push_back(CoreCoord(dram_core.x + 1, dram_core_y));
+        uint32_t worker_x = dram_core.x + 1;
+        while (std::find(non_worker_cols.begin(), non_worker_cols.end(), worker_x) != non_worker_cols.end() &&
+               worker_x < full_grid_size_x - 1) {
+            worker_x++;
+        }
+        dram_interface_workers.push_back(CoreCoord(worker_x, dram_core_y));
     }
 
     if (arch == ARCH::WORMHOLE_B0) {
-        // Reassign worker cores based on harvesting for WH.
+        // Reassign worker cores based on harvesting and non-worker columns (e.g. dispatch) for WH.
         return reassign_dram_interface_cores_for_wormhole(
-            non_worker_rows, dram_interface_workers, num_dram_banks, max_worker_y_physical, min_worker_y_physical);
+            non_worker_rows,
+            non_worker_cols,
+            dram_interface_workers,
+            num_dram_banks,
+            max_worker_y_physical,
+            min_worker_y_physical);
     }
     if (arch == ARCH::BLACKHOLE) {
         // Reassign worker cores based on harvesting for BH.

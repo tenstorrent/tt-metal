@@ -905,3 +905,30 @@ def test_get_optimal_worker_cores_for_sharded_tensor_rejects_interleaved_tensor(
 
     with pytest.raises(RuntimeError, match="Tensor must be sharded to compute optimal worker cores"):
         ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
+
+
+# ============================================================================
+#  Optimal DRAM Worker Core Bounds Validation
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+@pytest.mark.parametrize("noc", [ttnn.NOC.NOC_0, ttnn.NOC.NOC_1])
+def test_optimal_dram_workers_within_compute_grid(device, noc):
+    """
+    Validate that all cores returned by get_optimal_dram_bank_to_logical_worker_assignment
+    fall within the valid compute grid. Regression test for issue #41031 where column major
+    dispatch on harvested devices returned cores on the dispatch column.
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc)
+
+    for i, core in enumerate(optimal_workers):
+        assert core.x < compute_grid.x and core.y < compute_grid.y, (
+            f"DRAM bank {i}: optimal worker core ({core.x}, {core.y}) is outside "
+            f"compute grid ({compute_grid.x}, {compute_grid.y})"
+        )
