@@ -176,28 +176,28 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::LT;
             } else {
                 postprocess = unary::UnaryOpType::LTZ;
             }
             break;
         case BinaryOpType::GT:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::GT;
             } else {
                 postprocess = unary::UnaryOpType::GTZ;
             }
             break;
         case BinaryOpType::GE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::GE;
             } else {
                 postprocess = unary::UnaryOpType::GEZ;
             }
             break;
         case BinaryOpType::LE:
-            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32) {
+            if ((is_sfpu_op() && dtype == DataType::FLOAT32) || dtype == DataType::INT32 || dtype == DataType::UINT16 || dtype == DataType::UINT32) {
                 binary_op = SfpuBinaryOp::LE;
             } else {
                 postprocess = unary::UnaryOpType::LEZ;
@@ -500,31 +500,33 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
         case LT:
-            if (dtype == DataType::FLOAT32) {
-                return {"lt_binary_tile_init();", "lt_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("lt_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("lt_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            else if (dtype == DataType::UINT16) {
-                return {"lt_uint16_tile_init();", "lt_uint16_tile"};
-            }
-            return {"lt_int32_tile_init();", "lt_int32_tile"};
+            return {"lt_binary_tile_init();", "lt_binary_tile"};
         case GT:
-            if (dtype == DataType::FLOAT32) {
-                return {"gt_binary_tile_init();", "gt_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("gt_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("gt_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            else if (dtype == DataType::UINT16) {
-                return {"gt_uint16_tile_init();", "gt_uint16_tile"};
-            }
-            return {"gt_int32_tile_init();", "gt_int32_tile"};
+            return {"gt_binary_tile_init();", "gt_binary_tile"};
         case GE:
-            if (dtype == DataType::FLOAT32) {
-                return {"ge_binary_tile_init();", "ge_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("ge_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("ge_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"ge_int32_tile_init();", "ge_int32_tile"};
+            return {"ge_binary_tile_init();", "ge_binary_tile"};
         case LE:
-            if (dtype == DataType::FLOAT32) {
-                return {"le_binary_tile_init();", "le_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("le_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("le_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"le_int32_tile_init();", "le_int32_tile"};
+            return {"le_binary_tile_init();", "le_binary_tile"};
         case EQ:
             if (dtype == DataType::FLOAT32) {
                 return {"eq_binary_tile_init();", "eq_binary_tile"};

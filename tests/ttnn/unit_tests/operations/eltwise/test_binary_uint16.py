@@ -785,7 +785,7 @@ def test_binary_bitwise_right_shift(device):
 )
 @pytest.mark.parametrize(
     "ttnn_op",
-    [ttnn.lt, ttnn.gt],
+    [ttnn.lt, ttnn.gt, ttnn.le, ttnn.ge],
 )
 def test_binary_relational_uint16(shape, low_a, high_a, low_b, high_b, ttnn_op, device):
     num_elements = max(int(torch.prod(torch.tensor(shape)).item()), 1)
