@@ -63,13 +63,15 @@ void bind_global_typecast(nb::module_& mod) {
                 const DataType&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::typecast),
+                const std::optional<CoreRangeSet>&,
+                const std::optional<Layout>&>(&ttnn::typecast),
             nb::arg("input_tensor"),
             nb::arg("dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("output_layout") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const Tensor&,
@@ -77,14 +79,16 @@ void bind_global_typecast(nb::module_& mod) {
                 const DataType&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::typecast),
+                const std::optional<CoreRangeSet>&,
+                const std::optional<Layout>&>(&ttnn::typecast),
             nb::arg("input_tensor"),
             nb::arg("input_dtype"),
             nb::arg("output_dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("output_layout") = nb::none()));
 }
 
 }  // namespace

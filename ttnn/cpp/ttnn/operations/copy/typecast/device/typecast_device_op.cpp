@@ -51,28 +51,28 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     return !args.sub_core_grids
                 .has_value();  // Typecast operation has no sub_core_grids support for optimized 2D sharded input path.
 }
+
+bool is_cross_layout(const TypecastParams& args, const TypecastInputs& tensor_args) {
+    const auto target_layout = args.output_layout.value_or(tensor_args.input.layout());
+    return target_layout != tensor_args.input.layout();
+}
 }  // namespace
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
-    if (tensor_args.input.is_sharded()) {
-        if (can_use_sharded_optimized_factory(args, tensor_args)) {
-            log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
-            return TypecastShardedProgramFactory{};
-        }
-        log_debug(tt::LogOp, "Using TypecastProgramFactory");
-        return TypecastProgramFactory{};
-    }
-    if (args.sub_core_grids.has_value()) {
-        log_debug(tt::LogOp, "Using TypecastSubgridProgramFactory");
-        return TypecastSubgridProgramFactory{};
+    // Cross-layout: TILE<->ROW_MAJOR transformation
+    if (is_cross_layout(args, tensor_args)) {
+        log_debug(tt::LogOp, "Using TypecastCrossLayoutProgramFactory");
+        return TypecastCrossLayoutProgramFactory{};
     }
 
-    if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        log_debug(tt::LogOp, "Using TypecastRowMajorChunkedProgramFactory");
-        return TypecastRowMajorChunkedProgramFactory{};
+    // Optimized sharded path (tile-size matching, L1 backed CBs)
+    if (tensor_args.input.is_sharded() && can_use_sharded_optimized_factory(args, tensor_args)) {
+        log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
+        return TypecastShardedProgramFactory{};
     }
 
+    // Default: handles TILE, ROW_MAJOR, interleaved, sharded, sub_core_grids
     log_debug(tt::LogOp, "Using TypecastProgramFactory");
     return TypecastProgramFactory{};
 }
@@ -81,6 +81,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+    const bool cross_layout = is_cross_layout(args, tensor_args);
 
     auto out_memory_config = args.output_memory_config;
     if (preallocated_output_tensor.has_value()) {
@@ -102,12 +103,22 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
     }
 
-    const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
-    TT_FATAL(
-        input_tensor_memory_layout == out_memory_config.memory_layout(),
-        "Typecast operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        input_tensor_memory_layout,
-        out_memory_config.memory_layout());
+    // BFP types (bfloat8_b, bfloat4_b) are tile-only — reject if output would be RM.
+    const auto target_layout = args.output_layout.value_or(input_tensor.layout());
+    if (target_layout == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            args.output_dtype != DataType::BFLOAT8_B && args.output_dtype != DataType::BFLOAT4_B,
+            "Typecast output dtype {} requires TILE layout but output layout is ROW_MAJOR. "
+            "BFP formats cannot be in ROW_MAJOR layout.",
+            args.output_dtype);
+    }
+
+    if (cross_layout) {
+        TT_FATAL(
+            !preallocated_output_tensor.has_value(),
+            "Preallocated output tensor is not supported for cross-layout typecast.");
+        TT_FATAL(!args.sub_core_grids.has_value(), "sub_core_grids is not supported for cross-layout typecast.");
+    }
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
@@ -140,8 +151,7 @@ TensorSpec TypecastDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    const Layout output_layout = tensor_args.input.layout();
-
+    const Layout output_layout = args.output_layout.value_or(tensor_args.input.layout());
     const Shape output_shape = tensor_args.input.logical_shape();
     return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
@@ -160,27 +170,25 @@ ttsl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(args, tensor_args);
 
-    operation::Hash hash;
-
-    // For tile layout, only volume matters. For row-major, actual shape dimensions matter.
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
+    // For same-layout tile operations, only volume matters (tiles are distributed uniformly).
+    // For row-major and cross-layout transforms, actual dimensions matter (ntiles_per_row,
+    // nblocks, stick sizes depend on shape, not just volume).
+    if (input_tensor.layout() == Layout::TILE && !is_cross_layout(args, tensor_args)) {
+        return operation::hash_operation<TypecastDeviceOperation>(
             args,
             program_factory.index(),
             input_tensor.dtype(),
             input_tensor.memory_config(),
             input_shape.volume(),
             input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<TypecastDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
     }
-    return hash;
+    return operation::hash_operation<TypecastDeviceOperation>(
+        args,
+        program_factory.index(),
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_shape,
+        input_tensor.layout());
 }
 
 bool TypecastDeviceOperation::skip_launch(
@@ -201,7 +209,8 @@ Tensor typecast(
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout) {
     return ttnn::device_operation::launch<TypecastDeviceOperation>(
         TypecastParams{
             .input_dtype = input.dtype(),
@@ -211,6 +220,7 @@ Tensor typecast(
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
+            .output_layout = output_layout,
         },
         TypecastInputs{.input = input, .preallocated_output = preallocated_output});
 }

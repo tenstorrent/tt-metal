@@ -14,7 +14,8 @@ inline Tensor typecast_impl(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Layout>& output_layout = std::nullopt) {
     // Handle host tensors by delegating to to_dtype
     if (is_cpu_tensor(input_tensor)) {
         TT_FATAL(
@@ -24,11 +25,20 @@ inline Tensor typecast_impl(
         TT_FATAL(
             !sub_core_grids.has_value(),
             "sub_core_grids is not supported for host tensor typecast (only applicable to device operations).");
-        // For host tensors, memory_config is not applicable, so we ignore it
-        return ttnn::to_dtype(input_tensor, output_dtype);
+        auto result = ttnn::to_dtype(input_tensor, output_dtype);
+        // Apply layout change for host tensors if requested
+        if (output_layout.has_value() && result.layout() != output_layout.value()) {
+            result = ttnn::to_layout(result, output_layout.value());
+        }
+        return result;
     }
 
-    // Device tensor path
+    // Device tensor path — everything goes through prim::typecast which selects
+    // the appropriate program factory (same-layout, cross-layout, sharded, etc.)
+    const auto target_mem_config = optional_output_tensor.has_value()
+                                       ? optional_output_tensor.value().memory_config()
+                                       : memory_config.value_or(input_tensor.memory_config());
+
     DataType input_dtype = input_tensor.dtype();
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or
@@ -40,18 +50,16 @@ inline Tensor typecast_impl(
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
     bool bfp8_pack_precise = (output_dtype == DataType::BFLOAT8_B);
-    auto output_memory_config = optional_output_tensor.has_value()
-                                    ? optional_output_tensor.value().memory_config()
-                                    : memory_config.value_or(input_tensor.memory_config());
     return ttnn::prim::typecast(
         input_tensor,
         output_dtype,
-        output_memory_config,
+        target_mem_config,
         fp32_dest_acc_en,
         preserve_fp32_precision,
         bfp8_pack_precise,
         optional_output_tensor,
-        sub_core_grids);
+        sub_core_grids,
+        output_layout);
 }
 
 }  // namespace ttnn::operations::copy::detail
@@ -63,7 +71,8 @@ Tensor typecast(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout) {
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype == optional_output_tensor.value().dtype(),
@@ -71,7 +80,7 @@ Tensor typecast(
     }
 
     return operations::copy::detail::typecast_impl(
-        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
+        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids, output_layout);
 }
 
 Tensor typecast(
@@ -80,7 +89,8 @@ Tensor typecast(
     const DataType& tt_output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout) {
     TT_FATAL(tt_input_dtype == input_tensor.dtype(), "input dtype and input tensor's dtype provided should match");
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
@@ -88,7 +98,7 @@ Tensor typecast(
             "If both output dtype and output tensor provided dtype should match");
     }
     return operations::copy::detail::typecast_impl(
-        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
+        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids, output_layout);
 }
 
 }  // namespace ttnn
