@@ -300,7 +300,7 @@ class TtPrefillTransformer(LightweightModule):
             for key, tensor in intermediates.items():
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
-                    tensor = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
+                    intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
                     # lm_head is balancing aware; and will only bring tiles (from each chip); to figure out what to do about it. needs partial pcc check
                 else:
                     logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
