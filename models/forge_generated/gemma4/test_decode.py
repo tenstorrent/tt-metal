@@ -1,19 +1,18 @@
 """PCC gate for the decode side. Same shape as test_prefill.py.
 
-Builds Gemma4ForCausalLM via the HF-only Phase 3 path
-(build_cached_main_from_hf) + synthesized runtime inputs, runs the
-forward pass, and asserts PCC >= 0.99 against the reference logits at
-gemma4/reference_logits/decode.pt.
+Builds Gemma4ForCausalLM via the HF state_dict path + synthesized
+runtime inputs, runs the forward pass, and asserts PCC >= 0.99 against
+the reference logits at gemma4/reference_logits/decode.pt.
 """
 import pathlib
 
+import gemma4
 import pytest
 import torch
-import ttnn
-
-import gemma4
 from gemma4 import weights as gw
+from gemma4.layer_table import LAYER_TABLE_DECODE
 
+import ttnn
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -26,28 +25,23 @@ def mesh_device():
 
 def test_decode_pcc(mesh_device):
     """End-to-end decode PCC gate. Uses HF weights + synthesized
-    runtime inputs + skipping consteval entirely."""
+    runtime inputs."""
     hf = gw.load_hf_weights()
     runtime = gemma4.synthesize_decode_inputs(mesh_device)
-    layer_table = gemma4.LAYER_TABLE_DECODE
+    layer_table = LAYER_TABLE_DECODE
 
-    max_norm_slot = max(
-        max(t.get("q_norm_input", 0), t.get("k_norm_input", 0))
-        for t in layer_table.values()
-    )
+    max_norm_slot = max(max(t.get("q_norm_input", 0), t.get("k_norm_input", 0)) for t in layer_table.values())
     n_slots = max(max(runtime) + 1, max_norm_slot + 1)
     input_list = [None] * n_slots
     for slot, t in runtime.items():
         input_list[slot] = t
 
-    cached_main = gw.build_cached_main_from_hf(
-        hf, input_list, layer_table, mesh_device, is_decode=True,
+    model = gemma4.Gemma4ForCausalLM.from_state_dict(
+        hf,
+        mesh_device,
+        is_decode=True,
     )
-
-    model = gemma4.Gemma4ForCausalLM.from_consteval(
-        layer_table=layer_table, is_decode=True,
-    )
-    out = model(input_list, cached_main=cached_main)
+    out = model(input_list)
     logits = out[-1]
 
     logits_host = ttnn.from_device(logits)
@@ -60,11 +54,11 @@ def test_decode_pcc(mesh_device):
         _REPO_ROOT / "gemma4" / "reference_logits" / "decode.pt",
         weights_only=True,
     ).float()
-    pcc = torch.corrcoef(
-        torch.stack([ref.flatten(), logits_torch.flatten()])
-    )[0, 1].item()
+    pcc = torch.corrcoef(torch.stack([ref.flatten(), logits_torch.flatten()]))[0, 1].item()
     last_tok = logits_torch.shape[1] - 1
-    print(f"decode PCC = {pcc:.6f} | argmax: "
-          f"ref={ref[0, last_tok].argmax().item()}, "
-          f"out={logits_torch[0, last_tok].argmax().item()}")
+    print(
+        f"decode PCC = {pcc:.6f} | argmax: "
+        f"ref={ref[0, last_tok].argmax().item()}, "
+        f"out={logits_torch[0, last_tok].argmax().item()}"
+    )
     assert pcc > 0.99, f"PCC dropped: {pcc}"
