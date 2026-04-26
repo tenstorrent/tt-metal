@@ -222,8 +222,8 @@ class Conv1d:
             slice_config=slice_config,
         )
         output = ttnn.reshape(output, (batch_size, output_height, output_width, self.configuration.out_channels))
-        if output.shape[2] > output_length_from_input_length(input_length, self.configuration):
-            output = output[:, :, : output_length_from_input_length(input_length, self.configuration), :]
+        # if output.shape[2] > output_length_from_input_length(input_length, self.configuration):
+        #     output = output[:, :, : output_length_from_input_length(input_length, self.configuration), :]
         return ttnn.squeeze(output, dim=1)
 
     def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:

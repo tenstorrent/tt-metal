@@ -42,7 +42,7 @@ class Linear:
         transposed_weight = (
             state_dict[weight_key].reshape(self.out_features, self.in_features).transpose(0, 1).contiguous()
         )
-        self.weight_tensor = ttnn.from_torch(
+        self.weight = ttnn.from_torch(
             transposed_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -50,9 +50,9 @@ class Linear:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.bias_tensor = None
+        self.bias = None
         if bias_key in state_dict and state_dict[bias_key] is not None:
-            self.bias_tensor = ttnn.from_torch(
+            self.bias = ttnn.from_torch(
                 state_dict[bias_key].reshape(1, 1, self.out_features),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -67,8 +67,8 @@ class Linear:
         )
         output = ttnn.linear(
             input,
-            self.weight_tensor,
-            bias=self.bias_tensor,
+            self.weight,
+            bias=self.bias,
             dtype=self.dtype,
             activation=self.activation,
             compute_kernel_config=self.compute_config,
@@ -77,5 +77,5 @@ class Linear:
         return output
 
     def deallocate(self):
-        ttnn.deallocate(self.weight_tensor)
-        ttnn.deallocate(self.bias_tensor)
+        ttnn.deallocate(self.weight)
+        ttnn.deallocate(self.bias)
